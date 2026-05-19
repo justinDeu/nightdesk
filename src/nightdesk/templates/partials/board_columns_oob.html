@@ -1,0 +1,14 @@
+{#
+  Polled fragment from /board/columns. Renders each of the four columns as
+  an OOB swap so the existing #board-col-<status> section is replaced in
+  place. There is no main-target body — the polling element uses
+  hx-swap="none". The sidebar lives outside these ids and is left alone,
+  which is what preserves an in-progress edit across polls.
+#}
+{% for col in columns %}
+  {% set column_status = col.status %}
+  {% set column_label = col.label %}
+  {% set tickets = col.tickets %}
+  {% set oob = true %}
+  {% include "partials/board_column.html" %}
+{% endfor %}

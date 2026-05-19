@@ -1,0 +1,16 @@
+[Unit]
+Description=nightdesk worker daemon
+After=network.target nightdesk-api.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/nightdesk-worker
+Restart=on-failure
+RestartSec=2
+RestartPreventExitStatus=70
+StandardOutput=journal
+StandardError=journal
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% set active_page = 'profiles' %}
+{% block body %}
+
+{% if flash %}
+  <div class="mb-4 rounded border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-fg">
+    {{ flash }}
+  </div>
+{% endif %}
+
+<div class="flex flex-col lg:flex-row gap-4 items-start min-h-[calc(100vh-8rem)]">
+
+  {# ---------- Left sidebar: profile list ---------------------------------- #}
+  <aside class="w-full lg:w-72 lg:flex-none">
+    <div class="rounded border border-border bg-bg-elev divide-y divide-border">
+
+      <div class="flex items-center justify-between gap-2 px-3 py-2">
+        <h1 class="text-sm font-semibold text-fg">Profiles</h1>
+        <a href="/profiles/new"
+           class="rounded bg-accent text-bg px-2 py-0.5 text-xs font-semibold hover:brightness-110"
+           hx-get="/profiles/new" hx-target="#profile-pane" hx-swap="outerHTML"
+           hx-push-url="true">
+          + New
+        </a>
+      </div>
+
+      <nav class="divide-y divide-border" id="profile-list">
+        {% for p in profiles %}
+          {# Selected-row rail is an inset box-shadow rather than border-left
+             so it doesn't bleed color into Tailwind v4's divide-y bottom border
+             (which is what `divide-y > :not(:last-child)` paints on every row
+             except the last). A border-l + border-accent combo recolors the
+             whole element's border, turning the divider green. #}
+          <a href="/profiles/{{ p.id }}"
+             data-profile-row="{{ p.id }}"
+             hx-get="/profiles/{{ p.id }}"
+             hx-target="#profile-pane"
+             hx-swap="outerHTML"
+             hx-push-url="true"
+             onclick="document.querySelectorAll('[data-profile-row]').forEach(e=>{e.classList.remove('bg-bg-elev-2');e.style.boxShadow='';});this.classList.add('bg-bg-elev-2');this.style.boxShadow='inset 2px 0 0 var(--color-accent)'"
+             {% if selected_id == p.id %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}
+             class="flex flex-col gap-0.5 px-3 py-2 text-sm hover:bg-bg-elev-2
+                    {% if selected_id == p.id %}bg-bg-elev-2{% endif %}">
+            <span class="font-medium text-fg truncate">{{ p.name }}</span>
+            {% if p.description %}
+              <span class="text-xs text-fg-muted truncate">{{ p.description }}</span>
+            {% endif %}
+            <span class="text-[10px] text-fg-muted font-mono">
+              {{ p.backend }} · network {{ p.network_mode }}
+            </span>
+          </a>
+        {% else %}
+          <div class="px-3 py-3 text-xs text-fg-muted">
+            No profiles yet.
+          </div>
+        {% endfor %}
+      </nav>
+
+      <div class="px-3 py-2">
+        <form method="post" action="/profiles/import"
+              enctype="multipart/form-data">
+          <label class="block cursor-pointer text-xs text-fg-muted hover:text-fg">
+            Import profile from JSON…
+            <input type="file" name="file" accept="application/json"
+                   onchange="this.form.submit()" class="hidden" />
+          </label>
+        </form>
+      </div>
+    </div>
+  </aside>
+
+  {# ---------- Right pane: view / edit / new ------------------------------- #}
+  {% include "partials/profile_pane.html" %}
+
+</div>
+
+{% endblock %}

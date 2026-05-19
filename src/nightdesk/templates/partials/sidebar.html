@@ -1,0 +1,179 @@
+{#
+  Right-rail sidebar. Modes: 'create' (no ticket) or 'edit' (ticket given).
+  Expects: mode, profiles (list), ticket (optional Ticket).
+
+  The sidebar is now a viewer only. The edit form lives in the centered
+  modal at partials/ticket_edit_modal.html — clicking Edit (or the create
+  CTA) opens that modal in the appropriate mode. The modal posts to the
+  same /board/tickets[/{id}] endpoints the old inline form used.
+#}
+{% set is_edit = (mode == 'edit' and ticket) %}
+{% set existing_dirs = (ticket.additional_dirs if is_edit else []) or [] %}
+{% set existing_linked_workspaces = (ticket.workspaces|selectattr('role', 'equalto', 'linked')|list if is_edit and ticket.workspaces else []) %}
+{% set current_mode = (ticket.workspace_mode if is_edit and ticket.workspace_mode else 'directory') %}
+{% set use_worktree = current_mode in ['git_worktree', 'worktree'] %}
+{% set primary_ws = ticket.workspaces | selectattr('role', 'equalto', 'primary') | first if is_edit and ticket.workspaces else none %}
+{% set ticket_profile = (profiles | selectattr('id', 'equalto', ticket.profile_id) | first) if is_edit else none %}
+{% set status_chip_class = {
+    'draft':    'border-border text-fg-muted',
+    'queued':   'border-info/40 text-info',
+    'running':  'border-accent text-accent',
+    'review':   'border-warn/40 text-warn',
+    'archived': 'border-border text-fg-muted',
+  } %}
+<aside
+  id="sidebar"
+  {% if is_edit %}data-selected-ticket-id="{{ ticket.id }}"{% endif %}
+  class="flex flex-col h-full rounded-md border border-border bg-bg-elev p-4 gap-4 overflow-y-auto"
+>
+  <header class="flex items-center justify-between gap-2">
+    <h2 class="text-sm font-semibold text-fg">
+      {% if is_edit %}Ticket{% else %}New ticket{% endif %}
+    </h2>
+    {% if is_edit %}
+      <div class="flex items-center gap-3 text-xs">
+        <a
+          href="/tickets/{{ ticket.id }}"
+          class="text-accent hover:underline"
+          title="Open the ticket's detail page with the live transcript"
+        >Open details &rarr;</a>
+      </div>
+    {% endif %}
+  </header>
+
+  {% if is_edit %}
+    {# --- View pane: nicely-formatted readonly display. ------------------ #}
+    <section class="flex flex-col gap-4 text-sm">
+      <div class="flex flex-col gap-2">
+        <h3 class="text-base font-semibold text-fg break-words">{{ ticket.title }}</h3>
+        <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span class="rounded-full border px-2 py-0.5 uppercase tracking-wide {{ status_chip_class.get(ticket.status, 'border-border text-fg-muted') }}">{{ ticket.status }}</span>
+          {% if ticket_profile %}
+            <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">{{ ticket_profile.name }}</span>
+          {% endif %}
+          {% if use_worktree %}
+            <span class="rounded-full border border-accent/40 bg-bg-elev-2 px-2 py-0.5 text-accent">git worktree</span>
+          {% else %}
+            <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">in directory</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Prompt</span>
+        {% if ticket.prompt %}
+          <pre class="whitespace-pre-wrap break-words font-mono text-xs text-fg leading-snug max-h-64 overflow-y-auto rounded border border-border bg-bg-elev-2/40 p-2">{{ ticket.prompt }}</pre>
+        {% else %}
+          <span class="text-fg-muted/70 text-xs italic">(no prompt)</span>
+        {% endif %}
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Working dir</span>
+        <code class="block break-all font-mono text-xs text-fg">{{ ticket.cwd or '—' }}</code>
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Workspace</span>
+        {% if primary_ws %}
+          <div class="rounded border border-border bg-bg-elev-2/40 p-2 text-xs space-y-1">
+            <div class="text-fg-muted">Mode: <span class="text-fg">{{ primary_ws.kind }}</span></div>
+            {% if primary_ws.worktree_name %}
+              <div class="text-fg-muted">Worktree: <span class="text-fg font-mono">{{ primary_ws.worktree_name }}</span></div>
+            {% endif %}
+            {% set ws_path = primary_ws.resolved_path or primary_ws.worktree_path or primary_ws.source_path %}
+            {% if ws_path %}
+              <code class="block break-all font-mono text-accent">{{ ws_path }}</code>
+            {% endif %}
+            {% if primary_ws.state and primary_ws.state != 'active' %}
+              <div class="text-fg-muted">State: <span class="text-fg">{{ primary_ws.state }}</span></div>
+            {% endif %}
+          </div>
+        {% else %}
+          <code class="block break-all font-mono text-xs text-fg">{{ ticket.cwd or '—' }}</code>
+        {% endif %}
+      </div>
+
+      {% if existing_linked_workspaces %}
+        <div class="flex flex-col gap-1">
+          <span class="text-fg-muted text-xs uppercase tracking-wide">Linked workspaces</span>
+          <ul class="flex flex-col gap-1.5 text-xs">
+            {% for w in existing_linked_workspaces %}
+              <li class="rounded border border-border bg-bg-elev-2/40 p-2 space-y-1">
+                <div class="flex items-center gap-1.5">
+                  <span class="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-fg-muted">{{ w.kind }}</span>
+                  <span class="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-fg-muted">{{ w.access }}</span>
+                  {% if w.label %}<span class="text-fg-muted">{{ w.label }}</span>{% endif %}
+                </div>
+                <code class="block break-all font-mono text-fg">{{ w.source_path or w.resolved_path or '' }}</code>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {% if existing_dirs %}
+        <div class="flex flex-col gap-1">
+          <span class="text-fg-muted text-xs uppercase tracking-wide">Additional dirs</span>
+          <ul class="flex flex-col gap-0.5 text-xs">
+            {% for d in existing_dirs %}
+              <li><code class="break-all font-mono text-fg">{{ d }}</code></li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      <div class="flex flex-wrap items-center gap-2 pt-1">
+        <button
+          type="button"
+          onclick="document.getElementById('ticket-edit-modal').showModal()"
+          class="px-3 py-1.5 rounded bg-accent text-bg font-medium hover:brightness-110 text-sm"
+        >Edit</button>
+        {% if ticket.status in ('draft', 'queued', 'review', 'archived') %}
+          <button
+            type="button"
+            data-run-now-btn
+            hx-post="/tickets/{{ ticket.id }}/run-now"
+            hx-swap="none"
+            hx-on::after-request="window.ndRunNowFeedback && window.ndRunNowFeedback(this, event)"
+            class="px-3 py-1.5 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-sm font-medium"
+          >Run now</button>
+        {% endif %}
+        {% if ticket.status == 'review' %}
+          <button
+            type="button"
+            data-archive-btn
+            hx-post="/board/tickets/{{ ticket.id }}/archive"
+            hx-target="#sidebar"
+            hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded border border-border text-fg-muted hover:border-accent hover:text-accent text-sm font-medium"
+          >Archive</button>
+        {% endif %}
+        <button
+          type="button"
+          hx-delete="/board/tickets/{{ ticket.id }}"
+          hx-confirm="Delete this ticket?"
+          hx-target="body"
+          hx-swap="none"
+          class="px-3 py-1.5 rounded border border-danger text-danger hover:bg-danger hover:text-bg text-sm font-medium ml-auto"
+        >Delete</button>
+      </div>
+    </section>
+  {% else %}
+    {# --- Create mode: empty-state pointer to the nav's + New button. ---- #}
+    <section class="flex flex-col items-start gap-3 text-sm">
+      <p class="text-fg-muted">
+        No ticket selected. Click a card on the board to view it, or use
+        <span class="font-medium text-accent">+ New ticket</span> in the
+        top bar to start a new one.
+      </p>
+    </section>
+  {% endif %}
+
+  {# Edit-mode only: the sidebar carries an edit modal pre-filled with the
+     selected ticket. The create-mode modal lives on the board page itself
+     so the nav button can pop it without a sidebar fetch. #}
+  {% if is_edit %}
+    {% include "partials/ticket_edit_modal.html" %}
+  {% endif %}
+</aside>

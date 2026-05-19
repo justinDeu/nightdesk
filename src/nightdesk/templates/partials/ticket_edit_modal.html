@@ -1,0 +1,298 @@
+{#
+  Full ticket create/edit modal. Designed to be the replacement for the
+  board sidebar's cramped edit form — same fields, same submit semantics,
+  more room to breathe. Centers on screen with the native <dialog>
+  showModal() behavior (forced via margin: auto + position fixed in case
+  any ancestor styles try to override the user-agent default).
+
+  Required context:
+    profiles  List of Profile rows for the profile <select>.
+
+  Optional context:
+    ticket      Ticket row when editing. Omit (or pass None) for create mode.
+    modal_id    DOM id for the <dialog>. Defaults to "ticket-edit-modal".
+
+  All form behavior (path suggestions, worktree preview, linked-workspace
+  rows) is delegated to /static/ticket_form.js so the same JS powers both
+  this modal and the sidebar form.
+#}
+{% set _mid = modal_id or 'ticket-edit-modal' %}
+{% set _is_edit = ticket is defined and ticket %}
+{% set _linked_workspaces = (ticket.workspaces|selectattr('role', 'equalto', 'linked')|list if _is_edit and ticket.workspaces else []) %}
+{% set _primary_ws = (ticket.workspaces | selectattr('role', 'equalto', 'primary') | first) if _is_edit and ticket.workspaces else none %}
+{% set _use_worktree = (ticket.workspace_mode in ['git_worktree', 'worktree']) if _is_edit and ticket.workspace_mode else false %}
+{% set _form_action = ('/board/tickets/' ~ ticket.id) if _is_edit else '/board/tickets' %}
+
+<dialog id="{{ _mid }}"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[820px] max-w-[calc(100vw-2rem)]"
+        style="margin: auto; max-height: 92vh;">
+  <form method="post"
+        action="{{ _form_action }}"
+        hx-post="{{ _form_action }}"
+        hx-swap="none"
+        hx-on::after-request="if (event.detail.successful) { document.getElementById('{{ _mid }}').close(); window.location.reload(); }"
+        data-ticket-form
+        class="flex flex-col max-h-[92vh]">
+
+    {# Sticky header so Save / Cancel stay visible while scrolling. #}
+    <div class="flex items-center justify-between px-5 py-3 border-b border-border bg-bg-elev sticky top-0 z-10">
+      <div>
+        <h2 class="text-base font-semibold">{% if _is_edit %}Edit ticket{% else %}New ticket{% endif %}</h2>
+        <p class="text-[11px] text-fg-muted">Title, prompt, profile, workspace — all in one place.</p>
+      </div>
+      <button type="button"
+              onclick="document.getElementById('{{ _mid }}').close()"
+              class="text-fg-muted hover:text-fg text-2xl leading-none px-2"
+              aria-label="Close">&times;</button>
+    </div>
+
+    {# Scrolling body. #}
+    <div class="px-5 py-4 space-y-4 overflow-y-auto flex-1">
+
+      <input type="hidden" name="workspace_form" value="1" />
+
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Title</span>
+        <input name="title" required value="{{ ticket.title if _is_edit else '' }}"
+               class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none" />
+      </label>
+
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Prompt</span>
+        <textarea name="prompt" rows="10"
+                  class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none">{{ ticket.prompt if _is_edit and ticket.prompt else '' }}</textarea>
+      </label>
+
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Profile</span>
+        <select name="profile_id" required
+                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
+          {% if not _is_edit %}<option value="">-- select --</option>{% endif %}
+          {% for p in profiles %}
+            <option value="{{ p.id }}" {% if _is_edit and ticket.profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      {# --- Workspaces ---------------------------------------------------- #
+       # Primary + linked rows in one unified list. Primary is the row the
+       # agent runs in (its path is the ticket's cwd; its kind controls the
+       # use_worktree flag). The shape mirrors a linked row so the user
+       # doesn't have to learn two different layouts for the same concept.
+       #}
+      <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm">
+        <div class="mb-2 flex items-start justify-between gap-2">
+          <div>
+            <h3 class="text-sm font-medium text-fg">Workspaces</h3>
+            <p class="mt-0.5 text-xs leading-snug text-fg-muted">Where the agent runs and which other repos/dirs it can see.</p>
+          </div>
+          <button type="button"
+                  onclick="window.ndAddLinkedWorkspaceRow('{{ _mid }}-linked')"
+                  class="shrink-0 rounded border border-border px-2 py-1 text-xs text-accent hover:border-accent hover:bg-bg">+ Add</button>
+        </div>
+
+        {# --- Primary workspace row (== cwd + worktree opts) ------------- #}
+        <div class="rounded-md border border-accent/40 bg-bg-elev-2 p-2 space-y-2 mb-2">
+          <div class="flex items-center justify-between gap-2">
+            <span class="rounded-full border border-accent/40 bg-accent/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">primary · agent runs here</span>
+          </div>
+          <div class="relative">
+            <input id="{{ _mid }}-cwd"
+                   name="cwd"
+                   data-cwd-input
+                   required
+                   autocomplete="off"
+                   spellcheck="false"
+                   placeholder="/home/you/project"
+                   value="{{ ticket.cwd if _is_edit and ticket.cwd else '' }}"
+                   oninput="window.ndPathSuggest(this, '{{ _mid }}-cwd-suggest')"
+                   onfocus="window.ndPathSuggest(this, '{{ _mid }}-cwd-suggest')"
+                   onblur="window.ndPathSuggestClose('{{ _mid }}-cwd-suggest')"
+                   onkeydown="window.ndPathSuggestKey(event, this, '{{ _mid }}-cwd-suggest')"
+                   class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+            <div id="{{ _mid }}-cwd-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="flex flex-col gap-1">
+              <span class="text-fg-muted text-[11px] uppercase tracking-wide">Kind</span>
+              <select name="primary_kind"
+                      onchange="window.ndSyncPrimaryWorkspaceKind && window.ndSyncPrimaryWorkspaceKind(this)"
+                      class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+                <option value="directory" {% if not _use_worktree %}selected{% endif %}>Directory</option>
+                <option value="git_worktree" {% if _use_worktree %}selected{% endif %}>Git worktree</option>
+              </select>
+            </label>
+            <div class="flex flex-col gap-1">
+              <span class="text-fg-muted text-[11px] uppercase tracking-wide">Access</span>
+              <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg-muted">
+                read/write <span class="text-fg-muted/60">(primary is always rw)</span>
+              </div>
+            </div>
+          </div>
+          {# Hidden bool the backend reads. Synced from the kind select via
+             ndSyncPrimaryWorkspaceKind so the form posts use_worktree=1
+             iff kind=git_worktree. #}
+          <input type="checkbox"
+                 name="use_worktree"
+                 value="1"
+                 {% if _use_worktree %}checked{% endif %}
+                 class="hidden"
+                 aria-hidden="true"
+                 tabindex="-1" />
+          {# Git-worktree-only fields. Hidden until kind=git_worktree. #}
+          <div class="{% if not _use_worktree %}hidden{% endif %} space-y-2" data-primary-git-fields>
+            <label class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-fg-muted text-[11px] uppercase tracking-wide">Worktree name</span>
+                <span class="text-[10px] text-fg-muted/60" data-worktree-name-hint>auto: ticket-XXXXXXXX</span>
+              </div>
+              <input name="worktree_name"
+                     autocomplete="off"
+                     placeholder="e.g. feat-login"
+                     value="{{ _primary_ws.worktree_name if _primary_ws and _primary_ws.worktree_name else '' }}"
+                     {% if not _use_worktree %}disabled{% endif %} data-worktree-field
+                     oninput="var f = this.closest('[data-ticket-form]'); window.ndScheduleWorktreePreview(250, f); window.ndSyncWorktreeNameHint(f)"
+                     class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45" />
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-fg-muted text-[11px] uppercase tracking-wide">Advanced: custom worktree path</span>
+              <div class="relative">
+                <input id="{{ _mid }}-wt-path"
+                       name="worktree_path"
+                       data-worktree-path-input
+                       autocomplete="off"
+                       spellcheck="false"
+                       placeholder="optional exact absolute path"
+                       value="{{ _primary_ws.worktree_path if _primary_ws and _primary_ws.worktree_path else '' }}"
+                       {% if not _use_worktree %}disabled{% endif %} data-worktree-field
+                       oninput="window.ndPathSuggest(this, '{{ _mid }}-wt-path-suggest'); window.ndScheduleWorktreePreview(250, this.closest('[data-ticket-form]'));"
+                       onfocus="window.ndPathSuggest(this, '{{ _mid }}-wt-path-suggest')"
+                       onblur="window.ndPathSuggestClose('{{ _mid }}-wt-path-suggest')"
+                       onkeydown="window.ndPathSuggestKey(event, this, '{{ _mid }}-wt-path-suggest')"
+                       class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45" />
+                <div id="{{ _mid }}-wt-path-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+              </div>
+            </label>
+            <div data-worktree-path-preview class="rounded border border-border bg-bg px-2 py-1.5 text-xs" aria-live="polite">
+              <div class="mb-0.5 text-[11px] uppercase tracking-wide text-fg-muted">Worktree path preview <span data-worktree-preview-source></span></div>
+              <code class="block break-all font-mono text-accent" data-worktree-preview-path>Enable worktree to preview the target path.</code>
+            </div>
+          </div>
+        </div>
+
+        {# --- Linked workspace rows -------------------------------------- #}
+        <div id="{{ _mid }}-linked" class="space-y-2">
+          {% for w in _linked_workspaces %}
+            {% set _lid = _mid ~ '-linked-row-' ~ loop.index0 %}
+            <div class="rounded-md border border-border bg-bg-elev-2 p-2 space-y-2" data-linked-workspace-row>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-medium text-fg" data-linked-workspace-title>Workspace {{ loop.index }}</span>
+                <button type="button"
+                        onclick="window.ndRemoveLinkedWorkspaceRow(this);"
+                        class="rounded px-2 py-0.5 text-xs text-fg-muted hover:bg-bg hover:text-danger"
+                        title="Remove linked workspace">&times;</button>
+              </div>
+              <div class="relative">
+                <input id="{{ _lid }}"
+                       name="linked_workspace_path"
+                       autocomplete="off"
+                       spellcheck="false"
+                       value="{{ w.source_path or w.resolved_path or '' }}"
+                       placeholder="/home/you/other-repo"
+                       oninput="window.ndPathSuggest(this, '{{ _lid }}-suggest'); window.ndScheduleLinkedWorkspacePreview(this.closest('[data-linked-workspace-row]'));"
+                       onfocus="window.ndPathSuggest(this, '{{ _lid }}-suggest')"
+                       onblur="window.ndPathSuggestClose('{{ _lid }}-suggest')"
+                       onkeydown="window.ndPathSuggestKey(event, this, '{{ _lid }}-suggest')"
+                       class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                <div id="{{ _lid }}-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="flex flex-col gap-1">
+                  <span class="text-fg-muted text-[11px] uppercase tracking-wide">Kind</span>
+                  <select name="linked_workspace_kind"
+                          onchange="window.ndSyncLinkedWorkspaceRow(this.closest('[data-linked-workspace-row]'));"
+                          class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+                    <option value="directory" {% if w.kind == 'directory' %}selected{% endif %}>Directory</option>
+                    <option value="git_worktree" {% if w.kind == 'git_worktree' %}selected{% endif %}>Git worktree</option>
+                  </select>
+                </label>
+                <label class="flex flex-col gap-1" data-linked-access-field>
+                  <span class="text-fg-muted text-[11px] uppercase tracking-wide">Access</span>
+                  <select name="linked_workspace_access"
+                          class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+                    <option value="read_only" {% if w.access == 'read_only' %}selected{% endif %}>Read-only</option>
+                    <option value="read_write" {% if w.access == 'read_write' %}selected{% endif %}>Read/write</option>
+                  </select>
+                </label>
+                <div class="hidden flex-col gap-1" data-linked-git-fields data-linked-git-inline>
+                  <span class="text-fg-muted text-[11px] uppercase tracking-wide">Git worktree</span>
+                  <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg-muted">
+                    Linked git worktrees use the primary worktree name.
+                  </div>
+                </div>
+              </div>
+              <div class="hidden space-y-2" data-linked-git-fields>
+                <label class="flex flex-col gap-1">
+                  <span class="text-fg-muted text-[11px] uppercase tracking-wide">Custom worktree path</span>
+                  <div class="relative">
+                    <input id="{{ _lid }}-path-override"
+                           name="linked_workspace_path_override"
+                           autocomplete="off"
+                           spellcheck="false"
+                           value="{{ w.worktree_path or '' }}"
+                           placeholder="optional exact absolute path"
+                           oninput="window.ndPathSuggest(this, '{{ _lid }}-path-override-suggest'); window.ndScheduleLinkedWorkspacePreview(this.closest('[data-linked-workspace-row]'));"
+                           onfocus="window.ndPathSuggest(this, '{{ _lid }}-path-override-suggest')"
+                           onblur="window.ndPathSuggestClose('{{ _lid }}-path-override-suggest')"
+                           onkeydown="window.ndPathSuggestKey(event, this, '{{ _lid }}-path-override-suggest')"
+                           class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                    <div id="{{ _lid }}-path-override-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+                  </div>
+                </label>
+                <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs" data-linked-worktree-preview>
+                  <div class="mb-0.5 text-[11px] uppercase tracking-wide text-fg-muted">Worktree path preview <span data-worktree-preview-source></span></div>
+                  <code class="block break-all font-mono text-accent" data-worktree-preview-path>Switch kind to git worktree to preview.</code>
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+
+    </div>
+
+    {# Sticky footer. #}
+    <div class="flex justify-end gap-2 px-5 py-3 border-t border-border bg-bg-elev">
+      <button type="button"
+              onclick="document.getElementById('{{ _mid }}').close()"
+              class="border border-border text-fg-muted hover:text-fg px-3 py-1.5 rounded text-sm">
+        Cancel
+      </button>
+      <button type="submit"
+              class="bg-accent text-bg font-medium px-3 py-1.5 rounded text-sm hover:brightness-110">
+        Save
+      </button>
+    </div>
+  </form>
+</dialog>
+<script>
+  // Backdrop click closes the dialog (native <dialog> doesn't on its own).
+  // Also re-runs the form init when the dialog opens so the worktree
+  // checkbox state, name hint, and linked-row sync all reflect the values
+  // the template just rendered.
+  (function () {
+    var dlg = document.getElementById('{{ _mid }}');
+    if (!dlg) return;
+    dlg.addEventListener('click', function (e) {
+      if (e.target === dlg) dlg.close();
+    });
+    var form = dlg.querySelector('[data-ticket-form]');
+    if (form) {
+      var origShow = dlg.showModal.bind(dlg);
+      dlg.showModal = function () {
+        origShow();
+        if (window.ndInitTicketForm) window.ndInitTicketForm(form);
+      };
+    }
+  })();
+</script>

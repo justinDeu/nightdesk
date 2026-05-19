@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% set active_page = 'board' %}
+{% block body %}
+<div
+  id="board-grid"
+  class="grid gap-3 grid-cols-[1fr_1fr_1fr_1fr_480px] h-[calc(100vh-6rem)]"
+>
+  {% for col in columns %}
+    {% set column_status = col.status %}
+    {% set column_label = col.label %}
+    {% set tickets = col.tickets %}
+    {% include "partials/board_column.html" %}
+  {% endfor %}
+
+  {% include "partials/sidebar.html" %}
+</div>
+
+{# Create-mode modal always present on the board so the "+ New ticket"
+   button can open it directly without re-fetching the sidebar. The
+   sidebar renders its own edit-mode instance with a different id when a
+   ticket is selected. #}
+{% with ticket=None, modal_id='ticket-create-modal' %}
+  {% include "partials/ticket_edit_modal.html" %}
+{% endwith %}
+
+{#
+  Polled refresh trigger. Pulls /board/columns every few seconds and lets
+  HTMX swap each column section in place via hx-swap-oob. The sidebar is
+  outside these ids, so unsaved edits in the editor are preserved across
+  every poll. The `poll` custom event lets the drag handler force an
+  immediate refresh after a successful drop without waiting for the tick.
+#}
+<div
+  id="board-columns-poll"
+  hx-get="/board/columns"
+  hx-trigger="every 3s, poll"
+  hx-swap="none"
+  hx-include="unset"
+  aria-hidden="true"
+  style="display:none"
+></div>
+
+<script>
+  (function () {
+    function csv(arr) { return arr.join(','); }
+
+    function ticketIdsFrom(list) {
+      return Array.from(list.querySelectorAll('li[data-ticket-id]'))
+        .map(function (el) { return el.dataset.ticketId; });
+    }
+
+    function postForm(url, params) {
+      var fd = new FormData();
+      Object.keys(params).forEach(function (k) { fd.append(k, params[k]); });
+      return fetch(url, {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin',
+      });
+    }
+
+    function pollColumnsNow() {
+      // Force an immediate /board/columns fetch. The OOB response swaps
+      // each column in place; the sidebar is never touched.
+      var trigger = document.getElementById('board-columns-poll');
+      if (!trigger || typeof htmx === 'undefined') return;
+      htmx.trigger(trigger, 'poll');
+    }
+
+    function isDragging() {
+      return !!document.querySelector(
+        '.sortable-chosen, .sortable-drag, .sortable-ghost'
+      );
+    }
+
+    function initSortable() {
+      if (typeof Sortable === 'undefined') return;
+      document.querySelectorAll('ul.board-list').forEach(function (list) {
+        if (list.__sortable_bound) return;
+        list.__sortable_bound = true;
+        new Sortable(list, {
+          group: 'board',
+          animation: 120,
+          ghostClass: 'opacity-50',
+          onEnd: function (evt) {
+            var fromStatus = evt.from.dataset.status;
+            var toStatus = evt.to.dataset.status;
+            var itemId = evt.item.dataset.ticketId;
+            var p;
+            if (fromStatus === toStatus) {
+              var ids = ticketIdsFrom(evt.to);
+              p = postForm('/board/columns/' + toStatus + '/reorder', {
+                ticket_ids: csv(ids),
+              });
+            } else {
+              p = postForm('/board/tickets/' + itemId + '/move', {
+                target_status: toStatus,
+                position: evt.newIndex,
+              });
+            }
+            // Trigger an immediate columns refresh either way — on
+            // success it confirms the new state (and pulls in anything
+            // else that changed); on failure it reverts the optimistic
+            // DOM placement to server truth. No full page reload, so
+            // the sidebar's in-progress edit is preserved.
+            p.then(pollColumnsNow, pollColumnsNow);
+          },
+        });
+      });
+    }
+
+    function syncSelectedCard() {
+      // Highlight whichever board card matches the sidebar's currently
+      // open ticket. The sidebar partial sets data-selected-ticket-id on
+      // its <aside>; if it's missing (create mode) no card is highlighted.
+      //
+      // Inline styles instead of a CSS class — Tailwind utilities like
+      // `border-border` on the card were winning the cascade against
+      // every layered approach we tried. Inline styles beat any rule
+      // without !important, and column polls re-create the <li> so the
+      // styles get re-applied here on every htmx swap anyway.
+      var sidebar = document.getElementById('sidebar');
+      var selectedId = sidebar && sidebar.getAttribute('data-selected-ticket-id');
+      var accent = getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim() || '#34d399';
+      document.querySelectorAll('li[data-ticket-id]').forEach(function (card) {
+        var match = selectedId && card.dataset.ticketId === selectedId;
+        if (match) {
+          card.dataset.selected = '1';
+          card.style.borderColor = accent;
+          card.style.boxShadow = '0 0 0 1px ' + accent + ', 0 4px 12px rgba(52, 211, 153, .2)';
+          card.style.background = 'color-mix(in oklab, ' + accent + ' 8%, var(--color-bg-elev-2))';
+        } else {
+          delete card.dataset.selected;
+          card.style.borderColor = '';
+          card.style.boxShadow = '';
+          card.style.background = '';
+        }
+      });
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () {
+        initSortable();
+        syncSelectedCard();
+      });
+    } else {
+      initSortable();
+      syncSelectedCard();
+    }
+    // Re-init after HTMX swaps too — every poll replaces the column
+    // sections, so the new <ul>s need fresh Sortable bindings. The
+    // selection highlight also needs re-application: column swaps replace
+    // <li>s (losing the data-selected attribute) and sidebar swaps change
+    // which ticket is selected.
+    document.body.addEventListener('htmx:afterSwap', function () {
+      initSortable();
+      syncSelectedCard();
+    });
+    document.body.addEventListener('htmx:oobAfterSwap', function () {
+      initSortable();
+      syncSelectedCard();
+    });
+
+    // Don't let the periodic columns poll fire mid-drag — Sortable
+    // re-renders the dragged element and the ghost-class swap would
+    // either yank the card or wipe the drop visual. Sortable issues
+    // its own poll the moment the drop finishes anyway.
+    document.body.addEventListener('htmx:beforeRequest', function (evt) {
+      var elt = evt.detail && evt.detail.elt;
+      if (elt && elt.id === 'board-columns-poll' && isDragging()) {
+        evt.preventDefault();
+      }
+    });
+  })();
+</script>
+{% endblock %}

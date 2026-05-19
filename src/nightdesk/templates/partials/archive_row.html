@@ -1,0 +1,32 @@
+<tr class="border-t border-border hover:bg-bg-elev">
+  <td class="px-3 py-2">
+    <a href="/tickets/{{ row.id }}" class="text-accent hover:underline">{{ row.title }}</a>
+  </td>
+  <td class="px-3 py-2 text-fg-muted">
+    {{ profile_names.get(row.profile_id, row.profile_id) }}
+  </td>
+  <td class="px-3 py-2">
+    {% set o = row.outcome %}
+    {% if o == 'success' %}
+      <span class="inline-block px-2 py-0.5 rounded text-xs font-mono bg-bg-elev-2 text-accent border border-border">success</span>
+    {% elif o == 'failed' %}
+      <span class="inline-block px-2 py-0.5 rounded text-xs font-mono bg-bg-elev-2 text-danger border border-border">failed</span>
+    {% elif o in ('cancelled', 'worker_crash') %}
+      <span class="inline-block px-2 py-0.5 rounded text-xs font-mono bg-bg-elev-2 text-warn border border-border">{{ o }}</span>
+    {% else %}
+      <span class="inline-block px-2 py-0.5 rounded text-xs font-mono bg-bg-elev-2 text-fg-muted border border-border">none</span>
+    {% endif %}
+  </td>
+  <td class="px-3 py-2 text-fg-muted font-mono text-xs">
+    {{ row.finished_rel or '-' }}
+  </td>
+  <td class="px-3 py-2 font-mono text-xs">{{ row.priority }}</td>
+  <td class="px-3 py-2 text-right">
+    <form action="/archive/tickets/{{ row.id }}/unarchive" method="post" class="inline">
+      <button type="submit"
+              class="px-2 py-1 text-xs rounded border border-border bg-bg-elev-2 text-fg hover:text-accent">
+        Unarchive
+      </button>
+    </form>
+  </td>
+</tr>

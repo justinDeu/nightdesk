@@ -1,0 +1,595 @@
+{# Right-pane transcript view for a single run.
+
+   Rendered both at initial page load (with the latest run preselected) and
+   later as an HTMX swap target when the user clicks a row in run history.
+
+   Context:
+     ticket             - Ticket ORM object (needed for the live SSE URL).
+     selected_run       - Run being displayed, or None when no runs exist.
+     transcript_events  - Parsed canonical events (empty for legacy raw logs).
+     transcript_raw     - Raw file text for non-canonical transcripts.
+     live               - True if this run is the active running one and the
+                          SSE tail should be attached.
+
+   The outer page owns the section heading and the #transcript-panel-inner
+   wrapper; this partial only renders what swaps in.
+#}
+{% import "partials/transcript_event.html" as te %}
+
+{% if selected_run is none %}
+  <p class="text-fg-muted italic text-sm">no run yet</p>
+{% else %}
+  <div class="flex items-center gap-2 text-xs mb-2">
+    <span class="text-fg-muted">viewing</span>
+    <code class="text-fg">{{ selected_run.id[:8] }}</code>
+    <span class="text-fg-muted">{{ selected_run.started_at }}</span>
+    {% if live %}
+      <span class="ml-auto inline-block rounded px-2 py-0.5 bg-info/20 text-info">live</span>
+    {% endif %}
+  </div>
+
+  {% include "partials/run_stats.html" %}
+
+  {% if transcript_raw %}
+    {# Legacy raw SDK file: plain pre fallback. #}
+    <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto"
+         style="max-height: calc(100vh - 10rem);">{{ transcript_raw }}</pre>
+  {% else %}
+    <div class="overflow-y-auto pr-1" style="max-height: calc(100vh - 10rem);">
+      <div id="transcript" class="space-y-2">
+        {# Pre-pair tool_result events with their parent tool_use so each
+           pair renders as one visual card. Orphan results (no matching
+           tool_use in this slice) still render standalone. Mirrors the
+           append() logic in the live-tail JS below. #}
+        {% for item in tv.pair_tool_events(transcript_events) %}
+          {{ te.render_event(item.event, item.paired_result) }}
+        {% else %}
+          <p class="text-fg-muted italic text-sm" data-empty="true">no events yet</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if live %}
+      <div class="text-xs text-fg-muted mt-2" id="transcript-status">tailing live</div>
+      <script>
+      // ------------------------------------------------------------------
+      // Live-tail transcript renderer.
+      //
+      // Mirrors the server-side Jinja renderer in
+      //   templates/partials/transcript_event.html
+      //   templates/partials/tool_card.html
+      // backed by helpers in nightdesk/transcript_view.py.
+      //
+      // Keep both sides in sync — same DOM, same CSS classes (defined in
+      // static/app.css under .tc-card / .diff / .bash-cmd / .tool-result /
+      // .thinking-block / .assistant-text).
+      // ------------------------------------------------------------------
+      (function () {
+        // Close any prior EventSource left behind by a previous panel swap.
+        if (window.__transcriptES) {
+          try { window.__transcriptES.close(); } catch (_) {}
+          window.__transcriptES = null;
+        }
+
+        const container = document.getElementById('transcript');
+        const status = document.getElementById('transcript-status');
+        if (!container) return;
+        const empty = container.querySelector('[data-empty="true"]');
+        if (empty) empty.remove();
+
+        function escapeHtml(s) {
+          if (s === null || s === undefined) return '';
+          return String(s).replace(/[&<>"']/g, function (c) {
+            return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);
+          });
+        }
+
+        function el(html) {
+          const t = document.createElement('template');
+          t.innerHTML = html.trim();
+          return t.content.firstChild;
+        }
+
+        // --- shared helpers (mirror nightdesk.transcript_view) -----------
+
+        // Unified single-column diff with +/- gutter and line numbers.
+        // Two-pointer LCS-driven walk over the line lists; produces the
+        // same row sequence as difflib.SequenceMatcher.get_opcodes() for
+        // the inputs we feed it (short Edit fragments). For long inputs
+        // this is O(n*m) but Edit fragments are tiny in practice.
+        function diffRows(oldStr, newStr) {
+          const a = (oldStr || '').split('\n');
+          const b = (newStr || '').split('\n');
+          // Drop trailing empty line from a final '\n'.
+          if (a.length && a[a.length - 1] === '') a.pop();
+          if (b.length && b[b.length - 1] === '') b.pop();
+          const n = a.length, m = b.length;
+          // Build LCS length table.
+          const lcs = Array.from({length: n + 1}, () => new Int32Array(m + 1));
+          for (let i = n - 1; i >= 0; i--) {
+            for (let j = m - 1; j >= 0; j--) {
+              if (a[i] === b[j]) lcs[i][j] = lcs[i + 1][j + 1] + 1;
+              else lcs[i][j] = Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+            }
+          }
+          const rows = [];
+          let i = 0, j = 0;
+          while (i < n && j < m) {
+            if (a[i] === b[j]) {
+              rows.push({kind: 'ctx', gutter: ' ', ln: String(j + 1), text: b[j]});
+              i++; j++;
+            } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+              rows.push({kind: 'del', gutter: '-', ln: String(i + 1), text: a[i]});
+              i++;
+            } else {
+              rows.push({kind: 'ins', gutter: '+', ln: String(j + 1), text: b[j]});
+              j++;
+            }
+          }
+          while (i < n) {
+            rows.push({kind: 'del', gutter: '-', ln: String(i + 1), text: a[i]});
+            i++;
+          }
+          while (j < m) {
+            rows.push({kind: 'ins', gutter: '+', ln: String(j + 1), text: b[j]});
+            j++;
+          }
+          return rows;
+        }
+
+        function diffBlockHtml(oldStr, newStr) {
+          const rows = diffRows(oldStr, newStr);
+          const parts = ['<div class="diff">'];
+          for (const r of rows) {
+            parts.push(
+              `<div class="diff-row ${r.kind}"><span class="diff-gutter">${escapeHtml(r.gutter)}</span><span class="diff-ln">${escapeHtml(r.ln)}</span><span class="diff-src">${escapeHtml(r.text)}</span></div>`
+            );
+          }
+          parts.push('</div>');
+          return parts.join('');
+        }
+
+        // Aggregate (ins, del) counts for a single old/new pair. Mirrors
+        // nightdesk.transcript_view.diff_counts so the header totals agree
+        // with what the row renderer shows.
+        function diffCounts(oldStr, newStr) {
+          const rows = diffRows(oldStr, newStr);
+          let ins = 0, del = 0;
+          for (const r of rows) {
+            if (r.kind === 'ins') ins++;
+            else if (r.kind === 'del') del++;
+          }
+          return {ins: ins, del: del};
+        }
+
+        function diffHeaderHtml(path, ins, del) {
+          return (
+            `<div class="diff-header">` +
+              `<code class="diff-header-path">${escapeHtml(path)}</code>` +
+              `<span class="diff-header-counts">` +
+                `<span class="diff-count-ins">+${ins}</span>` +
+                `<span class="diff-count-del">-${del}</span>` +
+              `</span>` +
+            `</div>`
+          );
+        }
+
+        function elideOutput(text, head = 10, tail = 5, threshold = 20) {
+          const lines = (text || '').split('\n');
+          // Match Python splitlines() which drops a single trailing empty.
+          if (lines.length && lines[lines.length - 1] === '') lines.pop();
+          const total = lines.length;
+          if (total <= threshold) {
+            return {head: lines, tail: [], hidden: 0, total: total};
+          }
+          return {
+            head: lines.slice(0, head), tail: lines.slice(-tail),
+            hidden: total - head - tail, total: total,
+          };
+        }
+
+        const FENCE_RE = /^```([A-Za-z0-9_+\-.]*)\s*$/;
+        function assistantSegments(text) {
+          if (!text) return [{kind: 'text', lang: '', body: ''}];
+          const out = [];
+          let buf = [];
+          let inCode = false;
+          let lang = '';
+          for (const line of text.split('\n')) {
+            const m = FENCE_RE.exec(line);
+            if (m) {
+              if (inCode) {
+                out.push({kind: 'code', lang: lang, body: buf.join('\n')});
+                buf = []; inCode = false; lang = '';
+              } else {
+                if (buf.length) out.push({kind: 'text', lang: '', body: buf.join('\n')});
+                buf = []; inCode = true; lang = m[1] || '';
+              }
+              continue;
+            }
+            buf.push(line);
+          }
+          if (buf.length) {
+            out.push({kind: inCode ? 'code' : 'text', lang: lang, body: buf.join('\n')});
+          }
+          return out;
+        }
+
+        function toolSummary(evt) {
+          const tool = (evt.tool || '').trim();
+          const input = evt.input || {};
+          if (tool === 'Read') {
+            const path = input.file_path || input.path || '?';
+            let meta = '';
+            if (input.offset !== undefined && input.limit !== undefined) {
+              meta = `lines ${input.offset}-${Number(input.offset) + Number(input.limit)}`;
+            } else if (input.offset !== undefined) {
+              meta = `from line ${input.offset}`;
+            }
+            return {tag: 'Read', cls: 'read', primary: String(path), meta: meta};
+          }
+          if (tool === 'Write') {
+            const path = input.file_path || input.path || '?';
+            const content = String(input.content || '');
+            const lc = content ? content.split('\n').length : 0;
+            return {tag: 'Write', cls: 'write', primary: String(path), meta: lc ? `${lc} lines` : ''};
+          }
+          if (tool === 'Edit') {
+            const path = input.file_path || input.path || '?';
+            return {tag: 'Edit', cls: 'edit', primary: String(path), meta: ''};
+          }
+          if (tool === 'MultiEdit') {
+            const path = input.file_path || input.path || '?';
+            const n = (input.edits || []).length;
+            return {tag: 'MultiEdit', cls: 'multiedit', primary: String(path), meta: `${n} edits`};
+          }
+          if (tool === 'Bash') {
+            const cmd = String(input.command || '').trim();
+            let first = cmd.split('\n')[0] || '';
+            if (first.length > 80) first = first.slice(0, 77) + '...';
+            return {tag: 'Bash', cls: 'bash', primary: first, meta: ''};
+          }
+          if (tool === 'Glob') {
+            const pattern = input.pattern || '';
+            const path = input.path || '.';
+            return {tag: 'Glob', cls: 'glob', primary: String(pattern), meta: path ? `in ${path}` : ''};
+          }
+          if (tool === 'Grep') {
+            const pattern = input.pattern || '';
+            const flags = [];
+            if (input['-i']) flags.push('-i');
+            if (input['-n']) flags.push('-n');
+            if (input['-C'] !== undefined && input['-C'] !== null) flags.push(`-C${input['-C']}`);
+            else {
+              if (input['-A'] !== undefined && input['-A'] !== null) flags.push(`-A${input['-A']}`);
+              if (input['-B'] !== undefined && input['-B'] !== null) flags.push(`-B${input['-B']}`);
+            }
+            const extras = [];
+            if (flags.length) extras.push(flags.join(' '));
+            if (input.glob) extras.push(`glob=${input.glob}`);
+            if (input.type) extras.push(`type=${input.type}`);
+            extras.push(`in ${input.path || '.'}`);
+            return {tag: 'Grep', cls: 'grep', primary: String(pattern), meta: extras.join(' ')};
+          }
+          return {tag: tool || 'tool', cls: 'generic', primary: '', meta: ''};
+        }
+
+        function summaryHtml(s) {
+          const primary = s.primary ? `<code class="tc-path">${escapeHtml(s.primary)}</code>` : '';
+          const meta = s.meta ? `<span class="tc-meta">${escapeHtml(s.meta)}</span>` : '';
+          return `<summary><span class="tc-tag tc-tag-${s.cls}">${escapeHtml(s.tag)}</span> ${primary} ${meta}</summary>`;
+        }
+
+        // --- tool_use card renderers -------------------------------------
+
+        function renderToolCard(evt) {
+          const tool = evt.tool || '';
+          const input = evt.input || {};
+          const s = toolSummary(evt);
+          const sumHtml = summaryHtml(s);
+          let body = '';
+
+          if (tool === 'Edit') {
+            const path = input.file_path || input.path || '';
+            const oldS = input.old_string || '';
+            const newS = input.new_string || '';
+            const counts = diffCounts(oldS, newS);
+            const header = diffHeaderHtml(path, counts.ins, counts.del);
+            body = `<div class="tc-body"><div class="diff-stack">${header}${diffBlockHtml(oldS, newS)}</div></div>`;
+          } else if (tool === 'MultiEdit') {
+            const path = input.file_path || input.path || '';
+            const edits = input.edits || [];
+            let totalIns = 0, totalDel = 0;
+            for (const e of edits) {
+              const c = diffCounts(e.old_string || '', e.new_string || '');
+              totalIns += c.ins;
+              totalDel += c.del;
+            }
+            const header = diffHeaderHtml(path, totalIns, totalDel);
+            const parts = [];
+            edits.forEach((e, i) => {
+              if (i > 0) parts.push('<div class="diff-sep"></div>');
+              parts.push(diffBlockHtml(e.old_string || '', e.new_string || ''));
+            });
+            body = `<div class="tc-body"><div class="diff-stack">${header}${parts.join('')}</div></div>`;
+          } else if (tool === 'Bash') {
+            const cmd = String(input.command || '');
+            const desc = String(input.description || '');
+            const descHtml = desc ? `<div class="bash-desc">${escapeHtml(desc)}</div>` : '';
+            body = `<div class="tc-body"><pre class="bash-cmd">${escapeHtml(cmd)}</pre>${descHtml}</div>`;
+          } else if (tool === 'Write') {
+            const content = String(input.content || '');
+            if (content) {
+              const lines = content.split('\n');
+              const preview = lines.slice(0, 40).join('\n');
+              const tail = lines.length > 40 ? `\n&hellip; (${lines.length - 40} more lines)` : '';
+              body = `<div class="tc-body"><pre class="bash-cmd">${escapeHtml(preview)}${tail}</pre></div>`;
+            }
+          } else if (tool === 'Read' || tool === 'Glob' || tool === 'Grep') {
+            body = '';
+          } else {
+            body = `<div class="tc-body"><pre class="bash-cmd">${escapeHtml(JSON.stringify(input, null, 2))}</pre></div>`;
+          }
+
+          // Default-open the tools whose body IS the information (mirrors
+          // tool_card.html). Read/Glob/Grep have no body so they stay
+          // summary-only; generic fallback stays collapsed too.
+          const defaultOpen = (tool === 'Edit' || tool === 'MultiEdit' ||
+                                tool === 'Write' || tool === 'Bash');
+          const openAttr = defaultOpen ? ' open' : '';
+          const id = evt.id || '';
+          return el(`<div data-tool-use-id="${escapeHtml(id)}" class="space-y-1"><details class="tc-card"${openAttr}>${sumHtml}${body}</details></div>`);
+        }
+
+        function renderEvent(evt) {
+          const t = evt.type;
+          if (t === 'meta') {
+            return el(`<div class="text-fg-muted text-xs font-mono py-1">run ${escapeHtml((evt.run_id || '').slice(0,8))} started ${escapeHtml(evt.ts || '')}</div>`);
+          }
+          if (t === 'assistant_text') {
+            // Mirror evt_assistant_text in transcript_event.html: skip
+            // empty-text events so we don't render a bare "claude" chip
+            // with no body. Author chip prefers evt.model and falls back
+            // to 'claude' when the translator didn't carry one through.
+            const text = evt.text || '';
+            if (!text.trim()) return null;
+            const author = evt.model || 'claude';
+            const segs = assistantSegments(text);
+            const parts = [
+              '<div class="assistant-text">',
+              `<div class="assistant-author">${escapeHtml(author)}</div>`,
+            ];
+            for (const seg of segs) {
+              if (seg.kind === 'code') {
+                parts.push(`<pre class="code">${escapeHtml(seg.body)}</pre>`);
+              } else if (seg.body) {
+                parts.push(`<p>${escapeHtml(seg.body)}</p>`);
+              }
+            }
+            parts.push('</div>');
+            return el(parts.join(''));
+          }
+          if (t === 'thinking') {
+            const text = evt.text || '';
+            // Mirror evt_thinking in transcript_event.html: drop empty
+            // thinking events (some Claude variants return blocks with
+            // no content) instead of rendering a "thinking (0 tokens)"
+            // placeholder card.
+            if (!text.trim()) return null;
+            const tokens = text.split(/\s+/).filter(Boolean).length;
+            return el(`<details class="thinking-block"><summary>thinking (${tokens} tokens)</summary><div class="thinking-body">${escapeHtml(text)}</div></details>`);
+          }
+          if (t === 'tool_use') {
+            return renderToolCard(evt);
+          }
+          if (t === 'tool_result') {
+            const out = String(evt.output || '');
+            const elide = elideOutput(out);
+            const isError = !!evt.is_error;
+            const truncated = !!evt.truncated;
+            const errBadge = isError ? '<span class="bg-danger/20 text-danger px-1 rounded">error</span> ' : '';
+            const plural = elide.total === 1 ? '' : 's';
+            const sumLine = `${errBadge}result (${elide.total} line${plural}${truncated ? ', truncated' : ''})`;
+            let body;
+            if (elide.hidden === 0) {
+              body = `<pre class="tool-result-pre">${escapeHtml(out)}</pre>`;
+            } else {
+              body = `<pre class="tool-result-pre">${escapeHtml(elide.head.join('\n'))}</pre>` +
+                     `<details><summary class="bash-hidden-summary">${elide.hidden} lines hidden</summary></details>` +
+                     `<pre class="tool-result-pre">${escapeHtml(elide.tail.join('\n'))}</pre>`;
+            }
+            return el(`<details class="tool-result${isError ? ' is-error' : ''}" open><summary>${sumLine}</summary>${body}</details>`);
+          }
+          if (t === 'result') {
+            const subtype = evt.subtype || 'success';
+            const cls = subtype === 'success' ? 'border-accent bg-accent/5' : 'border-danger bg-danger/5';
+            const titleCls = subtype === 'success' ? 'text-accent' : 'text-danger';
+            const titleLabel = subtype === 'success' ? 'done' : 'error';
+            return el(`<div class="rounded p-3 border-2 ${cls}"><div class="font-bold ${titleCls}">${titleLabel}</div><div class="whitespace-pre-wrap text-sm mt-1">${escapeHtml(evt.summary || '')}</div></div>`);
+          }
+          if (t === 'worker_error') {
+            const kind = evt.kind || 'worker_error';
+            const summary = evt.summary || '';
+            const tb = evt.traceback || '';
+            const tbBlock = tb
+              ? `<details class="mt-2"><summary class="cursor-pointer text-xs text-fg-muted">stacktrace</summary><pre class="mt-1 bg-bg-elev-2 border border-border rounded p-2 font-mono text-xs whitespace-pre-wrap text-fg overflow-x-auto">${escapeHtml(tb)}</pre></details>`
+              : '';
+            return el(
+              `<div class="worker-error rounded p-3 border-2 border-danger bg-danger/10">` +
+                `<div class="flex items-center gap-2">` +
+                  `<span class="font-bold text-danger uppercase tracking-wide text-xs">worker error</span>` +
+                  `<code class="text-xs text-danger/80">${escapeHtml(kind)}</code>` +
+                `</div>` +
+                `<div class="whitespace-pre-wrap text-sm mt-2 text-fg">${escapeHtml(summary)}</div>` +
+                tbBlock +
+              `</div>`
+            );
+          }
+          return null;
+        }
+
+        function append(evt) {
+          // Pair tool_result events with their parent tool_use card so the
+          // two render as one visual unit. Mirrors the server-side pairing
+          // in tv.pair_tool_events used by the static loop above.
+          if (evt.type === 'tool_result' && evt.tool_use_id) {
+            const wrapper = container.querySelector(`[data-tool-use-id="${evt.tool_use_id}"]`);
+            if (wrapper) {
+              const card = wrapper.querySelector('.tc-card');
+              if (card) {
+                let body = card.querySelector(':scope > .tc-body');
+                if (!body) {
+                  // Read / Glob / Grep render with no tc-body. Create one
+                  // so the paired result has a home.
+                  body = document.createElement('div');
+                  body.className = 'tc-body';
+                  card.appendChild(body);
+                }
+                if (body.children.length > 0) {
+                  // Body already carries tool input (diff, bash cmd, write
+                  // preview). Visual divider separates input from output.
+                  const div = document.createElement('div');
+                  div.className = 'tc-divider';
+                  body.appendChild(div);
+                }
+                const resultNode = renderEvent(evt);
+                if (resultNode) body.appendChild(resultNode);
+                return;
+              }
+            }
+            // Fall through: no matching tool_use in view -> standalone.
+          }
+          const node = renderEvent(evt);
+          if (node) container.appendChild(node);
+        }
+
+        function parse(e) {
+          try { return JSON.parse(e.data); } catch (_) { return null; }
+        }
+
+        // -------- stats bar live updates --------------------------------
+        // Mirrors transcript_view.accumulate_stats. The server-side render
+        // covers everything up to ``data-last-seq``; the SSE stream replays
+        // those same historical events on connect, so we dedupe by seq and
+        // only accumulate events strictly above the watermark.
+        const statsBar = document.getElementById('run-stats-bar');
+        const seqHigh = statsBar ? parseInt(statsBar.dataset.lastSeq || '-1', 10) : -1;
+        function readNumStat(name) {
+          if (!statsBar) return 0;
+          const el = statsBar.querySelector(`[data-stat="${name}"]`);
+          if (!el) return 0;
+          const raw = (el.textContent || '').replace(/[^0-9]/g, '');
+          return parseInt(raw || '0', 10) || 0;
+        }
+        const stats = {
+          input_tokens: readNumStat('input'),
+          output_tokens: readNumStat('output'),
+          cache_read_tokens: readNumStat('cache-read'),
+          cache_write_tokens: readNumStat('cache-write'),
+          tool_count: readNumStat('tools'),
+          model: null,
+          cost_usd: null,
+        };
+
+        function fmtNum(n) {
+          return Number(n || 0).toLocaleString();
+        }
+        function renderStats() {
+          if (!statsBar) return;
+          const set = (name, val) => {
+            const el = statsBar.querySelector(`[data-stat="${name}"]`);
+            if (el) el.textContent = val;
+          };
+          if (stats.model) set('model', stats.model);
+          set('input', fmtNum(stats.input_tokens));
+          set('output', fmtNum(stats.output_tokens));
+          set('cache-read', fmtNum(stats.cache_read_tokens));
+          set('cache-write', fmtNum(stats.cache_write_tokens));
+          set('tools', String(stats.tool_count));
+          if (stats.cost_usd !== null && stats.cost_usd !== undefined) {
+            set('cost', '$' + Number(stats.cost_usd).toFixed(4));
+          }
+        }
+        function applyStatsEvent(evt) {
+          if (evt.scope === 'run') {
+            // Final cumulative totals — replace, don't sum.
+            if (evt.input_tokens != null)  stats.input_tokens  = +evt.input_tokens;
+            if (evt.output_tokens != null) stats.output_tokens = +evt.output_tokens;
+            if (evt.cache_read_tokens != null)  stats.cache_read_tokens  = +evt.cache_read_tokens;
+            if (evt.cache_write_tokens != null) stats.cache_write_tokens = +evt.cache_write_tokens;
+            if (evt.cost_usd != null) stats.cost_usd = +evt.cost_usd;
+          } else {
+            stats.input_tokens  += +(evt.input_tokens || 0);
+            stats.output_tokens += +(evt.output_tokens || 0);
+            stats.cache_read_tokens  += +(evt.cache_read_tokens || 0);
+            stats.cache_write_tokens += +(evt.cache_write_tokens || 0);
+          }
+          if (evt.model) stats.model = evt.model;
+          renderStats();
+        }
+
+        // -------- duration ticker ---------------------------------------
+        function fmtDuration(ms) {
+          if (!isFinite(ms) || ms < 0) return '—';
+          const sec = Math.floor(ms / 1000);
+          const h = Math.floor(sec / 3600);
+          const m = Math.floor((sec % 3600) / 60);
+          const s = sec % 60;
+          if (h > 0) return `${h}h ${m}m ${s}s`;
+          if (m > 0) return `${m}m ${s}s`;
+          return `${s}s`;
+        }
+        let durationTimer = null;
+        if (statsBar) {
+          const startedRaw = statsBar.dataset.startedAt;
+          const finishedRaw = statsBar.dataset.finishedAt;
+          const startedAt = startedRaw ? new Date(startedRaw) : null;
+          const finishedAt = finishedRaw ? new Date(finishedRaw) : null;
+          const durEl = statsBar.querySelector('[data-stat="duration"]');
+          function tickDuration() {
+            if (!startedAt || !durEl) return;
+            const end = finishedAt || new Date();
+            durEl.textContent = fmtDuration(end - startedAt);
+          }
+          tickDuration();
+          if (!finishedAt) {
+            durationTimer = setInterval(tickDuration, 1000);
+          }
+        }
+
+        const url = '/api/v1/tickets/{{ ticket.id }}/transcript';
+        const es = new EventSource(url);
+        window.__transcriptES = es;
+        function isNew(evt) {
+          const s = typeof evt.seq === 'number' ? evt.seq : -1;
+          return s > seqHigh;
+        }
+        ['meta', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error'].forEach(function (t) {
+          es.addEventListener(t, function (e) {
+            const evt = parse(e);
+            if (!evt) return;
+            if (evt.type === 'tool_use' && isNew(evt)) {
+              stats.tool_count += 1;
+              renderStats();
+            }
+            append(evt);
+          });
+        });
+        es.addEventListener('stats', function (e) {
+          const evt = parse(e);
+          if (evt && isNew(evt)) applyStatsEvent(evt);
+        });
+        es.addEventListener('end', function () {
+          es.close();
+          if (window.__transcriptES === es) window.__transcriptES = null;
+          if (status) status.textContent = 'stream closed';
+          if (durationTimer) { clearInterval(durationTimer); durationTimer = null; }
+        });
+        es.onerror = function () {
+          if (status) status.textContent = 'stream error';
+        };
+      })();
+      </script>
+    {% endif %}
+  {% endif %}
+{% endif %}

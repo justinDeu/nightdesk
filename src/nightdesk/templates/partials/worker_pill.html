@@ -1,0 +1,43 @@
+{#
+  Worker status pill.
+
+  States (precedence top to bottom):
+    1. stale / no heartbeat                 -> red, "offline"
+    2. out of window, no overflow run-nows  -> amber, "paused (resumes HH:MM)"
+       (no N/M fraction: capacity is 0, only run-now bypasses it)
+    3. overflow (total_running > max)       -> green, "host · N/M ⚡+K"
+    4. in window                            -> green, "host · N/M"
+#}
+{% if status.stale or not status.host %}
+  <span title="Worker offline (no recent heartbeat). Window {{ status.window_start }}-{{ status.window_end }}"
+        class="inline-flex items-center gap-1.5">
+    <span class="inline-block w-2 h-2 rounded-full bg-danger"></span>
+    <span class="text-danger">offline</span>
+  </span>
+{% elif not status.in_window and status.total_running == 0 %}
+  <span title="host={{ status.host }} pid={{ status.pid or '?' }} window={{ status.window_start }}-{{ status.window_end }} in_window=False — no normal picks until window opens; drag a ticket to running to bypass"
+        class="inline-flex items-center gap-1.5">
+    <span class="inline-block w-2 h-2 rounded-full bg-warn"></span>
+    <span class="text-warn">paused</span>
+    <span class="text-fg-muted">· resumes {{ status.window_start }}</span>
+  </span>
+{% else %}
+  {% set overflow = status.total_running > status.max_parallel %}
+  {% set dot_class = "bg-accent" if (overflow or status.in_window) else "bg-warn" %}
+  {% set tooltip = "host=" ~ status.host ~ " pid=" ~ (status.pid or "?") ~
+                    " window=" ~ status.window_start ~ "-" ~ status.window_end ~
+                    " in_window=" ~ status.in_window ~
+                    " normal=" ~ status.normal_running ~
+                    " run_now=" ~ status.run_now_running ~
+                    " total=" ~ status.total_running ~ "/" ~ status.max_parallel %}
+  <span title="{{ tooltip }}" class="inline-flex items-center gap-1.5">
+    <span class="inline-block w-2 h-2 rounded-full {{ dot_class }}"></span>
+    <span>{{ status.host }} · {{ status.total_running }}/{{ status.max_parallel }}</span>
+    {% if status.run_now_running and status.run_now_running > 0 %}
+      <span class="text-accent-strong">⚡+{{ status.run_now_running }}</span>
+    {% endif %}
+    {% if not status.in_window %}
+      <span class="text-fg-muted">· run-now only</span>
+    {% endif %}
+  </span>
+{% endif %}

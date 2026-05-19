@@ -1,0 +1,505 @@
+{% extends "base.html" %}
+{% set active_page = 'tickets' %}
+{% block body %}
+{# Status pill colors map by lifecycle stage. #}
+{% set status_class = {
+  'draft':    'bg-bg-elev-2 text-fg-muted border-border',
+  'queued':   'bg-info/20 text-info border-info/40',
+  'running':  'bg-accent/20 text-accent border-accent/40',
+  'review':   'bg-warn/20 text-warn border-warn/40',
+  'archived': 'bg-bg-elev-2 text-fg-muted border-border',
+}[ticket.status] | default('bg-bg-elev-2 text-fg-muted border-border') %}
+
+{% if project_settings_paths %}
+{# Project settings detection — collapsed to a one-line banner so it
+   doesn't eat vertical space on every page load. Click to expand for the
+   path list + explanation. #}
+<details class="mb-3 rounded border border-warn/40 bg-warn/10 text-xs">
+  <summary class="cursor-pointer px-2 py-1 text-warn select-none">
+    <span class="font-medium">Project Claude Code settings detected</span>
+    <span class="text-fg-muted">({{ project_settings_paths|length }} file{{ '' if project_settings_paths|length == 1 else 's' }})</span>
+  </summary>
+  <div class="px-2 pb-2 text-fg-muted space-y-1">
+    {% for p in project_settings_paths %}
+      <div><code class="px-1 py-0.5 bg-bg-elev-2 rounded">{{ p }}</code></div>
+    {% endfor %}
+    <p>Claude Code will merge these with the profile's settings at runtime — may override allowed/disallowed tools or model. Inspect the file if behavior is unexpected.</p>
+  </div>
+</details>
+{% endif %}
+
+<div class="flex flex-col lg:flex-row gap-4 items-start">
+
+  {# ===================================================================== #
+   # LEFT COLUMN: ticket info, prompt, scope, run history.
+   # Fixed-ish width on lg+ so the transcript pane on the right gets the
+   # remaining viewport width.
+   # ===================================================================== #}
+  <article class="w-full lg:w-[560px] lg:flex-none min-w-0 space-y-4">
+
+    {# --- Header card ----------------------------------------------------- #
+     # Three rows: title full-width, then pills, then action toolbar. The
+     # actions row is per-status so the toolbar reads as a single
+     # contextually-relevant strip rather than a grab bag of every transition.
+     #}
+    <header class="bg-bg-elev border border-border rounded p-4 space-y-3">
+      <h1 class="text-xl font-bold text-fg break-words">{{ ticket.title }}</h1>
+
+      <div class="flex flex-wrap items-center gap-2 text-xs">
+        <span class="inline-block border rounded px-2 py-0.5 {{ status_class }}">{{ ticket.status }}</span>
+        {% if ticket.profile %}
+          <span class="inline-block border border-border rounded px-2 py-0.5 bg-bg-elev-2 text-fg-muted">
+            {{ ticket.profile.name }}
+          </span>
+        {% endif %}
+        {% if ticket.priority %}
+          <span class="inline-block border border-border rounded px-2 py-0.5 bg-bg-elev-2 text-fg-muted">
+            prio {{ ticket.priority }}
+          </span>
+        {% endif %}
+      </div>
+
+      <div class="flex flex-wrap gap-2">
+        <button type="button"
+                onclick="document.getElementById('ticket-edit-modal').showModal()"
+                class="border border-border text-fg hover:bg-bg-elev-2 px-3 py-1 rounded text-sm">Edit</button>
+        {% if ticket.status in ('draft', 'queued') %}
+          {# HTMX, not a plain form: a plain POST would 303 and force a
+             page reload — the hard requirement on this ticket is that
+             Run-now must not navigate. hx-swap="none" leaves the DOM
+             alone; the after-request handler flashes the button so the
+             user can tell the click landed. #}
+          <button type="button"
+                  data-run-now-btn
+                  hx-post="/tickets/{{ ticket.id }}/run-now"
+                  hx-swap="none"
+                  hx-on::after-request="window.ndRunNowFeedback && window.ndRunNowFeedback(this, event)"
+                  class="bg-accent text-bg font-medium px-3 py-1 rounded text-sm">Run now</button>
+        {% endif %}
+        {% if ticket.status in ('review', 'archived') %}
+          <button type="button"
+                  onclick="document.getElementById('run-again-modal').showModal()"
+                  class="bg-accent text-bg font-medium px-3 py-1 rounded text-sm">Run again…</button>
+          <form method="post" action="/tickets/{{ ticket.id }}/requeue">
+            <button class="border border-border text-fg px-3 py-1 rounded text-sm">Requeue</button>
+          </form>
+        {% endif %}
+        {% if ticket.status == 'running' %}
+          <form method="post" action="/tickets/{{ ticket.id }}/cancel">
+            <button class="border border-warn text-warn px-3 py-1 rounded text-sm">Cancel</button>
+          </form>
+        {% endif %}
+        {% if ticket.status == 'review' %}
+          {# Cookie-auth UI route, not the bearer-only /api/v1/... twin.
+             Hitting the JSON endpoint from a browser session would 401
+             silently and the old after-request handler navigated
+             unconditionally, so the user saw "back to board" whether the
+             archive succeeded or not. Gating navigation on
+             event.detail.successful keeps the user on the page if the
+             server rejects the transition, and routes them to /archive
+             on success so they can SEE the ticket land there. #}
+          <button type="button"
+                  hx-post="/tickets/{{ ticket.id }}/archive"
+                  hx-swap="none"
+                  hx-on::htmx:after-request="if (event.detail.successful) window.location='/archive'"
+                  class="border border-border text-fg-muted px-3 py-1 rounded text-sm">Archive</button>
+        {% endif %}
+        {% if ticket.status != 'running' %}
+          {# Same anti-pattern fix as Archive: switch from the bearer-only
+             /api/v1/... route to the cookie-auth /board/... route, which
+             already returns 204 + HX-Redirect: / on success. HTMX honors
+             HX-Redirect only when the server sets it, and the route only
+             sets it on the success path — so 4xx responses leave the
+             user on the ticket page instead of silently bouncing to /. #}
+          <button type="button"
+                  hx-delete="/board/tickets/{{ ticket.id }}"
+                  hx-confirm="Delete this ticket? This cannot be undone."
+                  hx-swap="none"
+                  class="border border-danger text-danger px-3 py-1 rounded text-sm ml-auto">Delete</button>
+        {% endif %}
+      </div>
+    </header>
+
+    {# --- Prompt ---------------------------------------------------------- #
+     # Collapses for long prompts (> 15 lines). When open, caps height with
+     # scroll so the transcript panel and other sections stay accessible.
+     #}
+    {% set prompt_text = ticket.prompt or '' %}
+    {% set prompt_lines = prompt_text.splitlines()|length %}
+    <section class="bg-bg-elev border border-border rounded p-4">
+      <details {% if prompt_lines <= 15 %}open{% endif %}>
+        <summary class="cursor-pointer text-sm font-semibold text-fg-muted uppercase tracking-wide">
+          Prompt
+          {% if prompt_lines > 15 %}
+            <span class="font-normal normal-case tracking-normal text-xs">({{ prompt_lines }} lines, click to expand)</span>
+          {% endif %}
+        </summary>
+        <pre class="mt-2 bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto"
+             style="max-height: calc(100vh - 10rem);">{{ prompt_text }}</pre>
+      </details>
+    </section>
+
+    {# --- Filesystem access ----------------------------------------------- #
+     # Defines what the agent is *allowed* to touch on disk. Distinct from
+     # the Workspaces section below (which lists the actual git worktrees
+     # that were created at runtime). cwd is shown read-only — to change
+     # it, edit the ticket via the board sidebar. Additional rw paths are
+     # editable here since they're commonly tweaked between runs.
+     #}
+    <section class="bg-bg-elev border border-border rounded p-4">
+      <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide">Filesystem access</h2>
+      <p class="text-[11px] text-fg-muted mb-3">Paths the agent can read or write at runtime.</p>
+
+      <div class="mb-3">
+        <div class="text-xs text-fg-muted mb-1">working directory (cwd)</div>
+        <div class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-xs font-mono text-fg break-all">{{ ticket.cwd }}</div>
+      </div>
+
+      <div class="mb-3">
+        <div class="text-xs text-fg-muted mb-1">profile rw (inherited)</div>
+        <ul class="space-y-1 text-xs font-mono">
+          {% if ticket.profile and ticket.profile.fs_write %}
+            {% for p in ticket.profile.fs_write %}
+              <li class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg">{{ p }}</li>
+            {% endfor %}
+          {% else %}
+            <li class="text-fg-muted italic">none</li>
+          {% endif %}
+        </ul>
+      </div>
+
+      <div>
+        <div class="text-xs text-fg-muted mb-1">ticket additional rw</div>
+        <ul class="space-y-1 text-xs font-mono">
+          {% for d in (ticket.additional_dirs or []) %}
+            <li class="flex items-center gap-2 bg-bg-elev-2 border border-border rounded px-2 py-1">
+              <span class="text-fg flex-1 break-all">{{ d.path }}</span>
+              <span class="text-fg-muted">{{ d.mode }}</span>
+              <form method="post" action="/tickets/{{ ticket.id }}/additional-dirs/delete" class="inline">
+                <input type="hidden" name="path" value="{{ d.path }}" />
+                <button type="submit" class="text-fg-muted hover:text-danger" title="remove">x</button>
+              </form>
+            </li>
+          {% else %}
+            <li class="text-fg-muted italic">none</li>
+          {% endfor %}
+        </ul>
+
+        <form method="post" action="/tickets/{{ ticket.id }}/additional-dirs"
+              class="mt-2 flex gap-2 items-center">
+          <input type="text" name="path" placeholder="/absolute/path"
+                 required pattern="/.*"
+                 class="flex-1 bg-bg-elev-2 border border-border rounded px-2 py-1 text-sm font-mono text-fg placeholder:text-fg-muted" />
+          <input type="hidden" name="mode" value="rw" />
+          <button type="submit" class="bg-accent text-bg font-medium px-3 py-1 rounded text-sm">Add</button>
+        </form>
+      </div>
+    </section>
+
+    {# --- Workspaces ------------------------------------------------------ #
+     # Each workspace row reads top-to-bottom: identity pills (role / kind /
+     # access / state), optional label, then a definition-list of git-shaped
+     # fields. The earlier layout mixed bare text with pills and pushed
+     # state to the right with ml-auto, which made the row visually noisy
+     # and inconsistent with the surrounding cards.
+     #}
+    {% if ticket.workspaces %}
+    <section class="bg-bg-elev border border-border rounded p-4">
+      <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-3">Workspaces</h2>
+      <ul class="space-y-2">
+        {% for ws in ticket.workspaces %}
+        <li class="bg-bg-elev-2 border border-border rounded p-3 text-xs space-y-2">
+
+          {# Identity row: role / kind / access on the left, state on the right. #}
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="rounded px-1.5 py-0.5 font-semibold
+              {% if ws.role == 'primary' %}bg-accent/20 text-accent
+              {% else %}bg-bg-elev text-fg-muted border border-border{% endif %}">{{ ws.role }}</span>
+            <span class="rounded px-1.5 py-0.5 bg-bg-elev text-fg border border-border">{{ ws.kind }}</span>
+            {% if ws.access %}
+              <span class="rounded px-1.5 py-0.5 border
+                {% if ws.access == 'read_only' %}bg-warn/15 text-warn border-warn/40
+                {% else %}bg-bg-elev text-fg-muted border-border{% endif %}">{{ ws.access }}</span>
+            {% endif %}
+            {% if ws.state %}
+              <span class="ml-auto rounded px-1.5 py-0.5 bg-bg-elev text-fg-muted border border-border">{{ ws.state }}</span>
+            {% endif %}
+          </div>
+
+          {% if ws.label %}
+            <div class="text-fg">{{ ws.label }}</div>
+          {% endif %}
+
+          {# Git/path fields. Two-column dl so labels stack cleanly even on narrow widths. #}
+          {% set path = ws.resolved_path or ws.worktree_path or ws.source_path %}
+          {% if ws.branch or path or ws.base_ref or ws.base_sha or ws.head_sha %}
+          <dl class="grid grid-cols-[3.5rem_1fr] gap-x-2 gap-y-0.5 font-mono">
+            {% if ws.branch %}
+              <dt class="text-fg-muted">branch</dt>
+              <dd class="text-info break-all">{{ ws.branch }}</dd>
+            {% endif %}
+            {% if path %}
+              <dt class="text-fg-muted">path</dt>
+              <dd class="text-fg break-all">{{ path }}</dd>
+            {% endif %}
+            {% if ws.base_ref or ws.base_sha %}
+              <dt class="text-fg-muted">base</dt>
+              <dd class="text-fg-muted break-all">
+                {% if ws.base_ref %}{{ ws.base_ref }}{% endif %}
+                {% if ws.base_sha %}<span class="text-fg">{{ ws.base_sha[:12] }}</span>{% endif %}
+              </dd>
+            {% endif %}
+            {% if ws.head_sha %}
+              <dt class="text-fg-muted">head</dt>
+              <dd class="text-fg">{{ ws.head_sha[:12] }}</dd>
+            {% endif %}
+          </dl>
+          {% endif %}
+
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {# --- Run history ----------------------------------------------------- #
+     # Each row is a clickable button that swaps the right-pane transcript
+     # panel via HTMX. The currently selected row gets a ring highlight.
+     #}
+    <section class="bg-bg-elev border border-border rounded p-4">
+      <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-2">Run history</h2>
+      {% if runs %}
+        <ul class="space-y-1" id="run-history-list">
+          {% for r in runs %}
+            {% set outcome = r.exit_status or ('running' if r.finished_at is none else 'unknown') %}
+            {% set outcome_class = {
+              'succeeded': 'bg-accent/20 text-accent',
+              'success':   'bg-accent/20 text-accent',
+              'failed':    'bg-danger/20 text-danger',
+              'error':     'bg-danger/20 text-danger',
+              'cancelled': 'bg-warn/20 text-warn',
+              'running':   'bg-info/20 text-info',
+            }[outcome] | default('bg-bg-elev-2 text-fg-muted') %}
+            {% set is_selected = (selected_run is not none and selected_run.id == r.id) %}
+            <li>
+              <button type="button"
+                      data-run-row="{{ r.id }}"
+                      hx-get="/tickets/{{ ticket.id }}/runs/{{ r.id }}/transcript-panel"
+                      hx-target="#transcript-panel-inner"
+                      hx-swap="innerHTML"
+                      hx-on:click="document.querySelectorAll('[data-run-row]').forEach(e=>e.classList.remove('ring-2','ring-accent','border-accent'));this.classList.add('ring-2','ring-accent','border-accent')"
+                      class="w-full text-left flex items-center gap-3 border rounded px-3 py-2 text-xs cursor-pointer hover:bg-bg-elev-2 hover:border-accent/40
+                             {% if is_selected %}ring-2 ring-accent border-accent{% else %}border-border{% endif %}">
+                <code class="text-fg-muted">{{ r.id[:8] }}</code>
+                <span class="text-fg">{{ r.started_at }}</span>
+                <span class="text-fg-muted">&rarr; {{ r.finished_at or '...' }}</span>
+                <span class="inline-block rounded px-2 py-0.5 {{ outcome_class }}">{{ outcome }}</span>
+                {% if r.started_as_run_now %}
+                  <span class="inline-block rounded px-2 py-0.5 bg-warn/20 text-warn">run-now</span>
+                {% endif %}
+                {% if r.cost_usd is not none %}
+                  <span class="inline-block rounded px-2 py-0.5 bg-bg-elev-2 text-fg-muted"
+                        title="model: {{ r.model_used or 'unknown' }}{% if r.input_tokens %}&#10;input: {{ r.input_tokens }} tokens&#10;output: {{ r.output_tokens or 0 }} tokens&#10;cache read: {{ r.cache_read_tokens or 0 }}&#10;cache write: {{ r.cache_write_tokens or 0 }}{% endif %}">
+                    ${{ '%.4f'|format(r.cost_usd) }}
+                  </span>
+                {% endif %}
+                <a href="/api/v1/runs/{{ r.id }}/log"
+                   class="text-fg-muted hover:text-fg ml-1 underline decoration-dotted"
+                   title="Download worker log for this run"
+                   onclick="event.stopPropagation();">log</a>
+                <span class="text-fg-muted ml-auto">{{ r.host }}</span>
+              </button>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-fg-muted italic text-sm">no runs yet</p>
+      {% endif %}
+    </section>
+
+  </article>
+
+  {# ===================================================================== #
+   # RIGHT COLUMN: transcript panel. Takes the remaining viewport width on
+   # lg+ and sticks while the left column scrolls. The inner div is the
+   # HTMX swap target for run-history clicks.
+   # ===================================================================== #}
+  <aside class="w-full flex-1 min-w-0 lg:sticky lg:top-4 self-stretch">
+    <section id="transcript-panel"
+             class="bg-bg-elev border border-border rounded p-4 overflow-x-auto">
+      <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-2">Latest transcript</h2>
+      <div id="transcript-panel-inner">
+        {% include "partials/transcript_panel.html" %}
+      </div>
+    </section>
+  </aside>
+
+</div>
+{# --- Edit ticket modal -------------------------------------------------- #
+ # Reusable partial — same partial can later be included on the board
+ # page to replace the cramped sidebar editor.
+ #}
+{% include "partials/ticket_edit_modal.html" %}
+
+{# --- Run again modal --------------------------------------------------- #
+ # Replaces the inline "Next run" section. Two axes: workspace policy and
+ # conversation policy. The submit handler maps the chosen combination to
+ # the existing /resume, /retry, or /restart endpoints — no new server-side
+ # routes needed. "Conversation: keep" only applies when staying in the
+ # same worktree; for wipe / new-worktree we lock it to fresh because
+ # restart_ticket always drops the session id.
+ #}
+{% if ticket.status in ('review', 'archived') %}
+<dialog id="run-again-modal"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/55 p-0 w-[480px] max-w-[calc(100vw-2rem)] text-fg"
+        style="margin: auto; max-height: 92vh;">
+  <form id="run-again-form" method="post" action="" class="p-4 space-y-4 max-h-[92vh] overflow-y-auto">
+    <div class="flex items-center justify-between">
+      <h2 class="text-base font-semibold">Run again</h2>
+      <button type="button"
+              onclick="document.getElementById('run-again-modal').close()"
+              class="text-fg-muted hover:text-fg text-lg leading-none"
+              aria-label="Close">&times;</button>
+    </div>
+
+    <fieldset class="space-y-1.5">
+      <legend class="text-xs font-semibold uppercase tracking-wide text-fg-muted mb-1">Workspace</legend>
+      <label class="flex items-start gap-2 text-sm cursor-pointer">
+        <input type="radio" name="workspace" value="same" checked
+               class="mt-0.5"
+               onchange="window.ndUpdateRunAgainModal && window.ndUpdateRunAgainModal()" />
+        <span><span class="text-fg">Continue in same worktree</span>
+          <span class="block text-xs text-fg-muted">Pick up the existing worktree where it left off.</span></span>
+      </label>
+      <label class="flex items-start gap-2 text-sm cursor-pointer">
+        <input type="radio" name="workspace" value="wipe"
+               class="mt-0.5"
+               onchange="window.ndUpdateRunAgainModal && window.ndUpdateRunAgainModal()" />
+        <span><span class="text-fg">Delete existing & start fresh</span>
+          <span class="block text-xs text-fg-muted">Wipe and recreate the worktree at the same path.</span></span>
+      </label>
+      <label class="flex items-start gap-2 text-sm cursor-pointer">
+        <input type="radio" name="workspace" value="new"
+               class="mt-0.5"
+               onchange="window.ndUpdateRunAgainModal && window.ndUpdateRunAgainModal()" />
+        <span><span class="text-fg">New worktree (keep old)</span>
+          <span class="block text-xs text-fg-muted">Run in a fresh path; the prior worktree is preserved.</span></span>
+      </label>
+    </fieldset>
+
+    <fieldset class="space-y-1.5" id="run-again-conv-group">
+      <legend class="text-xs font-semibold uppercase tracking-wide text-fg-muted mb-1">Conversation</legend>
+      <label class="flex items-start gap-2 text-sm cursor-pointer">
+        <input type="radio" name="conversation" value="keep" checked class="mt-0.5" />
+        <span><span class="text-fg">Keep entire conversation</span>
+          <span class="block text-xs text-fg-muted">Resume from the last session id.</span></span>
+      </label>
+      <label class="flex items-start gap-2 text-sm cursor-pointer">
+        <input type="radio" name="conversation" value="fresh" class="mt-0.5" />
+        <span><span class="text-fg">Fresh conversation</span>
+          <span class="block text-xs text-fg-muted">Drop the prior session and start clean.</span></span>
+      </label>
+      <p id="run-again-conv-note" class="text-[11px] text-warn hidden">
+        Conversation is reset automatically when the worktree is replaced.
+      </p>
+    </fieldset>
+
+    <label class="block text-sm">
+      <span class="block text-xs font-semibold uppercase tracking-wide text-fg-muted mb-1">
+        Optional message for next run
+      </span>
+      <textarea name="next_run_context" rows="3"
+                class="w-full bg-bg-elev-2 border border-border rounded p-2 text-sm font-mono placeholder:text-fg-muted"
+                placeholder="One-shot instructions for the next run…">{{ ticket.next_run_context or '' }}</textarea>
+    </label>
+
+    <input type="hidden" name="workspace_policy" value="" />
+
+    <div class="flex items-center justify-between gap-2 pt-1 border-t border-border">
+      <div class="flex flex-wrap gap-2 text-xs">
+        <button type="submit" formaction="/tickets/{{ ticket.id }}/clone" formnovalidate
+                class="border border-border text-fg-muted hover:text-fg px-2 py-1 rounded">
+          Clone to new ticket
+        </button>
+        <button type="submit" formaction="/tickets/{{ ticket.id }}/merge-next-run-context" formnovalidate
+                class="border border-border text-fg-muted hover:text-fg px-2 py-1 rounded">
+          Merge message into prompt
+        </button>
+      </div>
+      <div class="flex gap-2">
+        <button type="button"
+                onclick="document.getElementById('run-again-modal').close()"
+                class="border border-border text-fg-muted hover:text-fg px-3 py-1 rounded text-sm">
+          Cancel
+        </button>
+        <button type="submit"
+                onclick="return window.ndSubmitRunAgain && window.ndSubmitRunAgain(this.form)"
+                class="bg-accent text-bg font-medium px-3 py-1 rounded text-sm">
+          Run again
+        </button>
+      </div>
+    </div>
+  </form>
+</dialog>
+<script>
+  (function () {
+    var TID = "{{ ticket.id }}";
+    var form = document.getElementById('run-again-form');
+    if (!form) return;
+
+    function selected(name) {
+      var el = form.querySelector('input[name="' + name + '"]:checked');
+      return el ? el.value : null;
+    }
+
+    window.ndUpdateRunAgainModal = function () {
+      var ws = selected('workspace');
+      var convGroup = document.getElementById('run-again-conv-group');
+      var convNote = document.getElementById('run-again-conv-note');
+      var convInputs = form.querySelectorAll('input[name="conversation"]');
+      var disabled = ws !== 'same';
+      convInputs.forEach(function (el) {
+        el.disabled = disabled;
+        if (disabled && el.value === 'keep') el.checked = false;
+        if (disabled && el.value === 'fresh') el.checked = true;
+      });
+      convGroup.classList.toggle('opacity-50', disabled);
+      convNote.classList.toggle('hidden', !disabled);
+    };
+
+    window.ndSubmitRunAgain = function (f) {
+      var ws = selected('workspace');
+      var conv = selected('conversation');
+      var policyInput = f.querySelector('input[name="workspace_policy"]');
+      if (ws === 'same' && conv === 'keep') {
+        f.action = '/tickets/' + TID + '/resume';
+        policyInput.disabled = true;
+      } else if (ws === 'same' && conv === 'fresh') {
+        f.action = '/tickets/' + TID + '/retry';
+        policyInput.disabled = true;
+      } else if (ws === 'wipe') {
+        f.action = '/tickets/' + TID + '/restart';
+        policyInput.value = 'recreate_in_place';
+        policyInput.disabled = false;
+      } else if (ws === 'new') {
+        f.action = '/tickets/' + TID + '/restart';
+        policyInput.value = 'fresh_path';
+        policyInput.disabled = false;
+      }
+      return true;
+    };
+
+    // Backdrop click closes the dialog (native <dialog> doesn't do this).
+    var dlg = document.getElementById('run-again-modal');
+    dlg.addEventListener('click', function (e) {
+      if (e.target === dlg) dlg.close();
+    });
+  })();
+</script>
+{% endif %}
+
+{# Store the current ticket ID so the board can highlight it on return. #}
+<script>
+  sessionStorage.setItem('nd_last_viewed_ticket', '{{ ticket.id }}');
+</script>
+{% endblock %}

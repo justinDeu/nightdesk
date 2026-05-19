@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nightdesk"
+version = "0.0.1"
+description = "Local-first work queue for LLM agents"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "anyio>=4.4",
+    "tomli>=2.0",
+    "claude-agent-sdk>=0.0.18",
+    "cryptography>=42.0",
+    "itsdangerous>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "freezegun>=1.5",
+    "watchfiles>=0.21",
+]
+
+[project.scripts]
+nightdesk-api = "nightdesk.cli:run_api"
+nightdesk-worker = "nightdesk.cli:run_worker"
+nightdesk-dev = "nightdesk.cli:run_dev"
+nightdesk-init = "nightdesk.cli:init"
+nightdesk-migrate = "nightdesk.cli:migrate"
+nightdesk-run-ticket = "nightdesk.cli:run_ticket"
+nightdesk-setup = "nightdesk.cli:setup"
+nightdesk-login = "nightdesk.cli:login"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nightdesk"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "freezegun>=1.5",
+    "watchfiles>=0.21",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

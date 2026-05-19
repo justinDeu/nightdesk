@@ -1,0 +1,16 @@
+[Unit]
+Description=nightdesk API server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/nightdesk-api
+Restart=on-failure
+RestartSec=2
+RestartPreventExitStatus=70
+StandardOutput=journal
+StandardError=journal
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=default.target

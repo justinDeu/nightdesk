@@ -1,0 +1,132 @@
+{# Per-event renderers for canonical transcript events.
+
+   Each macro renders one event type as a self-contained DOM block.
+
+   The JS live-tail in templates/partials/transcript_panel.html mirrors
+   these shapes when appending events client-side. Keep the two sides in
+   sync — same DOM, same CSS classes (defined in static/app.css under
+   .tc-card / .tool-result / .thinking-block / .assistant-text / .diff).
+
+   Pure helpers come from nightdesk.transcript_view, exposed as the Jinja
+   global `tv` in nightdesk.api.app.create_app.
+#}
+{% import "partials/tool_card.html" as tc %}
+
+{% macro evt_meta(evt) %}
+  <div class="text-fg-muted text-xs font-mono py-1">
+    run {{ (evt.get('run_id') or '')[:8] }} started {{ evt.get('ts','') }}
+  </div>
+{% endmacro %}
+
+{# assistant_text: first-class block (left accent border, elevated bg,
+   author chip) so the model's prose stands out from surrounding tool
+   cards. Fenced-code blocks render as <pre class="code"> so newlines
+   survive untouched.
+
+   Empty-text events (some SDK variants emit one when only tool_use
+   blocks were produced) render nothing — otherwise we'd show a bare
+   "claude" chip with no body. Mirrors the empty-text guard in the JS
+   live-tail (templates/partials/transcript_panel.html).
+
+   The author chip prefers ``evt.model`` (if a future translator carries
+   it through) and falls back to 'claude'. The meta event currently
+   doesn't surface model into per-assistant events, so the fallback is
+   what fires today. #}
+{% macro evt_assistant_text(evt) %}
+  {% set text = evt.get('text','') %}
+  {% if text and text.strip() %}
+    <div class="assistant-text">
+      <div class="assistant-author">{{ evt.get('model') or 'claude' }}</div>
+      {% for seg in tv.assistant_segments(text) %}
+        {% if seg.kind == 'code' %}
+          <pre class="code">{{ seg.body }}</pre>
+        {% elif seg.body %}
+          <p>{{ seg.body }}</p>
+        {% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{# thinking: italic muted, left-border, collapsed behind 'thinking (N tokens)'.
+   N tokens is a whitespace-token approximation since the canonical event
+   carries no token count.
+
+   Some Claude variants return thinking blocks with empty content (the raw
+   chain-of-thought never leaves the API). The translator drops those
+   going forward, but legacy transcripts on disk still contain them — so
+   render nothing when the text is empty/whitespace. #}
+{% macro evt_thinking(evt) %}
+  {% set text = evt.get('text','') %}
+  {% if text and text.strip() %}
+    {% set tokens = text.split() | length %}
+    <details class="thinking-block">
+      <summary>thinking ({{ tokens }} tokens)</summary>
+      <div class="thinking-body">{{ text }}</div>
+    </details>
+  {% endif %}
+{% endmacro %}
+
+{# tool_use: wraps the tool card in a div carrying ``data-tool-use-id`` so
+   the live-tail JS can find the parent when a tool_result arrives later.
+   When the caller has pre-paired a tool_result with this use (via
+   tv.pair_tool_events), pass it as ``paired_result`` and it renders inside
+   the tool card's .tc-body. #}
+{% macro evt_tool_use(evt, paired_result=None) %}
+  <div data-tool-use-id="{{ evt.get('id','') }}" class="space-y-1">
+    {{ tc.render_tool(evt, paired_result) }}
+  </div>
+{% endmacro %}
+
+{# tool_result: standalone render for unpaired results (orphan whose parent
+   tool_use is not present in the current view). When a result is paired
+   with its tool_use it renders inside the tool card via tc.tool_result_block
+   instead — same DOM, different parent. #}
+{% macro evt_tool_result(evt) %}
+  {{ tc.tool_result_block(evt) }}
+{% endmacro %}
+
+{% macro evt_result(evt) %}
+  {% set subtype = evt.get('subtype','success') %}
+  <div class="rounded p-3 border-2 {% if subtype == 'success' %}border-accent bg-accent/5{% else %}border-danger bg-danger/5{% endif %}">
+    <div class="font-bold {% if subtype == 'success' %}text-accent{% else %}text-danger{% endif %}">
+      {% if subtype == 'success' %}done{% else %}error{% endif %}
+    </div>
+    <div class="whitespace-pre-wrap text-sm mt-1">{{ evt.get('summary','') }}</div>
+  </div>
+{% endmacro %}
+
+{# worker_error: nightdesk-level failure surfaced as the final event of a
+   failed run. Red-tinted card so it pops at the end of the transcript;
+   the stacktrace is collapsed behind a <details> so it doesn't crowd
+   the summary but is one click away. #}
+{% macro evt_worker_error(evt) %}
+  {% set kind = evt.get('kind') or 'worker_error' %}
+  {% set summary = evt.get('summary','') %}
+  {% set tb = evt.get('traceback','') %}
+  <div class="worker-error rounded p-3 border-2 border-danger bg-danger/10">
+    <div class="flex items-center gap-2">
+      <span class="font-bold text-danger uppercase tracking-wide text-xs">worker error</span>
+      <code class="text-xs text-danger/80">{{ kind }}</code>
+    </div>
+    <div class="whitespace-pre-wrap text-sm mt-2 text-fg">{{ summary }}</div>
+    {% if tb %}
+      <details class="mt-2">
+        <summary class="cursor-pointer text-xs text-fg-muted">stacktrace</summary>
+        <pre class="mt-1 bg-bg-elev-2 border border-border rounded p-2 font-mono text-xs whitespace-pre-wrap text-fg overflow-x-auto">{{ tb }}</pre>
+      </details>
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% macro render_event(evt, paired_result=None) %}
+  {% set t = evt.get('type','') %}
+  {% if t == 'meta' %}{{ evt_meta(evt) }}
+  {% elif t == 'assistant_text' %}{{ evt_assistant_text(evt) }}
+  {% elif t == 'thinking' %}{{ evt_thinking(evt) }}
+  {% elif t == 'tool_use' %}{{ evt_tool_use(evt, paired_result) }}
+  {% elif t == 'tool_result' %}{{ evt_tool_result(evt) }}
+  {% elif t == 'result' %}{{ evt_result(evt) }}
+  {% elif t == 'worker_error' %}{{ evt_worker_error(evt) }}
+  {% endif %}
+{% endmacro %}

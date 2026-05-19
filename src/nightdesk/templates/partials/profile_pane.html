@@ -1,0 +1,664 @@
+{#
+  Right-pane fragment for the /profiles two-pane layout. Loaded inline from
+  profiles.html and also returned standalone via the routes when an HX-Request
+  swap targets #profile-pane. Pane modes:
+
+    empty  no profiles exist yet (or none selected)
+    view   read-only summary of the selected profile
+    edit   editable form for the selected profile
+    new    blank editable form for a brand-new profile
+
+  Edit and new share the form markup (see _form below). View mode never
+  shows secrets in plaintext — credentials render as "set/not set" and env
+  values render as bullet points keyed only by variable name.
+#}
+
+{% macro _pill(label, tone='neutral') %}
+  {% set classes = {
+    'neutral': 'border-border text-fg-muted bg-bg-elev-2',
+    'warn':    'border-warn/40 text-warn bg-warn/10',
+    'ok':      'border-accent/40 text-accent bg-accent/10',
+  }[tone] %}
+  <span class="rounded border px-2 py-0.5 text-xs font-mono {{ classes }}">{{ label }}</span>
+{% endmacro %}
+
+{% macro _kv(label, value) %}
+  <div class="grid grid-cols-[140px_1fr] gap-3 py-1.5 text-sm">
+    <dt class="text-fg-muted text-xs uppercase tracking-wide pt-0.5">{{ label }}</dt>
+    <dd class="text-fg break-words">{{ value }}</dd>
+  </div>
+{% endmacro %}
+
+<div id="profile-pane" class="flex-1 min-w-0">
+
+{% if pane_mode == 'empty' %}
+  <div class="rounded border border-dashed border-border bg-bg-elev p-8 text-center">
+    <h2 class="text-lg font-semibold text-fg mb-2">No profiles yet</h2>
+    <p class="text-sm text-fg-muted mb-4">
+      Profiles define how Claude Code runs for a ticket — credentials,
+      tool policy, filesystem access, network. Create one to get started.
+    </p>
+    <a href="/profiles/new"
+       class="inline-block rounded bg-accent text-bg px-3 py-1.5 text-sm font-semibold hover:brightness-110">
+      New profile
+    </a>
+  </div>
+
+{% elif pane_mode == 'view' %}
+  {# ---------- View mode -------------------------------------------------- #}
+  <div class="rounded border border-border bg-bg-elev">
+    {# Header strip: name, backend pill, actions. #}
+    <div class="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
+      <div class="min-w-0 flex-1">
+        <h2 class="text-lg font-semibold text-fg truncate">{{ profile.name }}</h2>
+        {% if profile.description %}
+          <p class="text-sm text-fg-muted mt-0.5">{{ profile.description }}</p>
+        {% endif %}
+      </div>
+      {{ _pill(backend_label, 'ok') }}
+      {{ _pill('network ' ~ profile.network_mode, 'neutral') }}
+      {% if profile.permission_mode %}
+        {{ _pill(profile.permission_mode) }}
+      {% endif %}
+      <div class="flex items-center gap-2">
+        <a href="/profiles/{{ profile.id }}/edit"
+           class="rounded bg-accent text-bg px-3 py-1 text-sm font-semibold hover:brightness-110">
+          Edit
+        </a>
+        <form method="post" action="/profiles/{{ profile.id }}/copy">
+          <button class="rounded border border-border px-3 py-1 text-sm text-fg-muted hover:text-fg"
+                  title="Create a new profile with these settings">
+            Copy
+          </button>
+        </form>
+        <a href="/profiles/{{ profile.id }}/export"
+           class="rounded border border-border px-3 py-1 text-sm text-fg-muted hover:text-fg">
+          Export
+        </a>
+        <form method="post" action="/profiles/{{ profile.id }}/delete"
+              onsubmit="return confirm('Delete profile {{ profile.name }}?');">
+          <button class="rounded border border-danger/40 px-3 py-1 text-sm text-danger hover:bg-danger/10">
+            Delete
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {# Body: two columns of dl rows for fast scanning. #}
+    <div class="grid gap-x-8 gap-y-1 px-4 py-3 md:grid-cols-2">
+      <dl>
+        {{ _kv('Backend', backend_label) }}
+        {{ _kv('Default model', profile.default_model or '—') }}
+        {{ _kv('Permission mode', profile.permission_mode or 'default') }}
+        {{ _kv('Network', profile.network_mode) }}
+        {{ _kv('Binary path', profile.claude_binary_path or 'daemon default') }}
+      </dl>
+      <dl>
+        {{ _kv('Credentials',
+               (credentials.source or 'not configured')
+               ~ (' · value set' if credentials.value_set else '')
+               ~ (' · ' ~ credentials.base_url if credentials.base_url else '') ) }}
+        {{ _kv('Allowed tools',
+               allowed_tools_list | join(', ') if allowed_tools_list else 'all') }}
+        {{ _kv('Denied tools',
+               denied_tools_list | join(', ') if denied_tools_list else '—') }}
+        {{ _kv('Run capabilities',
+               profile.run_token_scopes | join(', ') if profile.run_token_scopes else 'self-only') }}
+        {{ _kv('Env variables', env_keys | length ) }}
+      </dl>
+    </div>
+
+    {% if profile.system_prompt %}
+      <div class="border-t border-border px-4 py-3">
+        <div class="text-fg-muted text-xs uppercase tracking-wide mb-1">System prompt</div>
+        <pre class="text-sm text-fg whitespace-pre-wrap font-mono">{{ profile.system_prompt }}</pre>
+      </div>
+    {% endif %}
+
+    {% if model_overrides %}
+      <div class="border-t border-border px-4 py-3">
+        <div class="text-fg-muted text-xs uppercase tracking-wide mb-2">Model overrides</div>
+        <ul class="text-sm space-y-1">
+          {% for row in model_overrides %}
+            <li class="flex flex-wrap items-baseline gap-2">
+              <code class="text-accent text-xs">{{ row.name }}</code>
+              <span class="text-fg-muted">=</span>
+              <code class="text-fg text-xs">{{ row.value }}</code>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    {% if env_entries %}
+      <div class="border-t border-border px-4 py-3">
+        <div class="text-fg-muted text-xs uppercase tracking-wide mb-2">Environment variables</div>
+        <ul class="text-sm space-y-1">
+          {% for entry in env_entries %}
+            <li class="flex flex-wrap items-baseline gap-2">
+              <code class="text-accent text-xs">{{ entry.name }}</code>
+              {% if entry.is_secret %}
+                <span class="text-fg-muted text-xs">= <em>value set</em></span>
+              {% else %}
+                <span class="text-fg-muted">=</span>
+                <code class="text-fg text-xs">{{ entry.value }}</code>
+              {% endif %}
+              {% if entry.description %}
+                <span class="text-fg-muted text-xs italic">— {{ entry.description }}</span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    {% if fs_read_lines or fs_write_lines %}
+      <div class="border-t border-border px-4 py-3 grid gap-4 md:grid-cols-2">
+        <div>
+          <div class="text-fg-muted text-xs uppercase tracking-wide mb-1">fs_read</div>
+          {% if fs_read_lines %}
+            <ul class="text-sm font-mono space-y-0.5">
+              {% for p in fs_read_lines %}<li>{{ p }}</li>{% endfor %}
+            </ul>
+          {% else %}
+            <p class="text-sm text-fg-muted">—</p>
+          {% endif %}
+        </div>
+        <div>
+          <div class="text-fg-muted text-xs uppercase tracking-wide mb-1">fs_write</div>
+          {% if fs_write_lines %}
+            <ul class="text-sm font-mono space-y-0.5">
+              {% for p in fs_write_lines %}<li>{{ p }}</li>{% endfor %}
+            </ul>
+          {% else %}
+            <p class="text-sm text-fg-muted">—</p>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+{% else %}
+  {# ---------- Edit / new mode (shared form) ------------------------------ #}
+  <form method="post" action="{{ form_action }}"
+        class="rounded border border-border bg-bg-elev divide-y divide-border">
+
+    {# Header strip --------------------------------------------------------- #}
+    <div class="flex flex-wrap items-center gap-3 px-4 py-3">
+      <h2 class="text-lg font-semibold text-fg flex-1">
+        {% if pane_mode == 'new' %}New profile{% else %}Editing {{ profile.name }}{% endif %}
+      </h2>
+      <button type="submit"
+              class="rounded bg-accent text-bg px-3 py-1 text-sm font-semibold hover:brightness-110">
+        Save
+      </button>
+      {% if pane_mode == 'edit' %}
+        <button type="submit" name="save_as_new" value="1"
+                onclick="var n = prompt('New profile name'); if (!n) return false; this.form.querySelector('input[name=save_as_new_name]').value = n;"
+                class="rounded border border-border px-3 py-1 text-sm text-fg hover:bg-bg-elev-2">
+          Save as new
+        </button>
+        <input type="hidden" name="save_as_new_name" value="" />
+        <a href="/profiles/{{ profile.id }}"
+           class="rounded border border-border px-3 py-1 text-sm text-fg-muted hover:text-fg">
+          Cancel
+        </a>
+      {% else %}
+        <a href="/profiles"
+           class="rounded border border-border px-3 py-1 text-sm text-fg-muted hover:text-fg">
+          Cancel
+        </a>
+      {% endif %}
+    </div>
+
+    {# Identity + backend row --------------------------------------------- #}
+    <div class="px-4 py-3 grid gap-3 md:grid-cols-[1fr_1fr_200px]">
+      <label class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Name</span>
+        <input name="name" required value="{{ profile.name if profile else '' }}"
+               class="bg-bg border border-border rounded px-2 py-1 text-fg text-sm" />
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Description</span>
+        <input name="description" value="{{ profile.description if profile else '' }}"
+               placeholder="What is this profile for?"
+               class="bg-bg border border-border rounded px-2 py-1 text-fg text-sm" />
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Backend</span>
+        <select name="backend"
+                class="bg-bg border border-border rounded px-2 py-1 text-fg text-sm">
+          {% for code, label, enabled in backend_choices %}
+            <option value="{{ code }}"
+                    {% if (profile and profile.backend == code) or (not profile and code == 'claude_sdk') %}selected{% endif %}
+                    {% if not enabled %}disabled{% endif %}>
+              {{ label }}
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+
+    {# Everything below is Claude Code-specific. Once another backend lands
+       we'll branch this section by selected backend; for now the form just
+       declares its intent up front so users know what they're configuring. #}
+    <div class="px-4 py-2 bg-bg-elev-2/40 text-xs text-fg-muted uppercase tracking-wide">
+      Claude Code configuration
+    </div>
+
+    {# Authentication — single source of truth for how the sandboxed CC
+       authenticates. Holds the source radio, the secret value field (always
+       rendered to avoid layout shift when toggling source), and the optional
+       ANTHROPIC_BASE_URL for proxied setups. #}
+    <fieldset class="px-4 pt-5 pb-4 space-y-3">
+      <legend class="text-fg-muted text-xs uppercase tracking-wide mb-2">
+        Authentication
+      </legend>
+      <input type="hidden" name="credentials_field_submitted" value="1" />
+      <div class="flex items-stretch gap-1 rounded-md border border-border bg-bg-elev-2 p-1"
+           role="radiogroup" aria-label="Credentials source"
+           title="How the sandboxed Claude Code authenticates to Anthropic">
+        {% for src, label, hint in [
+          ('inherit', 'Host file', 'Mount ~/.claude/.credentials.json into the sandbox. Use this on machines where you already ran `claude login`.'),
+          ('auth_token', 'Auth token', 'Sets ANTHROPIC_AUTH_TOKEN. Used by proxies like Z.AI, LiteLLM, and your own gateways.'),
+          ('api_key', 'API key', 'Sets ANTHROPIC_API_KEY. Direct sk-ant-... key from console.anthropic.com.'),
+        ] %}
+          <label class="cursor-pointer flex-1 min-w-0" title="{{ hint }}">
+            <input type="radio" name="credentials_source" value="{{ src }}"
+                   class="peer sr-only" required
+                   {% if credentials.source == src %}checked{% endif %}
+                   onchange="window.ndUpdateCredentialField && window.ndUpdateCredentialField(this.form)" />
+            <span class="block text-center whitespace-nowrap px-3 py-2 rounded text-xs font-medium text-fg-muted
+                         hover:bg-bg-elev-3 hover:text-fg
+                         peer-checked:bg-accent peer-checked:text-bg peer-checked:shadow-sm
+                         peer-focus-visible:ring-2 peer-focus-visible:ring-accent
+                         transition-colors">
+              {{ label }}
+            </span>
+          </label>
+        {% endfor %}
+      </div>
+      {# Token field is ALWAYS rendered (disabled when inherit) so the
+         fieldset height never changes between sources. #}
+      <div id="credentials-value-row"
+           class="transition-opacity {% if not credentials.source or credentials.source == 'inherit' %}opacity-50 pointer-events-none{% endif %}">
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-[10px] uppercase tracking-wide"
+                title="The secret value applied as ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY at run time.">
+            Token / key
+          </span>
+          <input type="password" name="credentials_value" autocomplete="off"
+                 {% if not credentials.source or credentials.source == 'inherit' %}disabled{% endif %}
+                 placeholder="{% if credentials.value_set %}leave blank to keep current value{% elif credentials.source == 'inherit' %}not used with host file{% else %}paste secret here{% endif %}"
+                 title="The secret is encrypted at rest. Leave blank when editing to keep the existing value."
+                 class="w-full bg-bg border border-border rounded px-2 py-1.5 text-fg font-mono text-xs disabled:bg-bg-elev-2" />
+        </label>
+        {% if credentials.value_set %}
+          <p class="text-[10px] text-fg-muted mt-1">A secret is on file. Type a new value to rotate.</p>
+        {% endif %}
+      </div>
+      <label class="flex flex-col gap-1">
+        <span class="text-fg-muted text-[10px] uppercase tracking-wide"
+              title="Optional. Point Claude Code at a non-Anthropic endpoint (proxy, LiteLLM, Z.AI, Ollama, etc.).">
+          Custom endpoint <code class="text-accent normal-case">ANTHROPIC_BASE_URL</code>
+          <span class="text-fg-muted normal-case">(optional)</span>
+        </span>
+        <input name="credentials_base_url"
+               value="{{ credentials.base_url or '' }}"
+               placeholder="https://api.anthropic.com (default)"
+               title="Leave blank for direct Anthropic. Examples: https://api.z.ai/api/anthropic, http://localhost:4000"
+               class="bg-bg border border-border rounded px-2 py-1.5 text-fg font-mono text-xs" />
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-fg-muted text-[10px] uppercase tracking-wide"
+              title="Override the path to the `claude` binary the worker invokes. Defaults to whatever the daemon resolved at startup.">
+          Claude binary <span class="text-fg-muted normal-case">(optional)</span>
+        </span>
+        <input name="claude_binary_path"
+               value="{{ profile.claude_binary_path if profile and profile.claude_binary_path else '' }}"
+               placeholder="(daemon default)"
+               title="Absolute path to the claude binary. Most users leave this blank."
+               class="bg-bg border border-border rounded px-2 py-1.5 text-fg font-mono text-xs" />
+      </label>
+    </fieldset>
+
+    {# Permission mode + Network ----------------------------------------- #}
+    <div class="px-4 pt-5 pb-3 grid gap-4 md:grid-cols-2">
+      <div>
+        <div class="text-fg-muted text-xs uppercase tracking-wide mb-2"
+             title="How Claude Code handles permission prompts when it tries to use a tool.">
+          Permission mode
+        </div>
+        <div class="flex items-stretch gap-1 rounded-md border border-border bg-bg-elev-2 p-1"
+             role="radiogroup" aria-label="Permission mode">
+          {% for pm, pm_label, pm_hint in [
+            ('default', 'default', 'Ask before each tool call. The safest mode.'),
+            ('acceptEdits', 'edits', 'Auto-accept file edits, still prompt for shell/network actions. Maps to permission_mode=acceptEdits.'),
+            ('bypassPermissions', 'bypass', 'Skip every prompt. Use only inside the sandbox. Maps to permission_mode=bypassPermissions.'),
+          ] %}
+            <label class="cursor-pointer flex-1 min-w-0" title="{{ pm_hint }}">
+              <input type="radio" name="permission_mode" value="{{ pm }}"
+                     class="peer sr-only"
+                     {% if (profile and profile.permission_mode == pm) or (not profile and pm == 'default') %}checked{% endif %} />
+              <span class="block text-center whitespace-nowrap px-2 py-2 rounded font-mono text-[11px] text-fg-muted
+                           hover:bg-bg-elev-3 hover:text-fg
+                           peer-checked:bg-accent peer-checked:text-bg peer-checked:shadow-sm
+                           peer-focus-visible:ring-2 peer-focus-visible:ring-accent
+                           transition-colors">
+                {{ pm_label }}
+              </span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div aria-disabled="true">
+        <div class="text-fg-muted text-xs uppercase tracking-wide mb-2 flex items-center gap-2">
+          <span>Network</span>
+          <span class="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-border text-fg-muted">
+            not yet enforced
+          </span>
+        </div>
+        {# Persist the current value so disabling the radios doesn't clear it. #}
+        <input type="hidden" name="network_mode"
+               value="{{ profile.network_mode if profile and profile.network_mode else 'on' }}" />
+        <div class="flex items-stretch gap-1 rounded-md border border-border bg-bg-elev-2 p-1 opacity-50 pointer-events-none select-none"
+             role="radiogroup" aria-label="Network mode" aria-disabled="true">
+          {% for nm in ['off', 'on'] %}
+            <label class="flex-1 min-w-0">
+              <input type="radio" disabled
+                     class="peer sr-only"
+                     {% if (profile and profile.network_mode == nm) or (not profile and nm == 'on') %}checked{% endif %} />
+              <span class="block text-center whitespace-nowrap px-2 py-2 rounded font-mono text-[11px] text-fg-muted
+                           peer-checked:bg-bg-elev-3 peer-checked:text-fg">
+                {{ nm }}
+              </span>
+            </label>
+          {% endfor %}
+        </div>
+        <p class="text-[10px] text-fg-muted mt-1">
+          Per-host outbound enforcement is on the v1 roadmap. The current sandbox always shares the host network so inference works.
+        </p>
+      </div>
+    </div>
+
+    {# Tools + filesystem in two columns --------------------------------- #}
+    <div class="px-4 py-3 grid gap-4 md:grid-cols-2">
+      <div class="space-y-3">
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-xs uppercase tracking-wide">Allowed tools</span>
+          <textarea name="allowed_tools" rows="2"
+                    placeholder="Read, Grep, Glob (empty = all)"
+                    class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ allowed_tools_text }}</textarea>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-xs uppercase tracking-wide">Denied tools</span>
+          <textarea name="denied_tools" rows="2"
+                    placeholder="Bash, Edit, Write"
+                    class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ denied_tools_text }}</textarea>
+        </label>
+      </div>
+      <div class="space-y-3">
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-xs uppercase tracking-wide">fs_read (one per line)</span>
+          <textarea name="fs_read" rows="2"
+                    class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ fs_read_text }}</textarea>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-xs uppercase tracking-wide">fs_write (one per line)</span>
+          <textarea name="fs_write" rows="2"
+                    class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ fs_write_text }}</textarea>
+        </label>
+      </div>
+    </div>
+
+    {# System prompt (collapsed by default to keep the form tight) ------- #}
+    <details class="px-4 py-3" {% if profile and profile.system_prompt %}open{% endif %}>
+      <summary class="cursor-pointer text-fg-muted text-xs uppercase tracking-wide hover:text-fg">
+        System prompt (optional)
+      </summary>
+      <textarea name="system_prompt" rows="4"
+                placeholder="Prepended to the agent's system prompt."
+                class="mt-2 w-full bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ profile.system_prompt if profile and profile.system_prompt else '' }}</textarea>
+    </details>
+
+    {# Models / Routing / Behavior — promoted sections share storage with
+       the generic env editor below but render dedicated UI for the
+       common knobs so users don't have to type the env var name. #}
+    <input type="hidden" name="promoted_env_submitted" value="1" />
+
+    {# Models fieldset -------------------------------------------------- #}
+    <fieldset class="px-4 pt-5 pb-3 space-y-2">
+      <legend class="text-fg-muted text-xs uppercase tracking-wide mb-2"
+              title="Override the Claude model used for the run. Maps to ANTHROPIC_*_MODEL env vars.">
+        Models
+      </legend>
+      <label class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs">
+          Default <span class="text-fg-muted/70">(Profile-wide; used when no alias-specific override is set)</span>
+        </span>
+        <input name="default_model"
+               value="{{ profile.default_model if profile and profile.default_model else '' }}"
+               placeholder="claude-sonnet-4-5"
+               class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs" />
+      </label>
+      <p class="text-[10px] text-fg-muted pt-1">
+        Per-alias overrides below. Empty fields are not exported.
+      </p>
+      <div class="grid gap-x-6 gap-y-2 md:grid-cols-2">
+        <div class="space-y-2">
+          {% for row in promoted_models_primary %}
+            <label class="flex flex-col gap-1">
+              <span class="text-fg-muted text-xs">
+                {{ row.label }} <code class="text-accent">{{ row.name }}</code>
+              </span>
+              <input name="promoted_model_{{ row.name }}"
+                     value="{{ row.value }}"
+                     placeholder="{{ row.example }}"
+                     class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs" />
+            </label>
+          {% endfor %}
+        </div>
+        <div class="space-y-2">
+          {% for row in promoted_models_other %}
+            <label class="flex flex-col gap-1">
+              <span class="text-fg-muted text-xs">
+                {{ row.label }} <code class="text-accent">{{ row.name }}</code>
+              </span>
+              <input name="promoted_model_{{ row.name }}"
+                     value="{{ row.value }}"
+                     placeholder="{{ row.example }}"
+                     class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs" />
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+    </fieldset>
+
+    {# Behavior fieldset ----------------------------------------------- #}
+    <fieldset class="px-4 pt-5 pb-3 space-y-2">
+      <legend class="text-fg-muted text-xs uppercase tracking-wide mb-2"
+              title="Common CC env-var toggles. Each checkbox writes a '1' value into Profile.env when set.">
+        Behavior
+      </legend>
+      <div class="grid gap-1 md:grid-cols-2">
+        {% for tog in promoted_behavior_toggles %}
+          <label class="flex items-start gap-2 text-sm">
+            <input type="checkbox"
+                   name="promoted_behavior_{{ tog.name }}"
+                   value="1"
+                   {% if tog.checked %}checked{% endif %}
+                   class="mt-1" />
+            <span class="flex-1">
+              <code class="text-accent text-xs">{{ tog.name }}</code>
+              {% if tog.description %}
+                <span class="block text-[10px] text-fg-muted">{{ tog.description }}</span>
+              {% endif %}
+            </span>
+          </label>
+        {% endfor %}
+      </div>
+      <label class="flex flex-col gap-1 mt-2">
+        <span class="text-fg-muted text-xs">
+          <code class="text-accent">MAX_THINKING_TOKENS</code>
+        </span>
+        <input name="promoted_max_thinking_tokens"
+               type="number" min="0" step="1"
+               value="{{ promoted_behavior_numeric.max_thinking_tokens }}"
+               placeholder="(unset)"
+               class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs w-40" />
+        <span class="text-[10px] text-fg-muted">
+          Fixed thinking budget. 0 disables extended thinking; blank leaves it unset.
+        </span>
+      </label>
+    </fieldset>
+
+    {# Run-token scopes -------------------------------------------------- #}
+    <fieldset class="px-4 pt-5 pb-3 space-y-2">
+      <legend class="text-fg-muted text-xs uppercase tracking-wide mb-2"
+              title="Extra capabilities the per-run bearer token grants the agent.">
+        Run-token scopes
+      </legend>
+      <label class="flex items-start gap-2 text-sm">
+        <input type="checkbox" name="run_token_scope_ticket_create"
+               class="mt-1"
+               {% if profile and 'ticket.create' in (profile.run_token_scopes or []) %}checked{% endif %} />
+        <span class="flex-1">
+          <code class="text-accent text-xs">ticket.create</code>
+          <span class="block text-[10px] text-fg-muted">Lets the agent create new tickets via the API.</span>
+        </span>
+      </label>
+    </fieldset>
+
+    {# Environment variables: catalog-driven picker + custom override ---- #}
+    <div class="px-4 py-3">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <div class="text-fg-muted text-xs uppercase tracking-wide">
+          Other environment variables
+        </div>
+        <div class="flex items-center gap-2">
+          <select id="env-picker"
+                  class="bg-bg border border-border rounded px-2 py-1 text-fg text-xs">
+            <option value="">Add a known variable…</option>
+            {% for category, vars in env_catalog_categories %}
+              <optgroup label="{{ category }}">
+                {% for v in vars %}
+                  <option value="{{ v.name }}"
+                          data-description="{{ v.description }}"
+                          data-example="{{ v.example or '' }}"
+                          data-secret="{{ '1' if v.secret else '0' }}">
+                    {{ v.name }}
+                  </option>
+                {% endfor %}
+              </optgroup>
+            {% endfor %}
+          </select>
+          <button type="button" onclick="window.ndAddKnownEnvVar()"
+                  class="rounded border border-border px-2 py-1 text-xs text-fg hover:bg-bg-elev-2">
+            Add
+          </button>
+          <button type="button" onclick="window.ndAddCustomEnvVar()"
+                  class="rounded bg-accent/10 border border-accent/30 px-2 py-1 text-xs text-accent font-medium hover:bg-accent/20"
+                  title="Add any environment variable by name">
+            + any var
+          </button>
+        </div>
+      </div>
+      <input type="hidden" name="env_field_submitted" value="1" />
+      <p class="text-[10px] text-fg-muted mb-2">
+        Values are encrypted at rest. Existing entries show "value set"; type
+        to rotate, leave blank to keep, or remove the row to clear.
+      </p>
+      <div id="env-rows" class="space-y-2">
+        {% for key in env_keys %}
+          {% set known = env_catalog[0] if false else None %}
+          {% for v in env_catalog %}{% if v.name == key %}{% set known = v %}{% endif %}{% endfor %}
+          <div class="rounded border border-border bg-bg-elev-2 p-2 space-y-1" data-env-row>
+            <input type="hidden" name="env_rotate" value="{{ key }}" />
+            <div class="flex items-center gap-2">
+              <input name="env_name" value="{{ key }}" readonly
+                     class="flex-1 bg-bg border border-border rounded px-2 py-1 text-accent font-mono text-xs" />
+              <input name="env_value" type="password" autocomplete="off"
+                     placeholder="value set — type to rotate"
+                     class="flex-1 bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs" />
+              <button type="button"
+                      onclick="this.closest('[data-env-row]').remove();"
+                      class="px-2 py-1 text-fg-muted hover:text-danger"
+                      title="Remove">&times;</button>
+            </div>
+            {% set desc_var = None %}
+            {% for v in env_catalog %}{% if v.name == key %}{% set desc_var = v %}{% endif %}{% endfor %}
+            {% if desc_var %}
+              <p class="text-[10px] text-fg-muted">{{ desc_var.description }}</p>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+      <script>
+        (function () {
+          function addRow(name, description, example, isSecret, readonly) {
+            var box = document.getElementById('env-rows');
+            if (!box) return;
+            var row = document.createElement('div');
+            row.className = 'rounded border border-border bg-bg-elev-2 p-2 space-y-1';
+            row.setAttribute('data-env-row', '');
+            var nameAttrs = 'name="env_name" value="' + name + '"' +
+              (readonly ? ' readonly' : '');
+            var inputClass = 'flex-1 bg-bg border border-border rounded px-2 py-1 ' +
+              (readonly ? 'text-accent' : 'text-fg') + ' font-mono text-xs';
+            var valueType = isSecret ? 'password' : 'text';
+            row.innerHTML =
+              '<div class="flex items-center gap-2">' +
+              '  <input ' + nameAttrs +
+              '    class="' + inputClass + '" placeholder="NAME" />' +
+              '  <input name="env_value" type="' + valueType + '" autocomplete="off"' +
+              '    placeholder="' + (example || 'value') + '"' +
+              '    class="flex-1 bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs" />' +
+              '  <button type="button" class="px-2 py-1 text-fg-muted hover:text-danger" title="Remove">&times;</button>' +
+              '</div>' +
+              (description
+                ? '<p class="text-[10px] text-fg-muted">' + description + '</p>'
+                : '');
+            row.querySelector('button').addEventListener('click', function () {
+              row.remove();
+            });
+            box.appendChild(row);
+          }
+          window.ndAddKnownEnvVar = function () {
+            var picker = document.getElementById('env-picker');
+            if (!picker || !picker.value) return;
+            var opt = picker.options[picker.selectedIndex];
+            var name = picker.value;
+            // Prevent duplicate rows for the same variable.
+            var existing = document.querySelectorAll('#env-rows input[name="env_name"]');
+            for (var i = 0; i < existing.length; i++) {
+              if (existing[i].value === name) {
+                existing[i].closest('[data-env-row]').scrollIntoView({block: 'center'});
+                return;
+              }
+            }
+            addRow(name,
+              opt.getAttribute('data-description') || '',
+              opt.getAttribute('data-example') || '',
+              opt.getAttribute('data-secret') === '1',
+              true);
+            picker.value = '';
+          };
+          window.ndAddCustomEnvVar = function () {
+            addRow('', '', 'value', false, false);
+          };
+          window.ndUpdateCredentialField = function (form) {
+            if (!form) return;
+            var src = (form.querySelector('input[name="credentials_source"]:checked') || {}).value;
+            var row = document.getElementById('credentials-value-row');
+            if (!row) return;
+            if (src === 'inherit') row.classList.add('hidden');
+            else row.classList.remove('hidden');
+          };
+        })();
+      </script>
+    </div>
+
+  </form>
+{% endif %}
+
+</div>

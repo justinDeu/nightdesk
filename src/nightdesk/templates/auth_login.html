@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% set title = "Sign in" %}
+{% block body %}
+<div class="max-w-md mx-auto mt-16 px-6 py-8 bg-bg-elev border border-border rounded">
+  <h1 class="text-xl font-bold mb-4">Sign in to nightdesk</h1>
+  {% if error %}
+  <p class="mb-4 px-3 py-2 bg-red-900/40 border border-red-700 rounded text-sm">{{ error }}</p>
+  {% endif %}
+  <p class="text-sm text-fg-muted mb-4">
+    Paste the bearer token from <code class="px-1 py-0.5 bg-bg-elev-2 rounded">~/.config/nightdesk/config.toml</code>,
+    or run <code class="px-1 py-0.5 bg-bg-elev-2 rounded">nightdesk login</code> in a terminal to open a pre-authenticated browser session.
+  </p>
+  <form method="post" action="/auth/login" class="flex flex-col gap-3">
+    <label class="flex flex-col gap-1 text-sm">
+      <span>Bearer token</span>
+      <input type="password" name="bearer" autocomplete="off" autofocus required
+             class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg focus:outline-none focus:border-accent" />
+    </label>
+    <button type="submit"
+            class="px-3 py-1 bg-accent text-bg rounded hover:opacity-90">
+      Sign in
+    </button>
+  </form>
+</div>
+{% endblock %}

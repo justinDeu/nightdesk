@@ -1,0 +1,18 @@
+{% if hits %}
+  <ul class="max-h-96 overflow-y-auto">
+    {% for hit in hits %}
+      <li class="border-b border-border last:border-b-0">
+        <a href="/tickets/{{ hit.id }}"
+           class="block px-3 py-2 hover:bg-bg-elev-2">
+          <div class="font-bold text-fg truncate">{{ hit.title }}</div>
+          <div class="text-xs text-fg-muted truncate">{{ hit.snippet | safe }}</div>
+          <div class="text-[10px] text-accent uppercase tracking-wide">{{ hit.status }}</div>
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+{% elif q %}
+  <div class="px-3 py-2 text-sm text-fg-muted">No matches for "{{ q }}"</div>
+{% else %}
+  <div class="px-3 py-2 text-sm text-fg-muted">Type to search...</div>
+{% endif %}

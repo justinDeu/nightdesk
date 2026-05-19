@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% set active_page = 'archive' %}
+{% block body %}
+<section class="space-y-4">
+  <header class="flex items-center justify-between">
+    <h1 class="text-xl font-bold">Archive</h1>
+  </header>
+
+  <form
+    class="flex flex-wrap items-end gap-3 bg-bg-elev border border-border rounded-md p-3 text-sm"
+    hx-get="/archive/rows"
+    hx-target="#archive-table"
+    hx-swap="outerHTML"
+    hx-trigger="change delay:200ms from:find select, change delay:200ms from:find input[type='date'], input delay:300ms from:find input[type='search'], submit"
+  >
+    <label class="flex flex-col gap-1">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Outcome</span>
+      <select name="outcome"
+              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg">
+        {% for opt in outcomes %}
+          <option value="{{ opt }}" {% if filters.outcome == opt %}selected{% endif %}>
+            {{ opt }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="flex flex-col gap-1">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Profile</span>
+      <select name="profile_id"
+              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg">
+        <option value="" {% if not filters.profile_id %}selected{% endif %}>any</option>
+        {% for p in profiles %}
+          <option value="{{ p.id }}" {% if filters.profile_id == p.id %}selected{% endif %}>
+            {{ p.name }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="flex flex-col gap-1">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Since</span>
+      <input type="date" name="since" value="{{ filters_iso.since }}"
+             class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg" />
+    </label>
+
+    <label class="flex flex-col gap-1">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Until</span>
+      <input type="date" name="until" value="{{ filters_iso.until }}"
+             class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg" />
+    </label>
+
+    <label class="flex flex-col gap-1 flex-1 min-w-[200px]">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Search</span>
+      <input type="search" name="q" value="{{ filters.q }}" placeholder="title, prompt"
+             class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg" />
+    </label>
+
+    <button type="submit"
+            class="px-3 py-1 rounded border border-border bg-bg-elev-2 text-fg hover:text-accent">
+      Apply
+    </button>
+  </form>
+
+  {% include "partials/archive_table.html" %}
+</section>
+{% endblock %}

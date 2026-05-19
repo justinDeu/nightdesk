@@ -1,0 +1,28 @@
+{#
+  Single board column.
+  Expects: column_status (str), column_label (str), tickets (list[Ticket]),
+           profiles_by_id (dict), run_outcomes (dict).
+#}
+<section
+  id="board-col-{{ column_status }}"
+  class="flex flex-col min-w-0 rounded-md border border-border bg-bg-elev"
+  data-column="{{ column_status }}"
+  {# `oob` is set by the polling partial so the column replaces itself
+     by id (htmx out-of-band swap). Absent in the initial board render. #}
+  {% if oob %}hx-swap-oob="true"{% endif %}
+>
+  <header class="px-3 py-2 border-b border-border flex items-center justify-between">
+    <h2 class="text-sm font-semibold text-fg">
+      {{ column_label }}
+      <span class="ml-1 text-fg-muted font-normal">&middot; {{ tickets|length }}</span>
+    </h2>
+  </header>
+  <ul
+    class="board-list flex-1 min-h-[120px] p-2 space-y-2 overflow-y-auto"
+    data-status="{{ column_status }}"
+  >
+    {% for t in tickets %}
+      {% include "partials/ticket_card.html" %}
+    {% endfor %}
+  </ul>
+</section>

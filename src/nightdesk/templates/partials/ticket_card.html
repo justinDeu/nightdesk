@@ -1,0 +1,50 @@
+{#
+  Single ticket card used inside a board column.
+  Expects: t (Ticket-like), profiles_by_id (dict id->Profile),
+           run_outcomes (dict ticket_id->exit_status).
+
+  Clicking the card opens the sidebar in edit mode for this ticket.
+  Clicking the small ↗ link in the corner opens the full ticket detail
+  page (with the live transcript / SSE tail).
+#}
+{% set profile = profiles_by_id.get(t.profile_id) if profiles_by_id else None %}
+{% set outcome = run_outcomes.get(t.id) if run_outcomes else None %}
+<li
+  data-ticket-id="{{ t.id }}"
+  class="group rounded-md border border-border bg-bg-elev-2 px-3 py-2 cursor-grab hover:border-accent transition-colors shadow-sm"
+  hx-get="/board/sidebar?ticket_id={{ t.id }}"
+  hx-target="#sidebar"
+  hx-swap="outerHTML"
+  hx-trigger="click"
+>
+  <div class="flex items-start gap-2">
+    <div class="flex-1 min-w-0">
+      <div class="text-sm text-fg truncate font-medium">{{ t.title }}</div>
+      <div class="mt-1 flex flex-wrap items-center gap-1 text-xs">
+        {% if profile %}
+          <span class="px-1.5 py-0.5 rounded bg-bg-elev border border-border text-fg-muted">
+            {{ profile.name }}
+          </span>
+        {% endif %}
+        {% if t.status == 'review' and outcome %}
+          {% set chip_class = 'text-fg-muted border-border' %}
+          {% if outcome == 'success' %}{% set chip_class = 'text-accent border-accent/40' %}{% endif %}
+          {% if outcome == 'failed' %}{% set chip_class = 'text-danger border-danger/40' %}{% endif %}
+          {% if outcome in ('cancelled', 'worker_crash') %}{% set chip_class = 'text-warn border-warn/40' %}{% endif %}
+          <span class="px-1.5 py-0.5 rounded bg-bg-elev border {{ chip_class }}">
+            {{ outcome }}
+          </span>
+        {% endif %}
+      </div>
+    </div>
+    {# Open ticket detail (live transcript). stopPropagation so the parent
+       hx-get for the sidebar doesn't also fire on this click. #}
+    <a
+      href="/tickets/{{ t.id }}"
+      onclick="event.stopPropagation();"
+      title="Open ticket detail"
+      class="shrink-0 opacity-60 group-hover:opacity-100 text-fg-muted hover:text-accent text-sm leading-none"
+      aria-label="Open ticket detail"
+    >&#x2197;</a>
+  </div>
+</li>

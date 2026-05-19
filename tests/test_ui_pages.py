@@ -1,0 +1,557 @@
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from nightdesk.api.app import create_app
+from nightdesk.domain.profiles import create_profile
+from nightdesk.domain.tickets import create_ticket
+
+
+@pytest.fixture
+def app(engine, tmp_path):
+    return create_app(engine=engine, bearer_token="t",
+                       static_root=tmp_path / "static",
+                       transcript_root=tmp_path / "transcripts",
+                       worktree_root=tmp_path / "work")
+
+
+@pytest.fixture
+async def cookie_client(app):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test",
+                              cookies={"nightdesk_token": "t"}) as ac:
+        yield ac
+
+
+async def test_board_page_renders(cookie_client, session):
+    p = create_profile(session, name="ui", fs_read=[], fs_write=[], allowed_tools=[],
+                        denied_tools=[], network_mode="off", network_allowlist=[],
+                        secret_keys=[], default_model=None)
+    create_ticket(session, title="my ticket", prompt="hi",
+                    priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    assert "my ticket" in r.text
+
+
+async def test_board_sidebar_exposes_workspace_controls(cookie_client, session):
+    p = create_profile(session, name="workspace-ui", fs_read=[], fs_write=[],
+                       allowed_tools=[], denied_tools=[], network_mode="off",
+                       network_allowlist=[], secret_keys=[], default_model=None)
+    create_ticket(session, title="workspace ticket", prompt="hi",
+                  priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+
+    r = await cookie_client.get("/")
+
+    assert r.status_code == 200
+    # Workspace UI now lives in the unified workspaces section of the
+    # create modal. Primary row uses a kind <select> (Directory /
+    # Git worktree) instead of a "Run in git worktree" checkbox.
+    assert 'name="primary_kind"' in r.text
+    assert ">Git worktree<" in r.text
+    assert "Worktree name" in r.text
+    assert "disabled data-worktree-field" in r.text
+    assert "data-worktree-path-preview" in r.text
+    # The form's interactive behavior lives in /static/ticket_form.js
+    # (loaded globally from base.html); the page wires it up via inline
+    # event handlers + data-* markers.
+    assert '/static/ticket_form.js' in r.text
+    assert "data-ticket-form" in r.text
+    # Primary kind select drives worktree fields via the shared helper.
+    assert "ndSyncPrimaryWorkspaceKind" in r.text
+    assert "ndAddLinkedWorkspaceRow" in r.text
+    # Modal-scoped path suggest dropdown id ({modal_id}-wt-path-suggest).
+    assert "-wt-path-suggest" in r.text
+
+async def test_workspace_preview_uses_debounced_updates(cookie_client, session):
+    p = create_profile(session, name="workspace-debounce-ui", fs_read=[], fs_write=[],
+                       allowed_tools=[], denied_tools=[], network_mode="off",
+                       network_allowlist=[], secret_keys=[], default_model=None)
+    create_ticket(session, title="workspace ticket", prompt="hi",
+                  priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+
+    r = await cookie_client.get("/")
+
+    assert r.status_code == 200
+    # Debounce wiring lives in /static/ticket_form.js; the page hooks it
+    # via inline oninput handlers that call ndScheduleWorktreePreview.
+    assert '/static/ticket_form.js' in r.text
+    assert "ndScheduleWorktreePreview" in r.text
+    assert "data-worktree-preview-source" in r.text
+    assert "data-worktree-preview-path" in r.text
+
+
+async def test_linked_workspace_ui_has_git_specific_controls(cookie_client, session):
+    p = create_profile(session, name="linked-workspace-ui", fs_read=[], fs_write=[],
+                       allowed_tools=[], denied_tools=[], network_mode="off",
+                       network_allowlist=[], secret_keys=[], default_model=None)
+    create_ticket(session, title="workspace ticket", prompt="hi",
+                  priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+
+    r = await cookie_client.get("/")
+
+    assert r.status_code == 200
+    # The git-specific row markup is added dynamically by ticket_form.js
+    # when a row's kind is switched to git_worktree. The page just needs
+    # to load that script and expose the host container + Add button so
+    # the row factory can render into it.
+    assert '/static/ticket_form.js' in r.text
+    assert "ndAddLinkedWorkspaceRow" in r.text
+    # Modal-scoped linked-workspaces host id ({modal_id}-linked).
+    assert "-linked" in r.text
+    assert "data-linked-workspace-row" in r.text or "ndAddLinkedWorkspaceRow" in r.text
+
+
+async def test_profiles_page_lists_existing_profiles(cookie_client, session):
+    """List view shows each profile by name with New / Edit entry points.
+
+    The legacy inline backend-binding accordion was replaced in v1 by a
+    dedicated per-profile editor at /profiles/{id}; this test only checks
+    the table-of-profiles surface.
+    """
+    create_profile(
+        session,
+        name="zai",
+        fs_read=[],
+        fs_write=[],
+        allowed_tools=[],
+        denied_tools=[],
+        network_mode="off",
+        network_allowlist=[],
+        secret_keys=["ZAI_API_KEY"],
+        default_model="glm-5.1",
+        backend="claude_sdk",
+    )
+
+    r = await cookie_client.get("/profiles")
+
+    assert r.status_code == 200
+    assert "zai" in r.text
+    assert 'href="/profiles/new"' in r.text
+
+
+async def test_profile_editor_renders_existing_values(cookie_client, session):
+    """The two-pane profile UI lands in view mode at /profiles/{id} and the
+    editable form lives at /profiles/{id}/edit. The form POSTs back to
+    /profiles/{id} so saving updates the same row."""
+    p = create_profile(
+        session,
+        name="zai-edit",
+        fs_read=[],
+        fs_write=[],
+        allowed_tools=[],
+        denied_tools=[],
+        network_mode="off",
+        network_allowlist=[],
+        secret_keys=[],
+        default_model="glm-5.1",
+        backend="claude_sdk",
+    )
+
+    r = await cookie_client.get(f"/profiles/{p.id}/edit")
+
+    assert r.status_code == 200
+    body = r.text
+    assert "zai-edit" in body
+    assert "glm-5.1" in body
+    assert f'action="/profiles/{p.id}"' in body
+
+
+
+
+async def test_login_rejects_bad_token(cookie_client):
+    cookie_client.cookies.clear()
+    r = await cookie_client.post("/login", data={"token": "wrong"})
+    assert r.status_code == 401
+
+
+async def test_dashboard_route_removed(cookie_client):
+    r = await cookie_client.get("/dashboard")
+    assert r.status_code == 404
+
+
+async def test_run_now_htmx_returns_204_and_queues_draft(cookie_client, session):
+    """Hard requirement on the run-now ticket: HTMX clients (the only path
+    used in the browser) get 204 No Content + HX-Trigger event. No 303, no
+    redirect — those navigate the browser, which we forbid.
+
+    Also verifies the underlying status transition: a draft ticket must
+    actually become queued (otherwise the scheduler's WHERE status='queued'
+    clause never matches and the click is a silent no-op)."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket, get_ticket
+
+    p = create_profile(
+        session, name="rn-ui", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="rn", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False,
+    )
+    assert t.status == "draft"
+
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/run-now",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 204
+    assert r.headers.get("HX-Trigger") == "nd-run-now-queued"
+    # Body is empty (204 No Content) so HTMX leaves the DOM alone.
+    assert r.content == b""
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.status == "queued"
+    assert after.run_now is True
+
+
+async def test_run_now_non_htmx_falls_back_to_303(cookie_client, session):
+    """curl / no-JS clients keep working: a plain POST gets the 303 back to
+    the ticket detail page. Browser users hit the HTMX path above."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket, get_ticket
+
+    p = create_profile(
+        session, name="rn-ui-curl", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="rn", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False,
+    )
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/run-now",
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/tickets/{t.id}"
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    # Status transition still happened — non-HTMX path is not a no-op.
+    assert after.status == "queued"
+    assert after.run_now is True
+
+
+async def test_run_now_on_running_returns_409(cookie_client, session):
+    """A live run is not something we want to restart by accident; clicking
+    Run-now on it must error rather than silently set a flag."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="rn-ui-running", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="rn", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False, status="running",
+    )
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/run-now",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 409
+
+
+async def test_archive_htmx_returns_204_and_transitions(cookie_client, session):
+    """The cookie-auth Archive route mirrors run-now: HTMX clients get 204
+    so the template can gate `window.location='/archive'` on success without
+    a redirect fighting it. Also verifies the underlying review->archived
+    transition actually happens — the previous detail-page button hit the
+    bearer-only /api/v1/... twin and silently 401'd from browser sessions,
+    leaving the ticket in 'review' forever while the user was bounced to /.
+    """
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket, get_ticket
+
+    p = create_profile(
+        session, name="arch-ui", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="arch", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False, status="review",
+    )
+
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/archive",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 204
+    assert r.headers.get("HX-Trigger") == "nd-ticket-archived"
+    assert r.content == b""
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.status == "archived"
+
+
+async def test_archive_non_htmx_falls_back_to_303(cookie_client, session):
+    """curl / no-JS clients keep working: plain POST gets a 303 back to the
+    ticket detail page so the endpoint is still usable from a shell."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket, get_ticket
+
+    p = create_profile(
+        session, name="arch-ui-curl", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="arch", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False, status="review",
+    )
+
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/archive",
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/tickets/{t.id}"
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.status == "archived"
+
+
+async def test_archive_on_draft_returns_409(cookie_client, session):
+    """Archive is review-only per _VALID_TRANSITIONS; firing it on a draft
+    must error rather than silently no-op. 409 lets the template skip the
+    success-gated navigation so the user stays on the page and sees the
+    request failed."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="arch-ui-draft", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="arch", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False,  # default status='draft'
+    )
+
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/archive",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 409
+
+
+async def test_archive_missing_ticket_404(cookie_client):
+    r = await cookie_client.post(
+        "/tickets/no-such-id/archive",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 404
+
+
+async def test_sidebar_review_pane_shows_archive_button(cookie_client, session):
+    """Acceptance: the sidebar in edit mode for a review-status ticket
+    surfaces an Archive button that POSTs to the inline /board/... route
+    with hx-target=#sidebar so the rail updates in place (no full board
+    navigation, same rule as Run-now)."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="arch-sb", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="rev", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False, status="review",
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert "data-archive-btn" in body
+    assert f'hx-post="/board/tickets/{t.id}/archive"' in body
+    assert 'hx-target="#sidebar"' in body
+    assert ">Archive<" in body
+
+
+async def test_sidebar_draft_pane_omits_archive_button(cookie_client, session):
+    """Same gate as the detail page: only render Archive when status='review'.
+    A draft ticket must NOT see the button — the underlying transition would
+    409 and the user would think they archived something they didn't."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="arch-sb-draft", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="dft", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False,  # default status='draft'
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert "data-archive-btn" not in body
+    assert f"/board/tickets/{t.id}/archive" not in body
+
+
+async def test_board_archive_route_returns_sidebar_partial(cookie_client, session):
+    """POST /board/tickets/{tid}/archive performs the transition AND returns
+    the re-rendered sidebar so HTMX can swap it in place. After the call,
+    the returned sidebar is in edit mode for the now-archived ticket and no
+    longer carries the Archive button (status gate flipped)."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket, get_ticket
+
+    p = create_profile(
+        session, name="arch-board", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="rev2", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False, status="review",
+    )
+
+    r = await cookie_client.post(
+        f"/board/tickets/{t.id}/archive",
+        follow_redirects=False,
+    )
+    assert r.status_code == 200
+    body = r.text
+    # Sidebar partial (not the full page).
+    assert "<html" not in body.lower()
+    assert 'id="sidebar"' in body
+    # Sidebar in edit mode for the now-archived ticket: ticket id is set
+    # on the aside, the title renders, and the edit modal is included.
+    assert f'data-selected-ticket-id="{t.id}"' in body
+    assert "rev2" in body
+    assert 'id="ticket-edit-modal"' in body
+    # Archive button gone (status is now 'archived', not 'review').
+    assert "data-archive-btn" not in body
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.status == "archived"
+
+
+async def test_board_archive_on_draft_returns_409(cookie_client, session):
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="arch-board-draft", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="d", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False,
+    )
+
+    r = await cookie_client.post(
+        f"/board/tickets/{t.id}/archive",
+        follow_redirects=False,
+    )
+    assert r.status_code == 409
+
+
+async def test_detail_page_archive_button_uses_cookie_auth_route(
+    cookie_client, session,
+):
+    """Regression guard for the original bug: the detail-page Archive button
+    must POST to the cookie-auth /tickets/.../archive route, NOT the
+    bearer-only /api/v1/... twin. The latter 401s for browser sessions and
+    the old unconditional after-request handler still navigated, making the
+    failure invisible."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="arch-detail", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="rev3", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False, status="review",
+    )
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # Cookie-auth route is wired up.
+    assert f'hx-post="/tickets/{t.id}/archive"' in body
+    # Bearer-only twin must not appear on the page.
+    assert f"/api/v1/tickets/{t.id}/archive" not in body
+    # Navigation is success-gated, not unconditional.
+    assert "if (event.detail.successful) window.location='/archive'" in body
+    assert "hx-on::after-request=\"window.location='/'\"" not in body
+
+
+async def test_detail_page_delete_button_uses_cookie_auth_route(
+    cookie_client, session,
+):
+    """Same fix as Archive: the Delete button must hit the cookie-auth
+    /board/tickets/{id} route (returns 204 + HX-Redirect on success, plain
+    error otherwise). The old /api/v1/... wiring + unconditional
+    after-request handler silently failed for browser sessions."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="del-detail", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="d", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False,
+    )
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert f'hx-delete="/board/tickets/{t.id}"' in body
+    assert f'hx-delete="/api/v1/tickets/{t.id}"' not in body
+    # No unconditional navigation handler remains on the Delete button.
+    assert "hx-on::after-request=\"window.location='/'\"" not in body
+
+
+async def test_run_now_on_queued_only_sets_flag(cookie_client, session):
+    """Queued tickets stay queued; Run-now just flips the bypass flag so the
+    next scheduler tick picks them ahead of the window/capacity check."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket, get_ticket
+
+    p = create_profile(
+        session, name="rn-ui-queued", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="rn", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False, status="queued",
+    )
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/run-now",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 204
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.status == "queued"
+    assert after.run_now is True

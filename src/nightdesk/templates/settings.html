@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% set title = "Settings" %}
+{% block body %}
+{% set always_on = cfg and cfg.window_start == cfg.window_end %}
+<div class="max-w-2xl mx-auto px-4 py-4 flex flex-col gap-6">
+  <header class="flex items-center gap-4">
+    <h1 class="text-xl font-bold">Settings</h1>
+    {% if saved %}<span class="px-2 py-0.5 text-xs bg-green-900/40 text-green-200 rounded">saved</span>{% endif %}
+  </header>
+
+  <p class="text-sm text-fg-muted">
+    Changes take effect on the worker's next tick. No restart needed.
+  </p>
+
+  <form method="post" action="/settings" class="flex flex-col gap-4">
+    <section class="border border-border rounded p-4 bg-bg-elev">
+      <h2 class="font-semibold mb-3">Work hours</h2>
+      <p class="text-xs text-fg-muted mb-3">
+        Tickets are dispatched only between start and end. Overnight windows
+        like 22:00 to 07:00 are supported. Run-now tickets ignore this window.
+      </p>
+      <div class="flex flex-col gap-3 text-sm">
+        <label class="flex items-center gap-2">
+          <input id="always_on" name="always_on" type="checkbox"
+                 {% if always_on %}checked{% endif %}
+                 onchange="document.querySelectorAll('[data-window-field]').forEach(el => el.disabled = this.checked);" />
+          <span class="font-medium">Always on</span>
+          <span class="text-xs text-fg-muted">(worker may dispatch at any time)</span>
+        </label>
+        <div class="grid grid-cols-[1fr,8rem] gap-x-3 gap-y-3 items-center">
+          <label for="window_start" class="text-fg">
+            <div class="font-medium">Start</div>
+            <div class="text-xs text-fg-muted">Local time when dispatch opens.</div>
+          </label>
+          <input id="window_start" name="window_start" type="time" data-window-field
+                 value="{{ cfg.window_start if cfg else '22:00' }}"
+                 {% if always_on %}disabled{% endif %}
+                 class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+
+          <label for="window_end" class="text-fg">
+            <div class="font-medium">End</div>
+            <div class="text-xs text-fg-muted">Local time when dispatch closes.</div>
+          </label>
+          <input id="window_end" name="window_end" type="time" data-window-field
+                 value="{{ cfg.window_end if cfg else '07:00' }}"
+                 {% if always_on %}disabled{% endif %}
+                 class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+        </div>
+      </div>
+    </section>
+
+    <section class="border border-border rounded p-4 bg-bg-elev">
+      <h2 class="font-semibold mb-3">Scheduling</h2>
+      <div class="grid grid-cols-[1fr,8rem] gap-x-3 gap-y-3 text-sm items-center">
+        <label for="max_parallel" class="text-fg">
+          <div class="font-medium">Max parallel runs</div>
+          <div class="text-xs text-fg-muted">How many tickets the worker may execute at once. Clamped 1 to 16.</div>
+        </label>
+        <input id="max_parallel" name="max_parallel" type="number" min="1" max="16"
+               value="{{ cfg.max_parallel if cfg else 2 }}"
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+
+        <label for="polling_interval_seconds" class="text-fg">
+          <div class="font-medium">Polling interval (seconds)</div>
+          <div class="text-xs text-fg-muted">How often the worker checks for new tickets and re-reads settings.</div>
+        </label>
+        <input id="polling_interval_seconds" name="polling_interval_seconds" type="number" min="1" max="300"
+               value="{{ cfg.polling_interval_seconds if cfg else 5 }}"
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+      </div>
+    </section>
+
+    <section class="border border-border rounded p-4 bg-bg-elev">
+      <h2 class="font-semibold mb-3">Claude Code</h2>
+      <div class="grid grid-cols-[1fr,16rem] gap-x-3 gap-y-3 text-sm items-center">
+        <label for="claude_binary_path" class="text-fg">
+          <div class="font-medium">Claude binary path</div>
+          <div class="text-xs text-fg-muted">Leave blank to use <code>claude</code> on the daemon's PATH. Profiles can override per-run.</div>
+        </label>
+        <input id="claude_binary_path" name="claude_binary_path" type="text"
+               value="{{ (cfg.claude_binary_path if cfg else '') or '' }}"
+               placeholder="(use PATH lookup)"
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+
+        <label for="cc_minimum_version" class="text-fg">
+          <div class="font-medium">Minimum CC version</div>
+          <div class="text-xs text-fg-muted">Worker refuses to dispatch runs if installed claude is older. Default 2.1.80.</div>
+        </label>
+        <input id="cc_minimum_version" name="cc_minimum_version" type="text"
+               value="{{ (cfg.cc_minimum_version if cfg else '2.1.80') }}"
+               placeholder="2.1.80"
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+      </div>
+    </section>
+
+    <div class="flex justify-end gap-2">
+      <button type="submit"
+              class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">
+        Save
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

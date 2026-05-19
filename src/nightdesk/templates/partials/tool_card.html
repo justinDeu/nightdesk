@@ -1,0 +1,240 @@
+{# Tool-use cards.
+
+   Each macro renders one kind of tool_use input as a native
+   <details class="tc-card"><summary>...</summary><div class="tc-body">...</div></details>
+   block. The summary alone identifies the action; the body holds preview /
+   diff / command content that the user expands when interested.
+
+   When the caller pre-pairs a tool_result with its tool_use (see
+   ``transcript_view.pair_tool_events``), pass it as the ``result`` argument
+   and the result block renders inside the same .tc-body — below the
+   tool-specific input content, separated by a .tc-divider.
+
+   The JS live-tail in templates/partials/transcript_panel.html mirrors
+   these shapes and the same pairing placement. Keep the two sides in sync —
+   same DOM, same CSS classes (defined in static/app.css under .tc-card /
+   .diff / .bash-cmd / .tc-divider).
+
+   Helpers come from nightdesk.transcript_view, exposed as the Jinja global
+   `tv` in nightdesk.api.app.create_app.
+#}
+
+{# --- shared summary header ----------------------------------------------- #}
+{% macro _summary(s) %}
+  <summary>
+    <span class="tc-tag tc-tag-{{ s.tag_class }}">{{ s.tag }}</span>
+    {% if s.primary %}<code class="tc-path">{{ s.primary }}</code>{% endif %}
+    {% if s.meta %}<span class="tc-meta">{{ s.meta }}</span>{% endif %}
+  </summary>
+{% endmacro %}
+
+{# --- shared tool_result block ------------------------------------------- #
+   Renders a tool_result event as its own collapsible <details>. Used both
+   standalone (from transcript_event.evt_tool_result for unpaired results)
+   and inline inside a tool_use card's .tc-body when pre-paired. Default
+   open so the output is visible without an extra click; long output is
+   elided to head + tail with the middle behind an inner <details>. #}
+{% macro tool_result_block(evt) %}
+  {% set out = evt.get('output','') %}
+  {% set elide = tv.elide_output(out) %}
+  {% set truncated = evt.get('truncated', false) %}
+  {% set is_error = evt.get('is_error', false) %}
+  <details class="tool-result{% if is_error %} is-error{% endif %}" open>
+    <summary>
+      {% if is_error %}<span class="bg-danger/20 text-danger px-1 rounded">error</span> {% endif %}
+      result ({{ elide.total }} line{{ '' if elide.total == 1 else 's' }}{% if truncated %}, truncated{% endif %})
+    </summary>
+    {% if elide.hidden == 0 %}
+      <pre class="tool-result-pre">{{ out }}</pre>
+    {% else %}
+      <pre class="tool-result-pre">{{ elide.head | join('\n') }}</pre>
+      <details>
+        <summary class="bash-hidden-summary">{{ elide.hidden }} lines hidden</summary>
+      </details>
+      <pre class="tool-result-pre">{{ elide.tail | join('\n') }}</pre>
+    {% endif %}
+  </details>
+{% endmacro %}
+
+{# Divider rendered between a tool's input block and its paired result
+   inside the same .tc-body. Skipped when the card has no prior input
+   content (Read / Glob / Grep), so the result reads alone. #}
+{% macro _result_in_body(result, with_divider) %}
+  {% if with_divider %}<div class="tc-divider"></div>{% endif %}
+  {{ tool_result_block(result) }}
+{% endmacro %}
+
+{# --- read / write / glob / grep: one-line summary, optional body --------- #}
+{% macro tool_read(evt, result=None) %}
+  {% set s = tv.tool_summary(evt) %}
+  <details class="tc-card">
+    {{ _summary(s) }}
+    {% if result %}
+      <div class="tc-body">
+        {{ _result_in_body(result, false) }}
+      </div>
+    {% endif %}
+  </details>
+{% endmacro %}
+
+{% macro tool_write(evt, result=None) %}
+  {% set s = tv.tool_summary(evt) %}
+  {% set content = (evt.get('input', {}).get('content') or '') %}
+  <details class="tc-card" open>
+    {{ _summary(s) }}
+    {% if content or result %}
+      <div class="tc-body">
+        {% if content %}
+          <pre class="bash-cmd">{{ content.split('\n')[:40] | join('\n') }}{% if content.split('\n') | length > 40 %}
+&hellip; ({{ content.split('\n') | length - 40 }} more lines){% endif %}</pre>
+        {% endif %}
+        {% if result %}
+          {{ _result_in_body(result, content|length > 0) }}
+        {% endif %}
+      </div>
+    {% endif %}
+  </details>
+{% endmacro %}
+
+{% macro tool_glob(evt, result=None) %}
+  {% set s = tv.tool_summary(evt) %}
+  <details class="tc-card">
+    {{ _summary(s) }}
+    {% if result %}
+      <div class="tc-body">
+        {{ _result_in_body(result, false) }}
+      </div>
+    {% endif %}
+  </details>
+{% endmacro %}
+
+{% macro tool_grep(evt, result=None) %}
+  {% set s = tv.tool_summary(evt) %}
+  <details class="tc-card">
+    {{ _summary(s) }}
+    {% if result %}
+      <div class="tc-body">
+        {{ _result_in_body(result, false) }}
+      </div>
+    {% endif %}
+  </details>
+{% endmacro %}
+
+{# --- edit / multi_edit: unified single-column diff with gutter ----------- #}
+{% macro _diff_block(old, new) %}
+  <div class="diff">
+    {% for row in tv.unified_diff_rows(old, new) %}
+      <div class="diff-row {{ row.kind }}"><span class="diff-gutter">{{ row.gutter }}</span><span class="diff-ln">{{ row.line_no }}</span><span class="diff-src">{{ row.text }}</span></div>
+    {% endfor %}
+  </div>
+{% endmacro %}
+
+{# Header strip rendered above the diff block: file path on the left,
+   +N -M counts on the right. Visually glued to the diff via .diff-stack
+   in the component CSS. #}
+{% macro _diff_header(path, ins, dels) %}
+  <div class="diff-header">
+    <code class="diff-header-path">{{ path }}</code>
+    <span class="diff-header-counts">
+      <span class="diff-count-ins">+{{ ins }}</span>
+      <span class="diff-count-del">-{{ dels }}</span>
+    </span>
+  </div>
+{% endmacro %}
+
+{% macro tool_edit(evt, result=None) %}
+  {% set s = tv.tool_summary(evt) %}
+  {% set input = evt.get('input', {}) %}
+  {% set path = input.get('file_path') or input.get('path') or '' %}
+  {% set old = input.get('old_string') or '' %}
+  {% set new = input.get('new_string') or '' %}
+  {% set counts = tv.diff_counts(old, new) %}
+  <details class="tc-card" open>
+    {{ _summary(s) }}
+    <div class="tc-body">
+      <div class="diff-stack">
+        {{ _diff_header(path, counts.ins, counts.dels) }}
+        {{ _diff_block(old, new) }}
+      </div>
+      {% if result %}
+        {{ _result_in_body(result, true) }}
+      {% endif %}
+    </div>
+  </details>
+{% endmacro %}
+
+{% macro tool_multi_edit(evt, result=None) %}
+  {% set s = tv.tool_summary(evt) %}
+  {% set input = evt.get('input', {}) %}
+  {% set path = input.get('file_path') or input.get('path') or '' %}
+  {% set edits = input.get('edits') or [] %}
+  {# Aggregate counts across every hunk so the header strip reflects the
+     total change for the MultiEdit, not just the first hunk. Jinja
+     namespaces are used so values persist across loop iterations. #}
+  {% set totals = namespace(ins=0, dels=0) %}
+  {% for e in edits %}
+    {% set c = tv.diff_counts(e.get('old_string') or '', e.get('new_string') or '') %}
+    {% set totals.ins = totals.ins + c.ins %}
+    {% set totals.dels = totals.dels + c.dels %}
+  {% endfor %}
+  <details class="tc-card" open>
+    {{ _summary(s) }}
+    <div class="tc-body">
+      <div class="diff-stack">
+        {{ _diff_header(path, totals.ins, totals.dels) }}
+        {% for e in edits %}
+          {% if not loop.first %}<div class="diff-sep"></div>{% endif %}
+          {{ _diff_block(e.get('old_string') or '', e.get('new_string') or '') }}
+        {% endfor %}
+      </div>
+      {% if result %}
+        {{ _result_in_body(result, true) }}
+      {% endif %}
+    </div>
+  </details>
+{% endmacro %}
+
+{# --- bash: monospace command block, optional muted description ----------- #}
+{% macro tool_bash(evt, result=None) %}
+  {% set s = tv.tool_summary(evt) %}
+  {% set input = evt.get('input', {}) %}
+  {% set cmd = input.get('command') or '' %}
+  {% set desc = input.get('description') or '' %}
+  <details class="tc-card" open>
+    {{ _summary(s) }}
+    <div class="tc-body">
+      <pre class="bash-cmd">{{ cmd }}</pre>
+      {% if desc %}<div class="bash-desc">{{ desc }}</div>{% endif %}
+      {% if result %}
+        {{ _result_in_body(result, true) }}
+      {% endif %}
+    </div>
+  </details>
+{% endmacro %}
+
+{# --- generic fallback ---------------------------------------------------- #}
+{% macro tool_generic(evt, result=None) %}
+  {% set s = tv.tool_summary(evt) %}
+  <details class="tc-card">
+    {{ _summary(s) }}
+    <div class="tc-body">
+      <pre class="bash-cmd">{{ evt.get('input', {}) | tojson(indent=2) }}</pre>
+      {% if result %}
+        {{ _result_in_body(result, true) }}
+      {% endif %}
+    </div>
+  </details>
+{% endmacro %}
+
+{% macro render_tool(evt, result=None) %}
+  {% set tool = evt.get('tool', '') %}
+  {% if tool == 'Read' %}{{ tool_read(evt, result) }}
+  {% elif tool == 'Write' %}{{ tool_write(evt, result) }}
+  {% elif tool == 'Edit' %}{{ tool_edit(evt, result) }}
+  {% elif tool == 'MultiEdit' %}{{ tool_multi_edit(evt, result) }}
+  {% elif tool == 'Glob' %}{{ tool_glob(evt, result) }}
+  {% elif tool == 'Grep' %}{{ tool_grep(evt, result) }}
+  {% elif tool == 'Bash' %}{{ tool_bash(evt, result) }}
+  {% else %}{{ tool_generic(evt, result) }}
+  {% endif %}
+{% endmacro %}
