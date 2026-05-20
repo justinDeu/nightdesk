@@ -322,9 +322,9 @@
    # lg+ and sticks while the left column scrolls. The inner div is the
    # HTMX swap target for run-history clicks.
    # ===================================================================== #}
-  <aside class="w-full flex-1 min-w-0 lg:sticky lg:top-4 self-stretch">
+  <aside class="w-full flex-1 min-w-0 lg:sticky lg:top-4 self-stretch lg:max-h-[calc(100vh-5rem)] lg:flex lg:flex-col lg:overflow-hidden">
     <section id="transcript-panel"
-             class="bg-bg-elev border border-border rounded p-4 overflow-x-auto">
+             class="bg-bg-elev border border-border rounded p-4 lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
       <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-2">Latest transcript</h2>
       {# --- Prompt as first user message -------------------------------- #
        # Placed above the HTMX swap target so switching runs does not
@@ -336,7 +336,7 @@
         <pre class="user-prompt-body">{{ prompt_text }}</pre>
       </div>
       {% endif %}
-      <div id="transcript-panel-inner">
+      <div id="transcript-panel-inner" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
         {% include "partials/transcript_panel.html" %}
       </div>
     </section>

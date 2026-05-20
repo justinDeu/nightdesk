@@ -51,10 +51,9 @@
 
   {% if transcript_raw %}
     {# Legacy raw SDK file: plain pre fallback. #}
-    <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto"
-         style="max-height: calc(100vh - 10rem);">{{ transcript_raw }}</pre>
+    <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto max-h-[calc(100vh-10rem)] lg:flex-1 lg:min-h-0 lg:max-h-none">{{ transcript_raw }}</pre>
   {% else %}
-    <div id="transcript-scroll" class="overflow-y-auto pr-1" style="max-height: calc(100vh - 10rem);">
+    <div id="transcript-scroll" class="overflow-y-auto pr-1 max-h-[calc(100vh-10rem)] lg:flex-1 lg:min-h-0 lg:max-h-none">
       <div id="transcript" class="space-y-2">
         {# Pre-pair tool_result events with their parent tool_use so each
            pair renders as one visual card. Orphan results (no matching
