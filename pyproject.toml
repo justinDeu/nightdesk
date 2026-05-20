@@ -40,6 +40,8 @@ nightdesk-init = "nightdesk.cli:init"
 nightdesk-migrate = "nightdesk.cli:migrate"
 nightdesk-run-ticket = "nightdesk.cli:run_ticket"
 nightdesk-setup = "nightdesk.cli:setup"
+nightdesk-stop = "nightdesk.cli:stop"
+nightdesk-uninstall = "nightdesk.cli:uninstall"
 nightdesk-login = "nightdesk.cli:login"
 
 [tool.hatch.build.targets.wheel]
