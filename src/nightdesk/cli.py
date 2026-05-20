@@ -586,6 +586,225 @@ def setup() -> None:
 
 
 # ---------------------------------------------------------------------------
+# `nightdesk stop` command.
+# ---------------------------------------------------------------------------
+
+_UNIT_NAMES = ("nightdesk-api.service", "nightdesk-worker.service")
+
+
+def _systemctl(*args: str) -> subprocess.CompletedProcess:
+    """Run a systemctl --user command. Returns the CompletedProcess."""
+    return subprocess.run(
+        ["systemctl", "--user", *args],
+        capture_output=True, text=True,
+    )
+
+
+def _stop_systemd_units(dry_run: bool) -> None:
+    """Stop and disable the nightdesk systemd user units. Idempotent."""
+    if dry_run:
+        print("[dry-run] would run: systemctl --user stop nightdesk-api.service nightdesk-worker.service")
+        print("[dry-run] would run: systemctl --user disable nightdesk-api.service nightdesk-worker.service")
+        print("[dry-run] would run: systemctl --user daemon-reload")
+        return
+
+    _systemctl("stop", *_UNIT_NAMES)
+    _systemctl("disable", *_UNIT_NAMES)
+    _systemctl("daemon-reload")
+    print("systemd units stopped and disabled.")
+
+
+def _remove_systemd_unit_files(dry_run: bool) -> None:
+    """Remove the nightdesk unit files from ~/.config/systemd/user/."""
+    unit_dir = Path(os.path.expanduser("~/.config/systemd/user"))
+    for name in _UNIT_NAMES:
+        path = unit_dir / name
+        if path.exists():
+            if dry_run:
+                print(f"[dry-run] would remove: {path}")
+            else:
+                path.unlink()
+                print(f"Removed {path}")
+        else:
+            print(f"Unit file not found (already removed): {path}")
+
+    if not dry_run:
+        _systemctl("daemon-reload")
+        print("systemd daemon reloaded.")
+
+
+def _is_service_active() -> bool:
+    """Check whether any nightdesk service is currently active."""
+    for name in _UNIT_NAMES:
+        result = _systemctl("is-active", name)
+        if result.stdout.strip() == "active":
+            return True
+    return False
+
+
+def stop() -> None:
+    """Stop and disable nightdesk services. Preserves all config and data.
+
+    Usage:
+        nightdesk-stop
+        nightdesk-stop --dry-run
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="nightdesk-stop")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print planned actions without touching systemd.",
+    )
+    args = parser.parse_args()
+
+    _stop_systemd_units(args.dry_run)
+
+    if args.dry_run:
+        print("\n[dry-run] stop complete (no changes made).")
+    else:
+        print("\nServices stopped. Config and data are intact.")
+
+
+# ---------------------------------------------------------------------------
+# `nightdesk uninstall` command.
+# ---------------------------------------------------------------------------
+
+
+def uninstall() -> None:
+    """Reverse nightdesk-setup: stop services, remove units and config.
+
+    Data is PRESERVED by default. Use --purge-data / --purge-worktrees to
+    remove data directories as well.
+
+    Usage:
+        nightdesk-uninstall
+        nightdesk-uninstall --dry-run
+        nightdesk-uninstall --purge-data
+        nightdesk-uninstall --purge-data --purge-worktrees
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="nightdesk-uninstall")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print every action without performing any.",
+    )
+    parser.add_argument(
+        "--purge-data",
+        action="store_true",
+        help=(
+            "Remove the data directory (~/.local/share/nightdesk/) including "
+            "the database, transcripts, and logs."
+        ),
+    )
+    parser.add_argument(
+        "--purge-worktrees",
+        action="store_true",
+        help=(
+            "Remove worktree directories (~/.local/share/nightdesk-worktrees/ "
+            "and ~/.local/share/nightdesk-cc-sessions/)."
+        ),
+    )
+    args = parser.parse_args()
+
+    dry_run: bool = args.dry_run
+    config_dir = Path(os.path.expanduser("~/.config/nightdesk"))
+    config_path = DEFAULT_CONFIG_PATH
+    secrets_path = Path(os.path.expanduser("~/.config/nightdesk/secrets.env"))
+    data_dir = Path(os.path.expanduser("~/.local/share/nightdesk"))
+    worktree_dir = Path(os.path.expanduser("~/.local/share/nightdesk-worktrees"))
+    cc_sessions_dir = Path(os.path.expanduser("~/.local/share/nightdesk-cc-sessions"))
+
+    # -- Guard: stop running services first --------------------------------
+    if not dry_run and _is_service_active():
+        print("nightdesk services are running. Stopping them first.")
+        _stop_systemd_units(dry_run=False)
+    elif dry_run:
+        print("[dry-run] would check if services are running and stop them if so.")
+
+    # -- Remove systemd unit files ------------------------------------------
+    _remove_systemd_unit_files(dry_run)
+
+    # -- Remove config files ------------------------------------------------
+    for path, label in ((config_path, "config"), (secrets_path, "secrets.env")):
+        if path.exists():
+            if dry_run:
+                print(f"[dry-run] would remove: {path}")
+            else:
+                path.unlink()
+                print(f"Removed {label}: {path}")
+        else:
+            print(f"{label} not found (already removed): {path}")
+
+    # Remove config dir if empty. In dry-run the files above are still on disk,
+    # so discount the ones a real run would have just deleted; otherwise the
+    # preview would say "not empty, preserving" when a real run would remove it.
+    if config_dir.exists():
+        would_remove = {config_path, secrets_path}
+        remaining = [p for p in config_dir.iterdir() if p not in would_remove]
+        if not remaining:
+            if dry_run:
+                print(f"[dry-run] would remove empty directory: {config_dir}")
+            else:
+                config_dir.rmdir()
+                print(f"Removed empty config directory: {config_dir}")
+        else:
+            print(f"Config directory not empty, preserving: {config_dir} ({len(remaining)} items remain)")
+
+    # -- Data removal (opt-in) ----------------------------------------------
+    if args.purge_data:
+        if data_dir.exists():
+            if dry_run:
+                print(f"[dry-run] would remove data directory: {data_dir}")
+            else:
+                print(f"WARNING: permanently deleting all nightdesk data at {data_dir} — this cannot be undone.")
+                shutil.rmtree(data_dir)
+                print(f"Removed data directory: {data_dir}")
+        else:
+            print(f"Data directory not found: {data_dir}")
+    else:
+        if data_dir.exists():
+            print(f"Data directory preserved: {data_dir} (use --purge-data to remove)")
+        else:
+            print(f"Data directory not found: {data_dir}")
+
+    if args.purge_worktrees:
+        for d, label in ((worktree_dir, "worktree"), (cc_sessions_dir, "cc-sessions")):
+            if d.exists():
+                if dry_run:
+                    print(f"[dry-run] would remove {label} directory: {d}")
+                else:
+                    print(f"WARNING: permanently deleting {label} directory at {d} — this cannot be undone.")
+                    shutil.rmtree(d)
+                    print(f"Removed {label} directory: {d}")
+            else:
+                print(f"{label} directory not found: {d}")
+    else:
+        if worktree_dir.exists():
+            print(f"Worktree directory preserved: {worktree_dir} (use --purge-worktrees to remove)")
+        if cc_sessions_dir.exists():
+            print(f"CC sessions directory preserved: {cc_sessions_dir} (use --purge-worktrees to remove)")
+
+    # -- Summary ------------------------------------------------------------
+    if dry_run:
+        print("\n[dry-run] uninstall complete (no changes made).")
+    else:
+        print("\nnightdesk uninstall complete.")
+        print("  Removed: systemd units, config files")
+        if args.purge_data:
+            print("  Removed: data directory")
+        else:
+            print("  Preserved: data directory")
+        if args.purge_worktrees:
+            print("  Removed: worktree directories")
+        else:
+            print("  Preserved: worktree directories")
+
+
+# ---------------------------------------------------------------------------
 # `nightdesk login` command.
 # ---------------------------------------------------------------------------
 
