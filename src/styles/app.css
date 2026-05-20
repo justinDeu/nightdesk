@@ -392,6 +392,38 @@ li[data-ticket-id][data-selected] {
     line-height: 1.55;
   }
 
+  /* ---- user prompt -------------------------------------------------
+     The ticket prompt rendered as the first message in the transcript
+     panel. Mirrors .assistant-text structure (author chip + body) but
+     uses info color instead of accent so the user message reads as
+     distinct from model turns. Max-height with scroll handles long
+     prompts without crowding the transcript below. */
+  .user-prompt {
+    border-left: 3px solid var(--color-info);
+    background: var(--color-bg-elev);
+    border-radius: 0 6px 6px 0;
+    padding: 0.625rem 0.875rem;
+    color: var(--color-fg);
+  }
+  .user-prompt-author {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-info);
+    margin-bottom: 0.375rem;
+  }
+  .user-prompt-body {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 16rem;
+    overflow-y: auto;
+  }
   /* ---- assistant text ----------------------------------------------
      Assistant turns are first-class blocks: more prominent than tool
      cards (which are utility chrome around tool I/O). Left accent border

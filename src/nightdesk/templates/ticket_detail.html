@@ -134,25 +134,6 @@
       {% endif %}
     </header>
 
-    {# --- Prompt ---------------------------------------------------------- #
-     # Collapses for long prompts (> 15 lines). When open, caps height with
-     # scroll so the transcript panel and other sections stay accessible.
-     #}
-    {% set prompt_text = ticket.prompt or '' %}
-    {% set prompt_lines = prompt_text.splitlines()|length %}
-    <section class="bg-bg-elev border border-border rounded p-4">
-      <details {% if prompt_lines <= 15 %}open{% endif %}>
-        <summary class="cursor-pointer text-sm font-semibold text-fg-muted uppercase tracking-wide">
-          Prompt
-          {% if prompt_lines > 15 %}
-            <span class="font-normal normal-case tracking-normal text-xs">({{ prompt_lines }} lines, click to expand)</span>
-          {% endif %}
-        </summary>
-        <pre class="mt-2 bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto"
-             style="max-height: calc(100vh - 10rem);">{{ prompt_text }}</pre>
-      </details>
-    </section>
-
     {# --- Filesystem access ----------------------------------------------- #
      # Defines what the agent is *allowed* to touch on disk. Distinct from
      # the Workspaces section below (which lists the actual git worktrees
@@ -345,6 +326,16 @@
     <section id="transcript-panel"
              class="bg-bg-elev border border-border rounded p-4 overflow-x-auto">
       <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-2">Latest transcript</h2>
+      {# --- Prompt as first user message -------------------------------- #
+       # Placed above the HTMX swap target so switching runs does not
+       # erase it — the prompt belongs to the ticket, not a specific run. #}
+      {% set prompt_text = ticket.prompt or '' %}
+      {% if prompt_text %}
+      <div class="user-prompt mb-3">
+        <div class="user-prompt-author">user</div>
+        <pre class="user-prompt-body">{{ prompt_text }}</pre>
+      </div>
+      {% endif %}
       <div id="transcript-panel-inner">
         {% include "partials/transcript_panel.html" %}
       </div>
