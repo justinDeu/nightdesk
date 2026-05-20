@@ -93,6 +93,12 @@
         const container = document.getElementById('transcript');
         const status = document.getElementById('transcript-status');
         if (!container) return;
+
+        // Track the last non-empty assistant_text so the terminal result
+        // event can suppress itself when it merely echoes that prose. Mirrors
+        // transcript_view.result_duplicates_last_assistant on the server side
+        // so live runs don't double up the closing message either.
+        let lastAssistantText = null;
         const empty = container.querySelector('[data-empty="true"]');
         if (empty) empty.remove();
 
@@ -373,6 +379,7 @@
             // to 'claude' when the translator didn't carry one through.
             const text = evt.text || '';
             if (!text.trim()) return null;
+            lastAssistantText = text;
             const author = evt.model || 'claude';
             const segs = assistantSegments(text);
             const parts = [
@@ -421,6 +428,14 @@
             return el(`<details class="tool-result${isError ? ' is-error' : ''}" open><summary>${sumLine}</summary>${body}</details>`);
           }
           if (t === 'result') {
+            // Suppress the terminal result when it just echoes the last
+            // assistant_text (mirrors result_duplicates_last_assistant on the
+            // server). A result that differs still renders.
+            const summary = evt.summary || '';
+            if (summary.trim() && lastAssistantText !== null &&
+                summary.trim() === lastAssistantText.trim()) {
+              return null;
+            }
             const subtype = evt.subtype || 'success';
             const cls = subtype === 'success' ? 'border-accent bg-accent/5' : 'border-danger bg-danger/5';
             const titleCls = subtype === 'success' ? 'text-accent' : 'text-danger';

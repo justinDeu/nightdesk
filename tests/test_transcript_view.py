@@ -441,6 +441,53 @@ def test_pair_preserves_non_tool_events_in_order():
     assert paired[1].paired_result is res
 
 
+# --- duplicate final-message suppression (BUG 22) -------------------------
+#
+# The CC SDK's terminal result event usually echoes the model's last
+# assistant_text, so the transcript ends with the same prose twice. When they
+# match (trimmed), the redundant result is dropped; when they differ both show.
+# The live-tail JS in transcript_panel.html mirrors this rule.
+
+
+def test_result_equal_to_last_assistant_is_suppressed():
+    text = {"type": "assistant_text", "text": "All done. Tests pass."}
+    result = {"type": "result", "subtype": "success",
+              "summary": "All done. Tests pass."}
+    paired = pair_tool_events([text, result])
+    types = [p.event["type"] for p in paired]
+    assert types == ["assistant_text"]
+    assert "result" not in types
+
+
+def test_result_equal_modulo_whitespace_is_suppressed():
+    text = {"type": "assistant_text", "text": "All done.\n"}
+    result = {"type": "result", "subtype": "success", "summary": "  All done.  "}
+    paired = pair_tool_events([text, result])
+    assert [p.event["type"] for p in paired] == ["assistant_text"]
+
+
+def test_result_differing_from_last_assistant_keeps_both():
+    text = {"type": "assistant_text", "text": "Working on it."}
+    result = {"type": "result", "subtype": "success", "summary": "All done."}
+    paired = pair_tool_events([text, result])
+    assert [p.event["type"] for p in paired] == ["assistant_text", "result"]
+
+
+def test_result_with_no_prior_assistant_still_renders():
+    result = {"type": "result", "subtype": "error", "summary": "crashed"}
+    paired = pair_tool_events([result])
+    assert [p.event["type"] for p in paired] == ["result"]
+
+
+def test_empty_result_summary_does_not_suppress():
+    text = {"type": "assistant_text", "text": ""}
+    result = {"type": "result", "subtype": "success", "summary": ""}
+    paired = pair_tool_events([text, result])
+    # Empty assistant_text is itself dropped at render time; an empty result
+    # must not be considered a duplicate.
+    assert "result" in [p.event["type"] for p in paired]
+
+
 # --- pairing in the rendered DOM ------------------------------------------
 
 

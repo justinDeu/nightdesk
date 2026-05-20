@@ -319,6 +319,34 @@ def accumulate_stats(events) -> dict:
     return out
 
 
+def result_duplicates_last_assistant(events) -> bool:
+    """Return True when the final ``result`` summary echoes the last
+    ``assistant_text``.
+
+    The CC SDK's terminal ``result`` event usually carries the same text the
+    model already produced as its final ``assistant_text`` block, so the
+    transcript ends with the same prose twice. This detects that case so the
+    redundant ``result`` can be suppressed. Comparison is whitespace-trimmed
+    so trailing-newline / padding differences don't defeat the match. A
+    ``result`` whose summary differs (e.g. an error subtype, or a distinct
+    wrap-up) returns False so both still render.
+    """
+    last_assistant: str | None = None
+    last_result: dict | None = None
+    for e in events:
+        t = e.get("type")
+        if t == "assistant_text":
+            text = e.get("text") or ""
+            if text.strip():
+                last_assistant = text
+        elif t == "result":
+            last_result = e
+    if last_result is None or last_assistant is None:
+        return False
+    summary = last_result.get("summary") or ""
+    return summary.strip() == last_assistant.strip() and bool(summary.strip())
+
+
 def pair_tool_events(events) -> list[PairedEvent]:
     """Group tool_use events with their matching tool_result events.
 
@@ -326,8 +354,14 @@ def pair_tool_events(events) -> list[PairedEvent]:
     that don't pair (assistant_text, thinking, meta, result, and orphan
     tool_result events whose tool_use is not present in this slice) are
     emitted standalone in their original order.
+
+    When the terminal ``result`` event merely echoes the last
+    ``assistant_text`` (see :func:`result_duplicates_last_assistant`), the
+    redundant ``result`` is dropped so the transcript shows the closing prose
+    once. The JS live-tail mirrors this in ``transcript_panel.html``.
     """
     events_list = list(events)
+    drop_result = result_duplicates_last_assistant(events_list)
     results_by_id: dict[str, dict] = {}
     for e in events_list:
         if e.get("type") == "tool_result":
@@ -338,6 +372,8 @@ def pair_tool_events(events) -> list[PairedEvent]:
     out: list[PairedEvent] = []
     for e in events_list:
         t = e.get("type")
+        if t == "result" and drop_result:
+            continue
         if t == "tool_use":
             tid = e.get("id")
             result = results_by_id.get(tid) if tid else None
