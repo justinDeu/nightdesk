@@ -234,6 +234,12 @@ class ClaudeExecutor:
             except Exception:
                 log.exception("usage extraction failed for ticket %s", req.ticket_id)
 
+        session_id = None
+        if last_result_event is not None:
+            sid = last_result_event.get("session_id")
+            if sid:
+                session_id = str(sid)
+
         return ExecutionResult(
             exit_status=exit_status,
             pid=proc.pid,
@@ -241,4 +247,5 @@ class ClaudeExecutor:
             final_summary=final,
             assistant_tail=assistant_tail,
             usage=usage,
+            session_id=session_id,
         )

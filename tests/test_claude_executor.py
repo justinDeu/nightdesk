@@ -396,6 +396,34 @@ def test_event_to_dict_translates_rate_limit_event():
     assert translate(d) == [d]
 
 
+def test_event_to_dict_result_carries_session_id():
+    """The ResultMessage's session_id is captured on the result event so the
+    run can be resumed later (claude --resume <id>)."""
+    from dataclasses import dataclass
+
+    from nightdesk.worker._sdk_runner import _event_to_dict
+
+    @dataclass
+    class ResultMessage:
+        subtype: str = "success"
+        result: str = "done"
+        is_error: bool = False
+        session_id: str = "sess-xyz-789"
+
+    d = _event_to_dict(ResultMessage())
+    assert d["type"] == "result"
+    assert d["session_id"] == "sess-xyz-789"
+
+    # No session_id reported -> key simply absent (not None/empty noise).
+    @dataclass
+    class ResultNoSession:
+        subtype: str = "success"
+        result: str = "done"
+        is_error: bool = False
+
+    assert "session_id" not in _event_to_dict(ResultNoSession())
+
+
 def test_event_to_dict_unknown_message_is_worker_error_not_agent():
     """An unrecognized SDK message must surface as a worker_error (system
     styling), not as an assistant_text agent message.

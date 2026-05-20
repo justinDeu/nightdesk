@@ -78,3 +78,20 @@
     <code data-stat="cost" class="text-fg">{% if cost is not none %}${{ '%.4f'|format(cost) }}{% else %}—{% endif %}</code>
   </span>
 </div>
+
+{# Resume command: only when the SDK reported a session id. cd into the run's
+   working dir (worktree for git-worktree runs, else the ticket cwd) so the
+   resume runs in the right place, then resume the actual Claude conversation.
+   The `&&` renders HTML-escaped but copies back as literal `&&` via
+   textContent. #}
+{% if selected_run.session_id and selected_run.worktree_path %}
+{% set resume_cmd = 'cd "' ~ selected_run.worktree_path ~ '" && claude --resume ' ~ selected_run.session_id %}
+<div class="flex items-center gap-2 text-xs mb-3 px-3 py-1.5 rounded border border-border bg-bg-elev-2" data-resume-row>
+  <span class="text-fg-muted uppercase tracking-wide text-[10px] font-semibold shrink-0">resume</span>
+  <code id="nd-resume-cmd" class="text-fg font-mono truncate flex-1" title="{{ resume_cmd }}">{{ resume_cmd }}</code>
+  <button type="button"
+          class="shrink-0 rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev"
+          data-tooltip="Copy resume command"
+          onclick="(function(b){var t=document.getElementById('nd-resume-cmd');var s=t?t.textContent:'';if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(s).then(function(){var o=b.textContent;b.textContent='copied';setTimeout(function(){b.textContent=o;},1200);});}})(this)">copy</button>
+</div>
+{% endif %}

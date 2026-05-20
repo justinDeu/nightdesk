@@ -149,6 +149,12 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
             "result": getattr(evt, "result", None),
             "is_error": bool(getattr(evt, "is_error", False) or False),
         }
+        # Carry the Claude session id so the run can be resumed later
+        # (`claude --resume <id>` / SDK resume=). The translator passes the
+        # result event through unchanged, so this survives to the executor.
+        sid = getattr(evt, "session_id", None)
+        if sid:
+            out["session_id"] = str(sid)
         usage = _usage_to_dict(getattr(evt, "usage", None))
         if usage is not None:
             out["usage"] = usage

@@ -31,6 +31,9 @@ class ExecutionResult:
     # Set by claude executor from the final ``result`` event. None when the
     # run failed before the SDK emitted a result.
     usage: Optional[object] = None
+    # Claude session id from the final ``result`` event, used to resume the
+    # conversation later (claude --resume <id>). None when none was reported.
+    session_id: Optional[str] = None
 
 
 class Executor(Protocol):

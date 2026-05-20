@@ -530,7 +530,8 @@ async def run_one(
                 )
 
             finish_run(session, run.id, exit_status=result.exit_status,
-                       error_summary=result.error_summary)
+                       error_summary=result.error_summary,
+                       session_id=getattr(result, "session_id", None))
 
             # Persist token usage + cost. The CC SDK may not emit a result
             # event on cancellations or hard crashes, in which case usage

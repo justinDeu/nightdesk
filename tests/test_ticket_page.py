@@ -207,6 +207,52 @@ async def test_transcript_panel_route_renders_selected_run(
     assert "<html" not in body.lower()
 
 
+async def test_resume_command_renders_when_run_has_session_id(
+    cookie_client, session, tmp_path,
+):
+    """A run that captured a Claude session id surfaces a copyable resume
+    command that cd's into the run's working dir and resumes that session."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="p",
+                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    log = tmp_path / "transcripts" / "r.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(json.dumps(
+        {"type": "meta", "ts": "2026-05-16T00:00:00Z", "seq": 0,
+         "run_id": "r1", "ticket_id": t.id}) + "\n")
+    wt = str(tmp_path / "work" / "wt")
+    run = start_run(session, ticket_id=t.id, worktree_path=wt,
+                    transcript_path=str(log), pid=None, host="testhost")
+    run.session_id = "sess-abc-123"
+    session.commit()
+
+    r = await cookie_client.get(f"/tickets/{t.id}/runs/{run.id}/transcript-panel")
+    assert r.status_code == 200
+    body = r.text
+    assert "data-resume-row" in body
+    assert "claude --resume sess-abc-123" in body
+    assert wt in body  # cd's into the run's working dir
+
+
+async def test_no_resume_command_without_session_id(cookie_client, session, tmp_path):
+    """Runs with no captured session id show no resume command (nothing to
+    resume) rather than a broken command."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="p",
+                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    log = tmp_path / "transcripts" / "r2.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(json.dumps(
+        {"type": "meta", "ts": "2026-05-16T00:00:00Z", "seq": 0,
+         "run_id": "r2", "ticket_id": t.id}) + "\n")
+    run = start_run(session, ticket_id=t.id, worktree_path=str(tmp_path / "w"),
+                    transcript_path=str(log), pid=None, host="testhost")
+
+    r = await cookie_client.get(f"/tickets/{t.id}/runs/{run.id}/transcript-panel")
+    assert r.status_code == 200
+    assert "data-resume-row" not in r.text
+
+
 async def test_transcript_panel_route_404_when_run_off_ticket(
     cookie_client, session, tmp_path,
 ):

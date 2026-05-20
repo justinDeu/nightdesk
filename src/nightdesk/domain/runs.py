@@ -50,13 +50,17 @@ def start_run(session: Session, *, ticket_id: str, worktree_path: str,
 
 
 def finish_run(session: Session, run_id: str, *, exit_status: str,
-                error_summary: Optional[str]) -> Run:
+                error_summary: Optional[str],
+                session_id: Optional[str] = None) -> Run:
     r = session.get(Run, run_id)
     if r is None:
         raise RunNotFound(run_id)
     r.finished_at = datetime.now(timezone.utc)
     r.exit_status = exit_status
     r.error_summary = error_summary
+    # Only set when the SDK reported one; don't clobber an existing id with None.
+    if session_id:
+        r.session_id = session_id
     session.commit()
     session.refresh(r)
     return r
