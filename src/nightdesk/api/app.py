@@ -61,6 +61,19 @@ def create_app(
     # each template. The JS live-tail mirrors the same logic in JS.
     from nightdesk import transcript_view as _tv  # local import: avoid cycles
     templates.env.globals["tv"] = _tv
+
+    # Cache-busting helper for our own static assets. Appends the file's mtime
+    # as ?v= so a changed app.css / *.js is refetched instead of served stale
+    # from the browser cache. Falls back to the bare path if the file is
+    # missing (e.g. in tests with an empty static_root).
+    def _static_v(path: str) -> str:
+        try:
+            mtime = int((static_root / path).stat().st_mtime)
+        except OSError:
+            return f"/static/{path}"
+        return f"/static/{path}?v={mtime}"
+
+    templates.env.globals["static_v"] = _static_v
     app.state.templates = templates
     app.include_router(ui_routes.build_router(get_session, bearer_token, templates,
                                                           transcript_root=transcript_root))

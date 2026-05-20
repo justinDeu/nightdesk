@@ -6,17 +6,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title }} | nightdesk</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/app.css" />
+    <link rel="stylesheet" href="{{ static_v('app.css') }}" />
     <script src="/static/htmx.min.js" defer></script>
     <script src="/static/sortable.min.js" defer></script>
     {# confirm.js: styled modal for hx-confirm AND a programmatic ndConfirm()
        used by the sidebar dirty-state guard. Previously disabled because it
        prompted on every htmx request — fixed by gating on detail.question. #}
-    <script src="/static/confirm.js" defer></script>
+    <script src="{{ static_v('confirm.js') }}" defer></script>
     {# ticket_form.js: shared path-suggest, worktree-preview, and linked-
        workspace JS. Powers the centered edit/create modal in the sidebar
        AND the edit modal on /tickets/<id>. #}
-    <script src="/static/ticket_form.js" defer></script>
+    <script src="{{ static_v('ticket_form.js') }}" defer></script>
   </head>
   <body class="bg-bg text-fg min-h-screen">
     <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">
