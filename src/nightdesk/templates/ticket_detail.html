@@ -93,9 +93,13 @@
              204 + HX-Redirect: /tickets/{id} on success only — HTMX honors
              HX-Redirect just on the success path, so a 409 (ticket no longer
              running) leaves the user on the page instead of bouncing. #}
+          {# Confirm before cancel so a misclick doesn't kill a running agent.
+             hx-confirm is intercepted by confirm.js (htmx:confirm), which only
+             fires for htmx-driven requests — so this stays an hx-post button. #}
           <button type="button"
                   data-cancel-btn
                   hx-post="/board/tickets/{{ ticket.id }}/cancel"
+                  hx-confirm="Cancel this running ticket? The agent will stop."
                   hx-swap="none"
                   class="border border-warn text-warn px-3 py-1 rounded text-sm">Cancel</button>
         {% endif %}

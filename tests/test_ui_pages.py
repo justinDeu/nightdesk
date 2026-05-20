@@ -668,3 +668,14 @@ async def test_detail_page_cancel_button_uses_cookie_auth_route(cookie_client, s
     assert f"/api/v1/tickets/{t.id}/cancel" not in body
     # Not a plain form post to the old UI cancel route either.
     assert f'action="/tickets/{t.id}/cancel"' not in body
+
+
+async def test_detail_page_cancel_button_confirms_before_cancel(cookie_client, session):
+    """A misclick must not kill a running agent: the Cancel button carries an
+    hx-confirm prompt (intercepted by confirm.js for htmx requests) so the user
+    confirms before the running->review transition fires."""
+    t = _running_ticket(session, "cnl-confirm")
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert 'hx-confirm="Cancel this running ticket? The agent will stop."' in body
