@@ -560,6 +560,11 @@
         }
 
         function append(evt) {
+          // Capture scroll position before any DOM mutation so we can
+          // decide whether to auto-scroll after the new node lands.
+          var scroller = document.getElementById('transcript-scroll');
+          var atBottom = scroller && (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 32);
+
           // Pair tool_result events with their parent tool_use card so the
           // two render as one visual unit. Mirrors the server-side pairing
           // in tv.pair_tool_events used by the static loop above.
@@ -588,6 +593,9 @@
                   body.appendChild(resultNode);
                   applyCollapsedState(resultNode);
                 }
+                // Paired tool_result mutates an existing card, so re-check
+                // scroll even though it didn't go through container.appendChild.
+                if (atBottom && scroller) scroller.scrollTop = scroller.scrollHeight;
                 return;
               }
             }
@@ -599,6 +607,7 @@
             if (evt.type === 'rate_limit') bindCountdowns(node);
             if (window.ndLocalizeTimes) window.ndLocalizeTimes(node);
             applyCollapsedState(node);
+            if (atBottom && scroller) scroller.scrollTop = scroller.scrollHeight;
           }
         }
 
