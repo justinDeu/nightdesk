@@ -53,6 +53,53 @@ log = logging.getLogger(__name__)
 
 
 SANDBOX_HOME = "/sandbox-home"
+
+
+def run_cc_sessions_dir(root: str, run_id: str) -> str:
+    """Per-run host dir bound in as the sandbox's session store.
+
+    Each run binds its own empty subdir as the sandbox's session store
+    (CLAUDE_CONFIG_DIR/projects), so a run's agent can only ever see its own
+    conversation — never another run's. After the run the session file is
+    published to the host's real ~/.claude/projects so `claude --resume <id>`
+    works.
+
+    ``root`` MUST live outside the protected nightdesk data dir (see
+    ``_exclusion_paths``) or the bind is refused — callers anchor it as a
+    sibling of ``worktree_root`` (e.g. ~/.local/share/nightdesk-cc-sessions),
+    exactly like worktrees live outside ~/.local/share/nightdesk so they can
+    be bind-mounted.
+    """
+    return os.path.join(root, run_id)
+
+
+def publish_cc_session(store_dir: str, session_id: str) -> Optional[str]:
+    """Copy a sandboxed run's session file into the host ~/.claude/projects so
+    interactive `claude --resume <id>` finds it.
+
+    ``store_dir`` was bound in as CLAUDE_CONFIG_DIR/projects, so its layout
+    mirrors ~/.claude/projects exactly (``<encoded-cwd>/<session-id>.jsonl``).
+    We mirror the file's path-relative-to-store into the host store — no
+    fragile cwd-encoding logic. Best-effort: never raises (a publish failure
+    must not fail the run).
+    """
+    import glob
+
+    try:
+        matches = glob.glob(
+            os.path.join(store_dir, "**", f"{session_id}.jsonl"), recursive=True
+        )
+        if not matches:
+            return None
+        src = matches[0]
+        rel = os.path.relpath(src, store_dir)
+        dst = os.path.join(os.path.expanduser("~/.claude/projects"), rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        return dst
+    except Exception:
+        log.exception("failed to publish CC session %s from %s", session_id, store_dir)
+        return None
 # Keep this OUTSIDE any blanket ro mount (/usr, /opt). bwrap can't create the
 # destination file inside an already-mounted read-only tree, so a path like
 # /usr/local/bin/claude fails with "Read-only file system" the moment /usr
@@ -175,6 +222,7 @@ def build_bwrap_argv(
     cwd: str,
     cmd: list[str],
     env: dict[str, str],
+    cc_sessions_dir: Optional[str] = None,
 ) -> list[str]:
     """Compose the bwrap invocation for a single sandboxed run.
 
@@ -266,6 +314,17 @@ def build_bwrap_argv(
     creds_mount = _credential_mount(spec)
     if creds_mount is not None:
         argv += [f"--{creds_mount.kind}", creds_mount.src, creds_mount.dst]
+
+    # Per-run Claude session store: bind this run's own (empty) host dir over
+    # the session store inside the otherwise-tmpfs home, so the conversation
+    # survives sandbox teardown (and can be published for resume) WITHOUT
+    # exposing the user's real ~/.claude or any other run's sessions.
+    if cc_sessions_dir:
+        # Fail loudly if a misconfigured store path overlaps protected
+        # nightdesk dirs — never expose the data dir to the agent.
+        assert_no_excluded_paths([cc_sessions_dir])
+        os.makedirs(cc_sessions_dir, exist_ok=True)
+        argv += ["--bind", cc_sessions_dir, f"{SANDBOX_HOME}/.claude/projects"]
 
     # User-declared filesystem allowances.
     for p in spec.fs_read:

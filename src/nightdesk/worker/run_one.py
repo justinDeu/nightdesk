@@ -39,7 +39,12 @@ from nightdesk.worker.headless_prompt import (
     HEADLESS_POLICY_VERSION,
     build_headless_prompt,
 )
-from nightdesk.worker.sandbox import SANDBOX_HOME, build_bwrap_argv
+from nightdesk.worker.sandbox import (
+    SANDBOX_HOME,
+    build_bwrap_argv,
+    publish_cc_session,
+    run_cc_sessions_dir,
+)
 from nightdesk.worker.workspace import (
     Workspace, WorkspaceBundle, WorkspaceSpec, cleanup_workspace,
     prepare_workspace_bundle,
@@ -469,11 +474,17 @@ async def run_one(
             # nightdesk package (--clearenv wipes PYTHONPATH; relying on
             # bare ``python`` would pick up the system Python without the
             # editable install).
+            # Anchor the session store as a sibling of worktree_root — outside
+            # the protected ~/.local/share/nightdesk data dir, so it can be
+            # bind-mounted into the sandbox (same reason worktrees live there).
+            cc_sessions_root = cfg.worktree_root.parent / "nightdesk-cc-sessions"
+            cc_sessions_dir = run_cc_sessions_dir(str(cc_sessions_root), run.id)
             argv = build_bwrap_argv(
                 spec,
                 cwd=str(ws.path),
                 cmd=[sys.executable, "-m", "nightdesk.worker._sdk_runner"],
                 env=env,
+                cc_sessions_dir=cc_sessions_dir,
             )
             prompt = build_headless_prompt(
                 ticket_id=ticket.id,
@@ -532,6 +543,13 @@ async def run_one(
             finish_run(session, run.id, exit_status=result.exit_status,
                        error_summary=result.error_summary,
                        session_id=getattr(result, "session_id", None))
+
+            # Publish the run's Claude session from its isolated per-run store
+            # into the host ~/.claude/projects so `claude --resume <id>` works.
+            # Best-effort; never fails the run.
+            _sid = getattr(result, "session_id", None)
+            if _sid:
+                publish_cc_session(cc_sessions_dir, _sid)
 
             # Persist token usage + cost. The CC SDK may not emit a result
             # event on cancellations or hard crashes, in which case usage
