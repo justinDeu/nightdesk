@@ -464,7 +464,6 @@ def seed(
             tickets_by_status.setdefault(ticket.status, []).append(ticket)
 
             if run_spec is not None:
-                run_id_for_transcript = None
                 trans_path = str(transcript_root / f"demo-{ticket.id}.log")
 
                 run = start_run(
@@ -476,7 +475,6 @@ def seed(
                     host="demo-host",
                     intent=run_spec["intent"],
                 )
-                run_id_for_transcript = run.id
 
                 # Write transcript
                 _write_transcript(
