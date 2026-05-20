@@ -670,3 +670,57 @@ async def test_edit_save_new_env_value_still_rotates(
     with Session(fresh_engine) as s:
         p = s.get(Profile, pid)
         assert box.decrypt(p.env) == {"FOO": "new"}
+
+
+# ---------------------------------------------------------------------------
+# Auth-type token toggle (Bug 14). Pure JS behavior is hard to unit test, so
+# these assert the markup hooks and the toggle logic the JS depends on. The
+# behavior itself was verified by reading: ndUpdateCredentialField flips the
+# input's `disabled` attribute and the row's opacity/pointer-events classes
+# off the checked credentials_source radio, runs once on initial load, and
+# fires onchange for each radio.
+# ---------------------------------------------------------------------------
+
+
+async def _edit_body(cookie_client, fresh_engine, name="Read only") -> str:
+    from nightdesk.domain.profiles import list_profiles, seed_default_profiles
+
+    seed_default_profiles(fresh_engine)
+    with Session(fresh_engine) as s:
+        pid = next(p.id for p in list_profiles(s) if p.name == name)
+    r = await cookie_client.get(f"/profiles/{pid}/edit")
+    assert r.status_code == 200
+    return r.text
+
+
+async def test_auth_token_toggle_wiring_present(cookie_client, fresh_engine):
+    body = await _edit_body(cookie_client, fresh_engine)
+    # The toggle target carries a stable hook and the radios call the handler.
+    assert "data-cred-toggle" in body
+    assert 'window.ndUpdateCredentialField && window.ndUpdateCredentialField(this.form)' in body
+    # The handler must flip the disabled attribute (the load-bearing fix) and
+    # the dimming classes, not just a hidden class.
+    assert "input.disabled = false" in body
+    assert "input.disabled = true" in body
+    assert "row.classList.remove('opacity-50', 'pointer-events-none')" in body
+    assert "row.classList.add('opacity-50', 'pointer-events-none')" in body
+    # It distinguishes token-requiring types from inherit.
+    assert "src !== 'inherit'" in body
+    # And it runs on initial load reflecting the saved/checked radio.
+    assert 'input[name="credentials_source"]:checked' in body
+
+
+async def test_inherit_profile_renders_token_field_disabled(cookie_client, fresh_engine):
+    """A seeded profile defaults to inherit, so the token input ships disabled."""
+    body = await _edit_body(cookie_client, fresh_engine)
+    # The credentials value input is present and rendered disabled for inherit.
+    assert 'name="credentials_value"' in body
+    # Server-side render keeps the input disabled when the source is inherit;
+    # the JS keeps it in sync after that.
+    row_start = body.index('id="credentials-value-row"')
+    row_end = body.index("</div>", body.index("credentials_value", row_start))
+    row = body[row_start:row_end]
+    assert "disabled" in row
+    assert "opacity-50 pointer-events-none" in body[row_start - 200:row_start + 200]
+
+

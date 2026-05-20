@@ -280,7 +280,7 @@
       </div>
       {# Token field is ALWAYS rendered (disabled when inherit) so the
          fieldset height never changes between sources. #}
-      <div id="credentials-value-row"
+      <div id="credentials-value-row" data-cred-toggle
            class="transition-opacity {% if not credentials.source or credentials.source == 'inherit' %}opacity-50 pointer-events-none{% endif %}">
         <label class="flex flex-col gap-1">
           <span class="text-fg-muted text-[10px] uppercase tracking-wide"
@@ -646,14 +646,37 @@
           window.ndAddCustomEnvVar = function () {
             addRow('', '', 'value', false, false);
           };
+          // Enable/disable the token field based on the selected auth type.
+          // "inherit" (host file) needs no secret, so the field is disabled,
+          // dimmed, and cleared. Any token-requiring type (auth_token /
+          // api_key) enables it so the user can actually type a value. The
+          // <input disabled> attribute is the load-bearing piece: dropping
+          // only an opacity class still left the control unusable.
           window.ndUpdateCredentialField = function (form) {
             if (!form) return;
             var src = (form.querySelector('input[name="credentials_source"]:checked') || {}).value;
-            var row = document.getElementById('credentials-value-row');
+            var row = form.querySelector('[data-cred-toggle]') ||
+                      document.getElementById('credentials-value-row');
             if (!row) return;
-            if (src === 'inherit') row.classList.add('hidden');
-            else row.classList.remove('hidden');
+            var input = row.querySelector('input[name="credentials_value"]');
+            var needsToken = src && src !== 'inherit';
+            if (needsToken) {
+              row.classList.remove('opacity-50', 'pointer-events-none');
+              if (input) input.disabled = false;
+            } else {
+              row.classList.add('opacity-50', 'pointer-events-none');
+              if (input) {
+                input.disabled = true;
+                input.value = '';
+              }
+            }
           };
+          // Reflect the saved auth type on initial render (edit mode) so the
+          // token field matches the checked radio without a manual change.
+          (function () {
+            var checked = document.querySelector('input[name="credentials_source"]:checked');
+            if (checked && checked.form) window.ndUpdateCredentialField(checked.form);
+          })();
         })();
       </script>
     </div>
