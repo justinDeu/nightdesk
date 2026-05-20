@@ -1,5 +1,4 @@
-{#
-  Worker status pill.
+{# Worker status pill + hover panel.
 
   States (precedence top to bottom):
     1. stale / no heartbeat                 -> red, "offline"
@@ -8,29 +7,19 @@
     3. overflow (total_running > max)       -> green, "host · N/M ⚡+K"
     4. in window                            -> green, "host · N/M"
 #}
-{% if status.stale or not status.host %}
-  <span title="Worker offline (no recent heartbeat). Window {{ status.window_start }}-{{ status.window_end }}"
-        class="inline-flex items-center gap-1.5">
+
+{# Pill trigger - always visible in the header. #}
+<div class="inline-flex items-center gap-1.5 cursor-pointer select-none">
+  {% if status.stale or not status.host %}
     <span class="inline-block w-2 h-2 rounded-full bg-danger"></span>
     <span class="text-danger">offline</span>
-  </span>
-{% elif not status.in_window and status.total_running == 0 %}
-  <span title="host={{ status.host }} pid={{ status.pid or '?' }} window={{ status.window_start }}-{{ status.window_end }} in_window=False — no normal picks until window opens; drag a ticket to running to bypass"
-        class="inline-flex items-center gap-1.5">
+  {% elif not status.in_window and status.total_running == 0 %}
     <span class="inline-block w-2 h-2 rounded-full bg-warn"></span>
     <span class="text-warn">paused</span>
     <span class="text-fg-muted">· resumes {{ status.window_start }}</span>
-  </span>
-{% else %}
-  {% set overflow = status.total_running > status.max_parallel %}
-  {% set dot_class = "bg-accent" if (overflow or status.in_window) else "bg-warn" %}
-  {% set tooltip = "host=" ~ status.host ~ " pid=" ~ (status.pid or "?") ~
-                    " window=" ~ status.window_start ~ "-" ~ status.window_end ~
-                    " in_window=" ~ status.in_window ~
-                    " normal=" ~ status.normal_running ~
-                    " run_now=" ~ status.run_now_running ~
-                    " total=" ~ status.total_running ~ "/" ~ status.max_parallel %}
-  <span title="{{ tooltip }}" class="inline-flex items-center gap-1.5">
+  {% else %}
+    {% set overflow = status.total_running > status.max_parallel %}
+    {% set dot_class = "bg-accent" if (overflow or status.in_window) else "bg-warn" %}
     <span class="inline-block w-2 h-2 rounded-full {{ dot_class }}"></span>
     <span>{{ status.host }} · {{ status.total_running }}/{{ status.max_parallel }}</span>
     {% if status.run_now_running and status.run_now_running > 0 %}
@@ -39,5 +28,105 @@
     {% if not status.in_window %}
       <span class="text-fg-muted">· run-now only</span>
     {% endif %}
-  </span>
-{% endif %}
+  {% endif %}
+</div>
+
+{# Hover panel - shown on hover or when pinned via click. #}
+<div data-worker-panel
+     class="absolute right-0 top-full mt-1 w-80 bg-bg-elev border border-border rounded-lg shadow-lg z-50 hidden group-hover:block">
+  <div class="p-3 text-xs">
+    <div class="space-y-1 font-mono">
+      <div class="flex justify-between gap-4">
+        <span class="text-fg-muted">Host</span>
+        <span class="text-fg">{{ status.host or '—' }}</span>
+      </div>
+      <div class="flex justify-between gap-4">
+        <span class="text-fg-muted">PID</span>
+        <span class="text-fg">{{ status.pid or '—' }}</span>
+      </div>
+      <div class="flex justify-between gap-4">
+        <span class="text-fg-muted">Last heartbeat</span>
+        {% if status.last_seen_at %}
+          <span class="text-fg" data-ts="{{ iso_utc(status.last_seen_at) }}">{{ status.last_seen_at }}</span>
+        {% else %}
+          <span class="text-fg">never</span>
+        {% endif %}
+      </div>
+      <div class="flex justify-between gap-4">
+        <span class="text-fg-muted">State</span>
+        {% if status.stale or not status.host %}
+          <span class="text-danger">● offline</span>
+        {% else %}
+          <span class="text-accent">● online</span>
+        {% endif %}
+      </div>
+      <div class="flex justify-between gap-4">
+        <span class="text-fg-muted">Window</span>
+        <span class="text-fg">
+          {{ status.window_start }}–{{ status.window_end }}
+          {% if status.in_window %}
+            <span class="text-accent">(active)</span>
+          {% else %}
+            <span class="text-warn">(inactive)</span>
+          {% endif %}
+        </span>
+      </div>
+      <div class="flex justify-between gap-4">
+        <span class="text-fg-muted">Max parallel</span>
+        <span class="text-fg">{{ status.max_parallel }}</span>
+      </div>
+    </div>
+
+    {% if status.running_runs %}
+      <div class="border-t border-border pt-2 mt-2">
+        <div class="text-fg-muted font-medium mb-1.5">Running Jobs</div>
+        <div class="space-y-0.5">
+          {% for run in status.running_runs %}
+            <a href="/tickets/{{ run.ticket_id }}"
+               class="flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-bg-elev-2 text-fg">
+              {% if run.started_as_run_now %}
+                <span class="text-warn shrink-0">⚡</span>
+              {% else %}
+                <span class="shrink-0 w-3"></span>
+              {% endif %}
+              <span class="text-fg-muted shrink-0">{{ run.pid or '—' }}</span>
+              <span class="truncate flex-1 min-w-0">{{ run.ticket_title }}</span>
+              <span class="text-fg-muted shrink-0 ml-auto pl-2">{{ run.profile_name }}</span>
+            </a>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+(function () {
+  var pill = document.getElementById('worker-pill');
+  if (!pill) return;
+
+  // Re-apply pinned state after each HTMX swap.
+  var panel = pill.querySelector('[data-worker-panel]');
+  if (panel && pill.hasAttribute('data-pinned')) {
+    panel.style.display = 'block';
+  }
+
+  // Register click-to-pin handler once.
+  if (!pill.__ndPanelInit) {
+    pill.__ndPanelInit = true;
+    pill.addEventListener('click', function (e) {
+      // Don't toggle pin when clicking a link inside the panel.
+      if (e.target.closest('a')) return;
+      var p = pill.querySelector('[data-worker-panel]');
+      if (!p) return;
+      if (pill.hasAttribute('data-pinned')) {
+        pill.removeAttribute('data-pinned');
+        p.style.display = '';
+      } else {
+        pill.setAttribute('data-pinned', '');
+        p.style.display = 'block';
+      }
+    });
+  }
+})();
+</script>
