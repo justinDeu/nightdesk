@@ -51,6 +51,20 @@ async def test_settings_get_renders_work_hours_with_time_inputs(cookie_client, s
     body = r.text
     assert "Work hours" in body
     assert 'type="time"' in body
+
+
+async def test_settings_binary_path_shows_resolved_default(cookie_client, session, monkeypatch):
+    """The Claude binary path field shows the actual resolved PATH binary as its
+    placeholder/hint, not the old generic '(use PATH lookup)' text."""
+    import nightdesk.api.routes.ui as ui_module  # noqa: F401
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda name: "/opt/cc/bin/claude" if name == "claude" else None)
+
+    r = await cookie_client.get("/settings")
+    assert r.status_code == 200
+    body = r.text
+    assert "(use PATH lookup)" not in body
+    assert "/opt/cc/bin/claude" in body
     assert 'name="window_start"' in body
     assert 'name="window_end"' in body
     assert 'name="always_on"' in body

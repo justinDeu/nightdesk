@@ -110,11 +110,14 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
 
     @router.get("/settings", response_class=HTMLResponse, dependencies=[auth])
     async def settings_page(request: Request, session: Session = Depends(get_session)):
+        import shutil
+
         from nightdesk.db.models import ConfigRow
         cfg = session.get(ConfigRow, 1)
         return templates.TemplateResponse(
             request, "settings.html",
-            {"title": "Settings", "active_page": "settings", "cfg": cfg, "saved": False},
+            {"title": "Settings", "active_page": "settings", "cfg": cfg,
+             "path_claude_binary": shutil.which("claude"), "saved": False},
         )
 
     @router.post("/settings", response_class=HTMLResponse, dependencies=[auth])
@@ -156,9 +159,11 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         cfg.cc_minimum_version = (cc_minimum_version or "").strip() or cfg.cc_minimum_version
         session.commit()
         session.refresh(cfg)
+        import shutil
         return templates.TemplateResponse(
             request, "settings.html",
-            {"title": "Settings", "active_page": "settings", "cfg": cfg, "saved": True},
+            {"title": "Settings", "active_page": "settings", "cfg": cfg,
+             "path_claude_binary": shutil.which("claude"), "saved": True},
         )
 
     return router

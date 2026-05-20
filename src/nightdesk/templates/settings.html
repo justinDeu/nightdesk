@@ -75,11 +75,13 @@
       <div class="grid grid-cols-[1fr,16rem] gap-x-3 gap-y-3 text-sm items-center">
         <label for="claude_binary_path" class="text-fg">
           <div class="font-medium">Claude binary path</div>
-          <div class="text-xs text-fg-muted">Leave blank to use <code>claude</code> on the daemon's PATH. Profiles can override per-run.</div>
+          <div class="text-xs text-fg-muted">Leave blank to use <code>claude</code> on the daemon's PATH. Profiles can override per-run.
+            {% if path_claude_binary %}Currently resolves to <code class="text-fg">{{ path_claude_binary }}</code>.{% else %}<span class="text-warn">No <code>claude</code> found on PATH.</span>{% endif %}
+          </div>
         </label>
         <input id="claude_binary_path" name="claude_binary_path" type="text"
                value="{{ (cfg.claude_binary_path if cfg else '') or '' }}"
-               placeholder="(use PATH lookup)"
+               placeholder="{{ path_claude_binary or 'no claude on PATH' }}"
                class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
 
         <label for="cc_minimum_version" class="text-fg">
