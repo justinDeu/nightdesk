@@ -724,3 +724,52 @@ async def test_inherit_profile_renders_token_field_disabled(cookie_client, fresh
     assert "opacity-50 pointer-events-none" in body[row_start - 200:row_start + 200]
 
 
+# ---------------------------------------------------------------------------
+# Single model field (Bug 15). The auth section must not carry a model input;
+# the only model selector is the dedicated Models fieldset, and the form must
+# submit exactly one model-name value to the backend.
+# ---------------------------------------------------------------------------
+
+
+async def test_auth_section_has_no_model_field(cookie_client, fresh_engine):
+    body = await _edit_body(cookie_client, fresh_engine)
+    # Isolate the Authentication fieldset (legend "Authentication" up to the
+    # next fieldset/section) and assert it carries no model input.
+    auth_start = body.index("Authentication")
+    auth_end = body.index("Permission mode", auth_start)
+    auth = body[auth_start:auth_end]
+    assert 'name="default_model"' not in auth
+    assert "promoted_model_" not in auth
+    # No stray model input named simply "model" anywhere either.
+    assert 'name="model"' not in body
+
+
+async def test_exactly_one_default_model_input(cookie_client, fresh_engine):
+    body = await _edit_body(cookie_client, fresh_engine)
+    assert body.count('name="default_model"') == 1
+
+
+async def test_default_model_persists_as_single_value(
+    cookie_client, fresh_client, fresh_engine,
+):
+    """Saving the form sends one model value through to the column."""
+    create_r = await fresh_client.post("/api/v1/profiles", json={
+        "name": "one-model",
+        "claude_credentials": {"source": "inherit"},
+    })
+    pid = create_r.json()["id"]
+    r = await cookie_client.post(
+        f"/profiles/{pid}",
+        data={
+            "name": "one-model",
+            "backend": "claude_sdk",
+            "permission_mode": "default",
+            "network_mode": "on",
+            "default_model": "claude-sonnet-4-5",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    with Session(fresh_engine) as s:
+        p = s.get(Profile, pid)
+        assert p.default_model == "claude-sonnet-4-5"
