@@ -41,6 +41,7 @@ nightdesk-migrate = "nightdesk.cli:migrate"
 nightdesk-run-ticket = "nightdesk.cli:run_ticket"
 nightdesk-setup = "nightdesk.cli:setup"
 nightdesk-login = "nightdesk.cli:login"
+nightdesk-seed-demo = "nightdesk.seed_demo:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nightdesk"]
