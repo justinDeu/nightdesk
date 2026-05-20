@@ -23,12 +23,19 @@ from nightdesk.domain.tickets import get_ticket, TicketNotFound
 from nightdesk.transcript import is_canonical
 
 
-def _format_sse(line: str) -> str:
+def _format_sse(line: str, since_seq: int = -1) -> str:
     """Format a transcript line for SSE.
 
     If the line parses as a canonical event with a ``type`` field, emit it as
     a typed SSE event so the client renderer can dispatch directly. Otherwise
     fall back to plain ``data:``.
+
+    ``since_seq`` is the highest ``seq`` the client already rendered server-side
+    on initial page load. Canonical events at or below that watermark are
+    suppressed so the connect-time replay of the on-disk transcript does not
+    re-emit events the page already shows (the duplicate "Run started" meta,
+    drifting tool cards, etc.). Events without a numeric ``seq`` always pass
+    through.
     """
     stripped = line.rstrip("\n")
     if not stripped:
@@ -38,6 +45,9 @@ def _format_sse(line: str) -> str:
     except json.JSONDecodeError:
         return f"data: {stripped}\n\n"
     if isinstance(evt, dict) and isinstance(evt.get("type"), str):
+        seq = evt.get("seq")
+        if isinstance(seq, int) and seq <= since_seq:
+            return ""
         return f"event: {evt['type']}\ndata: {stripped}\n\n"
     return f"data: {stripped}\n\n"
 
@@ -47,7 +57,11 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     auth = Depends(require_token_cookie_or_bearer(bearer_token))
 
     @router.get("/api/v1/tickets/{tid}/transcript", dependencies=[auth])
-    async def transcript_sse(tid: str, session: Session = Depends(get_session)):
+    async def transcript_sse(
+        tid: str,
+        since_seq: int = Query(-1),
+        session: Session = Depends(get_session),
+    ):
         try:
             t = get_ticket(session, tid)
         except TicketNotFound:
@@ -76,9 +90,11 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
         async def gen():
             with path.open("r", encoding="utf-8") as f:
-                # Send existing content first.
+                # Send existing content first. Canonical events at or below the
+                # client's server-rendered watermark are suppressed so the
+                # replay does not duplicate what the page already shows.
                 for line in f:
-                    chunk = _format_sse(line) if canonical else _legacy_chunk(line)
+                    chunk = _format_sse(line, since_seq) if canonical else _legacy_chunk(line)
                     if chunk:
                         yield chunk
                 # Then tail until the ticket leaves 'running'.
@@ -92,7 +108,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
                             return
                         await asyncio.sleep(0.5)
                         continue
-                    chunk = _format_sse(line) if canonical else _legacy_chunk(line)
+                    chunk = _format_sse(line, since_seq) if canonical else _legacy_chunk(line)
                     if chunk:
                         yield chunk
 

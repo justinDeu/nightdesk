@@ -557,7 +557,11 @@
           }
         }
 
-        const url = '/api/v1/tickets/{{ ticket.id }}/transcript';
+        // Pass the server-rendered watermark so the SSE replay only streams
+        // events with seq strictly above what the page already shows. This
+        // is the primary dedup; isNew() below is defense-in-depth in case the
+        // server can't filter (events with no numeric seq).
+        const url = '/api/v1/tickets/{{ ticket.id }}/transcript?since_seq=' + encodeURIComponent(seqHigh);
         const es = new EventSource(url);
         window.__transcriptES = es;
         function isNew(evt) {
@@ -568,7 +572,11 @@
           es.addEventListener(t, function (e) {
             const evt = parse(e);
             if (!evt) return;
-            if (evt.type === 'tool_use' && isNew(evt)) {
+            // Skip any event already rendered server-side. Events carrying a
+            // numeric seq are deduped by watermark; seq-less events fall
+            // through and render (legacy / non-canonical lines).
+            if (typeof evt.seq === 'number' && !isNew(evt)) return;
+            if (evt.type === 'tool_use') {
               stats.tool_count += 1;
               renderStats();
             }
