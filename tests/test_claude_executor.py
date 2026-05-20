@@ -213,6 +213,41 @@ async def test_claude_executor_cancelled_when_event_fires(tmp_path):
     assert evt.get("ts")
 
 
+async def test_cancelled_run_captures_session_id_from_init(tmp_path):
+    """A cancelled run records the session id from the init message — captured
+    up front, not at the (never-reached) result event — so the conversation can
+    still be resumed after a cancel."""
+    transcript = tmp_path / "t.log"
+    init_line = json.dumps({
+        "type": "system", "subtype": "init",
+        "data": {"session_id": "sess-cancel-1"},
+    }).encode() + b"\n"
+    # Init line drains immediately; wait blocks so the cancel fires mid-run.
+    fake = FakeProc(stdout_lines=[init_line], returncode=0, wait_delay=10.0)
+
+    async def fake_spawn(argv):
+        return fake
+
+    with patch("nightdesk.worker.claude_executor._spawn_sdk_subprocess", new=fake_spawn):
+        from nightdesk.worker.claude_executor import ClaudeExecutor
+        req = ExecutionRequest(
+            ticket_id="t1", prompt="hi", cwd=tmp_path, transcript_path=transcript,
+            bwrap_argv=["bwrap"], env={},
+            permission_spec=PermissionSpec(),
+        )
+
+        async def fire_cancel():
+            await asyncio.sleep(0.05)
+            req.cancel_event.set()
+
+        cancel_task = asyncio.create_task(fire_cancel())
+        res = await ClaudeExecutor().run(req)
+        await cancel_task
+
+    assert res.exit_status == "cancelled"
+    assert res.session_id == "sess-cancel-1"
+
+
 def test_translator_passes_cancelled_event_through():
     """The canonical cancelled event passes straight through the translator,
     mirroring rate_limit and the other already-canonical types."""

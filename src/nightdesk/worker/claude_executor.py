@@ -82,11 +82,14 @@ class ClaudeExecutor:
         error: Optional[str] = None
         last_result_event: Optional[dict[str, Any]] = None
         assistant_tail: list[str] = []
+        # Captured as early as the init event so a cancelled run still records
+        # its session id (the result event never arrives on cancel).
+        session_id: Optional[str] = None
 
         seq_counter: list[int] = [0]
 
         async def _drain() -> None:
-            nonlocal final, exit_status, error, last_result_event, assistant_tail
+            nonlocal final, exit_status, error, last_result_event, assistant_tail, session_id
             assert proc.stdout is not None
             buf = bytearray()
             with req.transcript_path.open("ab") as f:
@@ -116,7 +119,7 @@ class ClaudeExecutor:
                     buf.clear()
 
         async def _handle_line(f, line: bytes) -> None:
-            nonlocal final, exit_status, error, last_result_event, assistant_tail
+            nonlocal final, exit_status, error, last_result_event, assistant_tail, session_id
             text = line.decode("utf-8", errors="replace").strip()
             if not text:
                 return
@@ -137,9 +140,21 @@ class ClaudeExecutor:
                     "text": text,
                 })
                 return
+            # Capture the Claude session id as early as possible. The init
+            # system message carries it up front (translation drops the event,
+            # so read it here); the result event carries it again at the end.
+            # Capturing from init means a cancelled run — which never reaches a
+            # result event — still records a resumable session id.
+            if evt.get("type") == "system" and evt.get("subtype") == "init":
+                sid = (evt.get("data") or {}).get("session_id")
+                if sid:
+                    session_id = str(sid)
             # Capture run-completion summary before translation drops it.
             if evt.get("type") == "result":
                 last_result_event = evt
+                sid = evt.get("session_id")
+                if sid:
+                    session_id = str(sid)
                 if evt.get("subtype") == "success":
                     final = evt.get("result")
                 else:
@@ -205,7 +220,8 @@ class ClaudeExecutor:
                     "seq": next_seq(seq_counter),
                     "message": "Run cancelled by user.",
                 })
-            return ExecutionResult(exit_status="cancelled", pid=proc.pid)
+            return ExecutionResult(exit_status="cancelled", pid=proc.pid,
+                                   session_id=session_id)
 
         # Normal completion path.
         if not cancel_task.done():
@@ -233,12 +249,6 @@ class ClaudeExecutor:
                 usage = extract_usage(last_result_event, model_hint=req.permission_spec.default_model)
             except Exception:
                 log.exception("usage extraction failed for ticket %s", req.ticket_id)
-
-        session_id = None
-        if last_result_event is not None:
-            sid = last_result_event.get("session_id")
-            if sid:
-                session_id = str(sid)
 
         return ExecutionResult(
             exit_status=exit_status,
