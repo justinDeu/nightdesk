@@ -79,11 +79,11 @@ class WorkerErrorEvent(_BaseEvent, total=False):
 
     Emitted as the final event of a failed run so the transcript view can
     surface the worker error (executor crash, sdk runner non-zero exit,
-    headless policy escape, transcript drain failure, etc.) instead of
+    transcript drain failure, etc.) instead of
     burying it in a separate ticket comment.
 
     ``kind`` is a short machine tag (``executor_error``,
-    ``runner_exit_nonzero``, ``headless_requested_input``, ``drain_error``).
+    ``runner_exit_nonzero``, ``run_failed``, ``drain_error``).
     ``summary`` is the one-line user-facing message. ``traceback`` is the
     full Python stacktrace when one is available; absent for non-exception
     failures like an unexpected non-zero exit code.

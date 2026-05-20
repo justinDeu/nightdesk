@@ -38,7 +38,6 @@ from nightdesk.worker.executor import ExecutionRequest, ExecutionResult, Executo
 from nightdesk.worker.headless_prompt import (
     HEADLESS_POLICY_VERSION,
     build_headless_prompt,
-    detect_headless_question_escape,
 )
 from nightdesk.worker.sandbox import SANDBOX_HOME, build_bwrap_argv
 from nightdesk.worker.workspace import (
@@ -516,31 +515,13 @@ async def run_one(
                     except asyncio.CancelledError:
                         pass
 
-            escape = detect_headless_question_escape(
-                final_summary=result.final_summary,
-                assistant_tail=result.assistant_tail,
-            )
-            if escape is not None:
-                run.failure_kind = escape.kind
-                result = ExecutionResult(
-                    exit_status="failed",
-                    error_summary=escape.summary,
-                    pid=result.pid,
-                    final_summary=result.final_summary,
-                    assistant_tail=result.assistant_tail,
-                )
-
             # Worker-level error surfacing: any failed run gets a final
             # ``worker_error`` event tacked onto its transcript so the user
             # sees the failure cause in the same view they read the rest of
             # the run. Cancellations stay quiet because the user already
             # knows they cancelled.
             if result.exit_status not in ("success", "cancelled") and result.error_summary:
-                kind = (
-                    executor_error_kind
-                    or (escape.kind if escape is not None else None)
-                    or "run_failed"
-                )
+                kind = executor_error_kind or "run_failed"
                 append_worker_error(
                     run.transcript_path,
                     kind=kind,

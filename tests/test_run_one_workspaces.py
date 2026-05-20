@@ -28,17 +28,6 @@ class CapturingExecutor:
         return ExecutionResult(exit_status="success", final_summary="done")
 
 
-@dataclass
-class QuestioningExecutor:
-    async def run(self, req: ExecutionRequest) -> ExecutionResult:
-        return ExecutionResult(
-            exit_status="success",
-            assistant_tail=["Which approach do you prefer before I implement it?"],
-        )
-
-
-
-
 
 def _spec(**overrides):
     base = {
@@ -269,34 +258,6 @@ async def test_run_one_uses_staged_resume_intent(session, sample_profile, tmp_pa
     assert "RUN INTENT: resume" in executor.request.prompt
     assert "Continue with polling" in executor.request.prompt
     assert "Prior summary" in executor.request.prompt
-
-
-@pytest.mark.anyio
-async def test_run_one_fails_when_agent_requests_input(session, sample_profile, tmp_path):
-    primary = tmp_path / "primary"
-    primary.mkdir()
-    ticket = create_ticket(
-        session,
-        title="rerun",
-        prompt="Fix the drag bug",
-        status="running",
-        priority=0,
-        profile_id=sample_profile.id,
-        cwd=str(primary),
-    )
-    result = await run_one(
-        lambda: session,
-        RunOneConfig(
-            worktree_root=tmp_path / "work",
-            transcript_root=tmp_path / "transcripts",
-            secrets={},
-            host="testhost",
-            executor=QuestioningExecutor(),
-        ),
-        ticket.id,
-    )
-    assert result.exit_status == "failed"
-    assert "headless run requested user input" in (result.error_summary or "")
 
 
 @pytest.mark.anyio
