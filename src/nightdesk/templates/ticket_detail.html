@@ -311,7 +311,7 @@
                 </span>
                 <span class="inline-block rounded px-2 py-0.5 {{ outcome_class }}">{{ outcome }}</span>
                 {% if r.started_as_run_now %}
-                  <span class="inline-block rounded px-2 py-0.5 bg-warn/20 text-warn">run-now</span>
+                  <span class="text-warn/70 cursor-help" title="Started via Run now (bypassed the scheduler window)">&#9889;</span>
                 {% endif %}
                 {% if r.cost_usd is not none %}
                   <span class="inline-block rounded px-2 py-0.5 bg-bg-elev-2 text-fg-muted"

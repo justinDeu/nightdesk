@@ -363,7 +363,8 @@
         function renderEvent(evt) {
           const t = evt.type;
           if (t === 'meta') {
-            return el(`<div class="text-fg-muted text-xs font-mono py-1">run ${escapeHtml((evt.run_id || '').slice(0,8))} started ${escapeHtml(evt.ts || '')}</div>`);
+            const ts = escapeHtml(evt.ts || '');
+            return el(`<div class="text-fg-muted text-xs font-mono py-1">run ${escapeHtml((evt.run_id || '').slice(0,8))} started <span data-ts="${ts}">${ts}</span></div>`);
           }
           if (t === 'assistant_text') {
             // Mirror evt_assistant_text in transcript_event.html: skip
@@ -581,6 +582,7 @@
           if (node) {
             container.appendChild(node);
             if (evt.type === 'rate_limit') bindCountdowns(node);
+            if (window.ndLocalizeTimes) window.ndLocalizeTimes(node);
             applyCollapsedState(node);
           }
         }

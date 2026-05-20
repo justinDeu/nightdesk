@@ -14,7 +14,7 @@
 
 {% macro evt_meta(evt) %}
   <div class="text-fg-muted text-xs font-mono py-1">
-    run {{ (evt.get('run_id') or '')[:8] }} started {{ evt.get('ts','') }}
+    run {{ (evt.get('run_id') or '')[:8] }} started <span data-ts="{{ evt.get('ts','') }}">{{ evt.get('ts','') }}</span>
   </div>
 {% endmacro %}
 
