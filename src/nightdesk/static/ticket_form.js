@@ -13,9 +13,56 @@
   let previewSeq = 0;
   // dropdownId -> highlighted item index in its suggestion list.
   const activeIdx = new Map();
+  // dropdownId -> the input element it is currently anchored to. The
+  // dropdown hosts are position:fixed so they overlay the modal instead of
+  // expanding/being clipped by the overflow-y-auto body. We reposition them
+  // on scroll/resize so they keep tracking their input.
+  const suggestAnchor = new Map();
   // Per-host-id counters so two forms on the same page (modal + sidebar)
   // don't collide on generated row ids.
   const linkedSeqByHost = new Map();
+
+  // Place a fixed-position dropdown host directly under its input. Width
+  // matches the input; coordinates are viewport-relative (position: fixed).
+  function _positionSuggest(dropdownId, inputEl) {
+    const dd = document.getElementById(dropdownId);
+    if (!dd || !inputEl) return;
+    const r = inputEl.getBoundingClientRect();
+    dd.style.left = r.left + 'px';
+    dd.style.top = (r.bottom + 4) + 'px';
+    dd.style.width = r.width + 'px';
+  }
+
+  function _openSuggest(dropdownId, inputEl) {
+    const dd = document.getElementById(dropdownId);
+    if (!dd) return;
+    suggestAnchor.set(dropdownId, inputEl);
+    dd.classList.remove('hidden');
+    _positionSuggest(dropdownId, inputEl);
+  }
+
+  function _closeSuggest(dropdownId) {
+    const dd = document.getElementById(dropdownId);
+    if (dd) {
+      dd.innerHTML = '';
+      dd.classList.add('hidden');
+    }
+    suggestAnchor.delete(dropdownId);
+    activeIdx.set(dropdownId, -1);
+  }
+
+  // Keep open dropdowns glued to their inputs as the form body scrolls or
+  // the window resizes. Capture phase catches scrolls on the modal body.
+  function _repositionAll() {
+    suggestAnchor.forEach((inputEl, dropdownId) => {
+      const dd = document.getElementById(dropdownId);
+      if (dd && !dd.classList.contains('hidden')) {
+        _positionSuggest(dropdownId, inputEl);
+      }
+    });
+  }
+  window.addEventListener('scroll', _repositionAll, true);
+  window.addEventListener('resize', _repositionAll);
 
   function _items(dropdownId) {
     const dd = document.getElementById(dropdownId);
@@ -136,26 +183,27 @@
   window.ndPathSuggest = async function (inputEl, dropdownId) {
     const dd = document.getElementById(dropdownId);
     if (!dd) return;
-    if (inputEl && inputEl.readOnly) { dd.innerHTML = ''; activeIdx.set(dropdownId, -1); return; }
+    if (inputEl && inputEl.readOnly) { _closeSuggest(dropdownId); return; }
     const q = inputEl.value || '';
-    if (q.length < 1) { dd.innerHTML = ''; activeIdx.set(dropdownId, -1); return; }
+    if (q.length < 1) { _closeSuggest(dropdownId); return; }
     const mySeq = ++suggestSeq;
     try {
       const r = await fetch('/fs/suggest?' + new URLSearchParams({ q, target: inputEl.id }));
-      if (!r.ok) { dd.innerHTML = ''; return; }
+      if (!r.ok) { _closeSuggest(dropdownId); return; }
       if (mySeq !== suggestSeq) return;
       dd.innerHTML = await r.text();
       activeIdx.set(dropdownId, -1);
+      if (dd.querySelector('[data-suggest-value]')) {
+        _openSuggest(dropdownId, inputEl);
+      } else {
+        _closeSuggest(dropdownId);
+      }
     } catch (e) { /* ignore */ }
   };
 
   window.ndPathSuggestClose = function (dropdownId) {
     // Delay so mousedown on a suggestion item beats the blur-driven close.
-    setTimeout(() => {
-      const dd = document.getElementById(dropdownId);
-      if (dd) dd.innerHTML = '';
-      activeIdx.set(dropdownId, -1);
-    }, 180);
+    setTimeout(() => { _closeSuggest(dropdownId); }, 180);
   };
 
   window.ndPathSuggestPick = function (targetId, value) {
@@ -165,9 +213,7 @@
     el.focus();
     try { el.setSelectionRange(value.length, value.length); } catch (e) {}
     const dropdownId = targetId + '-suggest';
-    const dd = document.getElementById(dropdownId);
-    if (dd) dd.innerHTML = '';
-    activeIdx.set(dropdownId, -1);
+    _closeSuggest(dropdownId);
     el.dispatchEvent(new Event('input', { bubbles: true }));
     window.ndPathSuggest(el, dropdownId);
   };
@@ -194,9 +240,7 @@
         window.ndPathSuggestPick(inputEl.id, items[cur].getAttribute('data-suggest-value'));
       }
     } else if (ev.key === 'Escape') {
-      const dd = document.getElementById(dropdownId);
-      if (dd) dd.innerHTML = '';
-      activeIdx.set(dropdownId, -1);
+      _closeSuggest(dropdownId);
     }
   };
 
@@ -317,7 +361,7 @@
           onkeydown="window.ndPathSuggestKey(event, this, '${id}-suggest')"
           class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
         />
-        <div id="${id}-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+        <div id="${id}-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
       </div>
       <div class="grid grid-cols-2 gap-2">
         <label class="flex flex-col gap-1">
@@ -357,7 +401,7 @@
               onkeydown="window.ndPathSuggestKey(event, this, '${id}-path-override-suggest')"
               class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
             />
-            <div id="${id}-path-override-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+            <div id="${id}-path-override-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
           </div>
         </label>
         <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs" data-linked-worktree-preview>

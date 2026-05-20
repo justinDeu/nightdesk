@@ -61,6 +61,10 @@ async def test_board_sidebar_exposes_workspace_controls(cookie_client, session):
     assert "ndAddLinkedWorkspaceRow" in r.text
     # Modal-scoped path suggest dropdown id ({modal_id}-wt-path-suggest).
     assert "-wt-path-suggest" in r.text
+    # The suggestion dropdown host overlays the modal (position: fixed,
+    # JS-positioned) instead of expanding inside the overflow-y-auto body
+    # and resizing the modal. It also starts hidden until results render.
+    assert '-cwd-suggest" class="nd-suggest-host fixed z-50 hidden"' in r.text
 
 async def test_workspace_preview_uses_debounced_updates(cookie_client, session):
     p = create_profile(session, name="workspace-debounce-ui", fs_read=[], fs_write=[],

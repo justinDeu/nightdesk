@@ -110,7 +110,7 @@
                    onblur="window.ndPathSuggestClose('{{ _mid }}-cwd-suggest')"
                    onkeydown="window.ndPathSuggestKey(event, this, '{{ _mid }}-cwd-suggest')"
                    class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
-            <div id="{{ _mid }}-cwd-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+            <div id="{{ _mid }}-cwd-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <label class="flex flex-col gap-1">
@@ -170,7 +170,7 @@
                        onblur="window.ndPathSuggestClose('{{ _mid }}-wt-path-suggest')"
                        onkeydown="window.ndPathSuggestKey(event, this, '{{ _mid }}-wt-path-suggest')"
                        class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45" />
-                <div id="{{ _mid }}-wt-path-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+                <div id="{{ _mid }}-wt-path-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
               </div>
             </label>
             <div data-worktree-path-preview class="rounded border border-border bg-bg px-2 py-1.5 text-xs" aria-live="polite">
@@ -204,7 +204,7 @@
                        onblur="window.ndPathSuggestClose('{{ _lid }}-suggest')"
                        onkeydown="window.ndPathSuggestKey(event, this, '{{ _lid }}-suggest')"
                        class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
-                <div id="{{ _lid }}-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+                <div id="{{ _lid }}-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
               </div>
               <div class="grid grid-cols-2 gap-2">
                 <label class="flex flex-col gap-1">
@@ -246,7 +246,7 @@
                            onblur="window.ndPathSuggestClose('{{ _lid }}-path-override-suggest')"
                            onkeydown="window.ndPathSuggestKey(event, this, '{{ _lid }}-path-override-suggest')"
                            class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
-                    <div id="{{ _lid }}-path-override-suggest" class="absolute left-0 right-0 mt-1 z-40"></div>
+                    <div id="{{ _lid }}-path-override-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
                   </div>
                 </label>
                 <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs" data-linked-worktree-preview>
