@@ -134,7 +134,12 @@ def _resolve_filters(
 ) -> dict:
     if outcome not in _OUTCOMES:
         outcome = "any"
-    today = date.today()
+    # Use the UTC date, not the local one: run timestamps (finished_at) are
+    # stored in UTC, and the until/since bounds are compared against them after
+    # snapping to UTC start/end-of-day. Defaulting ``until`` to the local date
+    # in a timezone behind UTC produced an end-of-day bound earlier than a
+    # just-finished UTC run, silently hiding recently-archived tickets.
+    today = datetime.now(timezone.utc).date()
     since_d = _parse_date(since)
     if since is None:
         since_d = today - timedelta(days=30)

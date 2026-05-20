@@ -156,3 +156,17 @@ async def test_archive_requires_auth(app):
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.get("/archive")
     assert r.status_code == 401
+
+
+def test_default_filter_bounds_use_utc_date():
+    """Regression: the default since/until bounds must be derived from the UTC
+    date, not the local one. Run timestamps are UTC; defaulting to the local
+    date in a timezone behind UTC produced an until bound earlier than a
+    just-finished UTC run, hiding recently-archived tickets. This is
+    deterministic regardless of the host's local timezone."""
+    from nightdesk.api.routes.archive import _resolve_filters
+
+    utc_today = datetime.now(timezone.utc).date()
+    filters = _resolve_filters("any", "", None, None, "")
+    assert filters["until"] == utc_today
+    assert filters["since"] == utc_today - timedelta(days=30)
