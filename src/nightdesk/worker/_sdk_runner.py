@@ -19,8 +19,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import sys
 from typing import Any
+
+
+log = logging.getLogger(__name__)
 
 
 def _emit(evt: Any) -> None:
@@ -205,6 +210,7 @@ async def _run(spec: dict[str, Any]) -> int:
     try:
         from claude_agent_sdk import query, ClaudeAgentOptions  # type: ignore
     except Exception as exc:  # pragma: no cover - exercised via subprocess only
+        log.error("failed to import claude_agent_sdk: %s", exc)
         _emit({"type": "result", "subtype": "error",
                "result": f"failed to import claude_agent_sdk: {exc}"})
         return 1
@@ -236,11 +242,14 @@ async def _run(spec: dict[str, Any]) -> int:
     try:
         options = ClaudeAgentOptions(**opts_kwargs)
     except Exception as exc:
+        log.error("invalid SDK options: %s", exc)
         _emit({"type": "result", "subtype": "error",
                "result": f"invalid options: {exc}"})
         return 1
 
     rc = 0
+    log.info("SDK query starting: model=%s cwd=%s",
+             opts_kwargs.get("model"), opts_kwargs.get("cwd"))
     try:
         async for evt in query(prompt=spec.get("prompt", ""), options=options):
             d = _event_to_dict(evt)
@@ -251,13 +260,16 @@ async def _run(spec: dict[str, Any]) -> int:
                     and d.get("subtype") not in (None, "success"):
                 rc = 1
     except Exception as exc:
+        log.exception("SDK query crashed")
         _emit({"type": "result", "subtype": "error",
                "result": f"query crashed: {exc}"})
         rc = 1
+    log.info("SDK query finished: rc=%d", rc)
     return rc
 
 
 def main() -> int:
+    _setup_logging()
     raw = sys.stdin.read()
     try:
         spec = json.loads(raw) if raw.strip() else {}
@@ -266,6 +278,26 @@ def main() -> int:
                "result": f"bad spec json: {exc}"})
         return 1
     return asyncio.run(_run(spec))
+
+
+def _setup_logging() -> None:
+    """Configure logging for the SDK runner subprocess.
+
+    Routes log output to the per-run log file when NIGHTDESK_RUN_ID is set
+    (production bwrap runs). Falls back to basic stderr logging for ad-hoc
+    invocations (tests, manual CLI).
+    """
+    run_id = os.environ.get("NIGHTDESK_RUN_ID")
+    if run_id:
+        try:
+            from nightdesk.logging_setup import per_run_log_handler
+            handler = per_run_log_handler(run_id)
+            logging.getLogger().addHandler(handler)
+        except Exception:
+            logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
+    else:
+        logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
+    logging.getLogger().setLevel(logging.DEBUG)
 
 
 if __name__ == "__main__":

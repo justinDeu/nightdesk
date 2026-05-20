@@ -366,6 +366,8 @@ async def run_one(
 
     try:
         try:
+            # Track setup phase so the outer except can identify which step failed.
+            _setup_phase = "ticket_lookup"
             ticket = session.get(Ticket, ticket_id)
             if ticket is None:
                 log.error("ticket %s not found", ticket_id)
@@ -394,6 +396,8 @@ async def run_one(
                         spec.branch = None
                 if restart_workspace_policy == "recreate_in_place":
                     _cleanup_recorded_worktrees(ticket, delete_branches=True)
+            log.debug("preparing workspace bundle for ticket %s", ticket.id)
+            _setup_phase = "workspace_prep"
             bundle = prepare_workspace_bundle(
                 ticket_id=ticket.id,
                 root=cfg.worktree_root,
@@ -403,6 +407,7 @@ async def run_one(
             )
             ws = bundle.primary
             _record_workspace_resolution(ticket, bundle)
+            _setup_phase = "profile_spec"
             spec = _apply_workspace_permissions(
                 _profile_to_spec(
                     ticket,
@@ -439,6 +444,8 @@ async def run_one(
                 headless_policy_version=HEADLESS_POLICY_VERSION,
                 restart_workspace_policy=restart_workspace_policy,
             )
+            log.info("run %s started for ticket %s: transcript=%s intent=%s",
+                     run.id, ticket.id, run.transcript_path, run_intent)
 
             # Resolve scheduling knobs from the config table (live values).
             schedule_cfg = session.get(ConfigRow, 1)
@@ -479,6 +486,8 @@ async def run_one(
             # bind-mounted into the sandbox (same reason worktrees live there).
             cc_sessions_root = cfg.worktree_root.parent / "nightdesk-cc-sessions"
             cc_sessions_dir = run_cc_sessions_dir(str(cc_sessions_root), run.id)
+            log.debug("building bwrap argv for ticket %s run %s", ticket.id, run.id)
+            _setup_phase = "bwrap_build"
             argv = build_bwrap_argv(
                 spec,
                 cwd=str(ws.path),
@@ -486,6 +495,8 @@ async def run_one(
                 env=env,
                 cc_sessions_dir=cc_sessions_dir,
             )
+            log.debug("building headless prompt for ticket %s run %s", ticket.id, run.id)
+            _setup_phase = "prompt_build"
             prompt = build_headless_prompt(
                 ticket_id=ticket.id,
                 ticket_title=ticket.title,
@@ -571,9 +582,15 @@ async def run_one(
             if cur is not None and cur.status == "running":
                 try:
                     transition_status(session, ticket.id, "review")
+                    log.info("run %s completed for ticket %s: exit=%s, transitioned to review",
+                             run.id, ticket.id, result.exit_status)
                 except Exception:
                     log.exception("could not transition to review for %s",
                                   ticket.id)
+            else:
+                log.info("run %s completed for ticket %s: exit=%s (status already %s)",
+                         run.id, ticket.id, result.exit_status,
+                         cur.status if cur else "unknown")
 
             if result.exit_status == "success" and bundle is not None:
                 for owned_ws in bundle.workspaces:
@@ -596,8 +613,8 @@ async def run_one(
                 except Exception:
                     pass
     except Exception as exc:
-            log.exception("setup failed for ticket %s before executor.run",
-                          ticket_id)
+            log.exception("setup failed for ticket %s during %s phase: %s",
+                          ticket_id, _setup_phase, exc)
             tb_text = traceback.format_exc()
             try:
                 session.rollback()
@@ -624,7 +641,7 @@ async def run_one(
                         append_worker_error(
                             setup_run.transcript_path,
                             kind="setup_error",
-                            summary=f"worker setup failed: {exc!r}",
+                            summary=f"worker setup failed during {_setup_phase} phase: {exc!r}",
                             traceback_text=tb_text,
                         )
             except Exception:

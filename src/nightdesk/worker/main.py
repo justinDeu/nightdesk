@@ -103,7 +103,7 @@ class WorkerLoop:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
                 stdin=asyncio.subprocess.DEVNULL,
                 start_new_session=True,
             )
@@ -112,7 +112,26 @@ class WorkerLoop:
             return
         self._subprocs[ticket_id] = proc
         try:
+            # Drain stderr so the pipe buffer doesn't block the child. Lines
+            # are logged at WARNING level since the subprocess only writes to
+            # stderr on unexpected errors (tracebacks, unhandled exceptions).
+            async def _drain_stderr(p: asyncio.subprocess.Process, tid: str) -> None:
+                if p.stderr is None:
+                    return
+                while True:
+                    line = await p.stderr.readline()
+                    if not line:
+                        break
+                    log.warning("run-ticket %s stderr: %s",
+                                tid, line.decode("utf-8", errors="replace").rstrip())
+
+            drain_task = asyncio.create_task(_drain_stderr(proc, ticket_id))
             rc = await proc.wait()
+            # Give the stderr drain a moment to flush remaining lines.
+            try:
+                await asyncio.wait_for(drain_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
             if rc != 0:
                 log.warning("run-ticket subprocess for %s exited rc=%s",
                             ticket_id, rc)

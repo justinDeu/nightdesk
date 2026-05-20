@@ -1,6 +1,7 @@
 # src/nightdesk/worker/heartbeat.py
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -8,6 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Run, Ticket, WorkerHeartbeat
+
+
+log = logging.getLogger(__name__)
 
 
 def _pid_alive(pid: int | None) -> bool:
@@ -83,6 +87,8 @@ def recover_orphaned_runs(session: Session, *, host: str) -> int:
             if _pid_alive(r.pid):
                 any_alive = True
                 continue
+            log.info("marking orphaned run %s as worker_crash (ticket %s, pid %s)",
+                     r.id, t.id, r.pid)
             r.finished_at = now
             r.exit_status = "worker_crash"
             r.error_summary = "worker process died before run completed"
@@ -96,8 +102,12 @@ def recover_orphaned_runs(session: Session, *, host: str) -> int:
         if other_in_flight is None:
             # v2: any run-completion lands the ticket in 'review' so the
             # user can inspect the failure and requeue.
+            log.info("transitioning orphaned ticket %s from running to review", t.id)
             t.status = "review"
     session.commit()
+    if count:
+        log.info("orphan recovery pass 1: marked %d run(s) as worker_crash on host %s",
+                 count, host)
 
     # Pass 2: tickets stuck in running with no Run row at all.
     # Wait at least RUNLESS_GRACE_SECONDS before resetting so a freshly
@@ -123,9 +133,13 @@ def recover_orphaned_runs(session: Session, *, host: str) -> int:
         )
     ))
     for t in runless:
+        log.info("resetting runless ticket %s from running to queued", t.id)
         t.status = "queued"
         t.current_run_id = None
         # Don't reset run_now — the user originally asked for it; let the
         # scheduler bypass capacity on the next tick.
     session.commit()
+    if runless:
+        log.info("orphan recovery pass 2: reset %d runless ticket(s) to queued on host %s",
+                 len(runless), host)
     return count

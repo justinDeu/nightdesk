@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+
+log = logging.getLogger(__name__)
 
 
 class WorkspaceError(Exception):
@@ -68,9 +72,11 @@ class WorkspaceBundle:
 
 
 def _run_git(cwd: Path, *args: str) -> str:
+    cmd_args = ["git", "-C", str(cwd), *args]
+    log.debug("git %s (cwd=%s)", " ".join(args), cwd)
     try:
         result = subprocess.run(
-            ["git", "-C", str(cwd), *args],
+            cmd_args,
             check=True,
             capture_output=True,
             text=True,
@@ -78,6 +84,7 @@ def _run_git(cwd: Path, *args: str) -> str:
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
         detail = f": {stderr}" if stderr else ""
+        log.error("git %s failed for %s%s", " ".join(args), cwd, detail)
         raise WorkspaceError(f"git {' '.join(args)} failed for {cwd}{detail}") from exc
     return result.stdout.strip()
 
@@ -232,6 +239,9 @@ def _create_git_worktree(*, ticket_id: str, root: Path, cwd: Path,
     git_common_dir = source.git_common_dir
     relative = source.relative_path
 
+    log.info("creating git worktree for ticket %s: cwd=%s repo=%s",
+             ticket_id, cwd, repo_root)
+
     # Slash-style names (e.g. "fix/tui-status") are valid git branch names but
     # not valid filesystem directory names. Treat them as the intended branch
     # (unless one was passed explicitly) and derive a safe directory name by
@@ -256,6 +266,7 @@ def _create_git_worktree(*, ticket_id: str, root: Path, cwd: Path,
         raise WorkspaceError("worktree_path must not be inside the source repo")
     if target.exists():
         if reuse_existing:
+            log.info("reusing existing worktree at %s for ticket %s", target, ticket_id)
             run_path = target / relative
             if not run_path.exists() or not run_path.is_dir():
                 raise WorkspaceError(f"resolved worktree cwd does not exist: {run_path}")
@@ -273,7 +284,9 @@ def _create_git_worktree(*, ticket_id: str, root: Path, cwd: Path,
                 base_sha=source.base_sha,
             )
         if not fresh_if_exists:
+            log.error("worktree_path already exists for ticket %s: %s", ticket_id, target)
             raise WorkspaceError(f"worktree_path already exists: {target}")
+        log.info("target %s exists for ticket %s; allocating fresh slot", target, ticket_id)
         name, target, branch_name = _allocate_fresh_worktree_slot(
             root=root,
             source=source,
@@ -286,10 +299,14 @@ def _create_git_worktree(*, ticket_id: str, root: Path, cwd: Path,
     cmd = ["worktree", "add", "-b", branch_name, str(target)]
     if base_ref:
         cmd.append(base_ref)
+    log.info("git worktree add branch=%s target=%s base=%s for ticket %s",
+             branch_name, target, base_ref or "HEAD", ticket_id)
     _run_git(source.command_dir, *cmd)
 
     run_path = target / relative
     if not run_path.exists() or not run_path.is_dir():
+        log.error("resolved worktree cwd does not exist after checkout: %s (ticket %s)",
+                  run_path, ticket_id)
         subprocess.run(
             ["git", "-C", str(source.command_dir), "worktree", "remove", "--force", str(target)],
             check=False,
@@ -298,6 +315,8 @@ def _create_git_worktree(*, ticket_id: str, root: Path, cwd: Path,
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
         raise WorkspaceError(f"resolved worktree cwd does not exist: {run_path}")
+    log.info("git worktree created successfully for ticket %s: path=%s branch=%s",
+             ticket_id, run_path, branch_name)
     return Workspace(
         path=run_path,
         kind="git_worktree",
@@ -345,6 +364,8 @@ def prepare_workspace(
     scratch: not supported yet.
     """
     kind = _normalize_kind(mode)
+    log.debug("prepare_workspace: ticket=%s cwd=%s mode=%s kind=%s",
+              ticket_id, cwd, mode, kind)
     if access not in {"read_write", "read_only"}:
         raise WorkspaceError(f"unknown workspace access: {access!r}")
 
@@ -391,6 +412,9 @@ def prepare_workspace_bundle(*, ticket_id: str, root: Path,
                              specs: list[WorkspaceSpec],
                              reuse_existing_worktrees: bool = False,
                              fresh_worktree_paths: bool = False) -> WorkspaceBundle:
+    log.info("preparing workspace bundle for ticket %s: %d workspace(s), "
+             "reuse_existing=%s, fresh=%s",
+             ticket_id, len(specs), reuse_existing_worktrees, fresh_worktree_paths)
     if not specs:
         raise WorkspaceError("at least one workspace is required")
     primary_count = sum(1 for spec in specs if spec.role == "primary")
@@ -430,6 +454,7 @@ def prepare_workspace_bundle(*, ticket_id: str, root: Path,
 def cleanup_workspace(ws: Workspace) -> None:
     """No-op for user directories. Remove only Nightdesk-created workspaces."""
     if ws.kind == "git_worktree" and ws.repo_path is not None and ws.worktree_path is not None:
+        log.info("cleaning up git worktree: %s (repo=%s)", ws.worktree_path, ws.repo_path)
         subprocess.run(
             ["git", "-C", str(ws.repo_path), "worktree", "remove", "--force", str(ws.worktree_path)],
             check=False,
