@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,7 @@ from nightdesk.domain.tickets import (
     clone_ticket, get_ticket, merge_next_run_context_into_prompt, restart_ticket,
     resume_ticket, retry_ticket, set_next_run_context, update_ticket, TicketNotFound,
 )
+from nightdesk.logging_setup import run_log_path
 from nightdesk.transcript import is_canonical, read_events
 
 
@@ -130,6 +131,29 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
                 "transcript_events": events,
                 "transcript_raw": raw_text,
             },
+        )
+
+    @router.get("/runs/{rid}/log", dependencies=[auth])
+    async def download_run_log(rid: str, session: Session = Depends(get_session)):
+        """Cookie-auth download of a per-run worker log.
+
+        The browser opens this as a plain ``<a href>`` GET that carries the
+        signed session cookie, not a bearer header — so it can't hit the
+        bearer-only ``/api/v1/runs/{rid}/log`` route without a 401. Same fix
+        already applied to Archive / Cancel / Delete. The JSON-API route is
+        kept for programmatic clients.
+        """
+        try:
+            get_run(session, rid)
+        except RunNotFound:
+            raise HTTPException(404, "not found")
+        path = run_log_path(rid)
+        if not path.exists():
+            return PlainTextResponse("(no log for this run)", status_code=404)
+        return FileResponse(
+            path,
+            media_type="text/plain; charset=utf-8",
+            filename=f"nightdesk-run-{rid}.log",
         )
 
     @router.post("/tickets/{tid}/additional-dirs", dependencies=[auth])

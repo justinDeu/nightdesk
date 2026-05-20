@@ -319,7 +319,7 @@
                     ${{ '%.4f'|format(r.cost_usd) }}
                   </span>
                 {% endif %}
-                <a href="/api/v1/runs/{{ r.id }}/log"
+                <a href="/runs/{{ r.id }}/log"
                    class="text-fg-muted hover:text-fg ml-auto underline decoration-dotted"
                    title="Download worker log for this run"
                    onclick="event.stopPropagation();">log</a>
