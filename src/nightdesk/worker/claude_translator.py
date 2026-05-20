@@ -210,6 +210,7 @@ def translate(event_dict: dict) -> list[dict]:
         # System init / config messages — not rendered.
         return []
     # Some SDKs emit raw shape that already matches our canonical form.
-    if etype in {"assistant_text", "thinking", "tool_use", "tool_result", "result", "meta"}:
+    if etype in {"assistant_text", "thinking", "tool_use", "tool_result",
+                 "result", "meta", "rate_limit"}:
         return [dict(event_dict)]
     return []

@@ -290,6 +290,21 @@ def test_thinking_block_stays_collapsed():
     assert " open>" not in html
 
 
+def test_rate_limit_event_renders_card_with_countdown():
+    # A rate_limit event must render a visible RATE LIMITED card with the
+    # status, limit type, and a countdown wired to resets_at — not be dropped.
+    html = _render_event({
+        "type": "rate_limit", "status": "rejected",
+        "rate_limit_type": "five_hour", "resets_at": 1_900_000_000,
+        "utilization": 1.0,
+    })
+    assert "rate limited" in html.lower()
+    assert "rejected" in html
+    assert "five_hour" in html
+    assert 'data-resets-at="1900000000"' in html
+    assert "rate-limit-countdown" in html
+
+
 def test_thinking_empty_renders_nothing():
     # Legacy transcripts on disk may carry thinking events with empty
     # content (some Claude variants returned blocks where the raw CoT

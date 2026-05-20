@@ -88,9 +88,8 @@ def _usage_to_dict(usage: Any) -> dict[str, Any] | None:
 def _event_to_dict(evt: Any) -> dict[str, Any] | None:
     """Convert one SDK message object to a translator-compatible dict.
 
-    Returns ``None`` for events that should be dropped (e.g. rate-limit
-    notifications). Dict inputs pass through unchanged so test stubs that
-    yield raw dicts keep working.
+    Returns ``None`` for events that should be dropped. Dict inputs pass
+    through unchanged so test stubs that yield raw dicts keep working.
     """
     if isinstance(evt, dict):
         return evt
@@ -135,8 +134,26 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
             out["model"] = model
         return out
     if name == "RateLimitEvent":
-        # Not user-visible; skip rather than pollute the transcript.
-        return None
+        # Surface rate limits as first-class transcript events. The SDK carries
+        # the detail on a nested RateLimitInfo dataclass (see claude_agent_sdk
+        # types.py): status, resets_at (unix seconds), rate_limit_type,
+        # utilization. Flatten the fields the renderer needs into a plain dict.
+        info = getattr(evt, "rate_limit_info", None)
+        out_rl: dict[str, Any] = {"type": "rate_limit"}
+        if info is not None:
+            status = getattr(info, "status", None)
+            if status is not None:
+                out_rl["status"] = status
+            resets_at = getattr(info, "resets_at", None)
+            if resets_at is not None:
+                out_rl["resets_at"] = resets_at
+            limit_type = getattr(info, "rate_limit_type", None)
+            if limit_type is not None:
+                out_rl["rate_limit_type"] = limit_type
+            utilization = getattr(info, "utilization", None)
+            if utilization is not None:
+                out_rl["utilization"] = utilization
+        return out_rl
     # Unknown message: best-effort fallback so the renderer shows something.
     return {"type": "assistant_text", "text": str(evt)}
 

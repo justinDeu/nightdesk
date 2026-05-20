@@ -324,8 +324,9 @@ def test_event_to_dict_converts_typed_sdk_objects():
     assert d["subtype"] == "success"
     assert d["result"] == "all good"
 
-    # Rate-limit notifications are dropped, not rendered.
-    assert _event_to_dict(RateLimitEvent()) is None
+    # Rate-limit notifications are surfaced as a canonical rate_limit event,
+    # not dropped. With no rate_limit_info the bare type still comes through.
+    assert _event_to_dict(RateLimitEvent()) == {"type": "rate_limit"}
 
     # Plain dicts (e.g. from test stubs) pass through unchanged.
     raw = {"type": "assistant", "content": "passthrough"}
@@ -334,6 +335,36 @@ def test_event_to_dict_converts_typed_sdk_objects():
     # Unknown block falls back to a text block so it still renders.
     class Mystery: ...
     assert _block_to_dict(Mystery())["type"] == "text"
+
+
+def test_event_to_dict_translates_rate_limit_event():
+    """A RateLimitEvent must become a canonical rate_limit dict carrying the
+    nested RateLimitInfo fields the renderer needs, not be dropped."""
+    from dataclasses import dataclass, field
+    from typing import Optional
+
+    from nightdesk.worker._sdk_runner import _event_to_dict
+    from nightdesk.worker.claude_translator import translate
+
+    @dataclass
+    class RateLimitInfo:
+        status: str = "rejected"
+        resets_at: Optional[int] = 1_900_000_000
+        rate_limit_type: Optional[str] = "five_hour"
+        utilization: Optional[float] = 0.95
+
+    @dataclass
+    class RateLimitEvent:
+        rate_limit_info: object = field(default_factory=RateLimitInfo)
+
+    d = _event_to_dict(RateLimitEvent())
+    assert d == {
+        "type": "rate_limit", "status": "rejected",
+        "resets_at": 1_900_000_000, "rate_limit_type": "five_hour",
+        "utilization": 0.95,
+    }
+    # The translator passes the canonical event straight through.
+    assert translate(d) == [d]
 
 
 @pytest.mark.anyio

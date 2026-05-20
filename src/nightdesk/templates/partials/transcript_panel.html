@@ -407,6 +407,36 @@
             const titleLabel = subtype === 'success' ? 'done' : 'error';
             return el(`<div class="rounded p-3 border-2 ${cls}"><div class="font-bold ${titleCls}">${titleLabel}</div><div class="whitespace-pre-wrap text-sm mt-1">${escapeHtml(evt.summary || '')}</div></div>`);
           }
+          if (t === 'rate_limit') {
+            // Mirror evt_rate_limit in transcript_event.html: amber card with
+            // a RATE LIMITED badge and a live countdown to resets_at (Unix
+            // seconds). The countdown ticker is wired up after the node is
+            // appended (see append()).
+            const status = evt.status || 'rejected';
+            const limitType = evt.rate_limit_type || '';
+            const resetsAt = evt.resets_at;
+            const util = (typeof evt.utilization === 'number')
+              ? `, ${(evt.utilization * 100).toFixed(1)}% used` : '';
+            const typeChip = limitType
+              ? `<code class="text-xs text-fg-muted">${escapeHtml(limitType)}</code>` : '';
+            let countdown = '';
+            if (resetsAt) {
+              countdown =
+                `<div class="text-xs text-fg-muted mt-1">next request in ` +
+                `<span class="rate-limit-countdown font-mono text-warn" data-resets-at="${escapeHtml(resetsAt)}">…</span></div>`;
+            }
+            return el(
+              `<div class="rate-limit rounded p-3 border-2 border-warn bg-warn/10">` +
+                `<div class="flex items-center gap-2">` +
+                  `<span class="font-bold text-warn uppercase tracking-wide text-xs">rate limited</span>` +
+                  `<code class="text-xs text-warn">${escapeHtml(status)}</code>` +
+                  typeChip +
+                `</div>` +
+                `<div class="whitespace-pre-wrap text-sm mt-2 text-fg">Agent hit a rate limit (${escapeHtml(status)}${escapeHtml(util)}).</div>` +
+                countdown +
+              `</div>`
+            );
+          }
           if (t === 'worker_error') {
             const kind = evt.kind || 'worker_error';
             const summary = evt.summary || '';
@@ -426,6 +456,34 @@
             );
           }
           return null;
+        }
+
+        // Wire a live countdown into any rate-limit card that hasn't been
+        // bound yet. Mirrors the inline script in evt_rate_limit (server-side)
+        // so freshly-appended live events tick down too.
+        function bindCountdowns(root) {
+          const els = (root || container).querySelectorAll(
+            '.rate-limit-countdown[data-resets-at]:not([data-rl-bound])');
+          els.forEach(function (cd) {
+            cd.setAttribute('data-rl-bound', '1');
+            const resetsAt = parseInt(cd.getAttribute('data-resets-at'), 10);
+            function fmt(sec) {
+              if (!isFinite(sec) || sec <= 0) return 'now';
+              const m = Math.floor(sec / 60), s = sec % 60;
+              if (m > 0) return m + 'm ' + s + 's';
+              return s + 's';
+            }
+            function tick() {
+              const remaining = Math.round(resetsAt - Date.now() / 1000);
+              cd.textContent = fmt(remaining);
+              if (remaining <= 0 && cd.__rlTimer) {
+                clearInterval(cd.__rlTimer);
+                cd.__rlTimer = null;
+              }
+            }
+            tick();
+            cd.__rlTimer = setInterval(tick, 1000);
+          });
         }
 
         function append(evt) {
@@ -460,7 +518,10 @@
             // Fall through: no matching tool_use in view -> standalone.
           }
           const node = renderEvent(evt);
-          if (node) container.appendChild(node);
+          if (node) {
+            container.appendChild(node);
+            if (evt.type === 'rate_limit') bindCountdowns(node);
+          }
         }
 
         function parse(e) {
@@ -568,7 +629,7 @@
           const s = typeof evt.seq === 'number' ? evt.seq : -1;
           return s > seqHigh;
         }
-        ['meta', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error'].forEach(function (t) {
+        ['meta', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error', 'rate_limit'].forEach(function (t) {
           es.addEventListener(t, function (e) {
             const evt = parse(e);
             if (!evt) return;

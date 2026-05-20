@@ -21,13 +21,13 @@ from typing import IO, Iterator, Literal, TypedDict
 
 CanonicalEventType = Literal[
     "meta", "assistant_text", "thinking", "tool_use", "tool_result", "result",
-    "worker_error",
+    "worker_error", "rate_limit",
 ]
 
 
 KNOWN_TYPES: frozenset[str] = frozenset(
     {"meta", "assistant_text", "thinking", "tool_use", "tool_result", "result",
-     "worker_error", "stats"}
+     "worker_error", "rate_limit", "stats"}
 )
 
 
@@ -93,6 +93,23 @@ class WorkerErrorEvent(_BaseEvent, total=False):
     kind: str
     summary: str
     traceback: str
+
+
+class RateLimitEvent(_BaseEvent, total=False):
+    """A rate-limit status change surfaced from the agent SDK.
+
+    ``status`` is the CLI's rate-limit status (``allowed`` | ``allowed_warning``
+    | ``rejected``). ``resets_at`` is the Unix timestamp (seconds) the limit
+    window resets — the renderer ticks a countdown down to it. ``rate_limit_type``
+    names the window (``five_hour``, ``seven_day``, ...) and ``utilization`` is
+    the fraction (0.0-1.0) of the window consumed.
+    """
+
+    type: Literal["rate_limit"]
+    status: str
+    resets_at: int
+    rate_limit_type: str
+    utilization: float
 
 
 def now_iso() -> str:

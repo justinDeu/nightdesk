@@ -119,6 +119,60 @@
   </div>
 {% endmacro %}
 
+{# rate_limit: the agent SDK reported a rate-limit status change. Render an
+   amber card with a "RATE LIMITED" badge, the limit type / status message,
+   and — when the SDK gave a reset timestamp — a live countdown to the next
+   allowed request. ``resets_at`` is Unix seconds; the inline script ticks the
+   countdown client-side. The JS live-tail in transcript_panel.html mirrors
+   this shape. #}
+{% macro evt_rate_limit(evt) %}
+  {% set status = evt.get('status') or 'rejected' %}
+  {% set limit_type = evt.get('rate_limit_type') or '' %}
+  {% set resets_at = evt.get('resets_at') %}
+  {% set util = evt.get('utilization') %}
+  <div class="rate-limit rounded p-3 border-2 border-warn bg-warn/10">
+    <div class="flex items-center gap-2">
+      <span class="font-bold text-warn uppercase tracking-wide text-xs">rate limited</span>
+      <code class="text-xs text-warn">{{ status }}</code>
+      {% if limit_type %}<code class="text-xs text-fg-muted">{{ limit_type }}</code>{% endif %}
+    </div>
+    <div class="whitespace-pre-wrap text-sm mt-2 text-fg">
+      Agent hit a rate limit ({{ status }}{% if util is not none %}, {{ (util * 100) | round(1) }}% used{% endif %}).
+    </div>
+    {% if resets_at %}
+      <div class="text-xs text-fg-muted mt-1">
+        next request in
+        <span class="rate-limit-countdown font-mono text-warn" data-resets-at="{{ resets_at }}">…</span>
+      </div>
+      <script>
+      (function () {
+        var els = document.querySelectorAll('.rate-limit-countdown[data-resets-at]:not([data-rl-bound])');
+        els.forEach(function (el) {
+          el.setAttribute('data-rl-bound', '1');
+          var resetsAt = parseInt(el.getAttribute('data-resets-at'), 10);
+          function fmt(sec) {
+            if (!isFinite(sec) || sec <= 0) return 'now';
+            var m = Math.floor(sec / 60), s = sec % 60;
+            if (m > 0) return m + 'm ' + s + 's';
+            return s + 's';
+          }
+          function tick() {
+            var remaining = Math.round(resetsAt - Date.now() / 1000);
+            el.textContent = fmt(remaining);
+            if (remaining <= 0 && el.__rlTimer) {
+              clearInterval(el.__rlTimer);
+              el.__rlTimer = null;
+            }
+          }
+          tick();
+          el.__rlTimer = setInterval(tick, 1000);
+        });
+      })();
+      </script>
+    {% endif %}
+  </div>
+{% endmacro %}
+
 {% macro render_event(evt, paired_result=None) %}
   {% set t = evt.get('type','') %}
   {% if t == 'meta' %}{{ evt_meta(evt) }}
@@ -128,5 +182,6 @@
   {% elif t == 'tool_result' %}{{ evt_tool_result(evt) }}
   {% elif t == 'result' %}{{ evt_result(evt) }}
   {% elif t == 'worker_error' %}{{ evt_worker_error(evt) }}
+  {% elif t == 'rate_limit' %}{{ evt_rate_limit(evt) }}
   {% endif %}
 {% endmacro %}
