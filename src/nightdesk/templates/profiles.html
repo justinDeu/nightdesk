@@ -56,12 +56,23 @@
         {% endfor %}
       </nav>
 
-      <div class="px-3 py-2">
+      <div class="px-3 py-2 space-y-2">
         <form method="post" action="/profiles/import"
               enctype="multipart/form-data">
           <label class="block cursor-pointer text-xs text-fg-muted hover:text-fg">
             Import profile from JSON…
             <input type="file" name="file" accept="application/json"
+                   onchange="this.form.submit()" class="hidden" />
+          </label>
+        </form>
+        {# Separate path: Claude Code settings.json uses a different schema
+           (model/env/permissions). The route translates it into our fields. #}
+        <form method="post" action="/profiles/import-cc"
+              enctype="multipart/form-data">
+          <label class="block cursor-pointer text-xs text-fg-muted hover:text-fg"
+                 title="Translate a Claude Code settings.json into a Nightdesk profile">
+            Import from Claude Code settings.json…
+            <input type="file" name="file" accept="application/json,.json"
                    onchange="this.form.submit()" class="hidden" />
           </label>
         </form>

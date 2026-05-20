@@ -33,6 +33,7 @@ from nightdesk.domain.profiles import (
     get_profile,
     list_profiles,
     strip_forbidden_import_fields,
+    translate_cc_settings,
     update_profile,
     ProfileNotFound,
     ProfileNameTaken,
@@ -940,6 +941,79 @@ def _build_html_router(
                 status_code=201,
             )
         flash = "Imported."
+        if dropped:
+            flash += " Dropped forbidden fields: " + ", ".join(dropped)
+        return RedirectResponse(
+            url=f"/profiles/{profile.id}?flash=" + flash.replace(" ", "%20"),
+            status_code=303,
+        )
+
+    @router.post("/profiles/import-cc", dependencies=[auth])
+    async def import_cc_settings(
+        request: Request,
+        file: UploadFile = File(...),
+        session: Session = Depends(get_session),
+    ):
+        """Import a Claude Code ``settings.json`` and translate it to a profile.
+
+        CC uses a different syntax than Nightdesk's own export (``model``,
+        ``env``, ``permissions.allow``/``deny``/``defaultMode``, plus keys we
+        don't model). ``translate_cc_settings`` maps those onto our schema and
+        parks the remainder in ``cc_settings_passthrough``. Forbidden keys
+        (hooks/mcpServers/agents/skills) are stripped with the same safety as
+        the native importer. The uploaded filename (or an explicit ``name``
+        form field) seeds the profile name.
+        """
+        raw = await file.read()
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(400, f"upload is not valid JSON: {exc}")
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "Claude Code settings must be a JSON object")
+
+        # Re-strip and report dropped forbidden keys for the flash message.
+        _, dropped = strip_forbidden_import_fields(payload)
+
+        form = await request.form()
+        explicit_name = (form.get("name") or "").strip() or None
+        fallback_name = explicit_name
+        if not fallback_name and file.filename:
+            stem = Path(file.filename).stem or file.filename
+            fallback_name = f"CC import ({stem})"
+        if not fallback_name:
+            fallback_name = "Imported from Claude Code"
+
+        try:
+            fields = translate_cc_settings(payload, name=fallback_name)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+        if not fields.get("name"):
+            fields["name"] = fallback_name
+        _validate_paths(fields.get("fs_read") or [], field="fs_read")
+        _validate_paths(fields.get("fs_write") or [], field="fs_write")
+        if fields.get("permission_mode") and fields["permission_mode"] not in _PERMISSION_MODES:
+            raise HTTPException(400, f"permission_mode must be one of {_PERMISSION_MODES}")
+
+        env_in = fields.pop("env", None)
+        if isinstance(env_in, dict) and env_in and box is not None:
+            fields["env"] = box.encrypt({
+                k: v for k, v in env_in.items()
+                if isinstance(k, str) and isinstance(v, str)
+            })
+
+        try:
+            profile = create_profile(session, **fields)
+        except ProfileNameTaken:
+            raise HTTPException(409, "name taken")
+
+        if request.headers.get("accept", "").startswith("application/json"):
+            return JSONResponse(
+                {"id": profile.id, "dropped_fields": dropped},
+                status_code=201,
+            )
+        flash = "Imported from Claude Code settings.json."
         if dropped:
             flash += " Dropped forbidden fields: " + ", ".join(dropped)
         return RedirectResponse(

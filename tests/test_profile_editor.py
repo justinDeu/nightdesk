@@ -773,3 +773,129 @@ async def test_default_model_persists_as_single_value(
     with Session(fresh_engine) as s:
         p = s.get(Profile, pid)
         assert p.default_model == "claude-sonnet-4-5"
+
+
+# ---------------------------------------------------------------------------
+# Import from Claude Code settings.json (Bug 16). CC uses a different schema
+# than Nightdesk's own export; translate_cc_settings maps it onto our fields.
+# ---------------------------------------------------------------------------
+
+
+_CC_SETTINGS_SAMPLE = {
+    "$schema": "https://json.schemastore.org/claude-code-settings.json",
+    "model": "claude-opus-4-5",
+    "env": {
+        "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+        "OTEL_METRICS_EXPORTER": "otlp",
+        # Auth-owned keys must be stripped, never written to the env blob.
+        "ANTHROPIC_API_KEY": "sk-ant-should-be-dropped",
+        "ANTHROPIC_BASE_URL": "https://proxy.example",
+    },
+    "permissions": {
+        "allow": ["Bash(npm run lint)", "Read(~/.zshrc)"],
+        "deny": ["Bash(curl *)", "Read(./.env)"],
+        "defaultMode": "acceptEdits",
+        "additionalDirectories": ["../shared"],
+    },
+    "apiKeyHelper": "/bin/get-key.sh",
+    "companyAnnouncements": ["hello"],
+    # Forbidden keys: stripped with the same safety as native imports.
+    "hooks": {"PostToolUse": []},
+    "mcpServers": {"foo": {"command": "x"}},
+}
+
+
+def test_translate_cc_settings_maps_core_fields():
+    from nightdesk.domain.profiles import translate_cc_settings
+
+    fields = translate_cc_settings(_CC_SETTINGS_SAMPLE, name="from-cc")
+    assert fields["name"] == "from-cc"
+    assert fields["default_model"] == "claude-opus-4-5"
+    assert fields["allowed_tools"] == ["Bash(npm run lint)", "Read(~/.zshrc)"]
+    assert fields["denied_tools"] == ["Bash(curl *)", "Read(./.env)"]
+    assert fields["permission_mode"] == "acceptEdits"
+    # env keeps non-auth vars and drops the auth-owned ones.
+    assert fields["env"]["CLAUDE_CODE_ENABLE_TELEMETRY"] == "1"
+    assert fields["env"]["OTEL_METRICS_EXPORTER"] == "otlp"
+    assert "ANTHROPIC_API_KEY" not in fields["env"]
+    assert "ANTHROPIC_BASE_URL" not in fields["env"]
+
+
+def test_translate_cc_settings_passthrough_and_strip():
+    from nightdesk.domain.profiles import translate_cc_settings
+
+    fields = translate_cc_settings(_CC_SETTINGS_SAMPLE, name="from-cc")
+    pt = fields["cc_settings_passthrough"]
+    # Unmapped top-level keys survive verbatim.
+    assert pt["apiKeyHelper"] == "/bin/get-key.sh"
+    assert pt["companyAnnouncements"] == ["hello"]
+    # Unmapped permission sub-keys survive under permissions.
+    assert pt["permissions"]["additionalDirectories"] == ["../shared"]
+    # allow/deny/defaultMode were consumed, not duplicated into passthrough.
+    assert "allow" not in pt["permissions"]
+    assert "deny" not in pt["permissions"]
+    assert "defaultMode" not in pt["permissions"]
+    # Forbidden keys never reach the profile, not even in passthrough.
+    assert "hooks" not in pt
+    assert "mcpServers" not in pt
+    assert "$schema" in pt  # benign, preserved
+
+
+def test_translate_cc_settings_drops_unsupported_permission_mode():
+    from nightdesk.domain.profiles import translate_cc_settings
+
+    fields = translate_cc_settings({"permissions": {"defaultMode": "plan"}})
+    # Unsupported mode is not applied; it lands in passthrough instead.
+    assert "permission_mode" not in fields
+    assert fields["cc_settings_passthrough"]["permissions"]["defaultMode"] == "plan"
+
+
+def test_translate_cc_settings_rejects_non_object():
+    from nightdesk.domain.profiles import translate_cc_settings
+
+    with pytest.raises(ValueError):
+        translate_cc_settings(["not", "a", "dict"])
+
+
+async def test_import_cc_route_creates_profile(cookie_client, fresh_engine):
+    files = {"file": ("settings.json",
+                       io.BytesIO(json.dumps(_CC_SETTINGS_SAMPLE).encode()),
+                       "application/json")}
+    r = await cookie_client.post(
+        "/profiles/import-cc",
+        files=files,
+        data={"name": "cc-imported"},
+        headers={"accept": "application/json"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert set(body["dropped_fields"]) >= {"hooks", "mcpServers"}
+
+    from nightdesk.domain.profile_secrets import ProfileSecretBox
+    box = ProfileSecretBox("t")
+    with Session(fresh_engine) as s:
+        p = s.get(Profile, body["id"])
+        assert p.name == "cc-imported"
+        assert p.default_model == "claude-opus-4-5"
+        assert p.permission_mode == "acceptEdits"
+        assert p.allowed_tools == ["Bash(npm run lint)", "Read(~/.zshrc)"]
+        assert p.denied_tools == ["Bash(curl *)", "Read(./.env)"]
+        assert p.cc_settings_passthrough["apiKeyHelper"] == "/bin/get-key.sh"
+        # Auth secret never persisted into the env blob.
+        decoded = box.decrypt(p.env)
+        assert "ANTHROPIC_API_KEY" not in decoded
+        assert decoded["CLAUDE_CODE_ENABLE_TELEMETRY"] == "1"
+
+
+async def test_import_cc_route_rejects_bad_json(cookie_client):
+    files = {"file": ("settings.json", io.BytesIO(b"not json"),
+                       "application/json")}
+    r = await cookie_client.post("/profiles/import-cc", files=files)
+    assert r.status_code == 400
+
+
+async def test_profiles_page_offers_cc_import_affordance(cookie_client):
+    r = await cookie_client.get("/profiles")
+    assert r.status_code == 200
+    assert 'action="/profiles/import-cc"' in r.text
+    assert "Import from Claude Code settings.json" in r.text
