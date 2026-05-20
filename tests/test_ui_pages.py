@@ -559,3 +559,112 @@ async def test_run_now_on_queued_only_sets_flag(cookie_client, session):
     after = get_ticket(session, t.id)
     assert after.status == "queued"
     assert after.run_now is True
+
+
+def _running_ticket(session, name):
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket, transition_status
+
+    p = create_profile(
+        session, name=name, fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="cnl", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False, status="queued",
+    )
+    transition_status(session, t.id, "running")
+    return t
+
+
+async def test_board_cancel_htmx_returns_204_and_transitions(cookie_client, session):
+    """POST /board/tickets/{tid}/cancel performs running->review and returns
+    204 + HX-Redirect to the ticket page so HTMX reloads it showing the new
+    review status. The redirect fires on the success path only, so a rejected
+    transition won't yank the user off the page. Mirrors the cookie-auth
+    Archive route — the old detail-page button hit the bearer-only
+    /api/v1/.../cancel twin and 401'd / dumped raw JSON for browser sessions."""
+    from nightdesk.domain.tickets import get_ticket
+
+    t = _running_ticket(session, "cnl-htmx")
+    r = await cookie_client.post(
+        f"/board/tickets/{t.id}/cancel",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 204
+    assert r.headers.get("HX-Redirect") == f"/tickets/{t.id}"
+    assert r.content == b""
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.status == "review"
+
+
+async def test_board_cancel_non_htmx_falls_back_to_303(cookie_client, session):
+    """curl / no-JS clients keep working: a plain POST gets a 303 back to the
+    ticket detail page, matching the Archive precedent."""
+    from nightdesk.domain.tickets import get_ticket
+
+    t = _running_ticket(session, "cnl-curl")
+    r = await cookie_client.post(
+        f"/board/tickets/{t.id}/cancel",
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/tickets/{t.id}"
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.status == "review"
+
+
+async def test_board_cancel_on_non_running_returns_409(cookie_client, session):
+    """Cancel is running-only per _VALID_TRANSITIONS (running -> review).
+    Firing it on a draft must 409 rather than silently no-op, so the template
+    leaves the user on the page (no HX-Redirect on the error path)."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="cnl-draft", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="d", prompt="", priority=0, profile_id=p.id,
+        cwd="/tmp", run_now=False,  # default status='draft'
+    )
+    r = await cookie_client.post(
+        f"/board/tickets/{t.id}/cancel",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 409
+
+
+async def test_board_cancel_missing_ticket_404(cookie_client):
+    r = await cookie_client.post(
+        "/board/tickets/no-such-id/cancel",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 404
+
+
+async def test_detail_page_cancel_button_uses_cookie_auth_route(cookie_client, session):
+    """Regression guard: the detail-page Cancel button for a running ticket
+    must POST to the cookie-auth /board/tickets/{id}/cancel route via HTMX,
+    NOT a plain <form> hitting the bearer-only /api/v1/.../cancel twin (which
+    401s for browser sessions and otherwise navigates the page to raw JSON)."""
+    t = _running_ticket(session, "cnl-detail")
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # Cookie-auth HTMX route is wired up.
+    assert f'hx-post="/board/tickets/{t.id}/cancel"' in body
+    # Bearer-only twin must not appear anywhere on the page.
+    assert f"/api/v1/tickets/{t.id}/cancel" not in body
+    # Not a plain form post to the old UI cancel route either.
+    assert f'action="/tickets/{t.id}/cancel"' not in body

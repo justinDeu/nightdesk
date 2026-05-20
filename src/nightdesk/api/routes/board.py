@@ -24,6 +24,7 @@ from nightdesk.domain.tickets import (
     list_tickets,
     reorder_in_column,
     set_run_now,
+    transition_status,
     transition_with_position,
     update_ticket,
 )
@@ -473,6 +474,33 @@ def build_router(
             "partials/sidebar.html",
             {"profiles": profiles, "ticket": ticket, "mode": "edit"},
         )
+
+    @router.post("/board/tickets/{tid}/cancel", dependencies=[auth])
+    async def cancel_inline(
+        tid: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        # Detail-page Cancel button target. Same anti-pattern fix as Archive:
+        # the old button posted a plain <form> to the bearer-only
+        # /api/v1/tickets/{tid}/cancel JSON route, which 401s for browser
+        # cookie sessions (and otherwise dumps raw TicketOut JSON over the
+        # page). This cookie-auth twin performs the running->review transition
+        # via transition_status. HTMX clients get 204 + HX-Redirect back to
+        # the ticket page so it reloads showing the new review status; the
+        # redirect only fires on the success path, so 4xx responses leave the
+        # user on the page. Non-HTMX (curl, no-JS) clients keep a 303 fallback.
+        try:
+            transition_status(session, tid, "review")
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        if request.headers.get("HX-Request") == "true":
+            resp = Response(status_code=204)
+            resp.headers["HX-Redirect"] = f"/tickets/{tid}"
+            return resp
+        return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
 
     @router.delete("/board/tickets/{tid}", dependencies=[auth])
     async def delete(tid: str, session: Session = Depends(get_session)):

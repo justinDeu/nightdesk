@@ -85,9 +85,19 @@
           </form>
         {% endif %}
         {% if ticket.status == 'running' %}
-          <form method="post" action="/tickets/{{ ticket.id }}/cancel">
-            <button class="border border-warn text-warn px-3 py-1 rounded text-sm">Cancel</button>
-          </form>
+          {# Same anti-pattern fix as Archive/Delete: the old plain <form>
+             posted to the bearer-only /api/v1/tickets/{id}/cancel JSON route,
+             which 401s for browser cookie sessions and otherwise navigates
+             the page to raw TicketOut JSON. Switch to the cookie-auth
+             /board/... route, which performs running->review and returns
+             204 + HX-Redirect: /tickets/{id} on success only — HTMX honors
+             HX-Redirect just on the success path, so a 409 (ticket no longer
+             running) leaves the user on the page instead of bouncing. #}
+          <button type="button"
+                  data-cancel-btn
+                  hx-post="/board/tickets/{{ ticket.id }}/cancel"
+                  hx-swap="none"
+                  class="border border-warn text-warn px-3 py-1 rounded text-sm">Cancel</button>
         {% endif %}
         {% if ticket.status == 'review' %}
           {# Cookie-auth UI route, not the bearer-only /api/v1/... twin.
