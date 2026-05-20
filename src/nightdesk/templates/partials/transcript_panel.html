@@ -27,11 +27,20 @@
       <span class="inline-block rounded px-2 py-0.5 bg-info/20 text-info">live</span>
     {% endif %}
     {% if not transcript_raw %}
+      {# Collapse / expand every <details> in the transcript. The collapsed
+         state is stored as data-collapsed on #transcript so the live-tail
+         append() can close newly-arrived events while collapsed. ``ml-auto``
+         pushes the control group to the right edge. #}
+      <button type="button" id="transcript-toggle-all"
+              class="ml-auto rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev"
+              onclick="(function(b){var c=document.getElementById('transcript');if(!c)return;var collapse=c.dataset.collapsed!=='1';c.dataset.collapsed=collapse?'1':'0';c.querySelectorAll('details').forEach(function(d){d.open=!collapse;});b.textContent=collapse?'expand all':'collapse all';})(this)">
+        collapse all
+      </button>
       {# Jump to the bottom of the scroll container. No auto-scroll exists,
          so this lets the user snap to the newest event (handy for live
-         tailing). ``ml-auto`` pushes the controls to the right edge. #}
+         tailing). #}
       <button type="button"
-              class="ml-auto rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev"
+              class="rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev"
               onclick="(function(){var s=document.getElementById('transcript-scroll');if(s)s.scrollTop=s.scrollHeight;})()">
         jump to end
       </button>
@@ -496,6 +505,17 @@
           });
         }
 
+        // When the user has collapsed the transcript, newly-arrived live
+        // events should land collapsed too. Cheap: close any <details> in the
+        // freshly-rendered subtree (and the node itself if it is a details).
+        function applyCollapsedState(node) {
+          if (!node || container.dataset.collapsed !== '1') return;
+          if (node.tagName === 'DETAILS') node.open = false;
+          if (node.querySelectorAll) {
+            node.querySelectorAll('details').forEach(function (d) { d.open = false; });
+          }
+        }
+
         function append(evt) {
           // Pair tool_result events with their parent tool_use card so the
           // two render as one visual unit. Mirrors the server-side pairing
@@ -521,7 +541,10 @@
                   body.appendChild(div);
                 }
                 const resultNode = renderEvent(evt);
-                if (resultNode) body.appendChild(resultNode);
+                if (resultNode) {
+                  body.appendChild(resultNode);
+                  applyCollapsedState(resultNode);
+                }
                 return;
               }
             }
@@ -531,6 +554,7 @@
           if (node) {
             container.appendChild(node);
             if (evt.type === 'rate_limit') bindCountdowns(node);
+            applyCollapsedState(node);
           }
         }
 
