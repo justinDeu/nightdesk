@@ -230,15 +230,23 @@
       ev.preventDefault();
       _setActive(dropdownId, (cur <= 0 ? items.length : cur) - 1);
     } else if (ev.key === 'Tab') {
+      // While the list is open, Tab/Shift-Tab move the highlight (down/up,
+      // wrapping) instead of leaving the field. When it's closed/empty we
+      // fall through so Tab moves focus normally — never trap focus.
+      if (!items.length) return;
+      ev.preventDefault();
+      if (ev.shiftKey) {
+        _setActive(dropdownId, (cur <= 0 ? items.length : cur) - 1);
+      } else {
+        _setActive(dropdownId, cur + 1);
+      }
+    } else if (ev.key === 'Enter') {
+      // Enter selects the highlighted item and closes the list. With no
+      // highlight yet, default to the first item so one Enter still picks.
       if (!items.length) return;
       ev.preventDefault();
       const i = cur >= 0 ? cur : 0;
       window.ndPathSuggestPick(inputEl.id, items[i].getAttribute('data-suggest-value'));
-    } else if (ev.key === 'Enter') {
-      if (cur >= 0 && items[cur]) {
-        ev.preventDefault();
-        window.ndPathSuggestPick(inputEl.id, items[cur].getAttribute('data-suggest-value'));
-      }
     } else if (ev.key === 'Escape') {
       _closeSuggest(dropdownId);
     }
