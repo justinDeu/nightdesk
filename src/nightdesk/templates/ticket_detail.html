@@ -305,8 +305,10 @@
                       class="w-full text-left flex items-center gap-3 border rounded px-3 py-2 text-xs cursor-pointer hover:bg-bg-elev-2 hover:border-accent/40
                              {% if is_selected %}ring-2 ring-accent border-accent{% else %}border-border{% endif %}">
                 <code class="text-fg-muted">{{ r.id[:8] }}</code>
-                <span class="text-fg">{{ r.started_at }}</span>
-                <span class="text-fg-muted">&rarr; {{ r.finished_at or '...' }}</span>
+                <span class="text-fg" data-ts="{{ iso_utc(r.started_at) }}">{{ r.started_at }}</span>
+                <span class="text-fg-muted">&rarr;
+                  {% if r.finished_at %}<span data-ts="{{ iso_utc(r.finished_at) }}">{{ r.finished_at }}</span>{% else %}...{% endif %}
+                </span>
                 <span class="inline-block rounded px-2 py-0.5 {{ outcome_class }}">{{ outcome }}</span>
                 {% if r.started_as_run_now %}
                   <span class="inline-block rounded px-2 py-0.5 bg-warn/20 text-warn">run-now</span>

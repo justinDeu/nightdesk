@@ -18,7 +18,7 @@
     {% endif %}
   </td>
   <td class="px-3 py-2 text-fg-muted font-mono text-xs">
-    {{ row.finished_rel or '-' }}
+    <span{% if row.finished_at %} data-ts-title="{{ iso_utc(row.finished_at) }}"{% endif %}>{{ row.finished_rel or '-' }}</span>
   </td>
   <td class="px-3 py-2 font-mono text-xs">{{ row.priority }}</td>
   <td class="px-3 py-2 text-right">

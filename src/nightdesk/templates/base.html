@@ -17,6 +17,9 @@
        workspace JS. Powers the centered edit/create modal in the sidebar
        AND the edit modal on /tickets/<id>. #}
     <script src="{{ static_v('ticket_form.js') }}" defer></script>
+    {# localize_time.js: render UTC timestamps (data-ts / data-ts-title) in the
+       viewer's locale + timezone, on load and after HTMX swaps. #}
+    <script src="{{ static_v('localize_time.js') }}" defer></script>
   </head>
   <body class="bg-bg text-fg min-h-screen">
     <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">

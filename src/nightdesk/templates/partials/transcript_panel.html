@@ -22,7 +22,7 @@
   <div class="flex items-center gap-2 text-xs mb-2">
     <span class="text-fg-muted">viewing</span>
     <code class="text-fg">{{ selected_run.id[:8] }}</code>
-    <span class="text-fg-muted">{{ selected_run.started_at }}</span>
+    <span class="text-fg-muted" data-ts="{{ iso_utc(selected_run.started_at) }}">{{ selected_run.started_at }}</span>
     {% if live %}
       <span class="inline-block rounded px-2 py-0.5 bg-info/20 text-info">live</span>
     {% endif %}

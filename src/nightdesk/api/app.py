@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -74,6 +75,20 @@ def create_app(
         return f"/static/{path}?v={mtime}"
 
     templates.env.globals["static_v"] = _static_v
+
+    # UTC ISO string for client-side localization (localize_time.js). Run/
+    # ticket datetimes are UTC but come back from SQLite naive; emitting a bare
+    # isoformat() would make the browser parse them as local time. Force a UTC
+    # offset so ``new Date()`` interprets them correctly, then renders in the
+    # viewer's own timezone.
+    def _iso_utc(dt: datetime | None) -> str:
+        if dt is None:
+            return ""
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+
+    templates.env.globals["iso_utc"] = _iso_utc
     app.state.templates = templates
     app.include_router(ui_routes.build_router(get_session, bearer_token, templates,
                                                           transcript_root=transcript_root))

@@ -146,6 +146,18 @@ async def test_unarchive_button_returns_ticket_to_queued(cookie_client, session)
     assert tr.json()["status"] == "queued"
 
 
+async def test_archive_row_emits_utc_timestamp_for_localization(cookie_client, session):
+    """The finished-at cell carries a UTC ISO timestamp (data-ts-title, with a
+    +00:00 offset) so localize_time.js can render it in the viewer's timezone.
+    A bare naive isoformat would be misparsed as local time by the browser."""
+    p = _mk_profile(session)
+    _archive_ticket(session, profile_id=p.id, title="ts-row")
+    r = await cookie_client.get("/archive/rows")
+    assert r.status_code == 200
+    assert "data-ts-title=" in r.text
+    assert "+00:00" in r.text
+
+
 async def test_unarchive_nonexistent_404(cookie_client):
     r = await cookie_client.post("/archive/tickets/no-such-id/unarchive")
     assert r.status_code == 404
