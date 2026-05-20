@@ -33,7 +33,7 @@ bind_host = "127.0.0.1"
 bind_port = 8765
 # db_path = "~/.local/share/nightdesk/nightdesk.db"
 # transcript_root = "~/.local/share/nightdesk/transcripts"
-# worktree_root = "~/.local/share/nightdesk/work"
+# worktree_root = "~/.local/share/nightdesk-worktrees"
 """
 
 # Minimum claude CLI version supported.
@@ -324,11 +324,16 @@ def _write_config(token: str, force: bool) -> Path:
     return config_path
 
 
-def _create_data_dirs() -> Path:
-    """Create the standard data directories. Returns the data root."""
+def _create_data_dirs(worktree_root: Path) -> Path:
+    """Create the standard data directories. Returns the data root.
+
+    ``worktree_root`` is created separately because it lives outside the data
+    dir (the sandbox cannot bind-mount paths under the data dir).
+    """
     data_root = Path(os.path.expanduser("~/.local/share/nightdesk"))
-    for sub in ("transcripts", "work", "logs", "logs/runs"):
+    for sub in ("transcripts", "logs", "logs/runs"):
         (data_root / sub).mkdir(parents=True, exist_ok=True)
+    worktree_root.mkdir(parents=True, exist_ok=True)
     return data_root
 
 
@@ -520,9 +525,9 @@ def setup() -> None:
     # -- Data directories --------------------------------------------------
     if dry_run:
         data_root = Path(os.path.expanduser("~/.local/share/nightdesk"))
-        print(f"[dry-run] would create: {data_root}/{{transcripts,work,logs,logs/runs}}")
+        print(f"[dry-run] would create: {data_root}/{{transcripts,logs,logs/runs}} and {cfg.worktree_root}")
     else:
-        data_root = _create_data_dirs()
+        data_root = _create_data_dirs(cfg.worktree_root)
 
     # -- Migrations --------------------------------------------------------
     if dry_run:

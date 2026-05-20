@@ -16,7 +16,12 @@ class NightdeskConfig:
     bearer_token: str = ""
     db_path: Path = field(default_factory=lambda: DEFAULT_DATA_DIR / "nightdesk.db")
     transcript_root: Path = field(default_factory=lambda: DEFAULT_DATA_DIR / "transcripts")
-    worktree_root: Path = field(default_factory=lambda: DEFAULT_DATA_DIR / "work")
+    # Worktrees live OUTSIDE the data dir on purpose: the sandbox refuses to
+    # bind-mount anything under ~/.local/share/nightdesk (db, creds, transcripts),
+    # so git_worktree-mode tickets must resolve to a sibling the sandbox can mount.
+    worktree_root: Path = field(
+        default_factory=lambda: Path(os.path.expanduser("~/.local/share/nightdesk-worktrees"))
+    )
     bind_host: str = "127.0.0.1"
     bind_port: int = 8765
     secrets: dict[str, str] = field(default_factory=dict)
