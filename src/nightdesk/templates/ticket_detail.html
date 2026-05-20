@@ -304,10 +304,9 @@
                   </span>
                 {% endif %}
                 <a href="/api/v1/runs/{{ r.id }}/log"
-                   class="text-fg-muted hover:text-fg ml-1 underline decoration-dotted"
+                   class="text-fg-muted hover:text-fg ml-auto underline decoration-dotted"
                    title="Download worker log for this run"
                    onclick="event.stopPropagation();">log</a>
-                <span class="text-fg-muted ml-auto">{{ r.host }}</span>
               </button>
             </li>
           {% endfor %}
