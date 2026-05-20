@@ -41,7 +41,7 @@
          tailing). #}
       <button type="button"
               class="rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev"
-              onclick="(function(){var s=document.getElementById('transcript-scroll');if(s)s.scrollTop=s.scrollHeight;})()">
+              onclick="(function(){var s=document.getElementById('transcript-scroll');if(!s)return;s.scrollTop=s.scrollHeight;var t=document.getElementById('transcript');var last=t&&t.lastElementChild;if(last&&last.scrollIntoView)last.scrollIntoView({block:'end'});})()">
         jump to end
       </button>
     {% endif %}
