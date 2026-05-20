@@ -396,6 +396,33 @@ def test_event_to_dict_translates_rate_limit_event():
     assert translate(d) == [d]
 
 
+def test_event_to_dict_unknown_message_is_worker_error_not_agent():
+    """An unrecognized SDK message must surface as a worker_error (system
+    styling), not as an assistant_text agent message.
+
+    Regression (BUG 21): the unknown-message fallback returned
+    {"type": "assistant_text", text: str(evt)}, so a runner-level surprise
+    (an SDK error object, an unexpected message class) was misattributed to
+    the model and rendered in the agent's prose block. Runner/worker errors
+    must render via the worker_error card instead.
+    """
+    from nightdesk.worker._sdk_runner import _event_to_dict
+    from nightdesk.worker.claude_translator import translate
+
+    class RunnerBoom:
+        def __str__(self):
+            return "runner exploded: connection reset"
+
+    d = _event_to_dict(RunnerBoom())
+    assert d["type"] == "worker_error"
+    assert d["type"] != "assistant_text"
+    assert d["kind"] == "runner_unknown_message"
+    assert "runner exploded" in d["summary"]
+    # The translator carries the worker_error straight through so the
+    # renderer shows the worker-error card, not the assistant block.
+    assert translate(d) == [d]
+
+
 @pytest.mark.anyio
 async def test_sdk_runner_typed_objects_translate_end_to_end(tmp_path):
     """Subprocess run with a typed-object SDK stub yields canonical events.

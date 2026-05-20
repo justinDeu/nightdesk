@@ -180,8 +180,13 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
                 out_rl["utilization"] = utilization
         out_rl["raw"] = _raw_payload(info if info is not None else evt)
         return out_rl
-    # Unknown message: best-effort fallback so the renderer shows something.
-    return {"type": "assistant_text", "text": str(evt)}
+    # Unknown message: surface as a worker_error (system styling) rather than
+    # an assistant_text. An unrecognized SDK message at this layer is a
+    # runner-level surprise, not agent prose — rendering it as an agent reply
+    # misattributes it to the model. Classify it as a system/worker error so
+    # the transcript shows it in the red worker-error card.
+    return {"type": "worker_error", "kind": "runner_unknown_message",
+            "summary": str(evt)}
 
 
 # Tools that only make sense with a human in the loop. The worker is headless,
