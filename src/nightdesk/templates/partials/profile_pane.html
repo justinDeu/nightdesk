@@ -91,7 +91,7 @@
         {{ _kv('Default model', profile.default_model or '—') }}
         {{ _kv('Permission mode', profile.permission_mode or 'default') }}
         {{ _kv('Network', profile.network_mode) }}
-        {{ _kv('Binary path', profile.claude_binary_path or 'daemon default') }}
+        {{ _kv('Binary path', profile.claude_binary_path or (daemon_claude_binary ~ ' (daemon default)')) }}
       </dl>
       <dl>
         {{ _kv('Credentials',
@@ -309,16 +309,26 @@
                title="Leave blank for direct Anthropic. Examples: https://api.z.ai/api/anthropic, http://localhost:4000"
                class="bg-bg border border-border rounded px-2 py-1.5 text-fg font-mono text-xs" />
       </label>
+    </fieldset>
+
+    {# Claude Code binary — runtime/execution setting, NOT authentication. Kept
+       in its own fieldset so it reads as "which binary the worker runs" rather
+       than being mistaken for a credential. #}
+    <fieldset class="px-4 pt-5 pb-4 space-y-3 border-t border-border">
+      <legend class="text-fg-muted text-xs uppercase tracking-wide mb-2">
+        Claude Code binary
+      </legend>
       <label class="flex flex-col gap-1">
         <span class="text-fg-muted text-[10px] uppercase tracking-wide"
-              title="Override the path to the `claude` binary the worker invokes. Defaults to whatever the daemon resolved at startup.">
-          Claude binary <span class="text-fg-muted normal-case">(optional)</span>
+              title="Override the path to the `claude` binary the worker invokes. Leave blank to use the daemon default shown as the placeholder.">
+          Binary path <span class="text-fg-muted normal-case">(optional)</span>
         </span>
         <input name="claude_binary_path"
                value="{{ profile.claude_binary_path if profile and profile.claude_binary_path else '' }}"
-               placeholder="(daemon default)"
-               title="Absolute path to the claude binary. Most users leave this blank."
+               placeholder="{{ daemon_claude_binary }}"
+               title="Absolute path to the claude binary. Leave blank to use the daemon default ({{ daemon_claude_binary }})."
                class="bg-bg border border-border rounded px-2 py-1.5 text-fg font-mono text-xs" />
+        <span class="text-fg-muted text-[10px]">Blank uses the daemon default: <code class="text-fg">{{ daemon_claude_binary }}</code></span>
       </label>
     </fieldset>
 

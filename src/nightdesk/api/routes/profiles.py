@@ -15,6 +15,7 @@ rotation affordance without leaking the secret back across the wire.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Optional
 
@@ -501,6 +502,21 @@ def _promoted_sections_context(env_blob: dict[str, str]) -> dict:
     }
 
 
+def _daemon_claude_binary(session: Session) -> str:
+    """The claude binary the worker would use when a profile leaves it blank.
+
+    Mirrors worker.run_one._resolve_default_claude_binary: the config row's
+    override if set, else whatever `claude` resolves to on PATH. Drives the
+    profile editor's placeholder so the ghost text shows the *actual* default
+    rather than a generic hint.
+    """
+    from nightdesk.db.models import ConfigRow
+
+    cfg_row = session.get(ConfigRow, 1)
+    configured = getattr(cfg_row, "claude_binary_path", None)
+    return configured or shutil.which("claude") or "claude"
+
+
 def _shared_form_context() -> dict:
     """Constants every editor context needs: backends, env catalog, modes."""
     return {
@@ -833,6 +849,7 @@ def _build_html_router(
             "selected_id": selected.id if selected is not None and hasattr(selected, "id") else None,
             "pane_mode": pane_mode,
             "flash": flash,
+            "daemon_claude_binary": _daemon_claude_binary(session),
         }
         if pane_mode == "view" and selected is not None:
             ctx.update(_view_context(selected, box))

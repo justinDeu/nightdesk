@@ -220,6 +220,26 @@ async def test_html_new_form_renders_credential_radios(cookie_client):
         assert f'value="{src}"' in body
 
 
+async def test_binary_field_separated_from_auth_with_resolved_placeholder(cookie_client):
+    """The Claude Code binary field lives in its own fieldset (not Authentication)
+    and its placeholder shows the resolved daemon-default binary, not a generic
+    hint."""
+    r = await cookie_client.get("/profiles/new")
+    assert r.status_code == 200
+    body = r.text
+    # Its own section heading, separate from auth.
+    assert "Claude Code binary" in body
+    # The input carries a concrete resolved placeholder (config override, else
+    # PATH `claude`, else the literal "claude") — never the old generic hint.
+    assert 'name="claude_binary_path"' in body
+    assert "(daemon default)" not in body  # old placeholder text is gone
+    # The binary input must NOT sit inside the Authentication fieldset: the
+    # Authentication legend appears before "Claude Code binary", and the input
+    # appears after the binary legend.
+    assert body.index("Authentication") < body.index("Claude Code binary")
+    assert body.index("Claude Code binary") < body.index('name="claude_binary_path"')
+
+
 async def test_html_view_shows_profile_name_and_edit_link(cookie_client, fresh_engine):
     """The /profiles/{id} page renders the profile in view mode by default.
     The right pane carries an explicit Edit link to /profiles/{id}/edit so
