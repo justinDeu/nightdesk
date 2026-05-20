@@ -296,13 +296,29 @@ def test_rate_limit_event_renders_card_with_countdown():
     html = _render_event({
         "type": "rate_limit", "status": "rejected",
         "rate_limit_type": "five_hour", "resets_at": 1_900_000_000,
-        "utilization": 1.0,
+        "utilization": 1.0, "raw": "status: rejected\nresets_at: 1900000000",
     })
     assert "rate limited" in html.lower()
     assert "rejected" in html
     assert "five_hour" in html
     assert 'data-resets-at="1900000000"' in html
     assert "rate-limit-countdown" in html
+    # The full payload is available under a raw-response dropdown.
+    assert "raw response" in html
+    assert "<details" in html
+
+
+def test_rate_limit_event_renders_raw_only_when_fields_missing():
+    # Generic case: an SDK that doesn't expose the known fields still shows the
+    # RATE LIMITED badge and the raw payload dropdown (no countdown, no status).
+    html = _render_event({
+        "type": "rate_limit",
+        "raw": "some_field: some_value\nother: 123",
+    })
+    assert "rate limited" in html.lower()
+    assert "raw response" in html
+    assert "some_field: some_value" in html
+    assert "rate-limit-countdown" not in html
 
 
 def test_cancelled_event_renders_marker_card():

@@ -85,6 +85,29 @@ def _usage_to_dict(usage: Any) -> dict[str, Any] | None:
     return cleaned or None
 
 
+def _raw_payload(obj: Any) -> str:
+    """Best-effort, JSON-safe text dump of an SDK payload for the raw dropdown.
+
+    Stays version-agnostic: list the object's public, non-callable attributes
+    as ``key: value`` lines so the renderer can show whatever fields this SDK
+    actually carries. Falls back to ``str()`` when introspection finds nothing.
+    """
+    try:
+        attrs = {}
+        for k in dir(obj):
+            if k.startswith("_"):
+                continue
+            v = getattr(obj, k, None)
+            if callable(v):
+                continue
+            attrs[k] = v
+        if attrs:
+            return "\n".join(f"{k}: {v}" for k, v in sorted(attrs.items()))
+    except Exception:
+        pass
+    return str(obj)
+
+
 def _event_to_dict(evt: Any) -> dict[str, Any] | None:
     """Convert one SDK message object to a translator-compatible dict.
 
@@ -134,10 +157,12 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
             out["model"] = model
         return out
     if name == "RateLimitEvent":
-        # Surface rate limits as first-class transcript events. The SDK carries
-        # the detail on a nested RateLimitInfo dataclass (see claude_agent_sdk
-        # types.py): status, resets_at (unix seconds), rate_limit_type,
-        # utilization. Flatten the fields the renderer needs into a plain dict.
+        # Surface rate limits as first-class transcript events. SDK versions
+        # differ on the exact shape, so stay generic: opportunistically pull the
+        # well-known fields (status, resets_at, rate_limit_type, utilization)
+        # when present for the badge + countdown, but ALWAYS attach a ``raw``
+        # dump of the whole payload so the renderer can show the latest raw
+        # response in a dropdown regardless of which fields this SDK provides.
         info = getattr(evt, "rate_limit_info", None)
         out_rl: dict[str, Any] = {"type": "rate_limit"}
         if info is not None:
@@ -153,6 +178,7 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
             utilization = getattr(info, "utilization", None)
             if utilization is not None:
                 out_rl["utilization"] = utilization
+        out_rl["raw"] = _raw_payload(info if info is not None else evt)
         return out_rl
     # Unknown message: best-effort fallback so the renderer shows something.
     return {"type": "assistant_text", "text": str(evt)}

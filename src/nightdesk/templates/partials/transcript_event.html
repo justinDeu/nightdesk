@@ -120,25 +120,33 @@
 {% endmacro %}
 
 {# rate_limit: the agent SDK reported a rate-limit status change. Render an
-   amber card with a "RATE LIMITED" badge, the limit type / status message,
-   and — when the SDK gave a reset timestamp — a live countdown to the next
-   allowed request. ``resets_at`` is Unix seconds; the inline script ticks the
-   countdown client-side. The JS live-tail in transcript_panel.html mirrors
-   this shape. #}
+   amber card with a "RATE LIMITED" badge and, when the SDK gave the fields, a
+   short summary + a live countdown to the next allowed request. ``resets_at``
+   is Unix seconds; the inline script ticks the countdown client-side. The full
+   payload is always available under a "raw response" dropdown so nothing is
+   lost when an SDK version names its fields differently. The JS live-tail in
+   transcript_panel.html mirrors this shape. #}
 {% macro evt_rate_limit(evt) %}
-  {% set status = evt.get('status') or 'rejected' %}
+  {% set status = evt.get('status') %}
   {% set limit_type = evt.get('rate_limit_type') or '' %}
   {% set resets_at = evt.get('resets_at') %}
   {% set util = evt.get('utilization') %}
+  {% set raw = evt.get('raw') %}
   <div class="rate-limit rounded p-3 border-2 border-warn bg-warn/10">
     <div class="flex items-center gap-2">
       <span class="font-bold text-warn uppercase tracking-wide text-xs">rate limited</span>
-      <code class="text-xs text-warn">{{ status }}</code>
+      {% if status %}<code class="text-xs text-warn">{{ status }}</code>{% endif %}
       {% if limit_type %}<code class="text-xs text-fg-muted">{{ limit_type }}</code>{% endif %}
     </div>
     <div class="whitespace-pre-wrap text-sm mt-2 text-fg">
-      Agent hit a rate limit ({{ status }}{% if util is not none %}, {{ (util * 100) | round(1) }}% used{% endif %}).
+      Agent hit a rate limit{% if status %} ({{ status }}{% if util is not none %}, {{ (util * 100) | round(1) }}% used{% endif %}){% endif %}.
     </div>
+    {% if raw %}
+      <details class="mt-2 text-xs">
+        <summary class="cursor-pointer text-fg-muted hover:text-fg">raw response</summary>
+        <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-fg-muted bg-bg-elev-2 border border-border rounded p-2">{{ raw }}</pre>
+      </details>
+    {% endif %}
     {% if resets_at %}
       <div class="text-xs text-fg-muted mt-1">
         next request in

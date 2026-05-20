@@ -349,8 +349,11 @@ def test_event_to_dict_converts_typed_sdk_objects():
     assert d["result"] == "all good"
 
     # Rate-limit notifications are surfaced as a canonical rate_limit event,
-    # not dropped. With no rate_limit_info the bare type still comes through.
-    assert _event_to_dict(RateLimitEvent()) == {"type": "rate_limit"}
+    # not dropped. With no rate_limit_info the type still comes through plus a
+    # best-effort raw payload dump for the dropdown.
+    rl = _event_to_dict(RateLimitEvent())
+    assert rl["type"] == "rate_limit"
+    assert "raw" in rl
 
     # Plain dicts (e.g. from test stubs) pass through unchanged.
     raw = {"type": "assistant", "content": "passthrough"}
@@ -382,11 +385,13 @@ def test_event_to_dict_translates_rate_limit_event():
         rate_limit_info: object = field(default_factory=RateLimitInfo)
 
     d = _event_to_dict(RateLimitEvent())
-    assert d == {
-        "type": "rate_limit", "status": "rejected",
-        "resets_at": 1_900_000_000, "rate_limit_type": "five_hour",
-        "utilization": 0.95,
-    }
+    assert d["type"] == "rate_limit"
+    assert d["status"] == "rejected"
+    assert d["resets_at"] == 1_900_000_000
+    assert d["rate_limit_type"] == "five_hour"
+    assert d["utilization"] == 0.95
+    # The full payload is always attached for the raw-response dropdown.
+    assert "status: rejected" in d["raw"]
     # The translator passes the canonical event straight through.
     assert translate(d) == [d]
 

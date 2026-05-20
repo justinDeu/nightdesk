@@ -110,6 +110,7 @@ class RateLimitEvent(_BaseEvent, total=False):
     resets_at: int
     rate_limit_type: str
     utilization: float
+    raw: str
 
 
 class CancelledEvent(_BaseEvent, total=False):

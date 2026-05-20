@@ -427,17 +427,29 @@
             return el(`<div class="rounded p-3 border-2 ${cls}"><div class="font-bold ${titleCls}">${titleLabel}</div><div class="whitespace-pre-wrap text-sm mt-1">${escapeHtml(evt.summary || '')}</div></div>`);
           }
           if (t === 'rate_limit') {
-            // Mirror evt_rate_limit in transcript_event.html: amber card with
-            // a RATE LIMITED badge and a live countdown to resets_at (Unix
-            // seconds). The countdown ticker is wired up after the node is
-            // appended (see append()).
-            const status = evt.status || 'rejected';
+            // Mirror evt_rate_limit in transcript_event.html: amber card with a
+            // RATE LIMITED badge, an optional summary + live countdown when the
+            // SDK gave those fields, and a "raw response" dropdown that always
+            // carries the full payload. The countdown ticker is wired up after
+            // the node is appended (see append()).
+            const status = evt.status || '';
             const limitType = evt.rate_limit_type || '';
             const resetsAt = evt.resets_at;
+            const raw = evt.raw || '';
             const util = (typeof evt.utilization === 'number')
               ? `, ${(evt.utilization * 100).toFixed(1)}% used` : '';
+            const statusChip = status
+              ? `<code class="text-xs text-warn">${escapeHtml(status)}</code>` : '';
             const typeChip = limitType
               ? `<code class="text-xs text-fg-muted">${escapeHtml(limitType)}</code>` : '';
+            const summary = status
+              ? ` (${escapeHtml(status)}${escapeHtml(util)})` : '';
+            let rawBlock = '';
+            if (raw) {
+              rawBlock =
+                `<details class="mt-2 text-xs"><summary class="cursor-pointer text-fg-muted hover:text-fg">raw response</summary>` +
+                `<pre class="mt-1 whitespace-pre-wrap break-all font-mono text-fg-muted bg-bg-elev-2 border border-border rounded p-2">${escapeHtml(raw)}</pre></details>`;
+            }
             let countdown = '';
             if (resetsAt) {
               countdown =
@@ -448,10 +460,11 @@
               `<div class="rate-limit rounded p-3 border-2 border-warn bg-warn/10">` +
                 `<div class="flex items-center gap-2">` +
                   `<span class="font-bold text-warn uppercase tracking-wide text-xs">rate limited</span>` +
-                  `<code class="text-xs text-warn">${escapeHtml(status)}</code>` +
+                  statusChip +
                   typeChip +
                 `</div>` +
-                `<div class="whitespace-pre-wrap text-sm mt-2 text-fg">Agent hit a rate limit (${escapeHtml(status)}${escapeHtml(util)}).</div>` +
+                `<div class="whitespace-pre-wrap text-sm mt-2 text-fg">Agent hit a rate limit${summary}.</div>` +
+                rawBlock +
                 countdown +
               `</div>`
             );
