@@ -21,6 +21,11 @@
   // Per-host-id counters so two forms on the same page (modal + sidebar)
   // don't collide on generated row ids.
   const linkedSeqByHost = new Map();
+  // dropdownIds whose very next ndPathSuggest call must be suppressed. After
+  // picking a value we fire an `input` event so the worktree preview refreshes,
+  // but that same event would otherwise reopen the suggestion list. We consume
+  // one suppression so the list stays closed after a pick.
+  const suppressOpen = new Set();
 
   // Place a fixed-position dropdown host directly under its input. Width
   // matches the input; coordinates are viewport-relative (position: fixed).
@@ -183,6 +188,12 @@
   window.ndPathSuggest = async function (inputEl, dropdownId) {
     const dd = document.getElementById(dropdownId);
     if (!dd) return;
+    // A pick just fired our synthetic input event; don't reopen the list.
+    if (suppressOpen.has(dropdownId)) {
+      suppressOpen.delete(dropdownId);
+      _closeSuggest(dropdownId);
+      return;
+    }
     if (inputEl && inputEl.readOnly) { _closeSuggest(dropdownId); return; }
     const q = inputEl.value || '';
     if (q.length < 1) { _closeSuggest(dropdownId); return; }
@@ -213,9 +224,11 @@
     el.focus();
     try { el.setSelectionRange(value.length, value.length); } catch (e) {}
     const dropdownId = targetId + '-suggest';
-    _closeSuggest(dropdownId);
+    // Refresh dependent UI (worktree preview) via an input event, but suppress
+    // the suggestion reopen that event would trigger, then close the list.
+    suppressOpen.add(dropdownId);
     el.dispatchEvent(new Event('input', { bubbles: true }));
-    window.ndPathSuggest(el, dropdownId);
+    _closeSuggest(dropdownId);
   };
 
   window.ndPathSuggestKey = function (ev, inputEl, dropdownId) {
