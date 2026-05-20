@@ -218,9 +218,15 @@ def translate_cc_settings(settings: dict, *, name: str | None = None) -> dict:
 
     # Anything not consumed above is parked in cc_settings_passthrough so the
     # import is lossless for keys Nightdesk doesn't (yet) promote (apiKeyHelper,
-    # companyAnnouncements, statusLine, etc.).
+    # companyAnnouncements, statusLine, etc.). Auth-owned keys are never parked
+    # here: cc_settings_passthrough is stored UNENCRYPTED, so a top-level
+    # ANTHROPIC_API_KEY/AUTH_TOKEN/BASE_URL (outside the nested env block, e.g.
+    # in a malformed file) must be dropped, not leaked into a plaintext column
+    # readable via profile export.
     passthrough: dict = {
-        k: v for k, v in cleaned.items() if k not in _CC_CONSUMED_TOP_LEVEL_KEYS
+        k: v for k, v in cleaned.items()
+        if k not in _CC_CONSUMED_TOP_LEVEL_KEYS
+        and k not in _CC_AUTH_OWNED_ENV_KEYS
     }
     if passthrough_perms:
         passthrough["permissions"] = passthrough_perms

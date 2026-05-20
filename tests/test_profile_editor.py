@@ -841,6 +841,29 @@ def test_translate_cc_settings_passthrough_and_strip():
     assert "$schema" in pt  # benign, preserved
 
 
+def test_translate_cc_settings_never_persists_auth_keys_anywhere():
+    """Auth secrets must never land in a profile field — not in env, and not in
+    the UNENCRYPTED cc_settings_passthrough column. Covers both the nested-env
+    path and a top-level placement (e.g. a malformed file)."""
+    from nightdesk.domain.profiles import translate_cc_settings
+
+    fields = translate_cc_settings({
+        "model": "claude-opus-4-7",
+        # Top-level auth keys (not under env) — must be dropped, not parked.
+        "ANTHROPIC_API_KEY": "sk-leak-top",
+        "ANTHROPIC_BASE_URL": "https://evil.example",
+        "env": {"ANTHROPIC_AUTH_TOKEN": "tok-leak-env", "FOO": "bar"},
+    })
+    pt = fields.get("cc_settings_passthrough", {})
+    env = fields.get("env", {})
+    for secret_key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
+        assert secret_key not in pt
+        assert secret_key not in env
+    # Non-secret env still imported.
+    assert env.get("FOO") == "bar"
+    assert fields["default_model"] == "claude-opus-4-7"
+
+
 def test_translate_cc_settings_drops_unsupported_permission_mode():
     from nightdesk.domain.profiles import translate_cc_settings
 
