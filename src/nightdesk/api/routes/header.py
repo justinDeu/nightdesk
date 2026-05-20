@@ -13,8 +13,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow, Run, Ticket, WorkerHeartbeat
@@ -51,15 +51,34 @@ def _collect_worker_status(session: Session, *, worktree_root: str,
 
     # See nightdesk.api.routes.config.worker_status for the rationale: count
     # actual worker activity from unfinished Run rows so wedged tickets don't
-    # inflate the pill.
-    total_running = session.scalar(
-        select(func.count()).select_from(Run).where(Run.finished_at.is_(None))
-    ) or 0
-    run_now_running = session.scalar(
-        select(func.count())
-        .select_from(Run)
-        .where(Run.finished_at.is_(None), Run.started_as_run_now.is_(True))
-    ) or 0
+    # inflate the pill. Fetch the running runs once and derive the counts from
+    # that same list so the pill total can never disagree with the hover panel.
+    running_runs = [
+        {
+            "id": r.id,
+            "ticket_id": r.ticket_id,
+            "ticket_title": r.ticket.title if r.ticket else "(unknown)",
+            "profile_name": (r.ticket.profile.name
+                             if r.ticket and r.ticket.profile
+                             else "(unknown)"),
+            "pid": r.pid,
+            "started_at": r.started_at,
+            "started_as_run_now": r.started_as_run_now,
+        }
+        for r in (
+            session.execute(
+                select(Run)
+                .where(Run.finished_at.is_(None))
+                .options(joinedload(Run.ticket).joinedload(Ticket.profile))
+                .order_by(Run.started_at)
+            )
+            .scalars()
+            .unique()
+            .all()
+        )
+    ]
+    total_running = len(running_runs)
+    run_now_running = sum(1 for r in running_runs if r["started_as_run_now"])
     normal_running = max(0, total_running - run_now_running)
 
     try:
@@ -94,6 +113,7 @@ def _collect_worker_status(session: Session, *, worktree_root: str,
         "normal_running": normal_running,
         "run_now_running": run_now_running,
         "total_running": total_running,
+        "running_runs": running_runs,
     }
 
 

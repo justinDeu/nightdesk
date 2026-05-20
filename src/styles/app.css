@@ -619,3 +619,11 @@ li[data-ticket-id][data-selected] {
 [data-tooltip]:focus-visible::before {
   opacity: 1;
 }
+
+/* Worker-status pill: keep the hover panel open when pinned via click.
+   `data-pinned` lives on the persistent #worker-pill element, so this rule
+   survives the 3s HTMX swaps with no JS re-apply (and thus no flicker). The
+   id+attribute selector outranks Tailwind's `.hidden` utility on the panel. */
+#worker-pill[data-pinned] [data-worker-panel] {
+  display: block;
+}
