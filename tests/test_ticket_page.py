@@ -389,3 +389,55 @@ async def test_resume_route_queues_ticket_and_stores_context(cookie_client, sess
     assert refreshed.status == "queued"
     assert refreshed.run_now is True
     assert refreshed.next_run_context == "Use polling"
+
+
+async def test_project_settings_warning_renders_inside_header_card(
+    tmp_path, session, engine,
+):
+    """When project Claude Code settings exist the warning renders inside
+    the header card (sidebar area), not as a top-level banner above the
+    two-column layout.
+
+    Placement contract:
+    - The marker attribute ``data-project-settings-warning`` is present.
+    - The key descriptive text is present (file count + explanatory note).
+    - The warning does NOT appear before the two-column flex container in
+      the rendered HTML (i.e. it is not a top-level banner).
+    """
+    # Create a .claude/settings.json in a tmp cwd so the route detects it.
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    settings_dir = cwd / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.json").write_text('{"permissions": {}}')
+
+    app = create_app(
+        engine=engine, bearer_token="t",
+        static_root=tmp_path / "static",
+        transcript_root=tmp_path / "transcripts",
+        worktree_root=tmp_path / "work",
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test",
+                           cookies={"nightdesk_token": "t"}) as ac:
+        p = _make_profile(session)
+        t = create_ticket(session, title="proj-settings-test", prompt="do it",
+                           priority=0, profile_id=p.id, run_now=False,
+                           cwd=str(cwd))
+        r = await ac.get(f"/tickets/{t.id}")
+
+    assert r.status_code == 200
+    body = r.text
+
+    # Warning content is present.
+    assert "data-project-settings-warning" in body
+    assert "Project Claude Code settings detected" in body
+    assert "merge these with the profile" in body
+    assert "settings.json" in body
+
+    # Warning must NOT appear before the two-column flex container — it
+    # should live inside the header card, not as a top-of-page banner.
+    two_col_marker = 'class="flex flex-col lg:flex-row gap-4 items-start"'
+    warning_marker = "data-project-settings-warning"
+    assert two_col_marker in body
+    assert body.index(two_col_marker) < body.index(warning_marker)

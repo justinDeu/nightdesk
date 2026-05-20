@@ -10,24 +10,6 @@
   'archived': 'bg-bg-elev-2 text-fg-muted border-border',
 }[ticket.status] | default('bg-bg-elev-2 text-fg-muted border-border') %}
 
-{% if project_settings_paths %}
-{# Project settings detection — collapsed to a one-line banner so it
-   doesn't eat vertical space on every page load. Click to expand for the
-   path list + explanation. #}
-<details class="mb-3 rounded border border-warn/40 bg-warn/10 text-xs">
-  <summary class="cursor-pointer px-2 py-1 text-warn select-none">
-    <span class="font-medium">Project Claude Code settings detected</span>
-    <span class="text-fg-muted">({{ project_settings_paths|length }} file{{ '' if project_settings_paths|length == 1 else 's' }})</span>
-  </summary>
-  <div class="px-2 pb-2 text-fg-muted space-y-1">
-    {% for p in project_settings_paths %}
-      <div><code class="px-1 py-0.5 bg-bg-elev-2 rounded">{{ p }}</code></div>
-    {% endfor %}
-    <p>Claude Code will merge these with the profile's settings at runtime — may override allowed/disallowed tools or model. Inspect the file if behavior is unexpected.</p>
-  </div>
-</details>
-{% endif %}
-
 <div class="flex flex-col lg:flex-row gap-4 items-start">
 
   {# ===================================================================== #
@@ -132,6 +114,24 @@
                   class="border border-danger text-danger px-3 py-1 rounded text-sm ml-auto">Delete</button>
         {% endif %}
       </div>
+
+      {% if project_settings_paths %}
+      {# Project settings note — compact chip inside the header card so it
+         doesn't dominate the page. Click to expand for the path list and
+         an explanation of how CC merges these at runtime. #}
+      <details class="rounded border border-warn/40 bg-warn/10 text-xs" data-project-settings-warning>
+        <summary class="cursor-pointer px-2 py-1 text-warn select-none">
+          <span class="font-medium">Project Claude Code settings detected</span>
+          <span class="text-fg-muted">({{ project_settings_paths|length }} file{{ '' if project_settings_paths|length == 1 else 's' }})</span>
+        </summary>
+        <div class="px-2 pb-2 text-fg-muted space-y-1">
+          {% for p in project_settings_paths %}
+            <div><code class="px-1 py-0.5 bg-bg-elev-2 rounded">{{ p }}</code></div>
+          {% endfor %}
+          <p>Claude Code will merge these with the profile's settings at runtime — may override allowed/disallowed tools or model. Inspect the file if behavior is unexpected.</p>
+        </div>
+      </details>
+      {% endif %}
     </header>
 
     {# --- Prompt ---------------------------------------------------------- #
