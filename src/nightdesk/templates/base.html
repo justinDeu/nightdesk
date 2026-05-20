@@ -20,7 +20,23 @@
   </head>
   <body class="bg-bg text-fg min-h-screen">
     <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">
-      <a href="/" class="font-bold text-accent">nightdesk</a>
+      <a href="/" class="font-bold text-accent shrink-0">nightdesk</a>
+      <div id="header-search" class="relative w-64 shrink-0">
+        <input type="text"
+               name="q"
+               placeholder="Search tickets..."
+               autocomplete="off"
+               hx-get="/header/search"
+               hx-trigger="keyup changed delay:200ms, focus"
+               hx-target="#search-results"
+               hx-include="this"
+               hx-swap="innerHTML"
+               onfocus="document.getElementById('search-results').classList.remove('hidden')"
+               onblur="setTimeout(() => document.getElementById('search-results').classList.add('hidden'), 150)"
+               class="w-full px-2 py-1 text-sm bg-bg-elev-2 border border-border rounded text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent" />
+        <div id="search-results"
+             class="absolute mt-1 w-72 bg-bg-elev border border-border rounded shadow z-50 hidden"></div>
+      </div>
       <nav class="flex items-center gap-1 text-sm">
         {% set nav_items = [
           ('board', '/', 'Board'),
@@ -48,24 +64,8 @@
         {% endif %}
       </nav>
       <div class="flex-1"></div>
-      <div id="header-search" class="relative w-64">
-        <input type="text"
-               name="q"
-               placeholder="Search tickets..."
-               autocomplete="off"
-               hx-get="/header/search"
-               hx-trigger="keyup changed delay:200ms, focus"
-               hx-target="#search-results"
-               hx-include="this"
-               hx-swap="innerHTML"
-               onfocus="document.getElementById('search-results').classList.remove('hidden')"
-               onblur="setTimeout(() => document.getElementById('search-results').classList.add('hidden'), 150)"
-               class="w-full px-2 py-1 text-sm bg-bg-elev-2 border border-border rounded text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent" />
-        <div id="search-results"
-             class="absolute mt-1 w-72 bg-bg-elev border border-border rounded shadow z-50 hidden"></div>
-      </div>
       <div id="worker-pill"
-           class="ml-2 text-sm text-fg-muted font-mono"
+           class="text-sm text-fg-muted font-mono"
            hx-get="/header/worker-pill"
            hx-trigger="load, every 3s"
            hx-swap="innerHTML">·</div>

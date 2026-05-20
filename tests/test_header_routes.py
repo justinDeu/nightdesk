@@ -197,3 +197,18 @@ async def test_base_template_includes_worker_pill_polling(cookie_client):
     assert r.status_code == 200
     assert 'id="worker-pill"' in r.text
     assert 'hx-get="/header/worker-pill"' in r.text
+
+
+async def test_search_box_precedes_nav_in_header_markup(cookie_client):
+    """Regression guard: #header-search must appear to the LEFT of the <nav>
+    links in the rendered HTML. If the order is ever swapped back the search
+    box will drift to the right side of the bar and this test will catch it."""
+    r = await cookie_client.get("/profiles")
+    assert r.status_code == 200
+    body = r.text
+    search_pos = body.index('id="header-search"')
+    nav_pos = body.index("<nav ")
+    assert search_pos < nav_pos, (
+        "#header-search must appear before <nav> in the header markup "
+        f"(search at {search_pos}, nav at {nav_pos})"
+    )
