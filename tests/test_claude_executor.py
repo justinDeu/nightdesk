@@ -198,6 +198,30 @@ async def test_claude_executor_cancelled_when_event_fires(tmp_path):
     assert res.exit_status == "cancelled"
     assert fake.terminated_called
 
+    # The cancel path must leave a terminal marker in the transcript so the
+    # user sees *why* the stream stopped, not just an abrupt end. Exactly one
+    # canonical cancelled event with a seq and a human message.
+    lines = [
+        json.loads(ln)
+        for ln in transcript.read_text().splitlines() if ln.strip()
+    ]
+    cancelled = [e for e in lines if e.get("type") == "cancelled"]
+    assert len(cancelled) == 1
+    evt = cancelled[0]
+    assert evt["message"] == "Run cancelled by user."
+    assert isinstance(evt.get("seq"), int)
+    assert evt.get("ts")
+
+
+def test_translator_passes_cancelled_event_through():
+    """The canonical cancelled event passes straight through the translator,
+    mirroring rate_limit and the other already-canonical types."""
+    from nightdesk.worker.claude_translator import translate
+
+    evt = {"type": "cancelled", "message": "Run cancelled by user.",
+           "seq": 7, "ts": "2026-05-19T00:00:00+00:00"}
+    assert translate(evt) == [evt]
+
 
 def test_module_imports_without_sdk():
     """Importing claude_executor must not require claude_agent_sdk."""

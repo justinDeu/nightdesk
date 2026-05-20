@@ -305,6 +305,23 @@ def test_rate_limit_event_renders_card_with_countdown():
     assert "rate-limit-countdown" in html
 
 
+def test_cancelled_event_renders_marker_card():
+    # A cancelled event must render a visible CANCELLED card with the reason,
+    # so the user sees why the run stopped instead of an abrupt stream end.
+    html = _render_event({
+        "type": "cancelled", "message": "Run cancelled by user.",
+    })
+    assert "cancelled" in html.lower()
+    assert "Run cancelled by user." in html
+    assert "border-warn" in html
+
+
+def test_cancelled_event_defaults_message_when_absent():
+    # Legacy/partial events without a message still render a sensible default.
+    html = _render_event({"type": "cancelled"})
+    assert "Run cancelled by user." in html
+
+
 def test_thinking_empty_renders_nothing():
     # Legacy transcripts on disk may carry thinking events with empty
     # content (some Claude variants returned blocks where the raw CoT

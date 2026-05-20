@@ -21,13 +21,13 @@ from typing import IO, Iterator, Literal, TypedDict
 
 CanonicalEventType = Literal[
     "meta", "assistant_text", "thinking", "tool_use", "tool_result", "result",
-    "worker_error", "rate_limit",
+    "worker_error", "rate_limit", "cancelled",
 ]
 
 
 KNOWN_TYPES: frozenset[str] = frozenset(
     {"meta", "assistant_text", "thinking", "tool_use", "tool_result", "result",
-     "worker_error", "rate_limit", "stats"}
+     "worker_error", "rate_limit", "cancelled", "stats"}
 )
 
 
@@ -110,6 +110,18 @@ class RateLimitEvent(_BaseEvent, total=False):
     resets_at: int
     rate_limit_type: str
     utilization: float
+
+
+class CancelledEvent(_BaseEvent, total=False):
+    """A terminal marker written when the user cancels a running ticket.
+
+    The worker terminates the agent process mid-run, so the event stream stops
+    abruptly; this event makes the reason explicit. ``message`` is the
+    one-line user-facing reason (e.g. ``Run cancelled by user.``).
+    """
+
+    type: Literal["cancelled"]
+    message: str
 
 
 def now_iso() -> str:

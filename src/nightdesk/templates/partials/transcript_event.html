@@ -173,6 +173,20 @@
   </div>
 {% endmacro %}
 
+{# cancelled: terminal marker written when the user cancels a running ticket.
+   The worker kills the agent mid-run so the stream stops abruptly; this card
+   makes the reason explicit. Amber/warn token, matching the Cancel button.
+   The JS live-tail in transcript_panel.html mirrors this shape. #}
+{% macro evt_cancelled(evt) %}
+  {% set message = evt.get('message') or 'Run cancelled by user.' %}
+  <div class="cancelled rounded p-3 border-2 border-warn bg-warn/10">
+    <div class="flex items-center gap-2">
+      <span class="font-bold text-warn uppercase tracking-wide text-xs">cancelled</span>
+    </div>
+    <div class="whitespace-pre-wrap text-sm mt-2 text-fg">{{ message }}</div>
+  </div>
+{% endmacro %}
+
 {% macro render_event(evt, paired_result=None) %}
   {% set t = evt.get('type','') %}
   {% if t == 'meta' %}{{ evt_meta(evt) }}
@@ -183,5 +197,6 @@
   {% elif t == 'result' %}{{ evt_result(evt) }}
   {% elif t == 'worker_error' %}{{ evt_worker_error(evt) }}
   {% elif t == 'rate_limit' %}{{ evt_rate_limit(evt) }}
+  {% elif t == 'cancelled' %}{{ evt_cancelled(evt) }}
   {% endif %}
 {% endmacro %}

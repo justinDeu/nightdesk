@@ -474,6 +474,20 @@
               `</div>`
             );
           }
+          if (t === 'cancelled') {
+            // Mirror evt_cancelled in transcript_event.html: amber card with a
+            // CANCELLED badge and the reason. Terminal marker when the user
+            // cancels a running ticket.
+            const message = evt.message || 'Run cancelled by user.';
+            return el(
+              `<div class="cancelled rounded p-3 border-2 border-warn bg-warn/10">` +
+                `<div class="flex items-center gap-2">` +
+                  `<span class="font-bold text-warn uppercase tracking-wide text-xs">cancelled</span>` +
+                `</div>` +
+                `<div class="whitespace-pre-wrap text-sm mt-2 text-fg">${escapeHtml(message)}</div>` +
+              `</div>`
+            );
+          }
           return null;
         }
 
@@ -663,7 +677,7 @@
           const s = typeof evt.seq === 'number' ? evt.seq : -1;
           return s > seqHigh;
         }
-        ['meta', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error', 'rate_limit'].forEach(function (t) {
+        ['meta', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error', 'rate_limit', 'cancelled'].forEach(function (t) {
           es.addEventListener(t, function (e) {
             const evt = parse(e);
             if (!evt) return;

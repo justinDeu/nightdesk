@@ -193,6 +193,18 @@ class ClaudeExecutor:
                         await t
                     except (asyncio.CancelledError, Exception):
                         pass
+            # Leave a terminal marker in the transcript so the user sees *why*
+            # the stream stopped. Without this the SSE tail just ends mid-run.
+            # The drain task (and its file handle) has been cancelled above, so
+            # reopen the transcript in append mode and write a canonical event
+            # with a fresh seq — both the initial render and the since_seq SSE
+            # tail then show it exactly once.
+            with req.transcript_path.open("ab") as f:
+                write_event(f, {
+                    "type": "cancelled", "ts": now_iso(),
+                    "seq": next_seq(seq_counter),
+                    "message": "Run cancelled by user.",
+                })
             return ExecutionResult(exit_status="cancelled", pid=proc.pid)
 
         # Normal completion path.
