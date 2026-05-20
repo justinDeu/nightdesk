@@ -235,6 +235,10 @@ def build_bwrap_argv(
     candidates = list(spec.fs_read) + list(spec.fs_write) + [cwd]
     assert_no_excluded_paths(candidates)
 
+    cc_bin = spec.claude_binary_path or shutil.which("claude") or "/usr/local/bin/claude"
+    log.info("build_bwrap_argv: cwd=%s claude_binary=%s fs_write=%d fs_read=%d",
+             cwd, cc_bin, len(spec.fs_write), len(spec.fs_read))
+
     argv: list[str] = ["bwrap"]
     argv += ["--die-with-parent"]
     argv += ["--unshare-pid", "--unshare-uts", "--unshare-ipc"]
@@ -278,6 +282,8 @@ def build_bwrap_argv(
         # Also expose the standard locations CC's HTTP client looks at.
         if ca != "/etc/ssl/certs/ca-certificates.crt":
             argv += ["--ro-bind", ca, "/etc/ssl/certs/ca-certificates.crt"]
+    else:
+        log.warning("no CA bundle found; TLS connections inside sandbox may fail")
     # If the host has /etc/passwd, expose it ro so name lookups (getpwuid,
     # logging, etc.) keep working. It's effectively public data on a Linux
     # system; we accept the minor info-leak rather than hand-rolling NSS.

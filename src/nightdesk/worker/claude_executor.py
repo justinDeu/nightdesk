@@ -67,6 +67,8 @@ class ClaudeExecutor:
         ]
         runner_spec = self._build_runner_spec(req)
 
+        log.info("spawning SDK subprocess for ticket %s: argv[0]=%s argc=%d",
+                 req.ticket_id, argv[0], len(argv))
         proc = await _spawn_sdk_subprocess(argv)
         assert proc.stdin is not None and proc.stdout is not None
 
@@ -241,6 +243,8 @@ class ClaudeExecutor:
         if rc != 0 and exit_status == "success":
             exit_status = "failed"
             error = error or f"sdk runner exited {rc}"
+        log.info("SDK subprocess for ticket %s exited: rc=%d exit_status=%s",
+                 req.ticket_id, rc, exit_status)
 
         usage = None
         if last_result_event is not None:

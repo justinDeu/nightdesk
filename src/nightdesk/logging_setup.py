@@ -23,7 +23,26 @@ from typing import Optional
 
 
 _DEFAULT_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+_PER_RUN_FORMAT = "%(asctime)s %(levelname)s %(name)s [run:%(run_id)s] %(message)s"
 _DEFAULT_LOG_DIR = Path(os.path.expanduser("~/.local/share/nightdesk/logs"))
+
+
+class RunIdFilter(logging.Filter):
+    """Inject ``run_id`` into every log record passing through.
+
+    Attached to the per-run file handler so lines written to the shared
+    worker.log *and* the per-run log are attributable to a specific run.
+    For the shared handler the format string picks up ``%(run_id)s`` only
+    when the filter is present (the default format omits it).
+    """
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__()
+        self.run_id = run_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.run_id = self.run_id  # type: ignore[attr-defined]
+        return True
 
 
 def configure_root_logging(
@@ -87,8 +106,10 @@ def per_run_log_handler(
     runs_dir.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(runs_dir / f"{run_id}.log", encoding="utf-8")
     handler.setLevel(level)
-    handler.setFormatter(logging.Formatter(_DEFAULT_FORMAT))
+    handler.addFilter(RunIdFilter(run_id))
+    handler.setFormatter(logging.Formatter(_PER_RUN_FORMAT))
     handler._nightdesk_run_id = run_id  # type: ignore[attr-defined]
+    handler._nightdesk = True  # type: ignore[attr-defined]
     return handler
 
 
