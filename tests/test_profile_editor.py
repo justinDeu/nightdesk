@@ -564,3 +564,109 @@ async def test_view_pane_redacts_credentials_and_env_values(
     # Sanity: the var name itself does appear (so users can audit what's set).
     assert "ANTHROPIC_CUSTOM_HEADERS" in body
     assert "value set" in body
+
+
+async def test_edit_save_blank_env_value_keeps_existing(
+    cookie_client, fresh_client, fresh_engine,
+):
+    """Regression: saving the edit form with a blank env value keeps it.
+
+    The editor renders existing env keys with empty value inputs (secrets are
+    never echoed) plus an ``env_rotate`` marker, and the helper text promises
+    "leave blank to keep". A plain save must not silently wipe the value.
+    """
+    from nightdesk.domain.profile_secrets import ProfileSecretBox
+
+    create_r = await fresh_client.post("/api/v1/profiles", json={
+        "name": "keep-env",
+        "claude_credentials": {"source": "inherit"},
+        "env": {"FOO": "secret-foo"},
+    })
+    pid = create_r.json()["id"]
+
+    r = await cookie_client.post(
+        f"/profiles/{pid}",
+        data={
+            "name": "keep-env",
+            "env_field_submitted": "1",
+            "env_name": "FOO",
+            "env_value": "",
+            "env_rotate": "FOO",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    box = ProfileSecretBox("t")
+    with Session(fresh_engine) as s:
+        p = s.get(Profile, pid)
+        assert box.decrypt(p.env) == {"FOO": "secret-foo"}
+
+
+async def test_save_as_new_copies_env(cookie_client, fresh_client, fresh_engine):
+    """Regression: 'Save as new' (UI duplicate) carries env vars to the copy.
+
+    The form leaves secret env values blank, so without preservation the copy
+    would land with an empty env blob.
+    """
+    from nightdesk.domain.profile_secrets import ProfileSecretBox
+
+    create_r = await fresh_client.post("/api/v1/profiles", json={
+        "name": "dup-src",
+        "claude_credentials": {"source": "inherit"},
+        "env": {"FOO": "secret-foo"},
+    })
+    pid = create_r.json()["id"]
+
+    r = await cookie_client.post(
+        f"/profiles/{pid}",
+        data={
+            "name": "dup-src",
+            "save_as_new": "1",
+            "save_as_new_name": "dup-copy",
+            "env_field_submitted": "1",
+            "env_name": "FOO",
+            "env_value": "",
+            "env_rotate": "FOO",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    box = ProfileSecretBox("t")
+    with Session(fresh_engine) as s:
+        copy = next(p for p in s.query(Profile).all() if p.name == "dup-copy")
+        assert copy.env is not None
+        assert box.decrypt(copy.env) == {"FOO": "secret-foo"}
+
+
+async def test_edit_save_new_env_value_still_rotates(
+    cookie_client, fresh_client, fresh_engine,
+):
+    """A non-empty value in a rotate row still replaces the stored value."""
+    from nightdesk.domain.profile_secrets import ProfileSecretBox
+
+    create_r = await fresh_client.post("/api/v1/profiles", json={
+        "name": "rotate-env",
+        "claude_credentials": {"source": "inherit"},
+        "env": {"FOO": "old"},
+    })
+    pid = create_r.json()["id"]
+
+    r = await cookie_client.post(
+        f"/profiles/{pid}",
+        data={
+            "name": "rotate-env",
+            "env_field_submitted": "1",
+            "env_name": "FOO",
+            "env_value": "new",
+            "env_rotate": "FOO",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    box = ProfileSecretBox("t")
+    with Session(fresh_engine) as s:
+        p = s.get(Profile, pid)
+        assert box.decrypt(p.env) == {"FOO": "new"}

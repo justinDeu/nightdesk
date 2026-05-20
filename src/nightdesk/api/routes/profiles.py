@@ -648,11 +648,17 @@ def _parse_env_form(
             # to set them via the generic editor.
             if key in _AUTH_OWNED_ENV_KEYS:
                 continue
-            if key in rotates and (idx >= len(values) or not values[idx]):
-                # User marked the row for rotation but left value empty —
-                # treat as clear.
-                continue
             val = values[idx] if idx < len(values) else ""
+            if key in rotates and not val:
+                # Existing row left blank: "leave blank to keep" (matches the
+                # form helper text). Preserve the value already on file so a
+                # plain save — or a save-as-new / copy — doesn't silently wipe
+                # env vars that were never echoed back into the form. To clear
+                # a value the user removes the whole row (its env_name stops
+                # being submitted), not blanks the input.
+                if existing_blob and key in existing_blob:
+                    out[key] = existing_blob[key]
+                continue
             out[key] = val or ""
 
     if has_promoted:
