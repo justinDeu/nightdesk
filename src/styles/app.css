@@ -495,6 +495,48 @@ li[data-ticket-id][data-selected] {
   animation: nd-highlight-fade 3s ease-out forwards;
 }
 
+/* ---- live transcript "tailing live" indicator ----------------------- */
+/* A pulsing dot + animated ellipsis signals an active SSE tail. Slightly
+   larger than the surrounding muted captions so it reads as a status. The
+   JS in transcript_panel.html strips .nd-live-status on stream end to stop
+   the animation. */
+@keyframes nd-live-pulse {
+  0%   { transform: scale(0.85); opacity: 0.55; }
+  50%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(0.85); opacity: 0.55; }
+}
+@keyframes nd-live-ellipsis {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+  100% { content: "..."; }
+}
+.nd-live-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8125rem;
+  line-height: 1.2;
+  color: var(--color-fg-muted);
+}
+.nd-live-status .nd-live-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--color-info, var(--color-accent));
+  box-shadow: 0 0 6px color-mix(in oklab, var(--color-info, var(--color-accent)) 60%, transparent);
+  animation: nd-live-pulse 1.2s ease-in-out infinite;
+}
+.nd-live-status .nd-live-ellipsis::after {
+  content: "";
+  animation: nd-live-ellipsis 1.6s steps(1, end) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nd-live-status .nd-live-dot { animation: none; opacity: 0.9; }
+  .nd-live-status .nd-live-ellipsis::after { animation: none; content: "..."; }
+}
+
 /* Styled hover tooltip. Add data-tooltip="text" to any element to replace the
    native title bubble with one that matches the app surface tokens. The
    element becomes the positioning context; the tip floats above and centers.

@@ -488,6 +488,42 @@ def test_empty_result_summary_does_not_suppress():
     assert "result" in [p.event["type"] for p in paired]
 
 
+# --- live "tailing live" indicator (BUG 18) -------------------------------
+#
+# The status element should carry an animated pulsing dot + ellipsis and a
+# larger label than the surrounding muted captions. The animation is driven
+# by CSS classes/keyframes in src/styles/app.css (compiled to static/app.css).
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def test_live_status_markup_has_animated_dot_and_label():
+    src = (_repo_root() / "src" / "nightdesk" / "templates"
+           / "partials" / "transcript_panel.html").read_text()
+    # The server-rendered status carries the pulsing dot, the label, and the
+    # animated ellipsis spans inside the nd-live-status container.
+    assert 'id="transcript-status"' in src
+    assert "nd-live-status" in src
+    assert "nd-live-dot" in src
+    assert "nd-live-ellipsis" in src
+    assert "tailing live" in src
+    # The live-tail JS keeps the animation by only stripping it on terminal
+    # states (stream closed / error).
+    assert "setStatusDone" in src
+
+
+def test_live_status_animation_compiled_into_css():
+    css = (_repo_root() / "src" / "nightdesk" / "static" / "app.css").read_text()
+    # Keyframes + selectors must survive the Tailwind build so the dot pulses
+    # and the ellipsis animates.
+    assert "nd-live-pulse" in css
+    assert "nd-live-ellipsis" in css
+    assert ".nd-live-status" in css
+    assert ".nd-live-dot" in css
+
+
 # --- pairing in the rendered DOM ------------------------------------------
 
 

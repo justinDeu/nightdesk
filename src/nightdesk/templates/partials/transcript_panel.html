@@ -69,7 +69,7 @@
     </div>
 
     {% if live %}
-      <div class="text-xs text-fg-muted mt-2" id="transcript-status">tailing live</div>
+      <div class="nd-live-status mt-2" id="transcript-status"><span class="nd-live-dot"></span><span class="nd-live-text">tailing live</span><span class="nd-live-ellipsis"></span></div>
       <script>
       // ------------------------------------------------------------------
       // Live-tail transcript renderer.
@@ -726,14 +726,22 @@
           const evt = parse(e);
           if (evt && isNew(evt)) applyStatsEvent(evt);
         });
+        // Drop the live animation (pulsing dot + ellipsis) when the stream
+        // reaches a terminal state, leaving a plain static label.
+        function setStatusDone(text) {
+          if (!status) return;
+          status.classList.remove('nd-live-status');
+          status.classList.add('text-xs', 'text-fg-muted');
+          status.textContent = text;
+        }
         es.addEventListener('end', function () {
           es.close();
           if (window.__transcriptES === es) window.__transcriptES = null;
-          if (status) status.textContent = 'stream closed';
+          setStatusDone('stream closed');
           if (durationTimer) { clearInterval(durationTimer); durationTimer = null; }
         });
         es.onerror = function () {
-          if (status) status.textContent = 'stream error';
+          setStatusDone('stream error');
         };
       })();
       </script>
