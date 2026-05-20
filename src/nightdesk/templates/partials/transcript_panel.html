@@ -24,7 +24,17 @@
     <code class="text-fg">{{ selected_run.id[:8] }}</code>
     <span class="text-fg-muted">{{ selected_run.started_at }}</span>
     {% if live %}
-      <span class="ml-auto inline-block rounded px-2 py-0.5 bg-info/20 text-info">live</span>
+      <span class="inline-block rounded px-2 py-0.5 bg-info/20 text-info">live</span>
+    {% endif %}
+    {% if not transcript_raw %}
+      {# Jump to the bottom of the scroll container. No auto-scroll exists,
+         so this lets the user snap to the newest event (handy for live
+         tailing). ``ml-auto`` pushes the controls to the right edge. #}
+      <button type="button"
+              class="ml-auto rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev"
+              onclick="(function(){var s=document.getElementById('transcript-scroll');if(s)s.scrollTop=s.scrollHeight;})()">
+        jump to end
+      </button>
     {% endif %}
   </div>
 
@@ -35,7 +45,7 @@
     <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto"
          style="max-height: calc(100vh - 10rem);">{{ transcript_raw }}</pre>
   {% else %}
-    <div class="overflow-y-auto pr-1" style="max-height: calc(100vh - 10rem);">
+    <div id="transcript-scroll" class="overflow-y-auto pr-1" style="max-height: calc(100vh - 10rem);">
       <div id="transcript" class="space-y-2">
         {# Pre-pair tool_result events with their parent tool_use so each
            pair renders as one visual card. Orphan results (no matching
