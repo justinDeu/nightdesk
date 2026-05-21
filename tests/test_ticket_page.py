@@ -395,8 +395,9 @@ async def test_review_ticket_shows_run_again_modal(cookie_client, session):
 async def test_run_row_omits_host(cookie_client, session, tmp_path):
     """Run-history rows must not echo the worker hostname. It's already shown
     in the top-nav worker pill and this is a local-first app, so repeating it
-    on every row is redundant noise. The log link takes the ml-auto slot the
-    host span used to occupy so the row stays right-aligned."""
+    on every row is redundant noise. The right-side items (outcome pill, run-now
+    bolt, cost, log link) live in a single ml-auto wrapper so the row stays
+    right-aligned."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
                        priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
@@ -413,8 +414,10 @@ async def test_run_row_omits_host(cookie_client, session, tmp_path):
     assert "Run history" in body
     # ...but the host string never appears anywhere on the page.
     assert "bespoke-host-xyz" not in body
-    # The log link inherits the right-alignment slot.
-    assert 'class="text-fg-muted hover:text-fg ml-auto underline decoration-dotted"' in body
+    # The right-side items wrapper holds the ml-auto right-alignment slot.
+    assert 'class="ml-auto flex items-center gap-2"' in body
+    # The log link still renders (now inside that wrapper, without its own ml-auto).
+    assert 'class="text-fg-muted hover:text-fg underline decoration-dotted"' in body
 
 
 async def test_resume_route_queues_ticket_and_stores_context(cookie_client, session):
