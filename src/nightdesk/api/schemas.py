@@ -321,6 +321,7 @@ class ConfigOut(BaseModel):
     max_parallel: int
     worktree_root: str
     transcript_root: str
+    worktree_base_ref: Optional[str] = None
 
 
 _HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -338,6 +339,9 @@ class ConfigUpdate(BaseModel):
     window_start: Optional[str] = None
     window_end: Optional[str] = None
     max_parallel: Optional[int] = None
+    # Global default base ref for git_worktree tickets. Pass an empty string to
+    # clear the default (tickets then branch from HEAD). None leaves it alone.
+    worktree_base_ref: Optional[str] = None
 
     @field_validator("window_start", "window_end", mode="before")
     @classmethod
@@ -347,6 +351,15 @@ class ConfigUpdate(BaseModel):
         if not isinstance(v, str) or not _HH_MM_RE.match(v):
             raise ValueError("must be a valid HH:MM time (00:00-23:59)")
         return v
+
+    @field_validator("worktree_base_ref", mode="before")
+    @classmethod
+    def _strip_base_ref(cls, v: object) -> object:
+        if v is None:
+            return v
+        if not isinstance(v, str):
+            raise ValueError("worktree_base_ref must be a string")
+        return v.strip()
 
 
 class WorkerStatusOut(BaseModel):

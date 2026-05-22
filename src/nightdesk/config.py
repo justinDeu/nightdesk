@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 import os
 import tomli
 
@@ -24,6 +25,10 @@ class NightdeskConfig:
     )
     bind_host: str = "127.0.0.1"
     bind_port: int = 8765
+    # Optional global default base ref for git_worktree tickets. Seeds the
+    # mutable ConfigRow.worktree_base_ref at setup; new tickets without an
+    # explicit base_ref branch from this ref instead of HEAD.
+    worktree_base_ref: Optional[str] = None
     secrets: dict[str, str] = field(default_factory=dict)
 
 
@@ -47,7 +52,7 @@ def load_config(
     cfg = NightdeskConfig()
     if config_path.exists():
         data = tomli.loads(config_path.read_text())
-        for key in ("bearer_token", "bind_host", "bind_port"):
+        for key in ("bearer_token", "bind_host", "bind_port", "worktree_base_ref"):
             if key in data:
                 setattr(cfg, key, data[key])
         for key in ("db_path", "transcript_root", "worktree_root"):

@@ -360,6 +360,7 @@ def _persist_setup_to_db(cfg: NightdeskConfig, binary: str, version: str) -> Non
                     id=1,
                     worktree_root=str(cfg.worktree_root),
                     transcript_root=str(cfg.transcript_root),
+                    worktree_base_ref=(cfg.worktree_base_ref or None),
                     max_run_duration_seconds=86400,
                     run_token_grace_seconds=300,
                 )

@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.db.models import ConfigRow
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.runs import get_run
 from nightdesk.domain.tickets import (
@@ -109,6 +110,7 @@ def _workspace_payload_from_form(form) -> tuple[str, Optional[str], Optional[str
     mode = "git_worktree" if form.get("use_worktree") else "directory"
     worktree_name = (form.get("worktree_name") or "").strip() or None
     worktree_path = _optional_abs_path(form.get("worktree_path"))
+    base_ref = (form.get("base_ref") or "").strip() or None
     workspaces = [{
         "role": "primary",
         "label": "primary",
@@ -117,6 +119,7 @@ def _workspace_payload_from_form(form) -> tuple[str, Optional[str], Optional[str
         "source_path": cwd,
         "worktree_name": worktree_name,
         "worktree_path": worktree_path,
+        "base_ref": base_ref,
         "retention": "preserve",
     }]
     linked_paths = list(form.getlist("linked_workspace_path"))
@@ -174,6 +177,30 @@ def _git_value(cwd: Path, *args: str) -> Optional[str]:
         return None
     return result.stdout.strip() or None
 
+
+
+def _base_ref_status(cwd: str, base_ref: Optional[str]) -> Optional[str]:
+    """Return whether ``base_ref`` resolves to a commit in the repo at ``cwd``.
+
+    - ``None``  -> nothing to check (no base_ref, or cwd not a usable git dir).
+    - ``"ok"``  -> the ref resolves to a commit; the worktree branch can start there.
+    - ``"missing"`` -> the ref does not resolve. The "branch is gone" case the
+      UI must warn about: ``git worktree add ... <base_ref>`` would fail at run
+      time, leaving the ticket stuck. Surfacing it at edit time is the whole
+      point of this check.
+    """
+    ref = (base_ref or "").strip()
+    if not ref:
+        return None
+    try:
+        source = Path(os.path.expanduser(cwd.strip())).resolve()
+    except Exception:
+        return None
+    # Confirm this is actually a git working area before judging the ref.
+    if _git_value(source, "rev-parse", "--git-dir") is None:
+        return None
+    resolved = _git_value(source, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    return "ok" if resolved else "missing"
 
 
 def _is_bare_container(path: Path) -> bool:
@@ -277,6 +304,7 @@ def build_router(
         cwd: str = "",
         name: Optional[str] = None,
         path: Optional[str] = None,
+        base_ref: Optional[str] = None,
         format: str = "html",
     ):
         if not cwd.strip() and not (path and path.strip()):
@@ -294,12 +322,36 @@ def build_router(
             return HTMLResponse(
                 '<span class="text-warn">Preview unavailable until the path is valid.</span>'
             )
+        ref = (base_ref or "").strip()
+        ref_status = _base_ref_status(cwd, ref) if cwd.strip() else None
         if format == "json":
-            return JSONResponse({"path": str(preview_path), "source": source})
+            payload: dict = {"path": str(preview_path), "source": source}
+            # Only attach base-ref fields when a ref was supplied so callers
+            # that don't use the feature keep their stable two-key response.
+            if ref:
+                payload["base_ref"] = ref
+                payload["base_ref_status"] = ref_status
+            return JSONResponse(payload)
+        ref_line = ""
+        if ref:
+            if ref_status == "missing":
+                ref_line = (
+                    '<div class="mt-1 text-[11px] text-warn">'
+                    f'Base ref "{html.escape(ref)}" not found in this repo — '
+                    'the worktree will fail to create. Check the branch/ref name.'
+                    '</div>'
+                )
+            else:
+                ref_line = (
+                    '<div class="mt-1 text-[11px] text-fg-muted">'
+                    f'Branch will start from <span class="text-accent">{html.escape(ref)}</span>.'
+                    '</div>'
+                )
         return HTMLResponse(
             '<div class="mb-0.5 text-[11px] uppercase tracking-wide text-fg-muted">'
             f'Worktree Path Preview ({html.escape(source)})</div>'
             f'<code class="block break-all text-accent">{html.escape(str(preview_path))}</code>'
+            f'{ref_line}'
         )
     @router.get("/", response_class=HTMLResponse, dependencies=[auth])
     async def board(request: Request, session: Session = Depends(get_session)):
@@ -378,6 +430,16 @@ def build_router(
             raise HTTPException(422, "profile_id required")
         try:
             workspace_mode, worktree_name, worktree_path, workspaces = _workspace_payload_from_form(form)
+            # Global default: a git-worktree ticket created without an explicit
+            # base_ref inherits the configured worktree_base_ref so all new
+            # branches start from the same ref unless the user overrides it.
+            if workspace_mode == "git_worktree":
+                primary = workspaces[0]
+                if not primary.get("base_ref"):
+                    cfg = session.get(ConfigRow, 1)
+                    default_ref = (getattr(cfg, "worktree_base_ref", None) or "").strip() if cfg else ""
+                    if default_ref:
+                        primary["base_ref"] = default_ref
             create_ticket(
                 session,
                 title=title,

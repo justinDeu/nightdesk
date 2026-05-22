@@ -113,3 +113,14 @@ async def test_worker_status_counts_running_with_overflow(client, session):
     assert body["run_now_running"] == 2
     assert body["normal_running"] == 3
     assert body["max_parallel"] == 4
+
+
+async def test_patch_config_sets_and_clears_worktree_base_ref(client):
+    r = await client.patch("/api/v1/config", json={"worktree_base_ref": "develop"})
+    assert r.status_code == 200
+    assert r.json()["worktree_base_ref"] == "develop"
+
+    # Empty string clears the default (tickets then branch from HEAD).
+    r = await client.patch("/api/v1/config", json={"worktree_base_ref": ""})
+    assert r.status_code == 200
+    assert (r.json()["worktree_base_ref"] or "") == ""

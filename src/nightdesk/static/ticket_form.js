@@ -128,6 +128,7 @@
     });
     if (!enabled) {
       window.ndSetWorktreePreview('Enable worktree to preview the target path.', '', root);
+      if (window.ndSetBaseRefNote) window.ndSetBaseRefNote(root, '', null);
     }
     window.ndSyncWorktreeNameHint(root);
   };
@@ -157,25 +158,50 @@
     if (path) path.textContent = pathText;
   };
 
+  // Surface which ref the worktree branch will start from, and loudly flag
+  // the "branch is gone" case (ref doesn't resolve in the repo) so the user
+  // fixes it before the run fails at `git worktree add`.
+  window.ndSetBaseRefNote = function (root, ref, status) {
+    const note = (root || document).querySelector('[data-base-ref-note]');
+    if (!note) return;
+    const r = (ref || '').trim();
+    if (!r) {
+      note.textContent = '';
+      note.className = 'mt-1 text-[11px]';
+      return;
+    }
+    if (status === 'missing') {
+      note.textContent = 'Base ref "' + r + '" not found in this repo — the worktree will fail to create. Check the branch/ref name.';
+      note.className = 'mt-1 text-[11px] text-warn';
+    } else {
+      note.textContent = 'Branch will start from ' + r + '.';
+      note.className = 'mt-1 text-[11px] text-fg-muted';
+    }
+  };
+
   window.ndUpdateWorktreePreview = async function (scope) {
     const root = scope || document;
     if (!_worktreeEnabled(root)) {
       window.ndSetWorktreePreview('Enable worktree to preview the target path.', '', root);
+      window.ndSetBaseRefNote(root, '', null);
       return;
     }
     const cwd = (root.querySelector('[data-cwd-input]') || {}).value || '';
     const name = (root.querySelector('input[name="worktree_name"]') || {}).value || '';
     const path = (root.querySelector('[data-worktree-path-input]') || {}).value || '';
+    const baseRef = (root.querySelector('[data-base-ref-input]') || {}).value || '';
     if (!cwd && !path) {
       window.ndSetWorktreePreview('Choose a working dir or custom path to preview the target.', '', root);
+      window.ndSetBaseRefNote(root, '', null);
       return;
     }
     const mySeq = ++previewSeq;
     try {
-      const r = await fetch('/board/worktree-preview?' + new URLSearchParams({ cwd, name, path, format: 'json' }));
+      const r = await fetch('/board/worktree-preview?' + new URLSearchParams({ cwd, name, path, base_ref: baseRef, format: 'json' }));
       if (!r.ok || mySeq !== previewSeq) return;
       const data = await r.json();
       window.ndSetWorktreePreview(data.path, data.source, root);
+      window.ndSetBaseRefNote(root, data.base_ref || baseRef, data.base_ref_status);
     } catch (e) {
       if (mySeq === previewSeq) {
         window.ndSetWorktreePreview('Preview unavailable.', '', root);

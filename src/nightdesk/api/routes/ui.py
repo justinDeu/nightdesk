@@ -131,6 +131,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         always_on: str = Form(""),
         claude_binary_path: str = Form(""),
         cc_minimum_version: str = Form(""),
+        worktree_base_ref: str = Form(""),
     ):
         import re
 
@@ -157,6 +158,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
 
         cfg.claude_binary_path = (claude_binary_path or "").strip() or None
         cfg.cc_minimum_version = (cc_minimum_version or "").strip() or cfg.cc_minimum_version
+        cfg.worktree_base_ref = (worktree_base_ref or "").strip() or None
         session.commit()
         session.refresh(cfg)
         import shutil
