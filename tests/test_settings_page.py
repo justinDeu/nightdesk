@@ -149,3 +149,55 @@ async def test_settings_post_does_not_touch_max_run_duration(cookie_client, sess
     cfg = session.get(ConfigRow, 1)
     assert cfg.max_run_duration_seconds == 86400
     assert cfg.run_token_grace_seconds == 300
+
+
+async def test_settings_get_renders_worktree_base_ref_field(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
+                          worktree_base_ref="develop"))
+    session.commit()
+
+    r = await cookie_client.get("/settings")
+    assert r.status_code == 200
+    body = r.text
+    assert 'name="worktree_base_ref"' in body
+    assert "develop" in body
+
+
+async def test_settings_post_persists_worktree_base_ref(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "max_parallel": "2",
+            "polling_interval_seconds": "5",
+            "window_start": "22:00",
+            "window_end": "07:00",
+            "claude_binary_path": "",
+            "cc_minimum_version": "2.1.80",
+            "worktree_base_ref": "develop",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.worktree_base_ref == "develop"
+
+    # Blank submission clears it back to NULL.
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "max_parallel": "2",
+            "polling_interval_seconds": "5",
+            "window_start": "22:00",
+            "window_end": "07:00",
+            "claude_binary_path": "",
+            "cc_minimum_version": "2.1.80",
+            "worktree_base_ref": "",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.worktree_base_ref is None

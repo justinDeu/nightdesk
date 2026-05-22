@@ -95,6 +95,20 @@
       </div>
     </section>
 
+    <section class="border border-border rounded p-4 bg-bg-elev">
+      <h2 class="font-semibold mb-3">Git worktrees</h2>
+      <div class="grid grid-cols-[1fr,16rem] gap-x-3 gap-y-3 text-sm items-center">
+        <label for="worktree_base_ref" class="text-fg">
+          <div class="font-medium">Default base branch / ref</div>
+          <div class="text-xs text-fg-muted">New git-worktree tickets branch from this ref when no explicit base is set. Leave blank to branch from <code>HEAD</code>. Per-ticket values override this.</div>
+        </label>
+        <input id="worktree_base_ref" name="worktree_base_ref" type="text"
+               value="{{ (cfg.worktree_base_ref if cfg else '') or '' }}"
+               placeholder="HEAD"
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+      </div>
+    </section>
+
     <div class="flex justify-end gap-2">
       <button type="submit"
               class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">

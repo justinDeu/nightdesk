@@ -155,6 +155,21 @@
                      class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45" />
             </label>
             <label class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-fg-muted text-[11px] uppercase tracking-wide">Base branch / ref</span>
+                <span class="text-[10px] text-fg-muted/60">branch starts here</span>
+              </div>
+              <input name="base_ref"
+                     autocomplete="off"
+                     spellcheck="false"
+                     placeholder="HEAD"
+                     value="{{ _primary_ws.base_ref if _primary_ws and _primary_ws.base_ref else '' }}"
+                     {% if not _use_worktree %}disabled{% endif %} data-worktree-field data-base-ref-input
+                     oninput="window.ndScheduleWorktreePreview(250, this.closest('[data-ticket-form]'))"
+                     class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45" />
+              <span class="text-[10px] text-fg-muted/60">Leave blank to branch from <code>HEAD</code>. Use an existing branch, tag, or commit.</span>
+            </label>
+            <label class="flex flex-col gap-1">
               <span class="text-fg-muted text-[11px] uppercase tracking-wide">Advanced: custom worktree path</span>
               <div class="relative">
                 <input id="{{ _mid }}-wt-path"
@@ -176,6 +191,7 @@
             <div data-worktree-path-preview class="rounded border border-border bg-bg px-2 py-1.5 text-xs" aria-live="polite">
               <div class="mb-0.5 text-[11px] uppercase tracking-wide text-fg-muted">Worktree path preview <span data-worktree-preview-source></span></div>
               <code class="block break-all font-mono text-accent" data-worktree-preview-path>Enable worktree to preview the target path.</code>
+              <div class="mt-1 text-[11px]" data-base-ref-note></div>
             </div>
           </div>
         </div>

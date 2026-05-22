@@ -622,3 +622,140 @@ async def test_columns_endpoint_blocked_without_auth(app):
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.get("/board/columns")
         assert r.status_code == 401
+
+
+async def test_create_form_threads_base_ref(cookie_client, session, profile):
+    """An explicit base_ref on the create form lands on the primary workspace."""
+    r = await cookie_client.post(
+        "/board/tickets",
+        data={
+            "title": "with-base-ref",
+            "profile_id": profile.id,
+            "cwd": "/tmp",
+            "use_worktree": "1",
+            "worktree_name": "feature",
+            "base_ref": "develop",
+        },
+    )
+    assert r.status_code == 204
+    created = next(t for t in list_tickets(session, status="draft")
+                   if t.title == "with-base-ref")
+    primary = next(w for w in created.workspaces if w.role == "primary")
+    assert primary.base_ref == "develop"
+
+
+async def test_create_form_inherits_config_base_ref_default(cookie_client, session, profile):
+    """A git-worktree ticket created without base_ref inherits the global default."""
+    from nightdesk.db.models import ConfigRow
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
+                          worktree_base_ref="develop"))
+    session.commit()
+    r = await cookie_client.post(
+        "/board/tickets",
+        data={
+            "title": "inherits-default",
+            "profile_id": profile.id,
+            "cwd": "/tmp",
+            "use_worktree": "1",
+            "worktree_name": "feature",
+        },
+    )
+    assert r.status_code == 204
+    created = next(t for t in list_tickets(session, status="draft")
+                   if t.title == "inherits-default")
+    primary = next(w for w in created.workspaces if w.role == "primary")
+    assert primary.base_ref == "develop"
+
+
+async def test_create_form_explicit_base_ref_overrides_default(cookie_client, session, profile):
+    """An explicit base_ref wins over the configured global default."""
+    from nightdesk.db.models import ConfigRow
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
+                          worktree_base_ref="develop"))
+    session.commit()
+    r = await cookie_client.post(
+        "/board/tickets",
+        data={
+            "title": "explicit-wins",
+            "profile_id": profile.id,
+            "cwd": "/tmp",
+            "use_worktree": "1",
+            "worktree_name": "feature",
+            "base_ref": "release-1.2",
+        },
+    )
+    assert r.status_code == 204
+    created = next(t for t in list_tickets(session, status="draft")
+                   if t.title == "explicit-wins")
+    primary = next(w for w in created.workspaces if w.role == "primary")
+    assert primary.base_ref == "release-1.2"
+
+
+async def test_directory_ticket_does_not_inherit_base_ref_default(cookie_client, session, profile):
+    """A plain directory ticket never picks up the worktree base_ref default."""
+    from nightdesk.db.models import ConfigRow
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
+                          worktree_base_ref="develop"))
+    session.commit()
+    r = await cookie_client.post(
+        "/board/tickets",
+        data={
+            "title": "plain-dir",
+            "profile_id": profile.id,
+            "cwd": "/tmp",
+        },
+    )
+    assert r.status_code == 204
+    created = next(t for t in list_tickets(session, status="draft")
+                   if t.title == "plain-dir")
+    primary = next(w for w in created.workspaces if w.role == "primary")
+    assert primary.base_ref is None
+
+
+async def test_worktree_preview_flags_missing_base_ref(cookie_client, tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    (repo / "f.txt").write_text("hi\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "init"], check=True)
+
+    r = await cookie_client.get(
+        "/board/worktree-preview",
+        params={"cwd": str(repo), "name": "feat", "base_ref": "no-such-branch",
+                "format": "json"},
+    )
+    assert r.status_code == 200
+    assert r.json()["base_ref_status"] == "missing"
+
+    r2 = await cookie_client.get(
+        "/board/worktree-preview",
+        params={"cwd": str(repo), "name": "feat", "base_ref": "HEAD",
+                "format": "json"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["base_ref_status"] == "ok"
+
+
+async def test_worktree_preview_html_warns_about_missing_base_ref(cookie_client, tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    (repo / "f.txt").write_text("hi\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "init"], check=True)
+
+    r = await cookie_client.get(
+        "/board/worktree-preview",
+        params={"cwd": str(repo), "name": "feat", "base_ref": "ghost"},
+    )
+    assert r.status_code == 200
+    assert "not found" in r.text

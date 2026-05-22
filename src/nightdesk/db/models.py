@@ -158,6 +158,9 @@ class ConfigRow(Base):
     max_parallel: Mapped[int] = mapped_column(Integer, default=2)
     worktree_root: Mapped[str] = mapped_column(String)
     transcript_root: Mapped[str] = mapped_column(String)
+    # Global default base ref for git_worktree tickets. When set, new tickets
+    # created without an explicit base_ref branch from this ref instead of HEAD.
+    worktree_base_ref: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     polling_interval_seconds: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     max_run_duration_seconds: Mapped[int] = mapped_column(Integer, default=86400, nullable=False)
     run_token_grace_seconds: Mapped[int] = mapped_column(Integer, default=300, nullable=False)
