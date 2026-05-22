@@ -868,6 +868,10 @@ def run_api() -> None:
         logging.exception("Migration failed; refusing to start API.")
         sys.exit(70)
 
+    # Alembic's fileConfig resets the root logger level and disables loggers
+    # not listed in alembic.ini. Re-apply our config so app logs get through.
+    configure_root_logging(component="api")
+
     # CC version check (non-fatal: daemon still boots).
     from nightdesk.domain.cc_check import check_cc_binary, persist_cc_check
 
@@ -927,6 +931,10 @@ def run_worker() -> None:
     except Exception:
         logging.exception("Migration failed; refusing to start worker.")
         sys.exit(70)
+
+    # Alembic's fileConfig resets the root logger level and disables loggers
+    # not listed in alembic.ini. Re-apply our config so app logs get through.
+    configure_root_logging(component="worker")
 
     # CC version check (non-fatal: worker still starts; tick loop guards picks).
     from nightdesk.domain.cc_check import check_cc_binary, persist_cc_check

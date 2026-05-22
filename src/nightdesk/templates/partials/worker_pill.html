@@ -99,23 +99,3 @@
     {% endif %}
   </div>
 </div>
-
-<script>
-(function () {
-  var pill = document.getElementById('worker-pill');
-  if (!pill) return;
-
-  // Pinned visibility is driven entirely by the `data-pinned` attribute on
-  // this persistent #worker-pill element plus a CSS rule (see app.css). The
-  // attribute survives the 3s HTMX innerHTML swaps, so the panel stays open
-  // with no per-swap JS re-apply and therefore no flicker.
-  if (!pill.__ndPanelInit) {
-    pill.__ndPanelInit = true;
-    pill.addEventListener('click', function (e) {
-      // Don't toggle pin when clicking a link inside the panel.
-      if (e.target.closest('a')) return;
-      pill.toggleAttribute('data-pinned');
-    });
-  }
-})();
-</script>

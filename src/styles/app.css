@@ -406,6 +406,9 @@ li[data-ticket-id][data-selected] {
     color: var(--color-fg);
   }
   .user-prompt-author {
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 600;
@@ -414,15 +417,26 @@ li[data-ticket-id][data-selected] {
     color: var(--color-info);
     margin-bottom: 0.375rem;
   }
+  .user-prompt-author::-webkit-details-marker { display: none; }
+  .user-prompt-author::before {
+    content: "\25B8";
+    color: var(--color-info);
+    font-size: 9px;
+    width: 0.625rem;
+    display: inline-block;
+    transition: transform 0.12s ease;
+    margin-right: 0.25rem;
+  }
+  .user-prompt[open] > .user-prompt-author::before {
+    transform: rotate(90deg);
+  }
   .user-prompt-body {
-    margin: 0;
+    margin: 0.375rem 0 0;
     font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.55;
     white-space: pre-wrap;
     word-wrap: break-word;
-    max-height: 16rem;
-    overflow-y: auto;
   }
   /* ---- assistant text ----------------------------------------------
      Assistant turns are first-class blocks: more prominent than tool
@@ -620,10 +634,3 @@ li[data-ticket-id][data-selected] {
   opacity: 1;
 }
 
-/* Worker-status pill: keep the hover panel open when pinned via click.
-   `data-pinned` lives on the persistent #worker-pill element, so this rule
-   survives the 3s HTMX swaps with no JS re-apply (and thus no flicker). The
-   id+attribute selector outranks Tailwind's `.hidden` utility on the panel. */
-#worker-pill[data-pinned] [data-worker-panel] {
-  display: block;
-}

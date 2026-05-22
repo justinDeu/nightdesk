@@ -331,10 +331,10 @@
        # erase it — the prompt belongs to the ticket, not a specific run. #}
       {% set prompt_text = ticket.prompt or '' %}
       {% if prompt_text %}
-      <div class="user-prompt mb-3">
-        <div class="user-prompt-author">user</div>
+      <details class="user-prompt mb-3" open>
+        <summary class="user-prompt-author">user</summary>
         <pre class="user-prompt-body">{{ prompt_text }}</pre>
-      </div>
+      </details>
       {% endif %}
       <div id="transcript-panel-inner" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
         {% include "partials/transcript_panel.html" %}
