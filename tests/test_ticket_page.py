@@ -490,3 +490,67 @@ async def test_project_settings_warning_renders_inside_header_card(
     warning_marker = "data-project-settings-warning"
     assert two_col_marker in body
     assert body.index(two_col_marker) < body.index(warning_marker)
+
+
+async def test_subagent_children_nested_under_card(
+    cookie_client, session, tmp_path,
+):
+    """Sub-agent tool calls must render nested under the subagent card.
+
+    The rendered HTML must carry data-subagent-tool-use-id on the outer
+    wrapper, data-parent-tool-use-id on each child row, and the child tool
+    name must appear inside the nested block (i.e. after the subagent wrapper
+    opens and before it closes).
+    """
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="p",
+                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    log = tmp_path / "transcripts" / "subagent.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    agent_id = "toolu_agent_01"
+    lines = [
+        {"type": "meta", "ts": "2026-05-16T00:00:00Z", "seq": 0,
+         "run_id": "subagentrun", "ticket_id": t.id},
+        # The Agent tool_use that triggered the sub-agent.
+        {"type": "tool_use", "ts": "2026-05-16T00:00:01Z", "seq": 1,
+         "id": agent_id, "tool": "Agent",
+         "input": {"description": "explore the codebase"}},
+        # Sub-agent started event — tool_use_id links it to the Agent call.
+        {"type": "subagent", "ts": "2026-05-16T00:00:02Z", "seq": 2,
+         "subagent_type": "Explore", "phase": "progress",
+         "tool_use_id": agent_id, "task_id": agent_id,
+         "description": "exploring"},
+        # A child tool call whose parent_tool_use_id ties it to the sub-agent.
+        {"type": "tool_use", "ts": "2026-05-16T00:00:03Z", "seq": 3,
+         "id": "toolu_glob_01", "tool": "Glob",
+         "parent_tool_use_id": agent_id,
+         "input": {"pattern": "**/*.py", "path": "/opt/code"}},
+        {"type": "tool_result", "ts": "2026-05-16T00:00:04Z", "seq": 4,
+         "tool_use_id": "toolu_glob_01", "output": "src/foo.py", "is_error": False},
+        # Sub-agent notification (done).
+        {"type": "subagent", "ts": "2026-05-16T00:00:05Z", "seq": 5,
+         "subagent_type": "Explore", "phase": "notification",
+         "tool_use_id": agent_id, "task_id": agent_id,
+         "status": "completed", "summary": "found it"},
+    ]
+    log.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    start_run(session, ticket_id=t.id, worktree_path=str(tmp_path / "work"),
+              transcript_path=str(log), pid=None, host="testhost")
+
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+
+    # Outer sub-agent wrapper has the data hook for sidebar filtering.
+    assert f'data-subagent-tool-use-id="{agent_id}"' in body
+
+    # Child tool row carries data-parent-tool-use-id.
+    assert f'data-parent-tool-use-id="{agent_id}"' in body
+
+    # The child Glob tool name appears in the document.
+    assert "Glob" in body
+
+    # Glob must appear *inside* the subagent-group div, not before it.
+    subagent_group_start = body.index(f'data-subagent-tool-use-id="{agent_id}"')
+    glob_pos = body.index("Glob")
+    assert glob_pos > subagent_group_start

@@ -241,3 +241,27 @@
   {% elif t == 'subagent' %}{{ evt_subagent(evt) }}
   {% endif %}
 {% endmacro %}
+
+{# Render a GroupedEvent node (from tv.group_by_subagent): the event itself,
+   plus — for a sub-agent — its nested child tool calls. The child wrapper
+   carries data-parent-tool-use-id so the sidebar can filter by sub-agent.
+   The JS live-tail in transcript_panel.html mirrors this nesting. #}
+{% macro render_grouped(node) %}
+  {% set t = node.event.get('type','') %}
+  {% if t == 'subagent' %}
+    <div class="subagent-group" data-subagent-tool-use-id="{{ node.event.get('tool_use_id') or '' }}">
+      {{ evt_subagent(node.event) }}
+      {% if node.children %}
+      <div class="subagent-children ml-4 pl-3 space-y-1 border-l border-border">
+        {% for child in node.children %}
+          <div data-parent-tool-use-id="{{ node.event.get('tool_use_id') or '' }}">
+            {{ render_event(child.event, child.paired_result) }}
+          </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  {% else %}
+    {{ render_event(node.event, node.paired_result) }}
+  {% endif %}
+{% endmacro %}

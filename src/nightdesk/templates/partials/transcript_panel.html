@@ -60,8 +60,8 @@
            pair renders as one visual card. Orphan results (no matching
            tool_use in this slice) still render standalone. Mirrors the
            append() logic in the live-tail JS below. #}
-        {% for item in tv.pair_tool_events(transcript_events) %}
-          {{ te.render_event(item.event, item.paired_result) }}
+        {% for item in tv.group_by_subagent(tv.pair_tool_events(transcript_events)) %}
+          {{ te.render_grouped(item) }}
         {% else %}
           <p class="text-fg-muted italic text-sm" data-empty="true">no events yet</p>
         {% endfor %}
