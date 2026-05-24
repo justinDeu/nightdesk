@@ -212,6 +212,21 @@
   </details>
 {% endmacro %}
 
+{# --- task tools: clean summary + optional description, never raw json ----- #}
+{% macro tool_task(evt, result=None) %}
+  {% set s = tv.tool_summary(evt) %}
+  {% set desc = (evt.get('input', {}).get('description') or '') %}
+  <details class="tc-card">
+    {{ _summary(s) }}
+    {% if desc or result %}
+    <div class="tc-body">
+      {% if desc %}<div class="bash-desc">{{ desc }}</div>{% endif %}
+      {% if result %}{{ _result_in_body(result, desc|length > 0) }}{% endif %}
+    </div>
+    {% endif %}
+  </details>
+{% endmacro %}
+
 {# --- generic fallback ---------------------------------------------------- #}
 {% macro tool_generic(evt, result=None) %}
   {% set s = tv.tool_summary(evt) %}
@@ -235,6 +250,7 @@
   {% elif tool == 'Glob' %}{{ tool_glob(evt, result) }}
   {% elif tool == 'Grep' %}{{ tool_grep(evt, result) }}
   {% elif tool == 'Bash' %}{{ tool_bash(evt, result) }}
+  {% elif tool in ('TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TaskOutput', 'TaskStop') %}{{ tool_task(evt, result) }}
   {% else %}{{ tool_generic(evt, result) }}
   {% endif %}
 {% endmacro %}

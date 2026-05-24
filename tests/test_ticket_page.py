@@ -622,3 +622,36 @@ async def test_transcript_sidebar_shows_subagent_and_tasks(
     assert "todo-check" in body
     # "Write the tests" is still pending -> is-pending class.
     assert "todo-item is-pending" in body
+
+
+async def test_task_create_renders_as_clean_card(
+    cookie_client, session, tmp_path,
+):
+    """TaskCreate tool_use events must render as a clean tc-tag-task card,
+    not fall through to the raw-JSON generic fallback."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="p",
+                      priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    log = tmp_path / "transcripts" / "taskcreate.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"type": "meta", "ts": "2026-05-16T00:00:00Z", "seq": 0,
+         "run_id": "taskrun1", "ticket_id": t.id},
+        {"type": "tool_use", "ts": "2026-05-16T00:00:01Z", "seq": 1,
+         "id": "tc-1", "tool": "TaskCreate",
+         "input": {"subject": "Write unit tests", "description": ""}},
+    ]
+    log.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    start_run(session, ticket_id=t.id, worktree_path=str(tmp_path / "work"),
+              transcript_path=str(log), pid=None, host="testhost")
+
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # Subject text must appear.
+    assert "Write unit tests" in body
+    # Task tag class must be present.
+    assert "tc-tag-task" in body
+    # Raw JSON fallback must NOT appear (the literal key "subject": would
+    # indicate the generic renderer dumped the input dict).
+    assert '"subject":' not in body

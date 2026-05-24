@@ -249,6 +249,17 @@ def tool_summary(evt: dict) -> ToolSummary:
             extras.append(f"type={ftype}")
         extras.append(f"in {path}")
         return ToolSummary("Grep", "grep", str(pattern), " ".join(extras))
+    if tool == "TaskCreate":
+        subject = (input_.get("subject") or "").strip()
+        return ToolSummary("TaskCreate", "task", subject or "new task", "")
+    if tool == "TaskUpdate":
+        tid = str(input_.get("taskId") or "").strip()
+        status = (input_.get("status") or "").strip()
+        primary = f"task #{tid}" if tid else "task"
+        return ToolSummary("TaskUpdate", "task", primary, status)
+    if tool in ("TaskList", "TaskGet", "TaskOutput", "TaskStop"):
+        tid = str(input_.get("taskId") or "").strip()
+        return ToolSummary(tool, "task", (f"task #{tid}" if tid else ""), "")
     return ToolSummary(tool or "tool", "generic", "", "")
 
 

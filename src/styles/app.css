@@ -130,6 +130,11 @@ li[data-ticket-id][data-selected] {
     color: var(--color-fg-muted);
     border-color: var(--color-border);
   }
+  .tc-tag-task {
+    background: color-mix(in oklab, var(--color-info) 15%, transparent);
+    color: var(--color-info);
+    border-color: color-mix(in oklab, var(--color-info) 35%, transparent);
+  }
   .tc-tag-subagent {
     background: color-mix(in oklab, var(--color-subagent) 15%, transparent);
     color: var(--color-subagent);

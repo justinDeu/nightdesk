@@ -184,6 +184,16 @@ def test_tool_summary_unknown_tool_falls_through():
     assert s.tag == "Weird" and s.tag_class == "generic"
 
 
+def test_tool_summary_task_create_and_update():
+    from nightdesk.transcript_view import tool_summary
+    c = tool_summary({"type": "tool_use", "tool": "TaskCreate",
+                      "input": {"subject": "Read main.py", "description": "d"}})
+    assert c.tag == "TaskCreate" and c.tag_class == "task" and c.primary == "Read main.py"
+    u = tool_summary({"type": "tool_use", "tool": "TaskUpdate",
+                      "input": {"taskId": "2", "status": "completed"}})
+    assert u.primary == "task #2" and u.meta == "completed" and u.tag_class == "task"
+
+
 # --- default open/collapsed state on rendered partials --------------------
 #
 # The transcript page should show the body of tools whose body IS the

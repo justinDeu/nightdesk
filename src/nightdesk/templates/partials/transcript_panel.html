@@ -326,6 +326,20 @@
             extras.push(`in ${input.path || '.'}`);
             return {tag: 'Grep', cls: 'grep', primary: String(pattern), meta: extras.join(' ')};
           }
+          if (tool === 'TaskCreate') {
+            const subject = String(input.subject || '').trim();
+            return {tag: 'TaskCreate', cls: 'task', primary: subject || 'new task', meta: ''};
+          }
+          if (tool === 'TaskUpdate') {
+            const tid = String(input.taskId || '').trim();
+            const status = String(input.status || '').trim();
+            const primary = tid ? `task #${tid}` : 'task';
+            return {tag: 'TaskUpdate', cls: 'task', primary: primary, meta: status};
+          }
+          if (tool === 'TaskList' || tool === 'TaskGet' || tool === 'TaskOutput' || tool === 'TaskStop') {
+            const tid = String(input.taskId || '').trim();
+            return {tag: tool, cls: 'task', primary: tid ? `task #${tid}` : '', meta: ''};
+          }
           return {tag: tool || 'tool', cls: 'generic', primary: '', meta: ''};
         }
 
@@ -382,6 +396,9 @@
             }
           } else if (tool === 'Read' || tool === 'Glob' || tool === 'Grep') {
             body = '';
+          } else if (tool === 'TaskCreate' || tool === 'TaskUpdate' || tool === 'TaskList' || tool === 'TaskGet' || tool === 'TaskOutput' || tool === 'TaskStop') {
+            const desc = String(input.description || '');
+            body = desc ? `<div class="tc-body"><div class="bash-desc">${escapeHtml(desc)}</div></div>` : '';
           } else {
             body = `<div class="tc-body"><pre class="bash-cmd">${escapeHtml(JSON.stringify(input, null, 2))}</pre></div>`;
           }
