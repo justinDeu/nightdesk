@@ -31,6 +31,10 @@ from nightdesk.db.models import ConfigRow, Run, Ticket
 from nightdesk.domain.permissions import PermissionSpec, merge_permissions
 from nightdesk.domain.profile_secrets import ProfileSecretBox
 from nightdesk.domain.run_tokens import issue_run_token, revoke_for_run
+from nightdesk.domain.notifications import (
+    build_run_completion_payload,
+    fire_webhook,
+)
 from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import transition_status
 from nightdesk.transcript import append_worker_error
@@ -52,6 +56,39 @@ from nightdesk.worker.workspace import (
 
 
 log = logging.getLogger(__name__)
+
+
+def _maybe_fire_webhook(
+    session: Session,
+    *,
+    ticket_id: str,
+    run_id: str,
+    exit_status: str,
+    error_summary: Optional[str],
+    base_url: str,
+) -> None:
+    """Fire a run-completion webhook if notify_webhook_url is configured."""
+    cfg = session.get(ConfigRow, 1)
+    url = getattr(cfg, "notify_webhook_url", None)
+    if not url or not url.strip():
+        return
+    from nightdesk.db.models import Run as RunModel, Ticket as TicketModel
+    run = session.get(RunModel, run_id)
+    ticket = session.get(TicketModel, ticket_id)
+    if run is None or ticket is None:
+        return
+    payload = build_run_completion_payload(
+        ticket_id=ticket_id,
+        title=ticket.title,
+        run_id=run_id,
+        exit_status=exit_status,
+        error_summary=error_summary,
+        cost_usd=run.cost_usd,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        base_url=base_url,
+    )
+    fire_webhook(url, payload)
 
 
 @dataclass
@@ -587,6 +624,17 @@ async def run_one(
                 except Exception:
                     log.exception("could not transition to review for %s",
                                   ticket.id)
+                try:
+                    _maybe_fire_webhook(
+                        session,
+                        ticket_id=ticket.id,
+                        run_id=run.id,
+                        exit_status=result.exit_status,
+                        error_summary=result.error_summary,
+                        base_url=cfg.api_url,
+                    )
+                except Exception:
+                    log.exception("webhook fire failed for ticket %s", ticket.id)
             else:
                 log.info("run %s completed for ticket %s: exit=%s (status already %s)",
                          run.id, ticket.id, result.exit_status,
@@ -627,6 +675,19 @@ async def run_one(
             except Exception:
                 log.exception("could not transition setup-failed ticket %s "
                               "to review", ticket_id)
+            try:
+                cur_ticket = session.get(Ticket, ticket_id)
+                if cur_ticket is not None and cur_ticket.current_run_id is not None:
+                    _maybe_fire_webhook(
+                        session,
+                        ticket_id=ticket_id,
+                        run_id=cur_ticket.current_run_id,
+                        exit_status="failed",
+                        error_summary=f"setup error: {exc}",
+                        base_url=cfg.api_url,
+                    )
+            except Exception:
+                log.exception("webhook fire failed for setup-failed ticket %s", ticket_id)
             # Best-effort: if a run row was created before the failure,
             # write the worker_error onto its transcript so the user can
             # see it in the detail view. When setup fails before

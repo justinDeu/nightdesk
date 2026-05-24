@@ -169,6 +169,9 @@ class ConfigRow(Base):
         Integer, default=60 * 60 * 24 * 30, nullable=False,
     )
     cc_minimum_version: Mapped[str] = mapped_column(String, default="2.1.80", nullable=False)
+    # Webhook URL for run-completion notifications (Slack/Discord/ntfy etc.).
+    # Best-effort POST on run -> review transition; empty/NULL means disabled.
+    notify_webhook_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 class RunToken(Base):

@@ -20,6 +20,8 @@
     {# localize_time.js: render UTC timestamps (data-ts / data-ts-title) in the
        viewer's locale + timezone, on load and after HTMX swaps. #}
     <script src="{{ static_v('localize_time.js') }}" defer></script>
+    {# notifications.js: browser desktop notifications for run completions. #}
+    <script src="{{ static_v('notifications.js') }}" defer></script>
   </head>
   <body class="bg-bg text-fg min-h-screen">
     <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">
@@ -67,6 +69,18 @@
         {% endif %}
       </nav>
       <div class="flex-1"></div>
+      <button id="notify-bell" type="button" title="Enable desktop notifications"
+              class="hidden text-sm text-fg-muted hover:text-fg transition-colors"
+              onclick="window.ndRequestNotificationPermission(function(){document.getElementById('notify-bell').classList.add('hidden')})">
+        &#x1F514;
+      </button>
+      <script>
+        (function(){
+          if ('Notification' in window && Notification.permission === 'default') {
+            document.getElementById('notify-bell').classList.remove('hidden');
+          }
+        })();
+      </script>
       <div id="worker-pill"
            class="relative group text-sm text-fg-muted font-mono"
            hx-get="/header/worker-pill"
