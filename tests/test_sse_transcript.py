@@ -106,6 +106,73 @@ async def test_sse_since_seq_drops_already_rendered_events(app, session, tmp_pat
     assert seqs == [2]
 
 
+async def test_sse_emits_event_ids(app, session, tmp_path):
+    """Each canonical event carries an ``id: <seq>`` SSE field so the browser
+    tracks Last-Event-ID and can resume on reconnect."""
+    from nightdesk.domain.runs import start_run
+
+    _p, t = _make_running_ticket(session, tmp_path)
+    log = tmp_path / "transcripts" / "run-ids.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("ab") as f:
+        write_event(f, {"type": "meta", "ts": now_iso(), "seq": 0,
+                        "run_id": "r1", "ticket_id": t.id})
+        write_event(f, {"type": "assistant_text", "ts": now_iso(), "seq": 1,
+                        "text": "a"})
+    start_run(session, ticket_id=t.id, worktree_path=str(tmp_path / "work"),
+              transcript_path=str(log), pid=None, host="testhost")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test",
+                           cookies={"nightdesk_token": "t"}) as ac:
+        async with ac.stream("GET", f"/api/v1/tickets/{t.id}/transcript") as r:
+            chunks = []
+            async for chunk in r.aiter_text():
+                chunks.append(chunk)
+                if "event: end" in chunk:
+                    break
+
+    text = "".join(chunks)
+    assert "id: 0\n" in text
+    assert "id: 1\n" in text
+
+
+async def test_sse_last_event_id_header_resumes_above_watermark(app, session, tmp_path):
+    """On reconnect the browser sends Last-Event-ID; the endpoint must resume
+    strictly above it rather than replaying the whole live transcript (which
+    the client would re-append, ballooning the DOM). The header floor wins even
+    when the since_seq query is lower or absent."""
+    from nightdesk.domain.runs import start_run
+
+    _p, t = _make_running_ticket(session, tmp_path)
+    log = tmp_path / "transcripts" / "run-resume.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("ab") as f:
+        for seq, txt in [(0, "zero"), (1, "one"), (2, "two"), (3, "three")]:
+            write_event(f, {"type": "assistant_text", "ts": now_iso(),
+                            "seq": seq, "text": txt})
+    start_run(session, ticket_id=t.id, worktree_path=str(tmp_path / "work"),
+              transcript_path=str(log), pid=None, host="testhost")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test",
+                           cookies={"nightdesk_token": "t"}) as ac:
+        # Simulate a reconnect that already received through seq 2. since_seq
+        # is absent (default -1); the header alone must gate the replay.
+        async with ac.stream(
+            "GET", f"/api/v1/tickets/{t.id}/transcript",
+            headers={"Last-Event-ID": "2"},
+        ) as r:
+            chunks = []
+            async for chunk in r.aiter_text():
+                chunks.append(chunk)
+                if "event: end" in chunk:
+                    break
+
+    evts = _events_from_chunks(chunks)
+    assert [e.get("seq") for e in evts] == [3]
+
+
 async def test_sse_default_since_seq_streams_all_in_order(app, session, tmp_path):
     """Without since_seq the full file replays once, in seq order."""
     from nightdesk.domain.runs import start_run

@@ -80,12 +80,27 @@
       );
     }
 
+    // Live registry of Sortable instances keyed by their <ul>. The columns
+    // poll OOB-replaces each column section (including its <ul>) every few
+    // seconds, so without this every poll would construct a fresh Sortable and
+    // orphan the previous one. SortableJS retains the detached <ul> (and all
+    // its cards) via document-level drag listeners and its animation-state
+    // manager until destroy() is called, so the heap climbed without bound on
+    // any board tab left open. Reap instances whose element has left the DOM
+    // before binding new ones.
+    var sortables = new Map();
+
     function initSortable() {
       if (typeof Sortable === 'undefined') return;
+      sortables.forEach(function (inst, list) {
+        if (!document.contains(list)) {
+          try { inst.destroy(); } catch (e) {}
+          sortables.delete(list);
+        }
+      });
       document.querySelectorAll('ul.board-list').forEach(function (list) {
-        if (list.__sortable_bound) return;
-        list.__sortable_bound = true;
-        new Sortable(list, {
+        if (sortables.has(list)) return;
+        sortables.set(list, new Sortable(list, {
           group: 'board',
           animation: 120,
           ghostClass: 'opacity-50',
@@ -112,7 +127,7 @@
             // the sidebar's in-progress edit is preserved.
             p.then(pollColumnsNow, pollColumnsNow);
           },
-        });
+        }));
       });
     }
 

@@ -859,6 +859,12 @@
         // only accumulate events strictly above the watermark.
         const statsBar = document.getElementById('run-stats-bar');
         const seqHigh = statsBar ? parseInt(statsBar.dataset.lastSeq || '-1', 10) : -1;
+        // Live high-water mark. Starts at the server-rendered watermark and
+        // advances as events arrive, so an EventSource auto-reconnect (the
+        // browser replays from the stream's start) does not re-render — and
+        // re-append — events we already showed. Leaving this frozen at seqHigh
+        // was the cause of unbounded transcript DOM growth across reconnects.
+        let lastSeq = seqHigh;
         function readNumStat(name) {
           if (!statsBar) return 0;
           const el = statsBar.querySelector(`[data-stat="${name}"]`);
@@ -951,7 +957,12 @@
         window.__transcriptES = es;
         function isNew(evt) {
           const s = typeof evt.seq === 'number' ? evt.seq : -1;
-          return s > seqHigh;
+          return s > lastSeq;
+        }
+        // Advance the watermark once an event is accepted for rendering.
+        // Seq-less (legacy) events leave it untouched.
+        function advance(evt) {
+          if (typeof evt.seq === 'number' && evt.seq > lastSeq) lastSeq = evt.seq;
         }
         ['meta', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error', 'rate_limit', 'cancelled', 'subagent'].forEach(function (t) {
           es.addEventListener(t, function (e) {
@@ -966,11 +977,12 @@
               renderStats();
             }
             append(evt);
+            advance(evt);
           });
         });
         es.addEventListener('stats', function (e) {
           const evt = parse(e);
-          if (evt && isNew(evt)) applyStatsEvent(evt);
+          if (evt && isNew(evt)) { applyStatsEvent(evt); advance(evt); }
         });
         // Drop the live animation (pulsing dot + ellipsis) when the stream
         // reaches a terminal state, leaving a plain static label.
