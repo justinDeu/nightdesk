@@ -15,8 +15,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0004_run_prompt"
-down_revision: Union[str, Sequence[str], None] = "0003_config_worktree_base_ref"
+revision: str = "0005_run_prompt"
+down_revision: Union[str, Sequence[str], None] = "0004_ticket_dependencies"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
