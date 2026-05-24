@@ -344,6 +344,14 @@ li[data-ticket-id][data-selected] {
     border: 0;
     margin: 8px 0;
   }
+  /* Hunk header row in the per-run diff viewer (@@ ... @@ lines). */
+  .diff-row.hunk {
+    background: color-mix(in oklab, var(--color-info) 12%, transparent);
+    color: var(--color-fg-muted);
+  }
+  .diff-row.hunk .diff-gutter {
+    color: var(--color-info);
+  }
 
   /* Header strip above an Edit / MultiEdit diff block. File path on the
      left (monospace, ellipsizes when narrow); +N -M line counts on the

@@ -19,7 +19,11 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Red
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from sqlalchemy import select
+
 from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.db.models import TicketWorkspace
+from nightdesk.domain.diff import compute_run_diff
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
 from nightdesk.domain.tickets import (
@@ -130,6 +134,45 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
                 "live": run.finished_at is None,
                 "transcript_events": events,
                 "transcript_raw": raw_text,
+            },
+        )
+
+    @router.get("/tickets/{tid}/runs/{rid}/diff-panel",
+                response_class=HTMLResponse, dependencies=[auth])
+    async def run_diff_panel(tid: str, rid: str, request: Request,
+                              session: Session = Depends(get_session)):
+        """HTMX target for the Changes tab on the detail page.
+
+        Computes the diff for the run's workspace and renders the
+        partial diff panel template.
+        """
+        try:
+            t = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "ticket not found")
+        try:
+            run = get_run(session, rid)
+        except RunNotFound:
+            raise HTTPException(404, "run not found")
+        if run.ticket_id != tid:
+            raise HTTPException(404, "run not on this ticket")
+
+        ws = _find_workspace(session, rid, run.ticket_id)
+        diff_result = None
+        if ws is not None and ws.repo_root:
+            diff_result = compute_run_diff(
+                repo_root=ws.repo_root,
+                base_sha=ws.base_sha,
+                head_sha=ws.head_sha,
+                branch=ws.branch,
+            )
+
+        return templates.TemplateResponse(
+            request, "partials/diff_panel.html", {
+                "ticket": t,
+                "selected_run": run,
+                "diff": diff_result,
+                "workspace": ws,
             },
         )
 
@@ -296,3 +339,21 @@ def _remove_dir(session: Session, tid: str, path: str):
     dirs = [d for d in (t.additional_dirs or []) if d.get("path") != target]
     update_ticket(session, tid, additional_dirs=dirs)
     return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
+
+
+def _find_workspace(session: Session, run_id: str, ticket_id: str):
+    """Look up the TicketWorkspace for a run, falling back to ticket-level."""
+    ws = session.execute(
+        select(TicketWorkspace)
+        .where(TicketWorkspace.run_id == run_id)
+        .order_by(TicketWorkspace.position)
+        .limit(1)
+    ).scalar_one_or_none()
+    if ws is not None:
+        return ws
+    return session.execute(
+        select(TicketWorkspace)
+        .where(TicketWorkspace.ticket_id == ticket_id)
+        .order_by(TicketWorkspace.position)
+        .limit(1)
+    ).scalar_one_or_none()

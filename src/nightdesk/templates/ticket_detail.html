@@ -318,26 +318,46 @@
   </article>
 
   {# ===================================================================== #
-   # RIGHT COLUMN: transcript panel. Takes the remaining viewport width on
-   # lg+ and sticks while the left column scrolls. The inner div is the
-   # HTMX swap target for run-history clicks.
+   # RIGHT COLUMN: tabbed panel (Transcript / Changes). Takes the remaining
+   # viewport width on lg+ and sticks while the left column scrolls.
    # ===================================================================== #}
   <aside class="w-full flex-1 min-w-0 lg:sticky lg:top-4 self-stretch lg:max-h-[calc(100vh-5rem)] lg:flex lg:flex-col lg:overflow-hidden">
     <section id="transcript-panel"
              class="bg-bg-elev border border-border rounded p-4 lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
-      <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-2">Latest transcript</h2>
-      {# --- Prompt as first user message -------------------------------- #
-       # Placed above the HTMX swap target so switching runs does not
-       # erase it — the prompt belongs to the ticket, not a specific run. #}
+
+      {# --- Tab bar -------------------------------------------------------- #}
+      <div class="flex items-center gap-1 mb-2" data-tab-bar>
+        <button type="button" data-tab="transcript"
+                class="tab-btn text-sm font-semibold uppercase tracking-wide px-3 py-1 rounded
+                       bg-accent/20 text-accent">
+          Transcript
+        </button>
+        <button type="button" data-tab="changes"
+                class="tab-btn text-sm font-semibold uppercase tracking-wide px-3 py-1 rounded
+                       text-fg-muted hover:text-fg hover:bg-bg-elev-2">
+          Changes
+        </button>
+      </div>
+
+      {# --- Transcript tab content ----------------------------------------- #}
       {% set prompt_text = ticket.prompt or '' %}
-      {% if prompt_text %}
-      <details class="user-prompt mb-3">
-        <summary class="user-prompt-author">user</summary>
-        <pre class="user-prompt-body">{{ prompt_text }}</pre>
-      </details>
-      {% endif %}
-      <div id="transcript-panel-inner" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
-        {% include "partials/transcript_panel.html" %}
+      <div data-tab-content="transcript" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
+        {% if prompt_text %}
+        <details class="user-prompt mb-3">
+          <summary class="user-prompt-author">user</summary>
+          <pre class="user-prompt-body">{{ prompt_text }}</pre>
+        </details>
+        {% endif %}
+        <div id="transcript-panel-inner" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
+          {% include "partials/transcript_panel.html" %}
+        </div>
+      </div>
+
+      {# --- Changes tab content (loaded via HTMX) -------------------------- #}
+      <div data-tab-content="changes" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0 hidden">
+        <div id="diff-panel-inner" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0 lg:overflow-y-auto">
+          {# Populated by HTMX on tab click or run selection. #}
+        </div>
       </div>
     </section>
   </aside>
@@ -506,8 +526,66 @@
 </script>
 {% endif %}
 
-{# Store the current ticket ID so the board can highlight it on return. #}
+{# Store the current ticket ID so the board can highlight it on return.
+   Tab switching logic for Transcript / Changes panels. #}
 <script>
   sessionStorage.setItem('nd_last_viewed_ticket', '{{ ticket.id }}');
+
+  (function () {
+    var TID = "{{ ticket.id }}";
+    var activeTab = "transcript";
+    var selectedRunId = "{{ selected_run.id if selected_run else '' }}";
+
+    var tabBtns = document.querySelectorAll('[data-tab-bar] .tab-btn');
+    var transcriptContent = document.querySelector('[data-tab-content="transcript"]');
+    var changesContent = document.querySelector('[data-tab-content="changes"]');
+    var diffPanelInner = document.getElementById('diff-panel-inner');
+
+    function activateTab(name) {
+      activeTab = name;
+      tabBtns.forEach(function (btn) {
+        var isActive = btn.dataset.tab === name;
+        btn.classList.toggle('bg-accent/20', isActive);
+        btn.classList.toggle('text-accent', isActive);
+        btn.classList.toggle('text-fg-muted', !isActive);
+        btn.classList.toggle('hover:text-fg', !isActive);
+        btn.classList.toggle('hover:bg-bg-elev-2', !isActive);
+      });
+      if (transcriptContent) transcriptContent.classList.toggle('hidden', name !== 'transcript');
+      if (changesContent) changesContent.classList.toggle('hidden', name !== 'changes');
+
+      if (name === 'changes' && selectedRunId && diffPanelInner) {
+        // Load diff for the selected run if not already loaded.
+        if (!diffPanelInner.dataset.loaded || diffPanelInner.dataset.loadedRun !== selectedRunId) {
+          htmx.ajax('GET', '/tickets/' + TID + '/runs/' + selectedRunId + '/diff-panel', diffPanelInner);
+          diffPanelInner.dataset.loaded = 'true';
+          diffPanelInner.dataset.loadedRun = selectedRunId;
+        }
+      }
+    }
+
+    tabBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        activateTab(btn.dataset.tab);
+      });
+    });
+
+    // When a run is clicked in the history, update the selectedRunId and
+    // refresh the diff panel if the Changes tab is active.
+    document.querySelectorAll('[data-run-row]').forEach(function (row) {
+      var origClick = row.getAttribute('hx-on:click');
+      row.addEventListener('click', function () {
+        selectedRunId = row.dataset.runRow;
+        if (activeTab === 'changes') {
+          // Force reload diff for the newly selected run.
+          if (diffPanelInner) {
+            delete diffPanelInner.dataset.loaded;
+            delete diffPanelInner.dataset.loadedRun;
+          }
+          activateTab('changes');
+        }
+      });
+    });
+  })();
 </script>
 {% endblock %}
