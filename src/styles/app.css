@@ -799,6 +799,12 @@ li[data-ticket-id][data-selected] {
   opacity: 1;
   transform: translateY(0);
 }
+/* Fit variant for narrow/clipping containers (e.g. the transcript sidebar):
+   cap the tip to the button's width so it wraps instead of overflowing the
+   container and getting clipped. Pair with a full-width (w-full) button. */
+.nd-cmd-tip.is-fit {
+  max-width: 100%;
+}
 .nd-cmd-tip-label {
   display: block;
   margin-bottom: 4px;

@@ -313,7 +313,14 @@ def _fmt_duration_ms(ms) -> str:
 
 def subagent_summary(evt: dict) -> SubagentSummary:
     """Return display metadata for a (collapsed) ``subagent`` event."""
-    label = (evt.get("subagent_type") or "").strip() or "subagent"
+    # Prefer the Claude Code sub-agent type (e.g. "Explore"). Fall back to the
+    # generic task_type (e.g. "local_bash" -> "local bash") for agents that
+    # don't carry a subagent_type, so the label is still meaningful instead of
+    # a bare "subagent".
+    label = (evt.get("subagent_type") or "").strip()
+    if not label:
+        task_type = (evt.get("task_type") or "").strip()
+        label = task_type.replace("_", " ") if task_type else "subagent"
     phase = (evt.get("phase") or "progress").strip()
     status = (evt.get("status") or "").strip()
     detail = (evt.get("description") or "").strip()
