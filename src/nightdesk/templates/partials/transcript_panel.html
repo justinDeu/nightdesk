@@ -690,8 +690,10 @@
                 `[data-subagent-task-id="${tid}"]`);
               if (existing) {
                 // Preserve already-nested child tool calls across re-render.
-                const oldKids = existing.querySelector(':scope > .subagent-children')
-                  || existing.closest('.subagent-group') && existing.closest('.subagent-group').querySelector(':scope > .subagent-children');
+                // `.subagent-children` is a sibling of `existing` (both are
+                // direct children of `.subagent-group`), so reach it via the group.
+                const group = existing.closest('.subagent-group');
+                const oldKids = group && group.querySelector(':scope > .subagent-children');
                 const newKids = fresh.querySelector(':scope > .subagent-children');
                 if (oldKids && newKids && oldKids.children.length) {
                   newKids.replaceWith(oldKids);
