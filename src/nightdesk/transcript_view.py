@@ -469,10 +469,6 @@ def accumulate_stats(events) -> dict:
         "tool_count": 0, "model": None, "cost_usd": None,
         "last_seq": -1,
     }
-    # Sub-agent runs report a cumulative tool_uses count per task_id across
-    # many progress events; track the latest per task so the contribution is
-    # counted once (not once per progress event) and added to the total.
-    subagent_tools: dict[str, int] = {}
     for e in events:
         seq = e.get("seq")
         if isinstance(seq, int) and seq > out["last_seq"]:
@@ -480,13 +476,6 @@ def accumulate_stats(events) -> dict:
         t = e.get("type")
         if t == "tool_use":
             out["tool_count"] += 1
-            continue
-        if t == "subagent":
-            tid = e.get("task_id") or e.get("tool_use_id")
-            usage = e.get("usage") or {}
-            tu = usage.get("tool_uses") if isinstance(usage, dict) else None
-            if tid and isinstance(tu, (int, float)):
-                subagent_tools[tid] = int(tu)
             continue
         if t != "stats":
             continue
@@ -506,7 +495,6 @@ def accumulate_stats(events) -> dict:
                 out[k] += int(e.get(k) or 0)
         if e.get("model"):
             out["model"] = e["model"]
-    out["tool_count"] += sum(subagent_tools.values())
     return out
 
 

@@ -760,3 +760,26 @@ def test_todo_list_prefers_task_tools_over_todowrite():
     ]
     todos = build_todo_list(events)
     assert [t["label"] for t in todos] == ["from-task"]
+
+
+# --- accumulate_stats --------------------------------------------------------
+
+
+def test_accumulate_stats_counts_subagent_tools_once():
+    from nightdesk.transcript_view import accumulate_stats
+    events = [
+        {"type": "tool_use", "id": "agent1", "tool": "Agent", "input": {}, "seq": 1},
+        {"type": "subagent", "phase": "started", "task_id": "k1",
+         "tool_use_id": "agent1", "subagent_type": "Explore", "seq": 2},
+        {"type": "tool_use", "id": "g1", "tool": "Glob", "input": {},
+         "parent_tool_use_id": "agent1", "seq": 3},
+        {"type": "tool_use", "id": "g2", "tool": "Bash", "input": {},
+         "parent_tool_use_id": "agent1", "seq": 4},
+        {"type": "subagent", "phase": "notification", "task_id": "k1",
+         "tool_use_id": "agent1", "status": "completed",
+         "usage": {"tool_uses": 2, "total_tokens": 100, "duration_ms": 500}, "seq": 5},
+    ]
+    stats = accumulate_stats(events)
+    # 1 Agent dispatch + 2 nested tool calls = 3 real tool_use events.
+    # The sub-agent's usage.tool_uses (2) must NOT be added on top.
+    assert stats["tool_count"] == 3
