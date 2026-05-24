@@ -1,0 +1,29 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - link "nightdesk" [ref=e3] [cursor=pointer]:
+      - /url: /
+    - textbox "Search tickets..." [ref=e5]
+    - navigation [ref=e6]:
+      - link "Board" [ref=e7] [cursor=pointer]:
+        - /url: /
+      - link "Archive" [ref=e8] [cursor=pointer]:
+        - /url: /archive
+      - link "Profiles" [ref=e9] [cursor=pointer]:
+        - /url: /profiles
+      - link "Settings" [ref=e10] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=e14] [cursor=pointer]: demo-host · 1/2
+  - main [ref=e15]:
+    - generic [ref=e16]:
+      - heading "Sign in to nightdesk" [level=1] [ref=e17]
+      - paragraph [ref=e18]:
+        - text: Paste the bearer token from
+        - code [ref=e19]: ~/.config/nightdesk/config.toml
+        - text: ", or run"
+        - code [ref=e20]: nightdesk login
+        - text: in a terminal to open a pre-authenticated browser session.
+      - generic [ref=e21]:
+        - generic [ref=e22]:
+          - generic [ref=e23]: Bearer token
+          - textbox "Bearer token" [ref=e24]
+        - button "Sign in" [ref=e25]

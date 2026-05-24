@@ -1,0 +1,15 @@
+[   60044ms] [ERROR] htmx:afterRequest @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   60044ms] [ERROR] htmx:sendError @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   60044ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8876/header/worker-pill:0
+[   63044ms] [ERROR] htmx:afterRequest @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   63044ms] [ERROR] htmx:sendError @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   63044ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8876/header/worker-pill:0
+[   66045ms] [ERROR] htmx:afterRequest @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   66045ms] [ERROR] htmx:sendError @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   66045ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8876/header/worker-pill:0
+[   69046ms] [ERROR] htmx:afterRequest @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   69046ms] [ERROR] htmx:sendError @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   69046ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8876/header/worker-pill:0
+[   72047ms] [ERROR] htmx:afterRequest @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   72047ms] [ERROR] htmx:sendError @ http://127.0.0.1:8876/static/htmx.min.js:0
+[   72047ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8876/header/worker-pill:0

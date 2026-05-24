@@ -1,0 +1,76 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - link "nightdesk" [ref=e3] [cursor=pointer]:
+      - /url: /
+    - textbox "Search tickets..." [ref=e5]
+    - navigation [ref=e6]:
+      - link "Board" [ref=e7] [cursor=pointer]:
+        - /url: /
+      - link "Archive" [ref=e8] [cursor=pointer]:
+        - /url: /archive
+      - link "Profiles" [ref=e9] [cursor=pointer]:
+        - /url: /profiles
+      - link "Settings" [ref=e10] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=e14] [cursor=pointer]: offline
+  - main [ref=e15]:
+    - generic [ref=e16]:
+      - heading "Archive" [level=1] [ref=e18]
+      - generic [ref=e19]:
+        - generic [ref=e20]:
+          - generic [ref=e21]: Outcome
+          - combobox "Outcome" [ref=e22]:
+            - option "any" [selected]
+            - option "success"
+            - option "failed"
+            - option "cancelled"
+            - option "worker_crash"
+        - generic [ref=e23]:
+          - generic [ref=e24]: Profile
+          - combobox "Profile" [ref=e25]:
+            - option "any" [selected]
+            - option "Edit workspace"
+            - option "Full workspace"
+            - option "Read only"
+        - generic [ref=e26]:
+          - generic [ref=e27]: Since
+          - textbox "Since" [ref=e28]: 2026-04-22
+        - generic [ref=e29]:
+          - generic [ref=e30]: Until
+          - textbox "Until" [ref=e31]: 2026-05-22
+        - generic [ref=e32]:
+          - generic [ref=e33]: Search
+          - searchbox "Search" [ref=e34]
+        - button "Apply" [ref=e35]
+      - table [ref=e37]:
+        - rowgroup [ref=e38]:
+          - row "Title Profile Outcome Finished Priority Actions" [ref=e39]:
+            - columnheader "Title" [ref=e40]
+            - columnheader "Profile" [ref=e41]
+            - columnheader "Outcome" [ref=e42]
+            - columnheader "Finished" [ref=e43]
+            - columnheader "Priority" [ref=e44]
+            - columnheader "Actions" [ref=e45]
+        - rowgroup [ref=e46]:
+          - row "Update dependency versions Read only success 2m ago 2 Unarchive" [ref=e47]:
+            - cell "Update dependency versions" [ref=e48]:
+              - link "Update dependency versions" [ref=e49] [cursor=pointer]:
+                - /url: /tickets/361c3bb7-08fa-41e6-90b8-c5786138cf72
+            - cell "Read only" [ref=e50]
+            - cell "success" [ref=e51]:
+              - generic [ref=e52]: success
+            - cell "2m ago" [ref=e53]
+            - cell "2" [ref=e54]
+            - cell "Unarchive" [ref=e55]:
+              - button "Unarchive" [ref=e57]
+          - row "Add health-check endpoint Edit workspace success 2m ago 0 Unarchive" [ref=e58]:
+            - cell "Add health-check endpoint" [ref=e59]:
+              - link "Add health-check endpoint" [ref=e60] [cursor=pointer]:
+                - /url: /tickets/22526406-d09d-4194-9936-76396fca7f35
+            - cell "Edit workspace" [ref=e61]
+            - cell "success" [ref=e62]:
+              - generic [ref=e63]: success
+            - cell "2m ago" [ref=e64]
+            - cell "0" [ref=e65]
+            - cell "Unarchive" [ref=e66]:
+              - button "Unarchive" [ref=e68]

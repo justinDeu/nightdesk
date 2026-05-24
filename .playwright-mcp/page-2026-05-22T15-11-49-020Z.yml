@@ -1,0 +1,103 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - link "nightdesk" [ref=e3] [cursor=pointer]:
+      - /url: /
+    - textbox "Search tickets..." [ref=e5]
+    - navigation [ref=e6]:
+      - link "Board" [ref=e7] [cursor=pointer]:
+        - /url: /
+      - link "Archive" [ref=e8] [cursor=pointer]:
+        - /url: /archive
+      - link "Profiles" [ref=e9] [cursor=pointer]:
+        - /url: /profiles
+      - link "Settings" [ref=e10] [cursor=pointer]:
+        - /url: /settings
+      - button "+ New ticket" [ref=e11]
+    - generic [ref=e15] [cursor=pointer]: demo-host · 1/2
+  - main [ref=e16]:
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - heading "Draft · 2" [level=2] [ref=e20]
+        - list [ref=e21]:
+          - listitem [ref=e22]:
+            - generic [ref=e23]:
+              - generic [ref=e24]:
+                - generic [ref=e25]: Add dark mode toggle
+                - generic [ref=e27]: Edit workspace
+              - link "Open ticket detail" [ref=e28] [cursor=pointer]:
+                - /url: /tickets/5ae01347-fbb4-45bb-a48f-18b3ddff872d
+                - text: ↗
+          - listitem [ref=e29]:
+            - generic [ref=e30]:
+              - generic [ref=e31]:
+                - generic [ref=e32]: Write onboarding guide
+                - generic [ref=e34]: Full workspace
+              - link "Open ticket detail" [ref=e35] [cursor=pointer]:
+                - /url: /tickets/2ea9c504-21ae-4356-a962-b22227e2615b
+                - text: ↗
+      - generic [ref=e36]:
+        - heading "Queued · 2" [level=2] [ref=e38]
+        - list [ref=e39]:
+          - listitem [ref=e40]:
+            - generic [ref=e41]:
+              - generic [ref=e42]:
+                - generic [ref=e43]: Fix pagination on archive view
+                - generic [ref=e45]: Read only
+              - link "Open ticket detail" [ref=e46] [cursor=pointer]:
+                - /url: /tickets/c2ec5ef2-57b6-417a-85ba-4467c5c7a53b
+                - text: ↗
+          - listitem [ref=e47]:
+            - generic [ref=e48]:
+              - generic [ref=e49]:
+                - generic [ref=e50]: Add rate-limit banner component
+                - generic [ref=e52]: Edit workspace
+              - link "Open ticket detail" [ref=e53] [cursor=pointer]:
+                - /url: /tickets/da9cafa2-10b7-4f25-b261-7ff3d707fa4c
+                - text: ↗
+      - generic [ref=e54]:
+        - heading "Running · 1" [level=2] [ref=e56]
+        - list [ref=e57]:
+          - listitem [ref=e58]:
+            - generic [ref=e59]:
+              - generic [ref=e60]:
+                - generic [ref=e61]: Refactor authentication middleware
+                - generic [ref=e63]: Full workspace
+              - link "Open ticket detail" [ref=e64] [cursor=pointer]:
+                - /url: /tickets/accba1ff-43e6-40b9-9b7e-ebac9103d9cc
+                - text: ↗
+      - generic [ref=e65]:
+        - heading "Review · 3" [level=2] [ref=e67]
+        - list [ref=e68]:
+          - listitem [ref=e69]:
+            - generic [ref=e70]:
+              - generic [ref=e71]:
+                - generic [ref=e72]: Implement CSV export for reports
+                - generic [ref=e73]:
+                  - generic [ref=e74]: Read only
+                  - generic [ref=e75]: success
+              - link "Open ticket detail" [ref=e76] [cursor=pointer]:
+                - /url: /tickets/6b4168ee-6a65-40b5-a0b9-5aed2d944d04
+                - text: ↗
+          - listitem [ref=e77]:
+            - generic [ref=e78]:
+              - generic [ref=e79]:
+                - generic [ref=e80]: Migrate to pydantic v2 models
+                - generic [ref=e81]:
+                  - generic [ref=e82]: Edit workspace
+                  - generic [ref=e83]: failed
+              - link "Open ticket detail" [ref=e84] [cursor=pointer]:
+                - /url: /tickets/d16c4cf1-f539-4404-b92d-44b0cef9a799
+                - text: ↗
+          - listitem [ref=e85]:
+            - generic [ref=e86]:
+              - generic [ref=e87]:
+                - generic [ref=e88]: Upgrade to SQLAlchemy 2.1
+                - generic [ref=e89]:
+                  - generic [ref=e90]: Full workspace
+                  - generic [ref=e91]: cancelled
+              - link "Open ticket detail" [ref=e92] [cursor=pointer]:
+                - /url: /tickets/f625ec7c-c345-42e8-8ff4-b89e86e6ecf8
+                - text: ↗
+      - complementary [ref=e93]:
+        - heading "New ticket" [level=2] [ref=e95]
+        - paragraph [ref=e97]: No ticket selected. Click a card on the board to view it, or use + New ticket in the top bar to start a new one.
