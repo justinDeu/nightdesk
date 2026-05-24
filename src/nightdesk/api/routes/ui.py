@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain.notifications import build_test_payload, fire_webhook
 from nightdesk.domain.tickets import (
     archive, requeue, request_run_now, transition_status,
     TicketNotFound, InvalidTransition,
@@ -143,6 +144,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         cc_minimum_version: str = Form(""),
         worktree_base_ref: str = Form(""),
         tz_offset: str = Form(""),
+        notify_webhook_url: str = Form(""),
     ):
         import re
 
@@ -187,6 +189,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         cfg.claude_binary_path = (claude_binary_path or "").strip() or None
         cfg.cc_minimum_version = (cc_minimum_version or "").strip() or cfg.cc_minimum_version
         cfg.worktree_base_ref = (worktree_base_ref or "").strip() or None
+        cfg.notify_webhook_url = (notify_webhook_url or "").strip() or None
         session.commit()
         session.refresh(cfg)
         import shutil
@@ -195,5 +198,20 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             {"title": "Settings", "active_page": "settings", "cfg": cfg,
              "path_claude_binary": shutil.which("claude"), "saved": True},
         )
+
+    @router.post("/settings/test-webhook", dependencies=[auth])
+    async def test_webhook(
+        request: Request,
+        url: str = Form(""),
+    ):
+        """Fire a synthetic test payload to the given webhook URL."""
+        import re as _re
+        target = (url or "").strip()
+        if not target or not _re.match(r"^https?://", target):
+            raise HTTPException(422, "provide a valid http(s) webhook URL")
+        base_url = str(request.base_url).rstrip("/")
+        payload = build_test_payload(base_url)
+        fire_webhook(target, payload)
+        return Response(status_code=204)
 
     return router

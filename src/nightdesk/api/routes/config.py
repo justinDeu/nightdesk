@@ -49,6 +49,9 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
         for k, v in payload.model_dump().items():
             if v is not None:
                 setattr(row, k, v)
+        # Empty-string webhook URL means "clear it" — set to None.
+        if row.notify_webhook_url is not None and not row.notify_webhook_url.strip():
+            row.notify_webhook_url = None
         session.commit()
         session.refresh(row)
         return row

@@ -322,6 +322,7 @@ class ConfigOut(BaseModel):
     worktree_root: str
     transcript_root: str
     worktree_base_ref: Optional[str] = None
+    notify_webhook_url: Optional[str] = None
 
 
 _HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -342,6 +343,8 @@ class ConfigUpdate(BaseModel):
     # Global default base ref for git_worktree tickets. Pass an empty string to
     # clear the default (tickets then branch from HEAD). None leaves it alone.
     worktree_base_ref: Optional[str] = None
+    # Webhook URL for run-completion notifications. Empty string clears it.
+    notify_webhook_url: Optional[str] = None
 
     @field_validator("window_start", "window_end", mode="before")
     @classmethod
@@ -359,6 +362,15 @@ class ConfigUpdate(BaseModel):
             return v
         if not isinstance(v, str):
             raise ValueError("worktree_base_ref must be a string")
+        return v.strip()
+
+    @field_validator("notify_webhook_url", mode="before")
+    @classmethod
+    def _clean_webhook_url(cls, v: object) -> object:
+        if v is None:
+            return v
+        if not isinstance(v, str):
+            raise ValueError("notify_webhook_url must be a string")
         return v.strip()
 
 
