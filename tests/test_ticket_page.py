@@ -555,6 +555,9 @@ async def test_subagent_children_nested_under_card(
     glob_pos = body.index("Glob")
     assert glob_pos > subagent_group_start
 
+    # Children are wrapped in a collapsible <details> with the toggle summary.
+    assert "subagent-children-toggle" in body
+
 
 async def test_transcript_sidebar_shows_subagent_and_tasks(
     cookie_client, session, tmp_path,
@@ -613,6 +616,8 @@ async def test_transcript_sidebar_shows_subagent_and_tasks(
     # Sub-agent entry with filter hook.
     assert f'data-filter-tool-use-id="{agent_id}"' in body
     assert "Executor" in body
+    # Sidebar button has a native hover tooltip via title=.
+    assert 'title=' in body
 
     # Task subjects appear with correct CSS checkbox classes.
     assert "Write the tests" in body

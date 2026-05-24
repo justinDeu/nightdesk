@@ -397,6 +397,9 @@ def subagent_index(events) -> list[dict]:
             "duration": s.duration,
             "done": s.done,
             "failed": s.failed,
+            "detail": s.detail,
+            "description": card.get("description", ""),
+            "prompt": card.get("prompt", ""),
         })
     return rows
 

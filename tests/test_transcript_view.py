@@ -391,6 +391,25 @@ def test_subagent_index_ignores_non_subagent_events():
     assert len(idx) == 1 and idx[0]["label"] == "Explore"
 
 
+def test_subagent_index_includes_description_and_prompt():
+    from nightdesk.transcript_view import subagent_index
+    events = [
+        {"type": "subagent", "phase": "started", "task_id": "k1",
+         "tool_use_id": "A", "subagent_type": "Explore",
+         "description": "explore the codebase",
+         "prompt": "find all Python files"},
+        {"type": "subagent", "phase": "notification", "task_id": "k1",
+         "tool_use_id": "A", "status": "completed",
+         "usage": {"tool_uses": 3, "total_tokens": 500, "duration_ms": 2000}},
+    ]
+    idx = subagent_index(events)
+    assert len(idx) == 1
+    row = idx[0]
+    assert row["description"] == "explore the codebase"
+    assert row["prompt"] == "find all Python files"
+    assert "detail" in row
+
+
 def test_thinking_whitespace_only_renders_nothing():
     html = _render_event({"type": "thinking", "text": "   \n\t  "}).strip()
     assert html == ""

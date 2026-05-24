@@ -628,7 +628,10 @@
                   `</div>` +
                 `</details>` +
               `</div>` +
-              `<div class="subagent-children ml-4 pl-3 space-y-1 border-l border-border"></div>` +
+              `<details class="subagent-children-wrap ml-4">` +
+                `<summary class="subagent-children-toggle">tool calls</summary>` +
+                `<div class="subagent-children pl-3 space-y-1 border-l border-border"></div>` +
+              `</details>` +
             `</div>`
           );
         }
@@ -707,11 +710,11 @@
                 `[data-subagent-task-id="${tid}"]`);
               if (existing) {
                 // Preserve already-nested child tool calls across re-render.
-                // `.subagent-children` is a sibling of `existing` (both are
-                // direct children of `.subagent-group`), so reach it via the group.
+                // `.subagent-children` is now nested inside a `<details>`, so
+                // use a descendant selector instead of a direct-child selector.
                 const group = existing.closest('.subagent-group');
-                const oldKids = group && group.querySelector(':scope > .subagent-children');
-                const newKids = fresh.querySelector(':scope > .subagent-children');
+                const oldKids = group && group.querySelector('.subagent-children');
+                const newKids = fresh.querySelector('.subagent-children');
                 if (oldKids && newKids && oldKids.children.length) {
                   newKids.replaceWith(oldKids);
                 }
@@ -773,6 +776,12 @@
               toInsert = wrap;
             }
             target.appendChild(toInsert);
+            if (evt.parent_tool_use_id && target !== container) {
+              const group = container.querySelector(`.subagent-group[data-subagent-tool-use-id="${evt.parent_tool_use_id}"]`);
+              const summary = group && group.querySelector('.subagent-children-toggle');
+              const n = target.querySelectorAll(':scope > [data-parent-tool-use-id]').length;
+              if (summary) summary.textContent = n + (n === 1 ? ' tool call' : ' tool calls');
+            }
             if (evt.type === 'rate_limit') bindCountdowns(node);
             if (window.ndLocalizeTimes) window.ndLocalizeTimes(node);
             applyCollapsedState(node);
@@ -783,7 +792,7 @@
           const ptid = evt && evt.parent_tool_use_id;
           if (ptid) {
             const kids = container.querySelector(
-              `.subagent-group[data-subagent-tool-use-id="${ptid}"] > .subagent-children`);
+              `.subagent-group[data-subagent-tool-use-id="${ptid}"] .subagent-children`);
             if (kids) return kids;
           }
           return container;

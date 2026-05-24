@@ -252,13 +252,16 @@
     <div class="subagent-group" data-subagent-tool-use-id="{{ node.event.get('tool_use_id') or '' }}">
       {{ evt_subagent(node.event) }}
       {% if node.children %}
-      <div class="subagent-children ml-4 pl-3 space-y-1 border-l border-border">
-        {% for child in node.children %}
-          <div data-parent-tool-use-id="{{ node.event.get('tool_use_id') or '' }}">
-            {{ render_event(child.event, child.paired_result) }}
-          </div>
-        {% endfor %}
-      </div>
+      <details class="subagent-children-wrap ml-4" open>
+        <summary class="subagent-children-toggle">{{ node.children|length }} tool call{{ '' if node.children|length == 1 else 's' }}</summary>
+        <div class="subagent-children pl-3 space-y-1 border-l border-border">
+          {% for child in node.children %}
+            <div data-parent-tool-use-id="{{ node.event.get('tool_use_id') or '' }}">
+              {{ render_event(child.event, child.paired_result) }}
+            </div>
+          {% endfor %}
+        </div>
+      </details>
       {% endif %}
     </div>
   {% else %}
