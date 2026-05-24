@@ -29,8 +29,14 @@
   <form method="post"
         action="{{ _form_action }}"
         hx-post="{{ _form_action }}"
+        {% if _is_edit %}
+        hx-target="#sidebar"
+        hx-swap="outerHTML"
+        hx-on::after-request="if (event.detail.successful) { var d=document.getElementById('{{ _mid }}'); if(d) d.close(); var p=document.getElementById('board-columns-poll'); if(p&&typeof htmx!=='undefined') htmx.trigger(p,'poll'); }"
+        {% else %}
         hx-swap="none"
         hx-on::after-request="if (event.detail.successful) { document.getElementById('{{ _mid }}').close(); window.location.reload(); }"
+        {% endif %}
         data-ticket-form
         class="flex flex-col max-h-[92vh]">
 
