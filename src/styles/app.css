@@ -246,6 +246,11 @@ li[data-ticket-id][data-selected] {
     margin-top: 0.25rem;
     color: var(--color-fg-muted);
   }
+  /* Command variant: matches the diff/Changes copy tooltips. */
+  .nd-tooltip .nd-tooltip-body.is-cmd {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: var(--color-accent);
+  }
 
   .tc-path {
     font-family: var(--font-mono);

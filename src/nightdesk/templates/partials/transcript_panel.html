@@ -147,7 +147,9 @@
           }
           if (body) {
             const b = document.createElement('div');
-            b.className = 'nd-tooltip-body';
+            // data-tip-mono marks the body as a command: render it in mono +
+            // accent like the diff/Changes copy tooltips.
+            b.className = 'nd-tooltip-body' + (btn.dataset.tipMono ? ' is-cmd' : '');
             b.textContent = body;
             tip.appendChild(b);
           }

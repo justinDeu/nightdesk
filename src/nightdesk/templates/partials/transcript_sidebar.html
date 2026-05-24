@@ -89,6 +89,7 @@
             data-copy="{{ resume_cmd }}"
             data-tip-title="Copies the resume command to your clipboard"
             data-tip-body="{{ resume_cmd }}"
+            data-tip-mono="1"
             onclick="(function(b){var c=b.getAttribute('data-copy');var l=b.querySelector('.nd-cmd-label');if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(c).then(function(){var o=l.textContent;l.textContent='Copied!';setTimeout(function(){l.textContent=o;},1500);});}})(this)"
             class="w-full cursor-pointer rounded border border-border bg-bg-elev-2 px-2 py-1.5 text-left transition-colors hover:border-accent/50 hover:bg-bg-elev">
       <span class="nd-cmd-label block truncate font-mono text-[11px] text-fg">{{ resume_cmd }}</span>
