@@ -631,6 +631,103 @@ async def test_transcript_sidebar_shows_subagent_and_tasks(
     assert "todo-item is-pending" in body
 
 
+async def test_sidebar_contains_stats_and_resume(
+    cookie_client, session, tmp_path,
+):
+    """Stats and resume sections live inside the sidebar, not as a top bar.
+
+    After the refactor the sidebar must contain:
+    - #run-stats-bar (with data-stat children for each metric)
+    - #nd-resume-cmd (when session_id + worktree_path exist)
+    - The old full-width stats bar must NOT appear outside the sidebar.
+    """
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="p",
+                      priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    log = tmp_path / "transcripts" / "sidebar_stats.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"type": "meta", "ts": "2026-05-16T00:00:00Z", "seq": 0,
+         "run_id": "statsrun", "ticket_id": t.id},
+    ]
+    log.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    run = start_run(session, ticket_id=t.id,
+                    worktree_path=str(tmp_path / "work"),
+                    transcript_path=str(log), pid=None, host="testhost")
+    # Give the run a session_id so the resume section appears.
+    run.session_id = "sess-abc123"
+    session.commit()
+
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+
+    # Sidebar exists and contains the stats bar.
+    assert 'id="transcript-sidebar"' in body
+    assert 'id="run-stats-bar"' in body
+
+    # Stats bar carries its data attributes for the JS live-update wiring.
+    assert 'data-started-at=' in body
+    assert 'data-last-seq=' in body
+    assert 'data-stat="model"' in body
+    assert 'data-stat="duration"' in body
+    assert 'data-stat="tools"' in body
+    assert 'data-stat="input"' in body
+    assert 'data-stat="output"' in body
+    assert 'data-stat="cache-read"' in body
+    assert 'data-stat="cache-write"' in body
+    assert 'data-stat="cost"' in body
+
+    # Resume section rendered because session_id + worktree_path exist.
+    assert 'id="nd-resume-cmd"' in body
+    assert "claude --resume sess-abc123" in body
+
+    # The stats heading should be inside the sidebar, and the old top-level
+    # stats bar include is gone (no standalone run-stats bar before the
+    # transcript-scroll area).
+    sidebar_start = body.index('id="transcript-sidebar"')
+    stats_bar_pos = body.index('id="run-stats-bar"')
+    scroll_pos = body.index('id="transcript-scroll"')
+    # Stats bar must come after sidebar start.
+    assert stats_bar_pos > sidebar_start
+    # Stats bar must come after transcript-scroll (sidebar is right of scroll).
+    assert stats_bar_pos > scroll_pos
+
+
+async def test_sidebar_renders_without_subagents_or_tasks(
+    cookie_client, session, tmp_path,
+):
+    """Sidebar renders for a run with no sub-agents or tasks (stats only)."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="p",
+                      priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    log = tmp_path / "transcripts" / "stats_only.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"type": "meta", "ts": "2026-05-16T00:00:00Z", "seq": 0,
+         "run_id": "statsrun2", "ticket_id": t.id},
+    ]
+    log.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    start_run(session, ticket_id=t.id,
+              worktree_path=str(tmp_path / "work"),
+              transcript_path=str(log), pid=None, host="testhost")
+
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+
+    # Sidebar renders even without sub-agents or tasks.
+    assert 'id="transcript-sidebar"' in body
+    assert 'id="run-stats-bar"' in body
+
+    # Sub-agents and Tasks sections should NOT appear.
+    assert ">Sub-agents<" not in body
+    assert ">Tasks<" not in body
+
+    # Stats section heading present.
+    assert ">Stats<" in body
+
+
 async def test_task_create_renders_as_clean_card(
     cookie_client, session, tmp_path,
 ):
