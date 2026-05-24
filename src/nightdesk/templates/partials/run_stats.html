@@ -79,6 +79,23 @@
   </span>
 </div>
 
+{# Failure banner: always-visible error summary when the run failed. Placed
+   in the run header region so it's visible without scrolling the transcript. #}
+{% if selected_run.exit_status == "failed" %}
+{% set ns = namespace(msg=selected_run.error_summary or '') %}
+{% if not ns.msg %}
+  {% for evt in transcript_events %}
+    {% if evt.type == "result" and (evt.subtype or "success") != "success" and evt.summary and not ns.msg %}
+      {% set ns.msg = evt.summary %}
+    {% endif %}
+  {% endfor %}
+{% endif %}
+<div class="flex items-start gap-2 text-sm mb-3 px-3 py-2.5 rounded border-2 border-danger bg-danger/10">
+  <span class="font-bold text-danger uppercase tracking-wide text-xs shrink-0 pt-0.5">error</span>
+  <span class="text-fg whitespace-pre-wrap">{{ ns.msg or "Run failed with no error summary." }}</span>
+</div>
+{% endif %}
+
 {# Resume command: only when the SDK reported a session id. cd into the run's
    working dir (worktree for git-worktree runs, else the ticket cwd) so the
    resume runs in the right place, then resume the actual Claude conversation.
