@@ -347,6 +347,40 @@ def test_thinking_empty_renders_nothing():
     assert html == ""
 
 
+# --- subagent_index -----------------------------------------------------------
+
+
+def test_subagent_index_lists_each_card():
+    from nightdesk.transcript_view import subagent_index
+    events = [
+        {"type": "subagent", "phase": "started", "task_id": "k1",
+         "tool_use_id": "A", "subagent_type": "Explore"},
+        {"type": "subagent", "phase": "notification", "task_id": "k1",
+         "tool_use_id": "A", "status": "completed",
+         "usage": {"tool_uses": 6, "total_tokens": 1200, "duration_ms": 4000}},
+        {"type": "subagent", "phase": "started", "task_id": "k2",
+         "tool_use_id": "B", "subagent_type": "Plan"},
+    ]
+    idx = subagent_index(events)
+    assert [r["label"] for r in idx] == ["Explore", "Plan"]   # creation order preserved
+    explore = idx[0]
+    assert explore["tool_use_id"] == "A"
+    assert explore["status"] == "completed"
+    assert explore["tool_uses"] == 6
+    assert explore["done"] is True
+
+
+def test_subagent_index_ignores_non_subagent_events():
+    from nightdesk.transcript_view import subagent_index
+    events = [
+        {"type": "tool_use", "id": "x", "tool": "Read", "input": {}},
+        {"type": "subagent", "phase": "started", "task_id": "k1",
+         "tool_use_id": "A", "subagent_type": "Explore"},
+    ]
+    idx = subagent_index(events)
+    assert len(idx) == 1 and idx[0]["label"] == "Explore"
+
+
 def test_thinking_whitespace_only_renders_nothing():
     html = _render_event({"type": "thinking", "text": "   \n\t  "}).strip()
     assert html == ""

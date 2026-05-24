@@ -352,6 +352,44 @@ def _merge_subagent(base: dict, evt: dict) -> None:
             base[k] = v
 
 
+def subagent_index(events) -> list[dict]:
+    """One row per sub-agent for the sidebar, folding lifecycle phases.
+
+    Reuses the same per-task merge as the inline card so the sidebar and the
+    card never disagree. Each row carries ``tool_use_id`` so a click can filter
+    the main panel by ``parent_tool_use_id``. Rows preserve first-seen order.
+    """
+    cards: dict[str, dict] = {}
+    order: list[str] = []
+    for e in events:
+        if e.get("type") != "subagent":
+            continue
+        key = e.get("task_id") or e.get("tool_use_id")
+        if not key:
+            continue
+        if key not in cards:
+            cards[key] = dict(e)
+            order.append(key)
+        else:
+            _merge_subagent(cards[key], e)
+    rows: list[dict] = []
+    for key in order:
+        card = cards[key]
+        s = subagent_summary(card)
+        rows.append({
+            "label": s.label,
+            "status": s.status or ("done" if s.done else "run"),
+            "tool_use_id": card.get("tool_use_id", ""),
+            "task_id": card.get("task_id", ""),
+            "tool_uses": s.tool_uses,
+            "tokens": s.tokens,
+            "duration": s.duration,
+            "done": s.done,
+            "failed": s.failed,
+        })
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Event pairing: bind each tool_result to its parent tool_use so the static
 # renderer can place them inside the same card. Mirrored client-side by the
