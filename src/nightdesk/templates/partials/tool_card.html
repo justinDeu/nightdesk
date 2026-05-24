@@ -200,10 +200,12 @@
   {% set input = evt.get('input', {}) %}
   {% set cmd = input.get('command') or '' %}
   {% set desc = input.get('description') or '' %}
+  {% set cwd = (input.get('cwd') or '') | trim %}
   <details class="tc-card" open>
     {{ _summary(s) }}
     <div class="tc-body">
       <pre class="bash-cmd">{{ cmd }}</pre>
+      {% if cwd %}<div class="bash-cwd">{{ cwd }}</div>{% endif %}
       {% if desc %}<div class="bash-desc">{{ desc }}</div>{% endif %}
       {% if result %}
         {{ _result_in_body(result, true) }}

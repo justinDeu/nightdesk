@@ -271,7 +271,9 @@
             const cmd = String(input.command || '').trim();
             let first = cmd.split('\n')[0] || '';
             if (first.length > 80) first = first.slice(0, 77) + '...';
-            return {tag: 'Bash', cls: 'bash', primary: first, meta: ''};
+            const cwd = String(input.cwd || '').trim();
+            const meta = cwd ? `in ${cwd}` : '';
+            return {tag: 'Bash', cls: 'bash', primary: first, meta};
           }
           if (tool === 'Glob') {
             const pattern = input.pattern || '';
@@ -339,8 +341,10 @@
           } else if (tool === 'Bash') {
             const cmd = String(input.command || '');
             const desc = String(input.description || '');
+            const cwd = String(input.cwd || '').trim();
+            const cwdHtml = cwd ? `<div class="bash-cwd">${escapeHtml(cwd)}</div>` : '';
             const descHtml = desc ? `<div class="bash-desc">${escapeHtml(desc)}</div>` : '';
-            body = `<div class="tc-body"><pre class="bash-cmd">${escapeHtml(cmd)}</pre>${descHtml}</div>`;
+            body = `<div class="tc-body"><pre class="bash-cmd">${escapeHtml(cmd)}</pre>${cwdHtml}${descHtml}</div>`;
           } else if (tool === 'Write') {
             const content = String(input.content || '');
             if (content) {

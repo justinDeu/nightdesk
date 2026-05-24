@@ -164,6 +164,23 @@ def test_tool_summary_bash_truncates_long_first_line():
     assert len(s.primary) == 80
 
 
+def test_tool_summary_bash_without_cwd():
+    s = tool_summary({"tool": "Bash", "input": {"command": "ls"}})
+    assert s.meta == ""
+
+
+def test_tool_summary_bash_with_cwd():
+    s = tool_summary({"tool": "Bash", "input": {
+        "command": "ls", "cwd": "/home/user/project",
+    }})
+    assert s.meta == "in /home/user/project"
+
+
+def test_tool_summary_bash_with_empty_cwd():
+    s = tool_summary({"tool": "Bash", "input": {"command": "ls", "cwd": ""}})
+    assert s.meta == ""
+
+
 def test_tool_summary_grep_includes_flags_and_glob():
     s = tool_summary({"tool": "Grep", "input": {
         "pattern": "foo", "-i": True, "-n": True, "glob": "*.py", "path": "src",
@@ -230,6 +247,33 @@ def test_tool_card_edit_defaults_open():
 def test_tool_card_bash_defaults_open():
     html = _render_tool({"tool": "Bash", "input": {"command": "echo hi"}})
     assert '<details class="tc-card" open>' in html
+
+
+def test_tool_card_bash_without_cwd():
+    html = _render_tool({"tool": "Bash", "input": {"command": "ls"}})
+    assert "bash-cwd" not in html
+
+
+def test_tool_card_bash_with_cwd():
+    html = _render_tool({"tool": "Bash", "input": {
+        "command": "ls", "cwd": "/home/user/project",
+    }})
+    assert "bash-cwd" in html
+    assert "/home/user/project" in html
+    # cwd renders before description in the body.
+    cwd_pos = html.index("bash-cwd")
+    cmd_pos = html.index("bash-cmd")
+    assert cmd_pos < cwd_pos
+
+
+def test_tool_card_bash_with_cwd_and_description():
+    html = _render_tool({"tool": "Bash", "input": {
+        "command": "ls", "cwd": "/tmp", "description": "List files",
+    }})
+    assert "bash-cwd" in html
+    assert "bash-desc" in html
+    # cwd comes before description.
+    assert html.index("bash-cwd") < html.index("bash-desc")
 
 
 def test_tool_card_write_defaults_open():
