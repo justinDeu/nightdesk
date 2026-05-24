@@ -12,7 +12,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,12 @@ def _format_sse(line: str, since_seq: int = -1) -> str:
     re-emit events the page already shows (the duplicate "Run started" meta,
     drifting tool cards, etc.). Events without a numeric ``seq`` always pass
     through.
+
+    Each canonical event also carries an ``id: <seq>`` SSE field. The browser
+    echoes the last id back as the ``Last-Event-ID`` header on automatic
+    reconnect, letting the endpoint resume above the watermark instead of
+    replaying (and the client re-appending) the whole live transcript — the
+    root cause of unbounded tab memory growth on long-lived streams.
     """
     stripped = line.rstrip("\n")
     if not stripped:
@@ -48,7 +54,8 @@ def _format_sse(line: str, since_seq: int = -1) -> str:
         seq = evt.get("seq")
         if isinstance(seq, int) and seq <= since_seq:
             return ""
-        return f"event: {evt['type']}\ndata: {stripped}\n\n"
+        prefix = f"id: {seq}\n" if isinstance(seq, int) else ""
+        return f"{prefix}event: {evt['type']}\ndata: {stripped}\n\n"
     return f"data: {stripped}\n\n"
 
 
@@ -58,6 +65,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     @router.get("/api/v1/tickets/{tid}/transcript", dependencies=[auth])
     async def transcript_sse(
+        request: Request,
         tid: str,
         since_seq: int = Query(-1),
         session: Session = Depends(get_session),
@@ -66,6 +74,18 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             t = get_ticket(session, tid)
         except TicketNotFound:
             raise HTTPException(404, "not found")
+
+        # On automatic EventSource reconnect the browser sends the seq of the
+        # last event it received. Resume above it so a dropped-and-reconnected
+        # stream (common for long-open / backgrounded tabs) does not replay the
+        # whole live transcript and balloon the DOM. The header floor wins when
+        # it is ahead of the page-load watermark.
+        last_event_id = request.headers.get("last-event-id")
+        if last_event_id:
+            try:
+                since_seq = max(since_seq, int(last_event_id))
+            except (TypeError, ValueError):
+                pass
 
         path: Path | None = None
         if t.current_run_id is not None:
