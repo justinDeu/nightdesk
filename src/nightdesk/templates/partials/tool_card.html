@@ -50,6 +50,7 @@
       <pre class="tool-result-pre">{{ elide.head | join('\n') }}</pre>
       <details>
         <summary class="bash-hidden-summary">{{ elide.hidden }} lines hidden</summary>
+        <pre class="tool-result-pre">{{ elide.hidden_lines | join('\n') }}</pre>
       </details>
       <pre class="tool-result-pre">{{ elide.tail | join('\n') }}</pre>
     {% endif %}

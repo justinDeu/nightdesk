@@ -105,6 +105,7 @@ class ElidedOutput:
     tail: list[str]
     hidden: int          # 0 means not elided
     total: int
+    hidden_lines: list[str] = ()  # middle lines omitted from head/tail
 
 
 def elide_output(text: str, head: int = 10, tail: int = 5, threshold: int = 20) -> ElidedOutput:
@@ -121,6 +122,7 @@ def elide_output(text: str, head: int = 10, tail: int = 5, threshold: int = 20) 
     return ElidedOutput(
         head=lines[:head], tail=lines[-tail:],
         hidden=total - head - tail, total=total,
+        hidden_lines=lines[head:-tail],
     )
 
 

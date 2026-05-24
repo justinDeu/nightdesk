@@ -204,11 +204,12 @@
           if (lines.length && lines[lines.length - 1] === '') lines.pop();
           const total = lines.length;
           if (total <= threshold) {
-            return {head: lines, tail: [], hidden: 0, total: total};
+            return {head: lines, tail: [], hidden: 0, total: total, hidden_lines: []};
           }
           return {
             head: lines.slice(0, head), tail: lines.slice(-tail),
             hidden: total - head - tail, total: total,
+            hidden_lines: lines.slice(head, -tail),
           };
         }
 
@@ -421,7 +422,7 @@
               body = `<pre class="tool-result-pre">${escapeHtml(out)}</pre>`;
             } else {
               body = `<pre class="tool-result-pre">${escapeHtml(elide.head.join('\n'))}</pre>` +
-                     `<details><summary class="bash-hidden-summary">${elide.hidden} lines hidden</summary></details>` +
+                     `<details><summary class="bash-hidden-summary">${elide.hidden} lines hidden</summary><pre class="tool-result-pre">${escapeHtml(elide.hidden_lines.join('\n'))}</pre></details>` +
                      `<pre class="tool-result-pre">${escapeHtml(elide.tail.join('\n'))}</pre>`;
             }
             return el(`<details class="tool-result${isError ? ' is-error' : ''}" open><summary>${sumLine}</summary>${body}</details>`);
