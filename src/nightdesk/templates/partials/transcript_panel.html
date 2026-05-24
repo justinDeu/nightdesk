@@ -54,19 +54,49 @@
     <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto"
          style="max-height: calc(100vh - 10rem);">{{ transcript_raw }}</pre>
   {% else %}
-    <div id="transcript-scroll" class="overflow-y-auto pr-1" style="max-height: calc(100vh - 10rem);">
-      <div id="transcript" class="space-y-2">
-        {# Pre-pair tool_result events with their parent tool_use so each
-           pair renders as one visual card. Orphan results (no matching
-           tool_use in this slice) still render standalone. Mirrors the
-           append() logic in the live-tail JS below. #}
-        {% for item in tv.group_by_subagent(tv.pair_tool_events(transcript_events)) %}
-          {{ te.render_grouped(item) }}
-        {% else %}
-          <p class="text-fg-muted italic text-sm" data-empty="true">no events yet</p>
-        {% endfor %}
+    {% set subagent_agents = tv.subagent_index(transcript_events) %}
+    {% set todos = tv.build_todo_list(transcript_events) %}
+    <div class="flex gap-3">
+      <div id="transcript-scroll" class="overflow-y-auto pr-1 flex-1 min-w-0" style="max-height: calc(100vh - 10rem);">
+        <div id="transcript" class="space-y-2">
+          {# Pre-pair tool_result events with their parent tool_use so each
+             pair renders as one visual card. Orphan results (no matching
+             tool_use in this slice) still render standalone. Mirrors the
+             append() logic in the live-tail JS below. #}
+          {% for item in tv.group_by_subagent(tv.pair_tool_events(transcript_events)) %}
+            {{ te.render_grouped(item) }}
+          {% else %}
+            <p class="text-fg-muted italic text-sm" data-empty="true">no events yet</p>
+          {% endfor %}
+        </div>
       </div>
+      {% if subagent_agents or todos %}
+        {% include "partials/transcript_sidebar.html" %}
+      {% endif %}
     </div>
+
+    <script>
+    (function () {
+      const sidebar = document.getElementById('transcript-sidebar');
+      if (!sidebar) return;
+      sidebar.addEventListener('click', (e) => {
+        const btn = e.target.closest('.subagent-filter');
+        if (!btn) return;
+        const id = btn.dataset.filterToolUseId;
+        const active = btn.classList.toggle('is-active');
+        // clear other active buttons when activating a new one
+        if (active) {
+          sidebar.querySelectorAll('.subagent-filter.is-active').forEach((b) => {
+            if (b !== btn) b.classList.remove('is-active');
+          });
+        }
+        const anyActive = sidebar.querySelector('.subagent-filter.is-active');
+        document.querySelectorAll('#transcript [data-parent-tool-use-id]').forEach((el) => {
+          el.style.display = (!anyActive || el.dataset.parentToolUseId === id) ? '' : 'none';
+        });
+      });
+    })();
+    </script>
 
     {% if live %}
       <div class="nd-live-status mt-2" id="transcript-status"><span class="nd-live-dot"></span><span class="nd-live-text">tailing live</span><span class="nd-live-ellipsis"></span></div>

@@ -554,3 +554,70 @@ async def test_subagent_children_nested_under_card(
     subagent_group_start = body.index(f'data-subagent-tool-use-id="{agent_id}"')
     glob_pos = body.index("Glob")
     assert glob_pos > subagent_group_start
+
+
+async def test_transcript_sidebar_shows_subagent_and_tasks(
+    cookie_client, session, tmp_path,
+):
+    """The transcript sidebar renders sub-agent index and task list.
+
+    When the transcript contains a sub-agent event and TaskCreate/TaskUpdate
+    calls, the rendered page must include:
+    - id="transcript-sidebar"
+    - the sub-agent label and data-filter-tool-use-id pointing to the agent
+    - each task subject with the appropriate ASCII status marker ([x] / [ ])
+    """
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="p",
+                      priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    log = tmp_path / "transcripts" / "sidebar.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    agent_id = "toolu_sidebar_01"
+    lines = [
+        {"type": "meta", "ts": "2026-05-16T00:00:00Z", "seq": 0,
+         "run_id": "sidebarrun", "ticket_id": t.id},
+        # Sub-agent started + completed.
+        {"type": "tool_use", "ts": "2026-05-16T00:00:01Z", "seq": 1,
+         "id": agent_id, "tool": "Agent",
+         "input": {"description": "do stuff"}},
+        {"type": "subagent", "ts": "2026-05-16T00:00:02Z", "seq": 2,
+         "subagent_type": "Executor", "phase": "progress",
+         "tool_use_id": agent_id, "task_id": agent_id,
+         "description": "running"},
+        {"type": "subagent", "ts": "2026-05-16T00:00:03Z", "seq": 3,
+         "subagent_type": "Executor", "phase": "notification",
+         "tool_use_id": agent_id, "task_id": agent_id,
+         "status": "completed", "summary": "all done"},
+        # Task events.
+        {"type": "tool_use", "ts": "2026-05-16T00:00:04Z", "seq": 4,
+         "id": "task-use-1", "tool": "TaskCreate",
+         "input": {"subject": "Write the tests", "activeForm": ""}},
+        {"type": "tool_use", "ts": "2026-05-16T00:00:05Z", "seq": 5,
+         "id": "task-use-2", "tool": "TaskCreate",
+         "input": {"subject": "Run the build", "activeForm": ""}},
+        {"type": "tool_use", "ts": "2026-05-16T00:00:06Z", "seq": 6,
+         "id": "task-upd-1", "tool": "TaskUpdate",
+         "input": {"taskId": 2, "status": "completed"}},
+    ]
+    log.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    start_run(session, ticket_id=t.id, worktree_path=str(tmp_path / "work"),
+              transcript_path=str(log), pid=None, host="testhost")
+
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+
+    # Sidebar is present.
+    assert 'id="transcript-sidebar"' in body
+
+    # Sub-agent entry with filter hook.
+    assert f'data-filter-tool-use-id="{agent_id}"' in body
+    assert "Executor" in body
+
+    # Task subjects appear with correct ASCII markers.
+    assert "Write the tests" in body
+    assert "Run the build" in body
+    # "Run the build" was marked completed -> [x] marker.
+    assert "[x]" in body
+    # "Write the tests" is still pending -> [ ] marker.
+    assert "[ ]" in body

@@ -1,0 +1,42 @@
+{# Right sidebar for the transcript: sub-agent index + task list.
+   Context: subagent_agents (list, from tv.subagent_index),
+            todos (list, from tv.build_todo_list).
+   Clicking a sub-agent toggles a filter handled by the script in
+   transcript_panel.html via data-filter-tool-use-id. #}
+<aside id="transcript-sidebar" class="w-64 shrink-0 overflow-y-auto pl-3 border-l border-border space-y-4 text-xs"
+       style="max-height: calc(100vh - 10rem);">
+  {% if subagent_agents %}
+  <section>
+    <h3 class="text-fg-muted uppercase tracking-wide mb-1">Sub-agents</h3>
+    <ul class="agents space-y-1">
+      {% for a in subagent_agents %}
+      <li data-agent="{{ a.tool_use_id }}">
+        <button type="button"
+                class="subagent-filter w-full text-left px-1 py-0.5 rounded hover:bg-bg-elev"
+                data-filter-tool-use-id="{{ a.tool_use_id }}">
+          <span class="text-fg">{{ a.label }}</span>
+          <span class="text-fg-muted">
+            {{ 'failed' if a.failed else a.status }}{% if a.tool_uses %} &middot; {{ a.tool_uses }} tool{{ '' if a.tool_uses == 1 else 's' }}{% endif %}
+          </span>
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+  {% if todos %}
+  <section>
+    <h3 class="text-fg-muted uppercase tracking-wide mb-1">Tasks</h3>
+    <ul class="todos space-y-0.5">
+      {% for t in todos %}
+      <li class="flex gap-1" data-todo-status="{{ t.status }}">
+        <span class="text-fg-muted">{% if t.status == 'completed' %}[x]{% elif t.status == 'in_progress' %}[~]{% else %}[ ]{% endif %}</span>
+        <span class="{{ 'line-through text-fg-muted' if t.status == 'completed' else 'text-fg' }}">
+          {{ t.activeForm if (t.status == 'in_progress' and t.activeForm) else t.label }}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</aside>
