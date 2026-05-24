@@ -27,9 +27,10 @@ from nightdesk.domain.diff import compute_run_diff
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
 from nightdesk.domain.tickets import (
-    clone_ticket, get_ticket, list_dependencies, list_dependents,
-    merge_next_run_context_into_prompt, restart_ticket,
-    resume_ticket, retry_ticket, set_next_run_context, update_ticket, TicketNotFound,
+    add_dependency, clone_ticket, get_ticket, list_dependencies, list_dependents,
+    list_tickets, merge_next_run_context_into_prompt, remove_dependency, restart_ticket,
+    resume_ticket, retry_ticket, set_next_run_context, update_ticket,
+    CyclicDependency, DependencyNotFound, TicketNotFound,
 )
 from nightdesk.logging_setup import run_log_path
 from nightdesk.transcript import is_canonical, read_events
@@ -94,6 +95,15 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
                 if candidate.exists():
                     project_settings_paths.append(str(candidate))
 
+        deps_upstreams = list_dependencies(session, tid)
+        # Candidate tickets for the "Add dependency" control: every other
+        # ticket that isn't this one and isn't already an upstream dependency.
+        _upstream_ids = {d.id for d in deps_upstreams}
+        dep_candidates = [
+            c for c in list_tickets(session, limit=500)
+            if c.id != tid and c.id not in _upstream_ids
+        ]
+
         return templates.TemplateResponse(request, "ticket_detail.html", {
             "ticket": t,
             "runs": runs,
@@ -104,8 +114,9 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             "project_settings_paths": project_settings_paths,
             "run_workspaces": run_workspaces,
             "profiles": list_profiles(session),
-            "deps_upstreams": list_dependencies(session, tid),
+            "deps_upstreams": deps_upstreams,
             "deps_downstreams": list_dependents(session, tid),
+            "dep_candidates": dep_candidates,
             "title": t.title,
             "active_page": "tickets",
         })
@@ -328,6 +339,40 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             raise HTTPException(404, "not found")
         except ValueError as e:
             raise HTTPException(422, str(e))
+        return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
+
+    @router.post("/tickets/{tid}/dependencies", dependencies=[auth])
+    async def add_dependency_form(
+        tid: str,
+        depends_on_id: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth UI route to add an upstream dependency.
+
+        Mirrors the other form posts on this page: redirects back to the
+        detail page (303) so the Dependency chain section re-renders.
+        """
+        try:
+            add_dependency(session, tid, depends_on_id.strip())
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except CyclicDependency as e:
+            raise HTTPException(422, str(e))
+        return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
+
+    @router.post("/tickets/{tid}/dependencies/{dep_on_id}/delete", dependencies=[auth])
+    async def remove_dependency_form(
+        tid: str, dep_on_id: str,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth UI route to remove an upstream dependency."""
+        try:
+            remove_dependency(session, tid, dep_on_id)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except DependencyNotFound:
+            # Idempotent: already gone is fine, just redirect back.
+            pass
         return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
 
     return router

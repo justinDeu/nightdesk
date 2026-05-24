@@ -86,14 +86,20 @@
   {{ tc.tool_result_block(evt) }}
 {% endmacro %}
 
+{# evt_result: terminal result card. For SUCCESSFUL runs this renders the green
+   "done" card. For FAILED runs (subtype != success) it renders nothing — the
+   failure is already surfaced by the always-visible top banner (see
+   transcript_panel.html) and, when present, the richer evt_worker_error card
+   (which carries kind + stacktrace). This avoids the double red card at the
+   bottom of a failed transcript. #}
 {% macro evt_result(evt) %}
   {% set subtype = evt.get('subtype','success') %}
-  <div class="rounded p-3 border-2 {% if subtype == 'success' %}border-accent bg-accent/5{% else %}border-danger bg-danger/5{% endif %}">
-    <div class="font-bold {% if subtype == 'success' %}text-accent{% else %}text-danger{% endif %}">
-      {% if subtype == 'success' %}done{% else %}error{% endif %}
-    </div>
+  {% if subtype == 'success' %}
+  <div class="rounded p-3 border-2 border-accent bg-accent/5">
+    <div class="font-bold text-accent">done</div>
     <div class="whitespace-pre-wrap text-sm mt-1">{{ evt.get('summary','') }}</div>
   </div>
+  {% endif %}
 {% endmacro %}
 
 {# worker_error: nightdesk-level failure surfaced as the final event of a

@@ -26,18 +26,27 @@ class SearchBackend(Protocol):
 
 
 def _escape_fts_query(q: str) -> str:
-    """Quote the user query for FTS5 phrase syntax.
+    """Build a per-token PREFIX query for FTS5.
 
     FTS5 treats unquoted strings as a tokenized query with implicit AND. Free
     text from the search box can contain operators (``"``, ``*``, ``:``,
     ``-``, ``AND``, etc.) that would change matching behavior. To keep things
-    predictable we double-quote the whole query and strip any embedded double
-    quotes that would close it prematurely.
+    predictable and avoid operator injection, each whitespace-separated token
+    is emitted as a double-quoted prefix term (``"<tok>"*``) joined by spaces,
+    which FTS5 combines with implicit AND. Embedded double quotes inside a
+    token are stripped so they can't close the wrapper prematurely.
+
+    Example: ``test ti`` -> ``"test"* "ti"*`` (matches "Test ticket").
     """
-    cleaned = q.replace('"', "").strip()
+    cleaned = q.strip()
     if not cleaned:
         return ""
-    return f'"{cleaned}"'
+    terms = []
+    for token in cleaned.split():
+        tok = token.replace('"', "")
+        if tok:
+            terms.append(f'"{tok}"*')
+    return " ".join(terms)
 
 
 class FTS5SearchBackend:

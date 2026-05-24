@@ -16,18 +16,20 @@
 #}
 {% import "partials/transcript_event.html" as te %}
 
-{# Per-run prompt (with ticket fallback) as the first user message.
-   Rendered above ALL run states — no-run, canonical events, and legacy
-   raw fallback — so it always appears as the opening conversation turn. #}
+{# Per-run prompt (with ticket fallback) rendered as the opening user message.
+   For canonical runs it becomes the first child INSIDE the #transcript scroll
+   container (see below) so it scrolls with the conversation. For the no-run
+   and legacy raw branches it's rendered inline at their respective spots. #}
 {% set prompt_text = (selected_run.prompt if selected_run else None) or ticket.prompt or '' %}
-{% if prompt_text %}
+{% macro user_prompt(text) %}
 <details class="user-prompt mb-3">
   <summary class="user-prompt-author">user</summary>
-  <pre class="user-prompt-body">{{ prompt_text }}</pre>
+  <pre class="user-prompt-body">{{ text }}</pre>
 </details>
-{% endif %}
+{% endmacro %}
 
 {% if selected_run is none %}
+  {% if prompt_text %}{{ user_prompt(prompt_text) }}{% endif %}
   <p class="text-fg-muted italic text-sm">no run yet</p>
 {% else %}
   <div class="flex items-center gap-2 text-xs mb-2">
@@ -58,8 +60,28 @@
     {% endif %}
   </div>
 
+  {# Always-visible failure banner. Shows under the "viewing" bar (before the
+     scroll container) so a run failure is visible without scrolling. Mirrors
+     the logic from the (now orphaned) run_stats.html: prefer the run's stored
+     error_summary, else the first non-success result event's summary. #}
+  {% if selected_run.exit_status == "failed" %}
+    {% set ns = namespace(msg=selected_run.error_summary or '') %}
+    {% if not ns.msg and not transcript_raw %}
+      {% for evt in transcript_events %}
+        {% if evt.type == "result" and (evt.subtype or "success") != "success" and evt.summary and not ns.msg %}
+          {% set ns.msg = evt.summary %}
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+    <div class="flex items-start gap-2 text-sm mb-3 px-3 py-2.5 rounded border-2 border-danger bg-danger/10">
+      <span class="font-bold text-danger uppercase tracking-wide text-xs shrink-0 pt-0.5">error</span>
+      <span class="text-fg whitespace-pre-wrap">{{ ns.msg or "Run failed with no error summary." }}</span>
+    </div>
+  {% endif %}
+
   {% if transcript_raw %}
-    {# Legacy raw SDK file: plain pre fallback. #}
+    {# Legacy raw SDK file: prompt as the opening turn, then plain pre fallback. #}
+    {% if prompt_text %}{{ user_prompt(prompt_text) }}{% endif %}
     <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto lg:flex-1 lg:min-h-0">{{ transcript_raw }}</pre>
   {% else %}
     {% set subagent_agents = tv.subagent_index(transcript_events) %}
@@ -67,6 +89,9 @@
     <div class="flex gap-3 lg:flex-1 lg:min-h-0">
       <div id="transcript-scroll" class="overflow-y-auto pr-1 flex-1 min-w-0">
         <div id="transcript" class="space-y-2">
+          {# The prompt is the opening user turn: a static first child of the
+             scroll container. Live-tail append() adds events AFTER it. #}
+          {% if prompt_text %}{{ user_prompt(prompt_text) }}{% endif %}
           {# Pre-pair tool_result events with their parent tool_use so each
              pair renders as one visual card. Orphan results (no matching
              tool_use in this slice) still render standalone. Mirrors the
@@ -543,10 +568,11 @@
               return null;
             }
             const subtype = evt.subtype || 'success';
-            const cls = subtype === 'success' ? 'border-accent bg-accent/5' : 'border-danger bg-danger/5';
-            const titleCls = subtype === 'success' ? 'text-accent' : 'text-danger';
-            const titleLabel = subtype === 'success' ? 'done' : 'error';
-            return el(`<div class="rounded p-3 border-2 ${cls}"><div class="font-bold ${titleCls}">${titleLabel}</div><div class="whitespace-pre-wrap text-sm mt-1">${escapeHtml(evt.summary || '')}</div></div>`);
+            // Mirror evt_result in transcript_event.html: only the success
+            // "done" card renders. A failed result is suppressed — the top
+            // failure banner and the worker_error card carry the failure.
+            if (subtype !== 'success') return null;
+            return el(`<div class="rounded p-3 border-2 border-accent bg-accent/5"><div class="font-bold text-accent">done</div><div class="whitespace-pre-wrap text-sm mt-1">${escapeHtml(evt.summary || '')}</div></div>`);
           }
           if (t === 'rate_limit') {
             // Mirror evt_rate_limit in transcript_event.html: amber card with a

@@ -764,3 +764,14 @@ li[data-ticket-id][data-selected] {
   opacity: 1;
 }
 
+/* Dialog close buttons: a subtle accent ring on keyboard focus instead of the
+   browser default outline (which renders as a white box / plus around the ×). */
+dialog button[aria-label="Close"]:focus {
+  outline: none;
+}
+dialog button[aria-label="Close"]:focus-visible {
+  outline: none;
+  border-radius: 0.25rem;
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+

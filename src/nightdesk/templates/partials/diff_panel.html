@@ -2,6 +2,33 @@
    Expects: diff (RunDiff or None), workspace (TicketWorkspace or None),
    selected_run (Run), ticket (Ticket). #}
 
+{# --- Macro: branch action buttons ---------------------------------------- #
+ # Defined first: Jinja macros are not hoisted, so this must precede its
+ # call sites below (the panel was previously broken when the macro lived
+ # at the bottom of the file). #}
+{% macro _branch_actions(ws, d) %}
+<div class="flex flex-wrap gap-2 text-xs mt-1">
+  <button type="button"
+          onclick="navigator.clipboard.writeText('git checkout {{ ws.branch }}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Checkout', 1500)"
+          class="border border-border text-fg hover:bg-bg-elev-2 px-2 py-1 rounded"
+          title="Copy git checkout command">Checkout</button>
+  <button type="button"
+          onclick="navigator.clipboard.writeText('git diff {{ d.base_sha }}..{{ d.head_sha }}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Diff cmd', 1500)"
+          class="border border-border text-fg hover:bg-bg-elev-2 px-2 py-1 rounded"
+          title="Copy git diff command">Diff cmd</button>
+  <button type="button"
+          onclick="navigator.clipboard.writeText('{{ ws.branch }}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Branch name', 1500)"
+          class="border border-border text-fg hover:bg-bg-elev-2 px-2 py-1 rounded"
+          title="Copy branch name">Branch name</button>
+  {% if ws.branch %}
+  <button type="button"
+          onclick="navigator.clipboard.writeText('gh pr create --head {{ ws.branch }} --fill'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Create PR cmd', 1500)"
+          class="border border-accent text-accent hover:bg-accent/10 px-2 py-1 rounded"
+          title="Copy gh pr create command">Create PR cmd</button>
+  {% endif %}
+</div>
+{% endmacro %}
+
 {% if diff is none %}
   <div class="text-fg-muted italic text-sm p-4">
     No git workspace found for this run.
@@ -110,28 +137,3 @@
 
   </div>
 {% endif %}
-
-
-{# --- Macro: branch action buttons ---------------------------------------- #}
-{% macro _branch_actions(ws, d) %}
-<div class="flex flex-wrap gap-2 text-xs mt-1">
-  <button type="button"
-          onclick="navigator.clipboard.writeText('git checkout {{ ws.branch }}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Checkout', 1500)"
-          class="border border-border text-fg hover:bg-bg-elev-2 px-2 py-1 rounded"
-          title="Copy git checkout command">Checkout</button>
-  <button type="button"
-          onclick="navigator.clipboard.writeText('git diff {{ d.base_sha }}..{{ d.head_sha }}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Diff cmd', 1500)"
-          class="border border-border text-fg hover:bg-bg-elev-2 px-2 py-1 rounded"
-          title="Copy git diff command">Diff cmd</button>
-  <button type="button"
-          onclick="navigator.clipboard.writeText('{{ ws.branch }}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Branch name', 1500)"
-          class="border border-border text-fg hover:bg-bg-elev-2 px-2 py-1 rounded"
-          title="Copy branch name">Branch name</button>
-  {% if ws.branch %}
-  <button type="button"
-          onclick="navigator.clipboard.writeText('gh pr create --head {{ ws.branch }} --fill'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Create PR cmd', 1500)"
-          class="border border-accent text-accent hover:bg-accent/10 px-2 py-1 rounded"
-          title="Copy gh pr create command">Create PR cmd</button>
-  {% endif %}
-</div>
-{% endmacro %}

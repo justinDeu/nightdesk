@@ -77,10 +77,15 @@
   {% set resume_cmd = 'cd "' ~ selected_run.worktree_path ~ '" && claude --resume ' ~ selected_run.session_id %}
   <section>
     <h3 class="text-fg-muted uppercase tracking-wide mb-1">Resume</h3>
-    <div class="px-2 py-1.5 rounded border border-border bg-bg-elev-2" data-resume-row>
-      <code id="nd-resume-cmd" class="text-fg font-mono break-all text-[11px]" title="{{ resume_cmd }}">{{ resume_cmd }}</code>
+    {# Single truncated line + copy button beside it. The full command stays
+       in the DOM (hidden node #nd-resume-cmd) so copy still grabs the whole
+       thing even though the visible line is ellipsized. #}
+    <div class="px-2 py-1.5 rounded border border-border bg-bg-elev-2 flex items-center gap-2" data-resume-row>
+      <code class="text-fg font-mono text-[11px] block min-w-0 flex-1 overflow-hidden whitespace-nowrap text-ellipsis"
+            data-tooltip="{{ resume_cmd }}">{{ resume_cmd }}</code>
+      <code id="nd-resume-cmd" class="hidden">{{ resume_cmd }}</code>
       <button type="button"
-              class="mt-1 rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev text-[11px]"
+              class="shrink-0 rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev text-[11px]"
               data-tooltip="Copy resume command"
               onclick="(function(b){var t=document.getElementById('nd-resume-cmd');var s=t?t.textContent:'';if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(s).then(function(){var o=b.textContent;b.textContent='copied';setTimeout(function(){b.textContent=o;},1200);});}})(this)">copy</button>
     </div>

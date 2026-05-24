@@ -52,13 +52,24 @@ def _profile_id(session) -> str:
 
 
 def test_escape_double_quotes_user_input():
+    # Each token becomes a quoted prefix term joined by spaces (implicit AND).
+    assert _escape_fts_query("test ti") == '"test"* "ti"*'
     # Embedded quotes are stripped so they can't close the wrapper.
-    assert _escape_fts_query('foo "bar"') == '"foo bar"'
+    assert _escape_fts_query('foo "bar"') == '"foo"* "bar"*'
     # Empty / whitespace -> empty string (no search).
     assert _escape_fts_query("") == ""
     assert _escape_fts_query("   ") == ""
-    # Operators are wrapped, not honored.
-    assert _escape_fts_query("foo OR bar") == '"foo OR bar"'
+    # Operators are wrapped per-token, not honored.
+    assert _escape_fts_query("foo OR bar") == '"foo"* "OR"* "bar"*'
+
+
+def test_search_prefix_matches_partial_token(session):
+    # Regression: "test ti" must find a ticket titled "Test ticket".
+    _setup_fts(session)
+    _seed_ticket(session, tid="a", title="Test ticket")
+    _seed_ticket(session, tid="b", title="unrelated thing")
+    backend = FTS5SearchBackend(session)
+    assert [h.id for h in backend.search("test ti")] == ["a"]
 
 
 def test_search_returns_empty_on_blank_query(session):

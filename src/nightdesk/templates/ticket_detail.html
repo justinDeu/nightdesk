@@ -134,24 +134,48 @@
       {% endif %}
     </header>
 
-    {# --- Dependency chain ------------------------------------------------- #}
-    {% if deps_upstreams or deps_downstreams %}
+    {# --- Dependency chain ------------------------------------------------- #
+     # Always rendered so there's an entry point to ADD a dependency even when
+     # none exist yet. Upstream rows carry a remove (×) button; the Add control
+     # is a <select> of other tickets plus a submit, both posting to the
+     # cookie-auth routes in ticket_page.py.
+     #}
     <section class="bg-bg-elev border border-border rounded p-4">
       <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-2">Dependency chain</h2>
-      {% if deps_upstreams %}
-        <div class="mb-2">
-          <div class="text-xs text-fg-muted mb-1">Depends on</div>
+      <div class="mb-2">
+        <div class="text-xs text-fg-muted mb-1">Depends on</div>
+        {% if deps_upstreams %}
           <ul class="space-y-1">
             {% for dep in deps_upstreams %}
               <li class="flex items-center gap-2 text-xs">
                 <span class="rounded px-1.5 py-0.5 border
                   {% if dep.status == 'review' or dep.status == 'archived' %}border-accent/40 text-accent{% else %}border-warn/40 text-warn{% endif %}">{{ dep.status }}</span>
-                <a href="/tickets/{{ dep.id }}" class="text-fg hover:text-accent">{{ dep.title }}</a>
+                <a href="/tickets/{{ dep.id }}" class="text-fg hover:text-accent flex-1 min-w-0 truncate">{{ dep.title }}</a>
+                <form method="post" action="/tickets/{{ ticket.id }}/dependencies/{{ dep.id }}/delete" class="inline shrink-0">
+                  <button type="submit" class="text-fg-muted hover:text-danger" title="Remove dependency">&times;</button>
+                </form>
               </li>
             {% endfor %}
           </ul>
-        </div>
-      {% endif %}
+        {% else %}
+          <p class="text-fg-muted italic text-xs">none</p>
+        {% endif %}
+
+        {% if dep_candidates %}
+        <form method="post" action="/tickets/{{ ticket.id }}/dependencies"
+              class="mt-2 flex gap-2 items-center">
+          <select name="depends_on_id" required
+                  class="flex-1 min-w-0 bg-bg-elev-2 border border-border rounded px-2 py-1 text-xs text-fg focus:border-accent outline-none">
+            <option value="">-- add a dependency --</option>
+            {% for c in dep_candidates %}
+              <option value="{{ c.id }}">{{ c.title }} ({{ c.status }})</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="shrink-0 bg-accent text-bg font-medium px-3 py-1 rounded text-xs">Add</button>
+        </form>
+        {% endif %}
+      </div>
+
       {% if deps_downstreams %}
         <div>
           <div class="text-xs text-fg-muted mb-1">Depended on by</div>
@@ -166,7 +190,6 @@
         </div>
       {% endif %}
     </section>
-    {% endif %}
 
     {# --- Filesystem access ----------------------------------------------- #
      # Defines what the agent is *allowed* to touch on disk. Distinct from
@@ -259,8 +282,16 @@
             <div class="text-fg">{{ ws.label }}</div>
           {% endif %}
 
-          {# Git/path fields. Two-column dl so labels stack cleanly even on narrow widths. #}
+          {# Git/path fields. Two-column dl so labels stack cleanly even on narrow widths.
+             For git worktrees the branch, the worktree name, and the path's
+             last segment are usually the same string (worktree dirs slugify
+             slashes to dashes). Show the branch once as the identity, and only
+             show the path's directory prefix when its basename just repeats the
+             branch — otherwise show the full path. #}
           {% set path = ws.resolved_path or ws.worktree_path or ws.source_path %}
+          {% set _branch_slug = (ws.branch | replace('/', '-')) if ws.branch else '' %}
+          {% set _basename = (path.rstrip('/').split('/') | last) if path else '' %}
+          {% set _path_redundant = ws.branch and _basename and (_basename == ws.branch or _basename == _branch_slug) %}
           {% if ws.branch or path or ws.base_ref or ws.base_sha or ws.head_sha %}
           <dl class="grid grid-cols-[3.5rem_1fr] gap-x-2 gap-y-0.5 font-mono">
             {% if ws.branch %}
@@ -269,7 +300,9 @@
             {% endif %}
             {% if path %}
               <dt class="text-fg-muted">path</dt>
-              <dd class="text-fg break-all">{{ path }}</dd>
+              <dd class="text-fg break-all">
+                {% if _path_redundant %}{# basename repeats the branch; show only the parent dir #}{{ path.rstrip('/').rsplit('/', 1)[0] }}/<span class="text-fg-muted">{{ _basename }}</span>{% else %}{{ path }}{% endif %}
+              </dd>
             {% endif %}
             {% if ws.base_ref or ws.base_sha %}
               <dt class="text-fg-muted">base</dt>
@@ -355,7 +388,7 @@
    # RIGHT COLUMN: tabbed panel (Transcript / Changes). Takes the remaining
    # viewport width on lg+ and sticks while the left column scrolls.
    # ===================================================================== #}
-  <aside class="w-full flex-1 min-w-0 lg:sticky lg:top-4 self-stretch lg:max-h-[calc(100vh-5rem)] lg:flex lg:flex-col lg:overflow-hidden">
+  <aside class="w-full flex-1 min-w-0 lg:sticky lg:top-4 lg:h-[calc(100vh-5rem)] lg:flex lg:flex-col lg:overflow-hidden">
     <section id="transcript-panel"
              class="bg-bg-elev border border-border rounded p-4 lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
 
@@ -579,8 +612,18 @@
         btn.classList.toggle('hover:text-fg', !isActive);
         btn.classList.toggle('hover:bg-bg-elev-2', !isActive);
       });
-      if (transcriptContent) transcriptContent.classList.toggle('hidden', name !== 'transcript');
-      if (changesContent) changesContent.classList.toggle('hidden', name !== 'changes');
+      // Inline display beats the lg:flex class (display:flex) that these
+      // containers carry; toggling the .hidden class alone loses to lg:flex
+      // in the cascade, so both panels would stay visible on lg+. Setting
+      // style.display='' falls back to the lg:flex class for the visible one.
+      if (transcriptContent) {
+        transcriptContent.classList.remove('hidden');
+        transcriptContent.style.display = (name === 'transcript') ? '' : 'none';
+      }
+      if (changesContent) {
+        changesContent.classList.remove('hidden');
+        changesContent.style.display = (name === 'changes') ? '' : 'none';
+      }
 
       if (name === 'changes' && selectedRunId && diffPanelInner) {
         // Load diff for the selected run if not already loaded.
@@ -597,6 +640,10 @@
         activateTab(btn.dataset.tab);
       });
     });
+
+    // Drive initial visibility via inline display so we don't rely on the
+    // .hidden class (which loses to lg:flex on lg+ screens).
+    activateTab('transcript');
 
     // When a run is clicked in the history, update the selectedRunId and
     // refresh the diff panel if the Changes tab is active.

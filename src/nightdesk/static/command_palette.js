@@ -450,6 +450,20 @@
     wirePaletteInput();
     document.addEventListener("keydown", onKeydown, true);
 
+    // Esc blurs the header search box. Without this the global onKeydown
+    // early-returns inside typing targets, so Esc would never unfocus it.
+    var headerSearch = document.querySelector('#header-search input[name="q"]');
+    if (headerSearch && !headerSearch.__ndEscWired) {
+      headerSearch.__ndEscWired = true;
+      headerSearch.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          headerSearch.blur();
+        }
+      });
+    }
+
     // If we landed on the board via the "c" shortcut from another page,
     // auto-open the create modal and clean the URL so a refresh doesn't
     // re-trigger it.
