@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow
 from nightdesk.domain.profiles import list_profiles
-from nightdesk.domain.runs import get_run
+from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.tickets import (
     InvalidTransition,
     TicketNotFound,
@@ -400,12 +400,14 @@ def build_router(
         profiles = list_profiles(session)
         ticket = None
         mode = "create"
+        runs: list = []
         if ticket_id:
             try:
                 ticket = get_ticket(session, ticket_id)
                 mode = "edit"
             except TicketNotFound:
                 raise HTTPException(404, "ticket not found")
+            runs = list_runs(session, ticket_id=ticket_id)
         return templates.TemplateResponse(
             request,
             "partials/sidebar.html",
@@ -413,6 +415,7 @@ def build_router(
                 "profiles": profiles,
                 "ticket": ticket,
                 "mode": mode,
+                "runs": runs,
             },
         )
 
@@ -507,7 +510,8 @@ def build_router(
         return templates.TemplateResponse(
             request,
             "partials/sidebar.html",
-            {"profiles": profiles, "ticket": ticket, "mode": "edit"},
+            {"profiles": profiles, "ticket": ticket, "mode": "edit",
+             "runs": list_runs(session, ticket_id=tid)},
         )
 
     @router.post("/board/tickets/{tid}/archive", dependencies=[auth])
@@ -534,7 +538,8 @@ def build_router(
         return templates.TemplateResponse(
             request,
             "partials/sidebar.html",
-            {"profiles": profiles, "ticket": ticket, "mode": "edit"},
+            {"profiles": profiles, "ticket": ticket, "mode": "edit",
+             "runs": list_runs(session, ticket_id=tid)},
         )
 
     @router.post("/board/tickets/{tid}/cancel", dependencies=[auth])

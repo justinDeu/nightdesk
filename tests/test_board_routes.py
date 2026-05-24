@@ -90,6 +90,73 @@ async def test_sidebar_missing_ticket_404(cookie_client):
     assert r.status_code == 404
 
 
+async def test_sidebar_create_cta_opens_create_modal(cookie_client, profile):
+    """The empty-state CTA must be a real, keyboard-focusable <button> that
+    opens the always-present create modal — not a static span pointing at the
+    top bar."""
+    r = await cookie_client.get("/board/sidebar")
+    assert r.status_code == 200
+    body = r.text
+    assert "<button" in body
+    assert "document.getElementById('ticket-create-modal').showModal()" in body
+
+
+async def test_sidebar_edit_lists_runs(cookie_client, session, profile):
+    """Selecting a ticket lists its runs in the sidebar, newest first, with the
+    run-now lightning bolt and a worker-log download link."""
+    from nightdesk.domain.runs import finish_run, start_run
+
+    t = create_ticket(
+        session, title="has-runs", prompt="p", profile_id=profile.id,
+        status="review", cwd="/tmp",
+    )
+    older = start_run(
+        session, ticket_id=t.id, worktree_path="/tmp/w",
+        transcript_path="/tmp/t.log", pid=1, host="h",
+    )
+    finish_run(session, older.id, exit_status="success", error_summary=None)
+    newer = start_run(
+        session, ticket_id=t.id, worktree_path="/tmp/w",
+        transcript_path="/tmp/t2.log", pid=2, host="h",
+        started_as_run_now=True,
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert f'data-run-row="{newer.id}"' in body
+    assert f'data-run-row="{older.id}"' in body
+    # Newest run renders first (list_runs orders by started_at desc).
+    assert body.index(f'data-run-row="{newer.id}"') < body.index(
+        f'data-run-row="{older.id}"'
+    )
+    # Worker-log download link is present for each run.
+    assert f'/runs/{newer.id}/log' in body
+    # The run-now run carries the lightning bolt.
+    assert "&#9889;" in body
+    # Rows link to the ticket detail page rather than an in-sidebar swap.
+    assert f'href="/tickets/{t.id}"' in body
+
+
+async def test_sidebar_edit_no_runs_shows_empty_state(cookie_client, session, profile):
+    t = create_ticket(
+        session, title="no-runs", prompt="p", profile_id=profile.id,
+        status="draft", cwd="/tmp",
+    )
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    assert "no runs yet" in r.text
+
+
+async def test_board_grid_pins_row_height(cookie_client):
+    """The board grid declares an explicit single-row track so it can't grow
+    past the viewport (which used to drag the pinned sidebar when the page
+    scrolled)."""
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    assert "grid-rows-1" in r.text
+
+
 async def test_create_ticket_via_form(cookie_client, session, profile):
     # The sidebar submits one form field per row (repeated `additional_dirs`).
     r = await cookie_client.post(

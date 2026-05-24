@@ -3,7 +3,14 @@
 {% block body %}
 <div
   id="board-grid"
-  class="grid gap-3 grid-cols-[1fr_1fr_1fr_1fr_480px] h-[calc(100vh-6rem)]"
+  {# grid-rows-1 (minmax(0,1fr)) pins the single row to the container height.
+     Without an explicit row track the implicit `auto` row grows to fit the
+     tallest column's full card list, overflowing h-[calc(100vh-6rem)] and
+     forcing the whole page to scroll — which dragged the sidebar with it.
+     min-h-0 lets the grid items shrink to the track so their own
+     overflow-y-auto handles internal scrolling (columns and sidebar each
+     scroll independently); the sidebar stays pinned. #}
+  class="grid gap-3 grid-cols-[1fr_1fr_1fr_1fr_480px] grid-rows-1 h-[calc(100vh-6rem)] min-h-0 overflow-hidden"
 >
   {% for col in columns %}
     {% set column_status = col.status %}

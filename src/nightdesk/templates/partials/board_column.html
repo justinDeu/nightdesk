@@ -5,7 +5,7 @@
 #}
 <section
   id="board-col-{{ column_status }}"
-  class="flex flex-col min-w-0 rounded-md border border-border bg-bg-elev"
+  class="flex flex-col min-w-0 min-h-0 rounded-md border border-border bg-bg-elev"
   data-column="{{ column_status }}"
   {# `oob` is set by the polling partial so the column replaces itself
      by id (htmx out-of-band swap). Absent in the initial board render. #}

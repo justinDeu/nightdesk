@@ -24,7 +24,7 @@
 <aside
   id="sidebar"
   {% if is_edit %}data-selected-ticket-id="{{ ticket.id }}"{% endif %}
-  class="flex flex-col h-full rounded-md border border-border bg-bg-elev p-4 gap-4 overflow-y-auto"
+  class="flex flex-col h-full min-h-0 rounded-md border border-border bg-bg-elev p-4 gap-4 overflow-y-auto"
 >
   <header class="flex items-center justify-between gap-2">
     <h2 class="text-sm font-semibold text-fg">
@@ -123,6 +123,52 @@
         </div>
       {% endif %}
 
+      {# --- Run history -------------------------------------------------- #
+       # Compact list of the selected ticket's runs. The board sidebar has no
+       # transcript-panel swap target, so each row links to the ticket detail
+       # page (and exposes the worker-log download) rather than wiring an
+       # in-sidebar transcript swap. `runs` may be undefined when the partial
+       # is rendered outside a runs-aware handler — default to empty. #}
+      {% set sidebar_runs = runs if runs is defined and runs else [] %}
+      <div class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Runs</span>
+        {% if sidebar_runs %}
+          <ul class="flex flex-col gap-1" data-sidebar-runs>
+            {% for r in sidebar_runs %}
+              {% set outcome = r.exit_status or ('running' if r.finished_at is none else 'unknown') %}
+              {% set outcome_class = {
+                'succeeded': 'bg-accent/20 text-accent',
+                'success':   'bg-accent/20 text-accent',
+                'failed':    'bg-danger/20 text-danger',
+                'error':     'bg-danger/20 text-danger',
+                'cancelled': 'bg-warn/20 text-warn',
+                'running':   'bg-info/20 text-info',
+              }[outcome] | default('bg-bg-elev-2 text-fg-muted') %}
+              <li data-run-row="{{ r.id }}"
+                  class="flex items-center gap-2 border border-border rounded px-2 py-1.5 text-xs hover:border-accent/40">
+                <a href="/tickets/{{ ticket.id }}"
+                   class="flex flex-1 min-w-0 items-center gap-2 hover:text-accent"
+                   title="Open the ticket detail page">
+                  <code class="text-fg-muted">{{ r.id[:8] }}</code>
+                  <span class="text-fg truncate" data-ts="{{ iso_utc(r.started_at) }}">{{ r.started_at }}</span>
+                </a>
+                <span class="flex items-center gap-1.5 shrink-0">
+                  <span class="inline-block rounded px-1.5 py-0.5 {{ outcome_class }}">{{ outcome }}</span>
+                  {% if r.started_as_run_now %}
+                    <span class="text-warn" data-tooltip="Started via Run now — bypassed the scheduler window">&#9889;</span>
+                  {% endif %}
+                  <a href="/runs/{{ r.id }}/log"
+                     class="text-fg-muted hover:text-fg underline decoration-dotted"
+                     title="Download worker log for this run">log</a>
+                </span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-fg-muted/70 text-xs italic">no runs yet</p>
+        {% endif %}
+      </div>
+
       <div class="flex flex-wrap items-center gap-2 pt-1">
         <button
           type="button"
@@ -160,13 +206,19 @@
       </div>
     </section>
   {% else %}
-    {# --- Create mode: empty-state pointer to the nav's + New button. ---- #}
+    {# --- Create mode: actionable empty state. The CTA is a real <button>
+       (keyboard-accessible) that opens the always-present create modal on
+       the board, matching the edit-mode "Edit" button pattern. #}
     <section class="flex flex-col items-start gap-3 text-sm">
       <p class="text-fg-muted">
-        No ticket selected. Click a card on the board to view it, or use
-        <span class="font-medium text-accent">+ New ticket</span> in the
-        top bar to start a new one.
+        No ticket selected. Click a card on the board to view it, or start a
+        new one below.
       </p>
+      <button
+        type="button"
+        onclick="document.getElementById('ticket-create-modal').showModal()"
+        class="px-3 py-1.5 rounded bg-accent text-bg font-medium hover:brightness-110 text-sm"
+      >+ New ticket</button>
     </section>
   {% endif %}
 
