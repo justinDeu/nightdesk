@@ -609,3 +609,58 @@ def test_intervening_events_do_not_break_pairing():
     assert html.count('class="tc-card"') == 2
     # Both results are present (inside their respective cards).
     assert html.count('class="tool-result" open') == 2
+
+
+# --- group_by_subagent -------------------------------------------------------
+
+
+def test_group_paired_events_by_subagent():
+    from nightdesk.transcript_view import pair_tool_events, group_by_subagent
+    events = [
+        {"type": "tool_use", "id": "agent1", "tool": "Agent", "input": {}},
+        {"type": "subagent", "phase": "started", "task_id": "k1",
+         "tool_use_id": "agent1", "subagent_type": "Explore"},
+        {"type": "tool_use", "id": "g1", "tool": "Glob", "input": {},
+         "parent_tool_use_id": "agent1"},
+        {"type": "tool_result", "tool_use_id": "g1", "output": "..."},
+        {"type": "subagent", "phase": "notification", "task_id": "k1",
+         "tool_use_id": "agent1", "status": "completed"},
+        {"type": "tool_use", "id": "top1", "tool": "Read", "input": {}},
+    ]
+    groups = group_by_subagent(pair_tool_events(events))
+    sub = next(g for g in groups if g.event.get("type") == "subagent")
+    assert [c.event.get("tool") for c in sub.children] == ["Glob"]
+    # the Glob's tool_result is carried as the child's paired_result, not a separate node
+    glob_child = sub.children[0]
+    assert glob_child.paired_result is not None
+    assert glob_child.paired_result.get("tool_use_id") == "g1"
+    # the top-level Read stays top-level
+    assert any(g.event.get("tool") == "Read" for g in groups)
+
+
+def test_group_handles_parallel_subagents():
+    from nightdesk.transcript_view import pair_tool_events, group_by_subagent
+    events = [
+        {"type": "subagent", "phase": "started", "task_id": "a",
+         "tool_use_id": "A", "subagent_type": "Explore"},
+        {"type": "subagent", "phase": "started", "task_id": "b",
+         "tool_use_id": "B", "subagent_type": "Plan"},
+        {"type": "tool_use", "id": "x", "tool": "Glob", "input": {}, "parent_tool_use_id": "B"},
+        {"type": "tool_use", "id": "y", "tool": "Bash", "input": {}, "parent_tool_use_id": "A"},
+    ]
+    groups = group_by_subagent(pair_tool_events(events))
+    by_label = {g.event.get("subagent_type"): g for g in groups
+                if g.event.get("type") == "subagent"}
+    assert [c.event["tool"] for c in by_label["Plan"].children] == ["Glob"]
+    assert [c.event["tool"] for c in by_label["Explore"].children] == ["Bash"]
+
+
+def test_group_orphan_parent_stays_top_level():
+    from nightdesk.transcript_view import pair_tool_events, group_by_subagent
+    # parent_tool_use_id references a sub-agent not present -> render top-level
+    events = [
+        {"type": "tool_use", "id": "z", "tool": "Bash", "input": {}, "parent_tool_use_id": "ghost"},
+    ]
+    groups = group_by_subagent(pair_tool_events(events))
+    assert len(groups) == 1
+    assert groups[0].event.get("tool") == "Bash"

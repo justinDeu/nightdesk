@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 
@@ -371,6 +371,47 @@ class PairedEvent:
     """
     event: dict
     paired_result: dict | None = None
+
+
+@dataclass
+class GroupedEvent:
+    """A render unit that may own nested child tool calls (sub-agent card).
+
+    ``children`` holds the tool events whose ``parent_tool_use_id`` matched this
+    node's sub-agent ``tool_use_id``. Empty for non-subagent nodes.
+    """
+    event: dict
+    paired_result: dict | None = None
+    children: list["GroupedEvent"] = field(default_factory=list)
+
+
+def group_by_subagent(paired: list[PairedEvent]) -> list[GroupedEvent]:
+    """Nest child tool events under the sub-agent card that spawned them.
+
+    A tool_use/tool_result whose ``parent_tool_use_id`` matches a subagent
+    card's ``tool_use_id`` is moved into that card's ``children`` instead of
+    rendering at top level. Events with no/unknown parent stay top-level, in
+    their original order.
+    """
+    cards_by_tuid: dict[str, GroupedEvent] = {}
+    out: list[GroupedEvent] = []
+    for pe in paired:
+        ev = pe.event
+        if ev.get("type") == "subagent":
+            node = GroupedEvent(event=ev, paired_result=None)
+            tuid = ev.get("tool_use_id")
+            if tuid:
+                cards_by_tuid[tuid] = node
+            out.append(node)
+            continue
+        ptid = ev.get("parent_tool_use_id")
+        if ptid and ptid in cards_by_tuid:
+            cards_by_tuid[ptid].children.append(
+                GroupedEvent(event=ev, paired_result=pe.paired_result)
+            )
+            continue
+        out.append(GroupedEvent(event=ev, paired_result=pe.paired_result))
+    return out
 
 
 def accumulate_stats(events) -> dict:
