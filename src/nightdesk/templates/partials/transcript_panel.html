@@ -163,17 +163,21 @@
           tip.style.top = top + 'px';
         };
         const hide = () => { tip.hidden = true; };
+        // Any element carrying data-tip-title/-body gets the shared fixed
+        // tooltip (sub-agent rows AND the resume button) — position:fixed so
+        // it escapes the sidebar's overflow and isn't capped to its width.
+        const TIP_SEL = '[data-tip-title], [data-tip-body]';
         sidebar.addEventListener('mouseover', (e) => {
-          const btn = e.target.closest('.subagent-filter');
+          const btn = e.target.closest(TIP_SEL);
           if (btn) show(btn);
         });
         sidebar.addEventListener('mouseout', (e) => {
-          const btn = e.target.closest('.subagent-filter');
+          const btn = e.target.closest(TIP_SEL);
           const to = e.relatedTarget;
-          if (btn && !(to && to.closest && to.closest('.subagent-filter') === btn)) hide();
+          if (btn && !(to && to.closest && to.closest(TIP_SEL) === btn)) hide();
         });
         sidebar.addEventListener('focusin', (e) => {
-          const btn = e.target.closest('.subagent-filter');
+          const btn = e.target.closest(TIP_SEL);
           if (btn) show(btn);
         });
         sidebar.addEventListener('focusout', hide);
