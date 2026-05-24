@@ -6,25 +6,30 @@
  # Defined first: Jinja macros are not hoisted, so this must precede its
  # call sites below (the panel was previously broken when the macro lived
  # at the bottom of the file). #}
+{# Copy-command button: label + a tooltip BELOW the button explaining the
+   action and showing the exact command it copies. The click handler swaps
+   only the .nd-cmd-label text (not the button's, which would wipe the tip). #}
+{% macro _copy_cmd_btn(label, action, cmd, accent=False) %}
+<button type="button"
+        data-copy="{{ cmd }}"
+        onclick="(function(b){var c=b.getAttribute('data-copy');var l=b.querySelector('.nd-cmd-label');if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(c).then(function(){var o=l.textContent;l.textContent='Copied!';setTimeout(function(){l.textContent=o;},1500);});}})(this)"
+        class="nd-cmd-btn cursor-pointer rounded px-2 py-1 transition-colors border
+               {% if accent %}border-accent text-accent hover:bg-accent/10{% else %}border-border text-fg hover:bg-bg-elev-2 hover:border-accent/50{% endif %}">
+  <span class="nd-cmd-label">{{ label }}</span>
+  <span class="nd-cmd-tip" aria-hidden="true">
+    <span class="nd-cmd-tip-label">{{ action }}</span>
+    <code class="nd-cmd-tip-cmd">{{ cmd }}</code>
+  </span>
+</button>
+{% endmacro %}
+
 {% macro _branch_actions(ws, d) %}
 <div class="flex flex-wrap gap-2 text-xs mt-1">
-  <button type="button"
-          onclick="navigator.clipboard.writeText('git checkout {{ ws.branch }}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Checkout', 1500)"
-          class="cursor-pointer border border-border text-fg hover:bg-bg-elev-2 hover:border-accent/50 px-2 py-1 rounded transition-colors"
-          data-tooltip="git checkout {{ ws.branch }}">Checkout</button>
-  <button type="button"
-          onclick="navigator.clipboard.writeText('git diff {{ d.base_sha }}..{{ d.head_sha }}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Diff cmd', 1500)"
-          class="cursor-pointer border border-border text-fg hover:bg-bg-elev-2 hover:border-accent/50 px-2 py-1 rounded transition-colors"
-          data-tooltip="git diff {{ d.base_sha }}..{{ d.head_sha }}">Diff cmd</button>
-  <button type="button"
-          onclick="navigator.clipboard.writeText('{{ ws.branch }}'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Branch name', 1500)"
-          class="cursor-pointer border border-border text-fg hover:bg-bg-elev-2 hover:border-accent/50 px-2 py-1 rounded transition-colors"
-          data-tooltip="{{ ws.branch }}">Branch name</button>
+  {{ _copy_cmd_btn('Checkout', 'Copies the checkout command to your clipboard', 'git checkout ' ~ ws.branch) }}
+  {{ _copy_cmd_btn('Diff cmd', 'Copies the diff command to your clipboard', 'git diff ' ~ d.base_sha ~ '..' ~ d.head_sha) }}
+  {{ _copy_cmd_btn('Branch name', 'Copies the branch name to your clipboard', ws.branch) }}
   {% if ws.branch %}
-  <button type="button"
-          onclick="navigator.clipboard.writeText('gh pr create --head {{ ws.branch }} --fill'); this.textContent='Copied!'; setTimeout(()=>this.textContent='Create PR cmd', 1500)"
-          class="cursor-pointer border border-accent text-accent hover:bg-accent/10 px-2 py-1 rounded transition-colors"
-          data-tooltip="gh pr create --head {{ ws.branch }} --fill">Create PR cmd</button>
+  {{ _copy_cmd_btn('Create PR', 'Copies the gh pr create command to your clipboard', 'gh pr create --head ' ~ ws.branch ~ ' --fill', accent=True) }}
   {% endif %}
 </div>
 {% endmacro %}

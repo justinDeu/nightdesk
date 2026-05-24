@@ -771,6 +771,53 @@ li[data-ticket-id][data-selected] {
   opacity: 1;
 }
 
+/* Copy-command button: a real child tooltip shown BELOW the button (so it
+   stays on-screen when the buttons sit at the top of a panel). Carries a
+   plain-language label of the action plus the exact command it copies. Used
+   on the diff/Changes panel; reusable anywhere a button copies a command. */
+.nd-cmd-btn { position: relative; }
+.nd-cmd-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  width: max-content;
+  max-width: min(30rem, 80vw);
+  padding: 7px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-elev-3);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .45);
+  text-align: left;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+.nd-cmd-btn:hover .nd-cmd-tip,
+.nd-cmd-btn:focus-visible .nd-cmd-tip {
+  opacity: 1;
+  transform: translateY(0);
+}
+.nd-cmd-tip-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-fg-muted);
+}
+.nd-cmd-tip-cmd {
+  display: block;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-accent);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* Dialog close buttons: a subtle accent ring on keyboard focus instead of the
    browser default outline (which renders as a white box / plus around the ×). */
 dialog button[aria-label="Close"]:focus {
