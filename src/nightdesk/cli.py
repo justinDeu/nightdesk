@@ -1088,6 +1088,228 @@ def run_ticket() -> None:
         sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# `nightdesk config` command.
+# ---------------------------------------------------------------------------
+
+
+# Keys that live in config.toml and are accepted by `config set`.
+_FILE_KEYS = {
+    "bind_host": str,
+    "bind_port": int,
+    "bearer_token": str,
+    "worktree_base_ref": str,
+}
+
+# Keys that are runtime-updatable via PATCH /api/v1/config.
+_RUNTIME_KEYS = {
+    "window_start": str,
+    "window_end": str,
+    "max_parallel": int,
+    "worktree_base_ref": str,
+}
+
+_HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+def _mask_token(token: str) -> str:
+    if len(token) <= 8:
+        return "*" * len(token)
+    return "*" * (len(token) - 8) + token[-8:]
+
+
+def _api_get_config(cfg: NightdeskConfig) -> dict | None:
+    """GET /api/v1/config. Returns parsed JSON dict or None on failure."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    url = f"http://{cfg.bind_host}:{cfg.bind_port}/api/v1/config"
+    headers = {}
+    if cfg.bearer_token:
+        headers["Authorization"] = f"Bearer {cfg.bearer_token}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return None
+
+
+def _api_patch_config(cfg: NightdeskConfig, payload: dict) -> bool:
+    """PATCH /api/v1/config with the given payload. Returns True on success."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    url = f"http://{cfg.bind_host}:{cfg.bind_port}/api/v1/config"
+    body = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json"}
+    if cfg.bearer_token:
+        headers["Authorization"] = f"Bearer {cfg.bearer_token}"
+    req = urllib.request.Request(url, data=body, method="PATCH", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _write_config_key(key: str, raw_value: str) -> None:
+    """Update a single key in config.toml, preserving comments and formatting."""
+    config_path = DEFAULT_CONFIG_PATH
+    if not config_path.exists():
+        print(
+            f"Config file not found at {config_path}. Run nightdesk-setup first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Determine the TOML representation.
+    if key in ("bind_port",):
+        # Integer keys — validate first, write bare number.
+        try:
+            int(raw_value)
+        except ValueError:
+            print(
+                f"Value for {key!r} must be an integer, got {raw_value!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        toml_val = raw_value
+    else:
+        escaped = raw_value.replace("\\", "\\\\").replace('"', '\\"')
+        toml_val = f'"{escaped}"'
+
+    text = config_path.read_text()
+    # Try to replace an existing key = ... line.
+    pattern = re.compile(rf"^({re.escape(key)}\s*=\s*).+$", re.MULTILINE)
+    new_line = f"{key} = {toml_val}"
+    if pattern.search(text):
+        text = pattern.sub(new_line, text)
+    else:
+        # Append at end.
+        if not text.endswith("\n"):
+            text += "\n"
+        text += new_line + "\n"
+
+    config_path.write_text(text)
+    config_path.chmod(0o600)
+
+
+def _validate_value(key: str, value: str) -> str:
+    """Validate and coerce a value for the given key. Returns the string to write."""
+    if key in ("bind_port", "max_parallel"):
+        try:
+            int(value)
+        except ValueError:
+            print(
+                f"Value for {key!r} must be an integer, got {value!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if key in ("window_start", "window_end"):
+        if not _HH_MM_RE.match(value):
+            print(
+                f"Value for {key!r} must be HH:MM format (00:00-23:59), got {value!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    return value
+
+
+def config_list() -> None:
+    """Print all current config values in key = value format."""
+    cfg = load_config()
+
+    # File-based config.
+    print(f"bind_host = {cfg.bind_host}")
+    print(f"bind_port = {cfg.bind_port}")
+    print(f"bearer_token = {_mask_token(cfg.bearer_token)}")
+    print(f"db_path = {cfg.db_path}")
+    print(f"transcript_root = {cfg.transcript_root}")
+    print(f"worktree_root = {cfg.worktree_root}")
+    if cfg.worktree_base_ref is not None:
+        print(f"worktree_base_ref = {cfg.worktree_base_ref}")
+    else:
+        print("worktree_base_ref = (not set)")
+
+    # Runtime config from the API.
+    runtime = _api_get_config(cfg)
+    if runtime is not None:
+        print(f"window_start = {runtime.get('window_start', 'N/A')}")
+        print(f"window_end = {runtime.get('window_end', 'N/A')}")
+        print(f"max_parallel = {runtime.get('max_parallel', 'N/A')}")
+    else:
+        print("window_start = (API unreachable)")
+        print("window_end = (API unreachable)")
+        print("max_parallel = (API unreachable)")
+
+
+def config_cmd() -> None:
+    """CLI entry point: `nightdesk-config list` or `nightdesk-config set <key> <value>`."""
+    import argparse
+
+    all_keys = sorted(set(_FILE_KEYS) | set(_RUNTIME_KEYS))
+
+    parser = argparse.ArgumentParser(
+        prog="nightdesk-config",
+        description="Inspect and modify nightdesk configuration.",
+    )
+    sub = parser.add_subparsers(dest="action")
+    sub.add_parser("list", help="Show all current config values")
+    set_parser = sub.add_parser("set", help="Set a config key")
+    set_parser.add_argument("key", help=f"Config key to set. Valid keys: {', '.join(all_keys)}")
+    set_parser.add_argument("value", help="Value to set")
+
+    args = parser.parse_args()
+
+    if args.action == "list":
+        config_list()
+    elif args.action == "set":
+        key: str = args.key
+        value: str = args.value
+
+        if key not in all_keys:
+            print(
+                f"Unknown config key {key!r}.\n"
+                f"Valid keys: {', '.join(all_keys)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        value = _validate_value(key, value)
+
+        is_file_key = key in _FILE_KEYS
+        is_runtime_key = key in _RUNTIME_KEYS
+
+        if is_file_key:
+            _write_config_key(key, value)
+            print(f"Written {key} = {value} to {DEFAULT_CONFIG_PATH}")
+
+        if is_runtime_key:
+            cfg = load_config()
+            patch_val: str | int = value
+            if key in ("max_parallel",):
+                patch_val = int(value)
+            if _api_patch_config(cfg, {key: patch_val}):
+                print(f"Applied {key} = {value} to running server.")
+            else:
+                print(
+                    f"Could not reach the API at http://{cfg.bind_host}:{cfg.bind_port}. "
+                    f"The config file has been updated but the running server was not notified.",
+                    file=sys.stderr,
+                )
+
+        if is_file_key and not is_runtime_key:
+            print("Note: this setting requires a server restart to take effect.")
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
 def run_dev() -> None:
     cfg = _init()
     src_dir = str(Path(__file__).parent)
