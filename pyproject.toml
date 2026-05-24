@@ -43,6 +43,7 @@ nightdesk-setup = "nightdesk.cli:setup"
 nightdesk-stop = "nightdesk.cli:stop"
 nightdesk-uninstall = "nightdesk.cli:uninstall"
 nightdesk-login = "nightdesk.cli:login"
+nightdesk-install-skills = "nightdesk.cli:install_skills"
 nightdesk-seed-demo = "nightdesk.seed_demo:main"
 
 [tool.hatch.build.targets.wheel]
