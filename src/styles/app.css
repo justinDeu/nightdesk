@@ -216,6 +216,37 @@ li[data-ticket-id][data-selected] {
     color: var(--color-fg-muted);
   }
 
+  /* ---- sub-agent hover tooltip -------------------------------------- */
+  .nd-tooltip {
+    position: fixed;
+    z-index: 50;
+    max-width: 22rem;
+    padding: 0.5rem 0.625rem;
+    background: var(--color-bg-elev-2);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    font-size: 0.75rem;
+    line-height: 1.35;
+    color: var(--color-fg);
+    pointer-events: none;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 60vh;
+    overflow: hidden;
+  }
+  .nd-tooltip[hidden] {
+    display: none;
+  }
+  .nd-tooltip .nd-tooltip-title {
+    font-weight: 600;
+    color: var(--color-fg);
+  }
+  .nd-tooltip .nd-tooltip-body {
+    margin-top: 0.25rem;
+    color: var(--color-fg-muted);
+  }
+
   .tc-path {
     font-family: var(--font-mono);
     font-size: 12px;

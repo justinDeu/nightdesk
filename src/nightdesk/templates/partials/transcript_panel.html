@@ -95,6 +95,56 @@
           el.style.display = (!anyActive || el.dataset.parentToolUseId === id) ? '' : 'none';
         });
       });
+
+      // Styled hover tooltip for sub-agent rows. Uses a single position:fixed
+      // element so it escapes the sidebar's overflow clipping, and is placed to
+      // the left of the hovered row (the sidebar sits at the right edge).
+      const tip = document.getElementById('nd-subagent-tooltip');
+      if (tip) {
+        const show = (btn) => {
+          const title = btn.dataset.tipTitle || '';
+          const body = btn.dataset.tipBody || '';
+          if (!title && !body) return;
+          tip.replaceChildren();
+          if (title) {
+            const t = document.createElement('div');
+            t.className = 'nd-tooltip-title';
+            t.textContent = title;
+            tip.appendChild(t);
+          }
+          if (body) {
+            const b = document.createElement('div');
+            b.className = 'nd-tooltip-body';
+            b.textContent = body;
+            tip.appendChild(b);
+          }
+          tip.hidden = false;
+          const r = btn.getBoundingClientRect();
+          const tr = tip.getBoundingClientRect();
+          let left = r.left - tr.width - 8;
+          if (left < 8) left = 8;
+          let top = r.top;
+          if (top + tr.height > window.innerHeight - 8) top = window.innerHeight - tr.height - 8;
+          if (top < 8) top = 8;
+          tip.style.left = left + 'px';
+          tip.style.top = top + 'px';
+        };
+        const hide = () => { tip.hidden = true; };
+        sidebar.addEventListener('mouseover', (e) => {
+          const btn = e.target.closest('.subagent-filter');
+          if (btn) show(btn);
+        });
+        sidebar.addEventListener('mouseout', (e) => {
+          const btn = e.target.closest('.subagent-filter');
+          const to = e.relatedTarget;
+          if (btn && !(to && to.closest && to.closest('.subagent-filter') === btn)) hide();
+        });
+        sidebar.addEventListener('focusin', (e) => {
+          const btn = e.target.closest('.subagent-filter');
+          if (btn) show(btn);
+        });
+        sidebar.addEventListener('focusout', hide);
+      }
     })();
     </script>
 

@@ -616,8 +616,10 @@ async def test_transcript_sidebar_shows_subagent_and_tasks(
     # Sub-agent entry with filter hook.
     assert f'data-filter-tool-use-id="{agent_id}"' in body
     assert "Executor" in body
-    # Sidebar button has a native hover tooltip via title=.
-    assert 'title=' in body
+    # Sidebar button carries styled-tooltip data attrs, and the shared
+    # tooltip element is present (replaces the generic native title tooltip).
+    assert "data-tip-title=" in body
+    assert 'id="nd-subagent-tooltip"' in body
 
     # Task subjects appear with correct CSS checkbox classes.
     assert "Write the tests" in body

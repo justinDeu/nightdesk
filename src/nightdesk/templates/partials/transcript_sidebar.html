@@ -14,7 +14,8 @@
         <button type="button"
                 class="subagent-filter w-full text-left px-1 py-0.5 rounded hover:bg-bg-elev"
                 data-filter-tool-use-id="{{ a.tool_use_id }}"
-                title="{{ a.description or a.label }}{% if a.prompt %}&#10;&#10;{{ a.prompt }}{% endif %}">
+                data-tip-title="{{ a.description or a.label }}"
+                data-tip-body="{{ a.prompt }}">
           <span class="text-fg">{{ a.label }}</span>
           <span class="text-fg-muted">
             {{ 'failed' if a.failed else a.status }}{% if a.tool_uses %} &middot; {{ a.tool_uses }} tool{{ '' if a.tool_uses == 1 else 's' }}{% endif %}
@@ -41,3 +42,6 @@
   </section>
   {% endif %}
 </aside>
+{# Shared hover tooltip for sub-agent rows; position:fixed via JS in
+   transcript_panel.html so it escapes the sidebar's overflow clipping. #}
+<div id="nd-subagent-tooltip" class="nd-tooltip" hidden></div>
