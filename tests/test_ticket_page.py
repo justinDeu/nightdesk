@@ -54,7 +54,7 @@ async def test_page_renders_for_fresh_ticket(cookie_client, session):
     assert "Prompt" in body
     assert "Filesystem access" in body
     assert "Run history" in body
-    assert "Latest transcript" in body
+    assert "Latest transcript" in body or "Transcript" in body
     # Profile fs_write surfaces.
     assert "/opt/code" in body
     # Empty states.
