@@ -1,0 +1,83 @@
+{#
+  Command palette + keyboard-shortcut cheat sheet.
+
+  Two native <dialog> elements, centered with the same showModal() pattern
+  used by ticket_edit_modal.html. All behavior (open/close, fuzzy filtering,
+  ticket search, quick actions, arrow-key navigation) lives in
+  /static/command_palette.js. The dialogs ship empty result/list slots that
+  the JS fills.
+
+  Native <dialog> gives us a focus trap and Esc-to-close for free, and every
+  control here is a real <button>, so the palette is keyboard- and
+  screen-reader-friendly. Keyboard shortcuts are a progressive enhancement:
+  if JS is disabled these dialogs simply never open and every action they
+  expose (new ticket, search, run-now, archive, requeue, open detail, board,
+  archive nav) stays reachable by mouse through the header and board UI.
+#}
+
+{# --- Command palette ---------------------------------------------------- #}
+<dialog id="nd-command-palette"
+        aria-label="Command palette"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[640px] max-w-[calc(100vw-2rem)]"
+        style="margin: 12vh auto auto auto;">
+  <div class="flex flex-col max-h-[70vh]">
+    <div class="px-3 py-2 border-b border-border">
+      <input id="nd-cmdk-input"
+             type="text"
+             autocomplete="off"
+             spellcheck="false"
+             role="combobox"
+             aria-expanded="true"
+             aria-controls="nd-cmdk-list"
+             aria-autocomplete="list"
+             placeholder="Search tickets or run a command..."
+             class="w-full bg-bg-elev-2 border border-border rounded px-2 py-1.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent" />
+    </div>
+    <ul id="nd-cmdk-list"
+        role="listbox"
+        aria-label="Results"
+        class="overflow-y-auto py-1 flex-1"></ul>
+    <div class="px-3 py-1.5 border-t border-border text-[11px] text-fg-muted flex items-center gap-3">
+      <span><kbd class="font-mono">↑↓</kbd> move</span>
+      <span><kbd class="font-mono">↵</kbd> run</span>
+      <span><kbd class="font-mono">esc</kbd> close</span>
+      <span class="ml-auto"><kbd class="font-mono">?</kbd> shortcuts</span>
+    </div>
+  </div>
+</dialog>
+
+{# --- Keyboard shortcuts cheat sheet -------------------------------------- #}
+<dialog id="nd-shortcuts-cheatsheet"
+        aria-label="Keyboard shortcuts"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[460px] max-w-[calc(100vw-2rem)]"
+        style="margin: auto;">
+  <div class="flex items-center justify-between px-5 py-3 border-b border-border">
+    <h2 class="text-base font-semibold">Keyboard shortcuts</h2>
+    <button type="button"
+            onclick="document.getElementById('nd-shortcuts-cheatsheet').close()"
+            class="text-fg-muted hover:text-fg text-2xl leading-none px-2"
+            aria-label="Close">&times;</button>
+  </div>
+  <div class="px-5 py-4 space-y-2 text-sm">
+    {% set _shortcuts = [
+      ('Ctrl / Cmd + K', 'Open the command palette'),
+      ('c', 'New ticket'),
+      ('/', 'Focus search'),
+      ('g then b', 'Go to board'),
+      ('g then a', 'Go to archive'),
+      ('?', 'Show this cheat sheet'),
+      ('Esc', 'Close palette or dialog'),
+    ] %}
+    {% for keys, label in _shortcuts %}
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-fg-muted">{{ label }}</span>
+        <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
+      </div>
+    {% endfor %}
+    <p class="pt-2 text-[11px] leading-snug text-fg-muted border-t border-border mt-3">
+      Shortcuts are an enhancement. Every action stays reachable by mouse:
+      the header search box, the + New ticket button, and the per-ticket
+      Run-now / Archive / Requeue controls.
+    </p>
+  </div>
+</dialog>
