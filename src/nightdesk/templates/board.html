@@ -80,6 +80,27 @@
       );
     }
 
+    // Per-column scroll memory keyed by status. The 3s poll OOB-replaces each
+    // <section> wholesale — including its scrollable <ul.board-list> — so the
+    // new list mounts at scrollTop 0 and a column scrolled down would snap
+    // back to the top every tick. Record positions as the user scrolls (scroll
+    // doesn't bubble, so listen in the capture phase) and reapply them once the
+    // replacement lists are in the DOM.
+    var columnScroll = {};
+    document.addEventListener('scroll', function (e) {
+      var t = e.target;
+      if (t && t.classList && t.classList.contains('board-list')) {
+        columnScroll[t.dataset.status] = t.scrollTop;
+      }
+    }, true);
+
+    function restoreColumnScroll() {
+      document.querySelectorAll('ul.board-list').forEach(function (ul) {
+        var s = columnScroll[ul.dataset.status];
+        if (s != null) ul.scrollTop = s;
+      });
+    }
+
     // Live registry of Sortable instances keyed by their <ul>. The columns
     // poll OOB-replaces each column section (including its <ul>) every few
     // seconds, so without this every poll would construct a fresh Sortable and
@@ -177,10 +198,12 @@
     document.body.addEventListener('htmx:afterSwap', function () {
       initSortable();
       syncSelectedCard();
+      restoreColumnScroll();
     });
     document.body.addEventListener('htmx:oobAfterSwap', function () {
       initSortable();
       syncSelectedCard();
+      restoreColumnScroll();
     });
 
     // Don't let the periodic columns poll fire mid-drag — Sortable

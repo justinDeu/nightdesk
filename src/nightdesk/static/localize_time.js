@@ -22,8 +22,32 @@
     return ABS.format(d);
   }
 
+  var HHMM = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+
+  // Convert a UTC "HH:MM" wall-clock string to a friendly local 12-hour label
+  // (e.g. "8:00 PM"). getTimezoneOffset() returns (UTC - local) in minutes, so
+  // local = utc - off.
+  function hhmmUtcToLocal(hhmm) {
+    var m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(hhmm || '');
+    if (!m) return null;
+    var off = new Date().getTimezoneOffset();
+    var total = (parseInt(m[1], 10) * 60 + parseInt(m[2], 10) - off);
+    total = ((total % 1440) + 1440) % 1440;
+    var d = new Date();
+    d.setHours(Math.floor(total / 60), total % 60, 0, 0);
+    return HHMM.format(d);
+  }
+
   function localize(root) {
     var scope = root || document;
+
+    scope.querySelectorAll('[data-hhmm-utc]:not([data-hhmm-done])').forEach(function (el) {
+      var out = hhmmUtcToLocal(el.getAttribute('data-hhmm-utc'));
+      el.setAttribute('data-hhmm-done', '1');
+      if (out !== null) el.textContent = out;
+    });
 
     scope.querySelectorAll('[data-ts]:not([data-ts-done])').forEach(function (el) {
       var out = fmt(el.getAttribute('data-ts'));

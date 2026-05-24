@@ -16,7 +16,7 @@
   {% elif not status.in_window and status.total_running == 0 %}
     <span class="inline-block w-2 h-2 rounded-full bg-warn"></span>
     <span class="text-warn">paused</span>
-    <span class="text-fg-muted">· resumes {{ status.window_start }}</span>
+    <span class="text-fg-muted">· resumes <span data-hhmm-utc="{{ status.window_start }}">{{ status.window_start }}</span></span>
   {% else %}
     {% set overflow = status.total_running > status.max_parallel %}
     {% set dot_class = "bg-accent" if (overflow or status.in_window) else "bg-warn" %}
@@ -60,14 +60,20 @@
           <span class="text-accent">● online</span>
         {% endif %}
       </div>
+      {# Equal start == end means "no restriction" (the scheduler's always-on
+         convention). Show that instead of a degenerate "8:00 PM–8:00 PM". #}
       <div class="flex justify-between gap-4">
         <span class="text-fg-muted">Window</span>
         <span class="text-fg">
-          {{ status.window_start }}–{{ status.window_end }}
-          {% if status.in_window %}
-            <span class="text-accent">(active)</span>
+          {% if status.window_start == status.window_end %}
+            <span class="text-accent">Always on</span>
           {% else %}
-            <span class="text-warn">(inactive)</span>
+            <span data-hhmm-utc="{{ status.window_start }}">{{ status.window_start }}</span>–<span data-hhmm-utc="{{ status.window_end }}">{{ status.window_end }}</span>
+            {% if status.in_window %}
+              <span class="text-accent">(active)</span>
+            {% else %}
+              <span class="text-warn">(inactive)</span>
+            {% endif %}
           {% endif %}
         </span>
       </div>

@@ -220,9 +220,7 @@ def tool_summary(evt: dict) -> ToolSummary:
         first = cmd.splitlines()[0] if cmd else ""
         if len(first) > 80:
             first = first[:77] + "..."
-        cwd = (input_.get("cwd") or "").strip()
-        meta = f"in {cwd}" if cwd else ""
-        return ToolSummary("Bash", "bash", first, meta)
+        return ToolSummary("Bash", "bash", first, "")
     if tool == "Glob":
         pattern = input_.get("pattern") or ""
         path = input_.get("path") or "."

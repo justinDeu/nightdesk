@@ -395,11 +395,6 @@ li[data-ticket-id][data-selected] {
     white-space: pre;
     margin: 0;
   }
-  .bash-cwd {
-    color: var(--color-fg-muted);
-    font-size: 11px;
-    font-family: var(--font-mono);
-  }
   .bash-desc {
     color: var(--color-fg-muted);
     font-size: 12px;
@@ -419,6 +414,11 @@ li[data-ticket-id][data-selected] {
   }
   .bash-hidden-summary::-webkit-details-marker { display: none; }
   .bash-hidden-summary:hover { color: var(--color-fg); }
+  /* Swap the affordance text by open state: closed shows "N lines hidden",
+     open hides that message but keeps a "collapse" handle to re-fold. */
+  .bash-hidden-summary .bhs-hide { display: none; }
+  details[open] > .bash-hidden-summary .bhs-show { display: none; }
+  details[open] > .bash-hidden-summary .bhs-hide { display: inline; }
 
   /* ---- tool result -------------------------------------------------- */
   .tool-result {

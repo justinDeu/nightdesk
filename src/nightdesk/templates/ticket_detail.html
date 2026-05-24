@@ -331,7 +331,7 @@
        # erase it — the prompt belongs to the ticket, not a specific run. #}
       {% set prompt_text = ticket.prompt or '' %}
       {% if prompt_text %}
-      <details class="user-prompt mb-3" open>
+      <details class="user-prompt mb-3">
         <summary class="user-prompt-author">user</summary>
         <pre class="user-prompt-body">{{ prompt_text }}</pre>
       </details>

@@ -1384,40 +1384,37 @@ def _write_version_marker(target_skills: Path, version: str, skills_hash: str) -
     ) + "\n")
 
 
-def _resolve_target(target_arg: str | None) -> Path:
-    """Resolve the installation target directory.
+def _resolve_skills_dir(target_arg: str | None) -> Path:
+    """Resolve the ``.claude/skills`` directory to install into.
 
-    Priority: explicit --target > git root of cwd > cwd itself.
+    - ``--target DIR`` -> ``DIR/.claude/skills`` (project-level install).
+    - default          -> the user's Claude config dir + ``/skills``:
+      ``$CLAUDE_CONFIG_DIR/skills`` when that env var is set (the same override
+      Claude Code itself honors), otherwise ``~/.claude/skills``.
     """
     if target_arg:
         p = Path(target_arg).resolve()
         if not p.is_dir():
             print(f"Target directory does not exist: {p}", file=sys.stderr)
             sys.exit(1)
-        return p
+        return p / ".claude" / "skills"
 
-    # Try git root of cwd.
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            return Path(result.stdout.strip())
-    except Exception:
-        pass
-
-    return Path.cwd()
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    base = Path(cfg).expanduser() if cfg else Path.home() / ".claude"
+    return base / "skills"
 
 
 def install_skills() -> None:
-    """CLI entry point: install nightdesk skills into a target project.
+    """CLI entry point: install nightdesk skills for the user.
 
-    Copies each bundled skill directory into ``<target>/.claude/skills/`` and
-    writes a version marker for drift detection on subsequent runs.
+    By default installs into the user's Claude config dir
+    (``$CLAUDE_CONFIG_DIR/skills`` or ``~/.claude/skills``), so the skills are
+    available across every project. ``--target DIR`` instead installs them
+    project-locally into ``DIR/.claude/skills``. Writes a version marker for
+    drift detection on subsequent runs.
 
     Usage:
-        nightdesk-install-skills
+        nightdesk-install-skills                     # -> ~/.claude/skills
         nightdesk-install-skills --target /path/to/project
         nightdesk-install-skills --force
     """
@@ -1428,7 +1425,8 @@ def install_skills() -> None:
     parser.add_argument(
         "--target",
         metavar="DIR",
-        help="Target project directory (default: git root of cwd, or cwd).",
+        help="Install project-locally into DIR/.claude/skills "
+             "(default: the user's $CLAUDE_CONFIG_DIR/skills or ~/.claude/skills).",
     )
     parser.add_argument(
         "--force",
@@ -1437,7 +1435,7 @@ def install_skills() -> None:
     )
     args = parser.parse_args()
 
-    target = _resolve_target(args.target)
+    target_skills = _resolve_skills_dir(args.target)
     bundled = _find_bundled_skills_dir()
     skills_hash = _hash_skills(bundled)
 
@@ -1446,7 +1444,20 @@ def install_skills() -> None:
     except Exception:
         version = "0.0.0"
 
-    target_skills = target / ".claude" / "skills"
+    # Refuse to install into our own bundled skills dir. Running with
+    # --target pointed at the nightdesk repo makes target_skills the bundled
+    # source — the per-skill rmtree + copytree
+    # below would delete each source skill before copying it back from the
+    # now-empty path, destroying the bundled skills. Nothing to install here.
+    if target_skills.resolve() == bundled.resolve():
+        print(
+            "Target resolves to nightdesk's own bundled skills directory "
+            f"({bundled}); nothing to install.\n"
+            "Run from another project, or pass --target <other-project>.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     target_skills.mkdir(parents=True, exist_ok=True)
 
     # Determine which bundled skill directories to install.

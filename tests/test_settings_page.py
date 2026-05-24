@@ -320,3 +320,54 @@ async def test_settings_post_invalid_tz_offset_stores_as_is(cookie_client, sessi
     cfg = session.get(ConfigRow, 1)
     assert cfg.window_start == "22:00"
     assert cfg.window_end == "07:00"
+
+
+async def test_settings_uncheck_always_on_persists(cookie_client, session):
+    """Unchecking 'always on' must leave a restricted window. The form prefills
+    both inputs from the always-on 00:00, so they arrive equal; storing that
+    verbatim would re-infer always-on (start == end). Fall back to the default
+    window instead so the toggle sticks."""
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
+                          window_start="00:00", window_end="00:00"))
+    session.commit()
+
+    # No always_on field (unchecked); equal local inputs (20:00 == 20:00).
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "max_parallel": "2",
+            "polling_interval_seconds": "5",
+            "window_start": "20:00",
+            "window_end": "20:00",
+            "cc_minimum_version": "2.1.80",
+            "tz_offset": "0",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.window_start != cfg.window_end  # no longer always-on
+    assert (cfg.window_start, cfg.window_end) == ("22:00", "07:00")
+
+
+async def test_settings_always_on_checked_stores_equal_window(cookie_client, session):
+    """Checking 'always on' stores 00:00/00:00 regardless of the time inputs."""
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "max_parallel": "2",
+            "polling_interval_seconds": "5",
+            "window_start": "20:00",
+            "window_end": "08:00",
+            "always_on": "on",
+            "cc_minimum_version": "2.1.80",
+            "tz_offset": "240",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.window_start == cfg.window_end == "00:00"

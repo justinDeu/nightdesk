@@ -24,7 +24,7 @@
 <aside
   id="sidebar"
   {% if is_edit %}data-selected-ticket-id="{{ ticket.id }}"{% endif %}
-  class="flex flex-col h-full min-h-0 rounded-md border border-border bg-bg-elev p-4 gap-4 overflow-y-auto"
+  class="flex flex-col h-full min-h-0 rounded-md border border-border bg-bg-elev p-4 gap-4 overflow-y-auto overflow-x-hidden"
 >
   <header class="flex items-center justify-between gap-2">
     <h2 class="text-sm font-semibold text-fg">

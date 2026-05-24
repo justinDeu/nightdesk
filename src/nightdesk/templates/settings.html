@@ -24,7 +24,7 @@
         <label class="flex items-center gap-2">
           <input id="always_on" name="always_on" type="checkbox"
                  {% if always_on %}checked{% endif %}
-                 onchange="document.querySelectorAll('[data-window-field]').forEach(el => el.disabled = this.checked);" />
+                 onchange="document.querySelectorAll('[data-window-field]').forEach(el => el.disabled = this.checked); if (!this.checked) { var s = document.getElementById('window_start'), e = document.getElementById('window_end'); if (s && e && s.value === e.value) { s.value = '22:00'; e.value = '07:00'; } }" />
           <span class="font-medium">Always on</span>
           <span class="text-xs text-fg-muted">(worker may dispatch at any time)</span>
         </label>

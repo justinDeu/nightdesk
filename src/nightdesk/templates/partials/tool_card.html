@@ -49,7 +49,7 @@
     {% else %}
       <pre class="tool-result-pre">{{ elide.head | join('\n') }}</pre>
       <details>
-        <summary class="bash-hidden-summary">{{ elide.hidden }} lines hidden</summary>
+        <summary class="bash-hidden-summary"><span class="bhs-show">{{ elide.hidden }} lines hidden</span><span class="bhs-hide">collapse</span></summary>
         <pre class="tool-result-pre">{{ elide.hidden_lines | join('\n') }}</pre>
       </details>
       <pre class="tool-result-pre">{{ elide.tail | join('\n') }}</pre>
@@ -201,12 +201,10 @@
   {% set input = evt.get('input', {}) %}
   {% set cmd = input.get('command') or '' %}
   {% set desc = input.get('description') or '' %}
-  {% set cwd = (input.get('cwd') or '') | trim %}
   <details class="tc-card" open>
     {{ _summary(s) }}
     <div class="tc-body">
       <pre class="bash-cmd">{{ cmd }}</pre>
-      {% if cwd %}<div class="bash-cwd">{{ cwd }}</div>{% endif %}
       {% if desc %}<div class="bash-desc">{{ desc }}</div>{% endif %}
       {% if result %}
         {{ _result_in_body(result, true) }}

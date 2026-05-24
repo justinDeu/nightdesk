@@ -169,10 +169,20 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             cfg.window_start = "00:00"
             cfg.window_end = "00:00"
         else:
-            if hhmm_re.match(window_start or ""):
-                cfg.window_start = _local_to_utc(window_start, tz_off)
-            if hhmm_re.match(window_end or ""):
-                cfg.window_end = _local_to_utc(window_end, tz_off)
+            ws = (_local_to_utc(window_start, tz_off)
+                  if hhmm_re.match(window_start or "") else cfg.window_start)
+            we = (_local_to_utc(window_end, tz_off)
+                  if hhmm_re.match(window_end or "") else cfg.window_end)
+            # Unchecking "always on" must leave a restricted window. But equal
+            # bounds ARE the always-on convention, so a degenerate ws == we
+            # (e.g. both inputs still carry the 00:00 the always-on state was
+            # prefilled from) would silently round-trip straight back to
+            # always-on. Fall back to the default window so the toggle sticks.
+            if ws == we:
+                ws = _local_to_utc("22:00", tz_off)
+                we = _local_to_utc("07:00", tz_off)
+            cfg.window_start = ws
+            cfg.window_end = we
 
         cfg.claude_binary_path = (claude_binary_path or "").strip() or None
         cfg.cc_minimum_version = (cc_minimum_version or "").strip() or cfg.cc_minimum_version
