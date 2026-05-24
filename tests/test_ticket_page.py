@@ -565,7 +565,7 @@ async def test_transcript_sidebar_shows_subagent_and_tasks(
     calls, the rendered page must include:
     - id="transcript-sidebar"
     - the sub-agent label and data-filter-tool-use-id pointing to the agent
-    - each task subject with the appropriate ASCII status marker ([x] / [ ])
+    - each task subject with the appropriate CSS checkbox class (todo-item is-completed / is-pending)
     """
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
@@ -614,10 +614,11 @@ async def test_transcript_sidebar_shows_subagent_and_tasks(
     assert f'data-filter-tool-use-id="{agent_id}"' in body
     assert "Executor" in body
 
-    # Task subjects appear with correct ASCII markers.
+    # Task subjects appear with correct CSS checkbox classes.
     assert "Write the tests" in body
     assert "Run the build" in body
-    # "Run the build" was marked completed -> [x] marker.
-    assert "[x]" in body
-    # "Write the tests" is still pending -> [ ] marker.
-    assert "[ ]" in body
+    # "Run the build" was marked completed -> is-completed class with todo-check.
+    assert "todo-item is-completed" in body
+    assert "todo-check" in body
+    # "Write the tests" is still pending -> is-pending class.
+    assert "todo-item is-pending" in body

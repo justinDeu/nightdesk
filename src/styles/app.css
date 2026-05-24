@@ -152,6 +152,50 @@ li[data-ticket-id][data-selected] {
     margin-top: 4px;
   }
 
+  /* ---- sidebar task list checkboxes --------------------------------- */
+  .todo-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .todo-check {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin-top: 1px;
+    border: 1.5px solid var(--color-border);
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    line-height: 1;
+    color: transparent;
+  }
+  .todo-item.is-completed .todo-check {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: var(--color-bg);
+  }
+  .todo-item.is-in_progress .todo-check {
+    border-color: var(--color-warn);
+  }
+  .todo-item.is-in_progress .todo-check::after {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-warn);
+  }
+  .todo-label {
+    color: var(--color-fg);
+    word-break: break-word;
+  }
+  .todo-item.is-completed .todo-label {
+    text-decoration: line-through;
+    color: var(--color-fg-muted);
+  }
+
   .tc-path {
     font-family: var(--font-mono);
     font-size: 12px;

@@ -29,9 +29,9 @@
     <h3 class="text-fg-muted uppercase tracking-wide mb-1">Tasks</h3>
     <ul class="todos space-y-0.5">
       {% for t in todos %}
-      <li class="flex gap-1" data-todo-status="{{ t.status }}">
-        <span class="text-fg-muted">{% if t.status == 'completed' %}[x]{% elif t.status == 'in_progress' %}[~]{% else %}[ ]{% endif %}</span>
-        <span class="{{ 'line-through text-fg-muted' if t.status == 'completed' else 'text-fg' }}">
+      <li class="todo-item is-{{ t.status }}" data-todo-status="{{ t.status }}">
+        <span class="todo-check" aria-hidden="true">{% if t.status == 'completed' %}&check;{% endif %}</span>
+        <span class="todo-label">
           {{ t.activeForm if (t.status == 'in_progress' and t.activeForm) else t.label }}
         </span>
       </li>
