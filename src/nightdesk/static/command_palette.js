@@ -152,15 +152,31 @@
     });
   }
 
-  function openCreateTicket() {
-    var modal = document.getElementById("ticket-create-modal");
+  function openModalEl(modal) {
     if (modal && typeof modal.showModal === "function") {
-      try { modal.showModal(); return; } catch (e) {}
+      try { modal.showModal(); return true; } catch (e) {}
     }
-    // Not on a page that carries the create modal — go to the board and let
-    // it auto-open via the ?new=1 flag handled on load below.
-    location.href = "/?new=1";
+    return false;
   }
+
+  // Opens the create-ticket modal from ANY page. If the page embeds the modal
+  // inline (the board), pop it directly. Otherwise lazy-load the partial into
+  // #create-modal-host via HTMX (which runs the partial's own init script),
+  // then open it. Falls back to navigating to the board if HTMX is missing.
+  function openCreateTicket() {
+    if (openModalEl(document.getElementById("ticket-create-modal"))) return;
+    var host = document.getElementById("create-modal-host");
+    if (!host || typeof window.htmx === "undefined") {
+      location.href = "/?new=1";
+      return;
+    }
+    window.htmx
+      .ajax("GET", "/board/new-ticket-modal", { target: "#create-modal-host", swap: "innerHTML" })
+      .then(function () {
+        openModalEl(document.getElementById("ticket-create-modal"));
+      });
+  }
+  window.ndOpenCreateTicket = openCreateTicket;
 
   // ---- command model -----------------------------------------------------
   // Each command: { label, hint, run }. Built fresh per open so the current

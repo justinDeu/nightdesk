@@ -81,31 +81,45 @@
       </label>
 
       {# --- Dependencies -------------------------------------------------- #
-       # Optional. This ticket stays blocked until every selected ticket
-       # reaches review/archived. The server runs a DAG cycle check, so a
-       # selection that would form a loop is rejected and skipped. The hidden
-       # deps_form marks the section as submitted, so an empty selection on
-       # edit means "remove all" rather than "leave untouched".
+       # Search-and-add picker (mirrors the workspaces UX): type to find a
+       # ticket, click to add it as a removable row. The rows below ARE the
+       # ticket's direct (depth-1) dependencies. Server runs a DAG cycle check,
+       # so a pick that would form a loop is rejected and skipped. The hidden
+       # deps_form marks the section as submitted, so clearing all rows on edit
+       # means "remove all" rather than "leave untouched".
        #}
       {% set _dep_all = dep_all if dep_all is defined else [] %}
-      {% set _current_dep_ids = (ticket.dependencies | map(attribute='depends_on_id') | list) if (_is_edit and ticket.dependencies) else [] %}
-      {% set _dep_options = (_dep_all | rejectattr('id', 'equalto', ticket.id) | list) if _is_edit else _dep_all %}
-      <input type="hidden" name="deps_form" value="1" />
-      <label class="flex flex-col gap-1 text-sm">
-        <span class="text-fg-muted text-xs uppercase tracking-wide">Depends on</span>
-        <span class="-mt-0.5 text-[11px] text-fg-muted">Won't run until the selected tickets finish. Cycles are rejected automatically.</span>
-        {% if _dep_options %}
-        <select name="depends_on_id" multiple size="5"
-                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg text-xs focus:border-accent outline-none">
-          {% for c in _dep_options %}
-            <option value="{{ c.id }}" {% if c.id in _current_dep_ids %}selected{% endif %}>{{ c.title }} · {{ c.status }}</option>
+      {% set _current_deps = (ticket.dependencies | map(attribute='depends_on') | select | list) if (_is_edit and ticket.dependencies) else [] %}
+      <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm" data-dep-picker>
+        <div class="mb-2">
+          <h3 class="text-sm font-medium text-fg">Dependencies</h3>
+          <p class="mt-0.5 text-xs leading-snug text-fg-muted">Stays blocked until these tickets finish. Cycles are rejected automatically.</p>
+        </div>
+        <input type="hidden" name="deps_form" value="1" />
+        {# Candidate tickets for the client-side search (id / title / status). #}
+        <script type="application/json" data-dep-candidates>[{% for c in _dep_all %}{% if not (_is_edit and c.id == ticket.id) %}{"id": {{ c.id | tojson }}, "title": {{ c.title | tojson }}, "status": {{ c.status | tojson }}}{{ "," if not loop.last }}{% endif %}{% endfor %}]</script>
+        <div class="relative">
+          <input type="text" data-dep-search autocomplete="off" spellcheck="false"
+                 placeholder="Search tickets to depend on…"
+                 oninput="window.ndDepSearch(this)"
+                 onfocus="window.ndDepSearch(this)"
+                 onkeydown="window.ndDepSearchKey(event, this)"
+                 onblur="window.ndDepSearchClose(this)"
+                 class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+          <div data-dep-suggest class="absolute left-0 right-0 z-50 mt-1 hidden max-h-48 overflow-y-auto rounded border border-border bg-bg-elev shadow-lg"></div>
+        </div>
+        <ul data-dep-selected class="mt-2 space-y-1">
+          {% for d in _current_deps %}
+          <li data-dep-row data-dep-id="{{ d.id }}" class="flex items-center gap-2 rounded border border-border bg-bg px-2 py-1 text-xs">
+            <input type="hidden" name="depends_on_id" value="{{ d.id }}" />
+            <span class="shrink-0 rounded px-1.5 py-0.5 border {% if d.status in ('review', 'archived') %}border-accent/40 text-accent{% else %}border-warn/40 text-warn{% endif %}">{{ d.status }}</span>
+            <a href="/tickets/{{ d.id }}" target="_blank" class="flex-1 truncate text-fg hover:text-accent" title="{{ d.title }}">{{ d.title }}</a>
+            <button type="button" onclick="window.ndDepRemove(this)" class="shrink-0 rounded px-1.5 py-0.5 text-fg-muted hover:bg-bg-elev hover:text-danger" title="Remove dependency">&times;</button>
+          </li>
           {% endfor %}
-        </select>
-        <span class="text-[10px] text-fg-muted/60">Ctrl/Cmd-click to select multiple, or to deselect.</span>
-        {% else %}
-        <span class="text-xs italic text-fg-muted">No other tickets to depend on yet.</span>
-        {% endif %}
-      </label>
+        </ul>
+        <p data-dep-empty class="mt-1 text-[11px] italic text-fg-muted {% if _current_deps %}hidden{% endif %}">No dependencies yet.</p>
+      </section>
 
       {# --- Workspaces ---------------------------------------------------- #
        # Primary + linked rows in one unified list. Primary is the row the

@@ -462,6 +462,134 @@
     row.querySelector('input').focus();
   };
 
+  // --- Dependency picker -------------------------------------------------
+  //
+  // Search-and-add control for ticket dependencies (depth 1). Candidates are
+  // embedded as a JSON <script> in the picker; selecting one appends a
+  // removable row carrying a hidden depends_on_id input. Mirrors the linked-
+  // workspace add/remove UX. DOM-built (no HTML strings) so arbitrary ticket
+  // titles can't break the markup.
+
+  function _depPicker(el) { return el && el.closest('[data-dep-picker]'); }
+
+  function _depCandidates(picker) {
+    const tag = picker.querySelector('script[data-dep-candidates]');
+    if (!tag) return [];
+    try { return JSON.parse(tag.textContent || '[]'); } catch (e) { return []; }
+  }
+
+  function _depSelectedIds(picker) {
+    return Array.from(picker.querySelectorAll('[data-dep-row]'))
+      .map((r) => r.getAttribute('data-dep-id'));
+  }
+
+  function _depUpdateEmpty(picker) {
+    const empty = picker.querySelector('[data-dep-empty]');
+    if (empty) empty.classList.toggle('hidden', picker.querySelectorAll('[data-dep-row]').length > 0);
+  }
+
+  function _depStatusClass(status) {
+    return (status === 'review' || status === 'archived')
+      ? 'border-accent/40 text-accent' : 'border-warn/40 text-warn';
+  }
+
+  function _depAdd(picker, id, title, status) {
+    if (!id || _depSelectedIds(picker).includes(id)) return;
+    const li = document.createElement('li');
+    li.setAttribute('data-dep-row', '');
+    li.setAttribute('data-dep-id', id);
+    li.className = 'flex items-center gap-2 rounded border border-border bg-bg px-2 py-1 text-xs';
+
+    const hidden = document.createElement('input');
+    hidden.type = 'hidden'; hidden.name = 'depends_on_id'; hidden.value = id;
+
+    const st = document.createElement('span');
+    st.className = 'shrink-0 rounded px-1.5 py-0.5 border ' + _depStatusClass(status);
+    st.textContent = status || '';
+
+    const link = document.createElement('a');
+    link.href = '/tickets/' + encodeURIComponent(id);
+    link.target = '_blank';
+    link.className = 'flex-1 truncate text-fg hover:text-accent';
+    link.title = title || id;
+    link.textContent = title || id;
+
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'shrink-0 rounded px-1.5 py-0.5 text-fg-muted hover:bg-bg-elev hover:text-danger';
+    rm.title = 'Remove dependency';
+    rm.textContent = '×';
+    rm.addEventListener('click', () => window.ndDepRemove(rm));
+
+    li.append(hidden, st, link, rm);
+    picker.querySelector('[data-dep-selected]').appendChild(li);
+    _depUpdateEmpty(picker);
+  }
+
+  window.ndDepSearch = function (input) {
+    const picker = _depPicker(input);
+    if (!picker) return;
+    const dd = picker.querySelector('[data-dep-suggest]');
+    const q = (input.value || '').trim().toLowerCase();
+    const selected = new Set(_depSelectedIds(picker));
+    let matches = _depCandidates(picker).filter((c) => !selected.has(c.id));
+    if (q) {
+      matches = matches.filter((c) =>
+        (c.title || '').toLowerCase().includes(q) || (c.status || '').toLowerCase().includes(q));
+    }
+    matches = matches.slice(0, 8);
+    dd.replaceChildren();
+    if (!matches.length) { dd.classList.add('hidden'); return; }
+    matches.forEach((c) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'block w-full cursor-pointer text-left px-2 py-1.5 text-xs hover:bg-bg-elev-2';
+      const t = document.createElement('span'); t.className = 'text-fg'; t.textContent = c.title || c.id;
+      const s = document.createElement('span'); s.className = 'text-fg-muted'; s.textContent = ' · ' + (c.status || '');
+      btn.append(t, s);
+      // mousedown (not click) so it fires before the input's blur-close.
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        _depAdd(picker, c.id, c.title, c.status);
+        input.value = '';
+        dd.replaceChildren();
+        dd.classList.add('hidden');
+        input.focus();
+      });
+      dd.appendChild(btn);
+    });
+    dd.classList.remove('hidden');
+  };
+
+  window.ndDepSearchKey = function (ev, input) {
+    const picker = _depPicker(input);
+    const dd = picker && picker.querySelector('[data-dep-suggest]');
+    if (!dd) return;
+    if (ev.key === 'Escape') {
+      dd.classList.add('hidden');
+    } else if (ev.key === 'Enter') {
+      const first = dd.querySelector('button');
+      if (first && !dd.classList.contains('hidden')) {
+        ev.preventDefault();
+        first.dispatchEvent(new MouseEvent('mousedown'));
+      }
+    }
+  };
+
+  window.ndDepSearchClose = function (input) {
+    const picker = _depPicker(input);
+    const dd = picker && picker.querySelector('[data-dep-suggest]');
+    // Delay so a mousedown on a suggestion beats the blur-driven close.
+    if (dd) setTimeout(() => dd.classList.add('hidden'), 180);
+  };
+
+  window.ndDepRemove = function (button) {
+    const picker = _depPicker(button);
+    const row = button && button.closest('[data-dep-row]');
+    if (row) row.remove();
+    if (picker) _depUpdateEmpty(picker);
+  };
+
   // --- Init / wire-up ----------------------------------------------------
   //
   // Run once on page load AND whenever a fresh ticket form mounts (e.g. a

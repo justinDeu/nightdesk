@@ -60,16 +60,14 @@
             {{ label }}
           </a>
         {% endfor %}
-        {% if active_page == 'board' %}
-          {# Create modal lives on the board page itself; just pop it. No
-             sidebar refetch — the board's polled column refresh keeps the
-             columns up to date once the new ticket lands. #}
-          <button type="button"
-                  onclick="var d = document.getElementById('ticket-create-modal'); if (d) d.showModal();"
-                  class="ml-2 px-2.5 py-1 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-xs font-medium">
-            + New ticket
-          </button>
-        {% endif %}
+        {# Works on every page: ndOpenCreateTicket pops the inline modal when
+           the page already has one (the board), otherwise lazy-loads it into
+           #create-modal-host below. #}
+        <button type="button"
+                onclick="window.ndOpenCreateTicket && window.ndOpenCreateTicket()"
+                class="ml-2 px-2.5 py-1 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-xs font-medium">
+          + New ticket
+        </button>
       </nav>
       <div class="flex-1"></div>
       <button id="notify-bell" type="button" title="Enable desktop notifications"
@@ -96,6 +94,9 @@
     {# Command palette + keyboard-shortcut cheat sheet. Behavior in
        /static/command_palette.js. #}
     {% include "partials/command_palette.html" %}
+    {# Lazy-load target for the create-ticket modal on pages that don't embed
+       it inline (everything except the board). Filled by ndOpenCreateTicket. #}
+    <div id="create-modal-host"></div>
     <script>
       // Shared feedback for Run-now buttons (board sidebar + ticket detail).
       // The endpoint returns 204 on success (HTMX) or 409 if the ticket is

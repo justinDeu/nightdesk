@@ -444,6 +444,22 @@ def build_router(
             },
         )
 
+    @router.get("/board/new-ticket-modal", response_class=HTMLResponse, dependencies=[auth])
+    async def new_ticket_modal(request: Request, session: Session = Depends(get_session)):
+        """The create-ticket modal as a standalone partial so any page can
+        lazy-load and open it. The board includes it inline; other pages fetch
+        it into a host container on demand (see ndOpenCreateTicket)."""
+        return templates.TemplateResponse(
+            request,
+            "partials/ticket_edit_modal.html",
+            {
+                "profiles": list_profiles(session),
+                "ticket": None,
+                "modal_id": "ticket-create-modal",
+                "dep_all": list_tickets(session, limit=500),
+            },
+        )
+
     @router.post("/board/tickets", dependencies=[auth])
     async def create(
         request: Request,
