@@ -395,6 +395,11 @@ li[data-ticket-id][data-selected] {
     white-space: pre;
     margin: 0;
   }
+  .bash-cwd {
+    color: var(--color-fg-muted);
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
   .bash-desc {
     color: var(--color-fg-muted);
     font-size: 12px;
