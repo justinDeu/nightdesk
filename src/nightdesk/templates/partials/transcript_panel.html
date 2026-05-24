@@ -596,18 +596,22 @@
           const summaryText = String(evt.summary || '').trim();
           const summaryHtml = summaryText
             ? `<div class="whitespace-pre-wrap text-sm mt-1 text-fg">${escapeHtml(summaryText)}</div>` : '';
+          const agentId = evt.tool_use_id || '';
           return (
-            `<div data-subagent-task-id="${escapeHtml(tid)}" class="space-y-1">` +
-              `<details class="tc-card subagent-card${failed ? ' is-error' : ''}" open>` +
-                `<summary><span class="tc-tag tc-tag-subagent">subagent</span> ` +
-                  `<code class="tc-path">${escapeHtml(label)}</code> ` +
-                  `<span class="tc-meta">${escapeHtml(metaText)}</span></summary>` +
-                `<div class="tc-body">` +
-                  detailHtml +
-                  `<div class="subagent-stats text-xs text-fg-muted">${statParts.join('')}</div>` +
-                  summaryHtml +
-                `</div>` +
-              `</details>` +
+            `<div class="subagent-group" data-subagent-tool-use-id="${escapeHtml(agentId)}">` +
+              `<div data-subagent-task-id="${escapeHtml(tid)}" class="space-y-1">` +
+                `<details class="tc-card subagent-card${failed ? ' is-error' : ''}" open>` +
+                  `<summary><span class="tc-tag tc-tag-subagent">subagent</span> ` +
+                    `<code class="tc-path">${escapeHtml(label)}</code> ` +
+                    `<span class="tc-meta">${escapeHtml(metaText)}</span></summary>` +
+                  `<div class="tc-body">` +
+                    detailHtml +
+                    `<div class="subagent-stats text-xs text-fg-muted">${statParts.join('')}</div>` +
+                    summaryHtml +
+                  `</div>` +
+                `</details>` +
+              `</div>` +
+              `<div class="subagent-children ml-4 pl-3 space-y-1 border-l border-border"></div>` +
             `</div>`
           );
         }
@@ -685,7 +689,16 @@
               const existing = container.querySelector(
                 `[data-subagent-task-id="${tid}"]`);
               if (existing) {
-                existing.replaceWith(fresh);
+                // Preserve already-nested child tool calls across re-render.
+                const oldKids = existing.querySelector(':scope > .subagent-children')
+                  || existing.closest('.subagent-group') && existing.closest('.subagent-group').querySelector(':scope > .subagent-children');
+                const newKids = fresh.querySelector(':scope > .subagent-children');
+                if (oldKids && newKids && oldKids.children.length) {
+                  newKids.replaceWith(oldKids);
+                }
+                // existing is the inner card div; replace the whole group.
+                const oldGroup = existing.closest('.subagent-group') || existing;
+                oldGroup.replaceWith(fresh);
               } else {
                 container.appendChild(fresh);
               }
@@ -732,11 +745,29 @@
           }
           const node = renderEvent(evt);
           if (node) {
-            container.appendChild(node);
+            let target = mountFor(evt);
+            let toInsert = node;
+            if (evt.parent_tool_use_id && target !== container) {
+              const wrap = document.createElement('div');
+              wrap.setAttribute('data-parent-tool-use-id', evt.parent_tool_use_id);
+              wrap.appendChild(node);
+              toInsert = wrap;
+            }
+            target.appendChild(toInsert);
             if (evt.type === 'rate_limit') bindCountdowns(node);
             if (window.ndLocalizeTimes) window.ndLocalizeTimes(node);
             applyCollapsedState(node);
           }
+        }
+
+        function mountFor(evt) {
+          const ptid = evt && evt.parent_tool_use_id;
+          if (ptid) {
+            const kids = container.querySelector(
+              `.subagent-group[data-subagent-tool-use-id="${ptid}"] > .subagent-children`);
+            if (kids) return kids;
+          }
+          return container;
         }
 
         function parse(e) {
@@ -844,7 +875,7 @@
           const s = typeof evt.seq === 'number' ? evt.seq : -1;
           return s > seqHigh;
         }
-        ['meta', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error', 'rate_limit', 'cancelled'].forEach(function (t) {
+        ['meta', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error', 'rate_limit', 'cancelled', 'subagent'].forEach(function (t) {
           es.addEventListener(t, function (e) {
             const evt = parse(e);
             if (!evt) return;
