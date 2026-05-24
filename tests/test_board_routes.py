@@ -826,3 +826,52 @@ async def test_worktree_preview_html_warns_about_missing_base_ref(cookie_client,
     )
     assert r.status_code == 200
     assert "not found" in r.text
+
+
+async def test_sidebar_shows_branch_for_worktree_workspace(cookie_client, session, profile):
+    """The sidebar Workspace section renders a Branch row when the primary
+    workspace has a branch set (git_worktree tickets)."""
+    t = create_ticket(
+        session,
+        title="branch-ticket",
+        prompt="p",
+        priority=0,
+        profile_id=profile.id,
+        cwd="/tmp",
+        run_now=False,
+        workspaces=[
+            {
+                "role": "primary",
+                "label": "primary",
+                "kind": "git_worktree",
+                "access": "read_write",
+                "source_path": "/tmp",
+                "worktree_name": "feat-branch-name",
+                "branch": "nightdesk/feat-branch-name",
+                "retention": "preserve",
+            },
+        ],
+    )
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert "Branch:" in body
+    assert "nightdesk/feat-branch-name" in body
+
+
+async def test_sidebar_omits_branch_for_directory_workspace(cookie_client, session, profile):
+    """A directory-mode ticket (no branch on the workspace) must not show a
+    Branch row at all — no empty label or blank line."""
+    t = create_ticket(
+        session,
+        title="dir-ticket",
+        prompt="p",
+        priority=0,
+        profile_id=profile.id,
+        cwd="/tmp",
+        run_now=False,
+    )
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert "Branch:" not in body

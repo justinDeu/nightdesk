@@ -81,6 +81,9 @@
             {% if primary_ws.worktree_name %}
               <div class="text-fg-muted">Worktree: <span class="text-fg font-mono">{{ primary_ws.worktree_name }}</span></div>
             {% endif %}
+            {% if primary_ws.branch %}
+              <div class="text-fg-muted">Branch: <span class="text-fg font-mono">{{ primary_ws.branch }}</span></div>
+            {% endif %}
             {% set ws_path = primary_ws.resolved_path or primary_ws.worktree_path or primary_ws.source_path %}
             {% if ws_path %}
               <code class="block break-all font-mono text-accent">{{ ws_path }}</code>
@@ -105,6 +108,9 @@
                   <span class="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-fg-muted">{{ w.access }}</span>
                   {% if w.label %}<span class="text-fg-muted">{{ w.label }}</span>{% endif %}
                 </div>
+                {% if w.branch %}
+                  <div class="text-fg-muted">Branch: <span class="text-fg font-mono">{{ w.branch }}</span></div>
+                {% endif %}
                 <code class="block break-all font-mono text-fg">{{ w.source_path or w.resolved_path or '' }}</code>
               </li>
             {% endfor %}
