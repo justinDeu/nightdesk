@@ -51,13 +51,12 @@
 
   {% if transcript_raw %}
     {# Legacy raw SDK file: plain pre fallback. #}
-    <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto"
-         style="max-height: calc(100vh - 10rem);">{{ transcript_raw }}</pre>
+    <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto lg:flex-1 lg:min-h-0">{{ transcript_raw }}</pre>
   {% else %}
     {% set subagent_agents = tv.subagent_index(transcript_events) %}
     {% set todos = tv.build_todo_list(transcript_events) %}
-    <div class="flex gap-3">
-      <div id="transcript-scroll" class="overflow-y-auto pr-1 flex-1 min-w-0" style="max-height: calc(100vh - 10rem);">
+    <div class="flex gap-3 lg:flex-1 lg:min-h-0">
+      <div id="transcript-scroll" class="overflow-y-auto pr-1 flex-1 min-w-0">
         <div id="transcript" class="space-y-2">
           {# Pre-pair tool_result events with their parent tool_use so each
              pair renders as one visual card. Orphan results (no matching
