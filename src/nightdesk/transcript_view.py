@@ -372,6 +372,13 @@ def subagent_index(events) -> list[dict]:
     """
     cards: dict[str, dict] = {}
     order: list[str] = []
+    # The dispatch description + prompt arrive on the ``started`` phase, then
+    # ``progress`` phases overwrite ``description`` with the transient current
+    # activity ("Reading X"). Capture the stable started-phase values so the
+    # sidebar tooltip shows the same task description/prompt as the Agent tool
+    # card, not whatever the sub-agent happened to be doing last.
+    task_desc: dict[str, str] = {}
+    task_prompt: dict[str, str] = {}
     for e in events:
         if e.get("type") != "subagent":
             continue
@@ -383,6 +390,12 @@ def subagent_index(events) -> list[dict]:
             order.append(key)
         else:
             _merge_subagent(cards[key], e)
+        d = (e.get("description") or "").strip()
+        if d and (e.get("phase") == "started" or key not in task_desc):
+            task_desc[key] = d
+        p = (e.get("prompt") or "").strip()
+        if p and key not in task_prompt:
+            task_prompt[key] = p
     rows: list[dict] = []
     for key in order:
         card = cards[key]
@@ -398,8 +411,8 @@ def subagent_index(events) -> list[dict]:
             "done": s.done,
             "failed": s.failed,
             "detail": s.detail,
-            "description": card.get("description", ""),
-            "prompt": card.get("prompt", ""),
+            "description": task_desc.get(key, ""),
+            "prompt": task_prompt.get(key, ""),
         })
     return rows
 

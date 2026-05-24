@@ -14,7 +14,7 @@
         <button type="button"
                 class="subagent-filter w-full text-left px-1 py-0.5 rounded hover:bg-bg-elev"
                 data-filter-tool-use-id="{{ a.tool_use_id }}"
-                title="{{ a.description or a.prompt or a.detail or a.label }}">
+                title="{{ a.description or a.label }}{% if a.prompt %}&#10;&#10;{{ a.prompt }}{% endif %}">
           <span class="text-fg">{{ a.label }}</span>
           <span class="text-fg-muted">
             {{ 'failed' if a.failed else a.status }}{% if a.tool_uses %} &middot; {{ a.tool_uses }} tool{{ '' if a.tool_uses == 1 else 's' }}{% endif %}

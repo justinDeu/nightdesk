@@ -398,6 +398,11 @@ def test_subagent_index_includes_description_and_prompt():
          "tool_use_id": "A", "subagent_type": "Explore",
          "description": "explore the codebase",
          "prompt": "find all Python files"},
+        # A progress phase overwrites description with transient activity and
+        # carries no prompt; the row must keep the stable started values.
+        {"type": "subagent", "phase": "progress", "task_id": "k1",
+         "tool_use_id": "A", "subagent_type": "Explore",
+         "description": "Reading src/nightdesk/db/models.py"},
         {"type": "subagent", "phase": "notification", "task_id": "k1",
          "tool_use_id": "A", "status": "completed",
          "usage": {"tool_uses": 3, "total_tokens": 500, "duration_ms": 2000}},
@@ -405,6 +410,7 @@ def test_subagent_index_includes_description_and_prompt():
     idx = subagent_index(events)
     assert len(idx) == 1
     row = idx[0]
+    # Stable started-phase description, NOT the transient progress activity.
     assert row["description"] == "explore the codebase"
     assert row["prompt"] == "find all Python files"
     assert "detail" in row
