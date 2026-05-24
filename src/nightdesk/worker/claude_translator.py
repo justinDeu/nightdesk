@@ -120,12 +120,16 @@ def _translate_assistant(event: dict) -> list[dict]:
             if text.strip():
                 out.append({"type": "thinking", "text": text})
         elif btype == "tool_use":
-            out.append({
+            tu = {
                 "type": "tool_use",
                 "id": block.get("id", ""),
                 "tool": block.get("name") or block.get("tool") or "",
                 "input": block.get("input") or {},
-            })
+            }
+            ptid = block.get("parent_tool_use_id")
+            if ptid:
+                tu["parent_tool_use_id"] = ptid
+            out.append(tu)
         else:
             # Unknown block; preserve the raw json as assistant_text.
             out.append({"type": "assistant_text", "text": _stringify(block)})
@@ -153,13 +157,17 @@ def _translate_user(event: dict) -> list[dict]:
                 output = "\n".join(parts)
             else:
                 output = _stringify(content)
-            out.append({
+            result_evt = {
                 "type": "tool_result",
                 "tool_use_id": block.get("tool_use_id", ""),
                 "output": output,
                 "is_error": bool(block.get("is_error", False)),
                 "truncated": bool(block.get("truncated", False)),
-            })
+            }
+            ptid = block.get("parent_tool_use_id")
+            if ptid:
+                result_evt["parent_tool_use_id"] = ptid
+            out.append(result_evt)
     return out
 
 

@@ -283,6 +283,38 @@ def test_translate_result_without_usage_emits_no_stats_event():
     assert all(e.get("type") != "stats" for e in out)
 
 
+def test_translate_passes_parent_tool_use_id_on_tool_use():
+    from nightdesk.worker.claude_translator import translate
+    ev = {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Glob", "input": {},
+         "parent_tool_use_id": "toolu_agent1"},
+    ]}}
+    out = translate(ev)
+    tu = [e for e in out if e["type"] == "tool_use"][0]
+    assert tu["parent_tool_use_id"] == "toolu_agent1"
+
+
+def test_translate_omits_parent_when_absent():
+    from nightdesk.worker.claude_translator import translate
+    ev = {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+    ]}}
+    out = translate(ev)
+    tu = [e for e in out if e["type"] == "tool_use"][0]
+    assert "parent_tool_use_id" not in tu
+
+
+def test_translate_passes_parent_on_tool_result():
+    from nightdesk.worker.claude_translator import translate
+    ev = {"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "ok",
+         "is_error": False, "parent_tool_use_id": "toolu_agent1"},
+    ]}}
+    out = translate(ev)
+    tr = [e for e in out if e["type"] == "tool_result"][0]
+    assert tr["parent_tool_use_id"] == "toolu_agent1"
+
+
 def test_tool_events_accept_parent_tool_use_id():
     from nightdesk.transcript import ToolUseEvent, ToolResultEvent
     use: ToolUseEvent = {
