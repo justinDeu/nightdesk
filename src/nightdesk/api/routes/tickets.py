@@ -5,13 +5,15 @@ from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_bearer
 from nightdesk.api.schemas import (
+    DependencyCreate, DependencyOut,
     TicketCreate, TicketOut, TicketReorder, TicketTransition, TicketUpdate,
 )
 from nightdesk.domain.tickets import (
-    archive, create_ticket, delete_ticket, get_ticket, list_tickets, requeue,
+    add_dependency, archive, create_ticket, delete_ticket, get_ticket,
+    list_tickets, remove_dependency, requeue,
     reorder_in_column, request_run_now, transition_status,
     transition_with_position, unarchive, update_ticket,
-    TicketNotFound, InvalidTransition,
+    TicketNotFound, InvalidTransition, CyclicDependency, DependencyNotFound,
 )
 
 
@@ -33,6 +35,51 @@ def _coerce_workspaces(payload_workspaces):
     ]
 
 
+def _ticket_to_out(t) -> TicketOut:
+    """Build a TicketOut including dependency edges."""
+    from nightdesk.api.schemas import TicketWorkspaceOut
+    deps = []
+    for dep in (t.dependencies or []):
+        upstream = dep.depends_on
+        deps.append(DependencyOut(
+            id=dep.id,
+            ticket_id=t.id,
+            depends_on_id=dep.depends_on_id,
+            depends_on_title=upstream.title if upstream else "(deleted)",
+            depends_on_status=upstream.status if upstream else "unknown",
+            created_at=dep.created_at,
+        ))
+    workspaces = []
+    for ws in (t.workspaces or []):
+        workspaces.append(TicketWorkspaceOut.model_validate(ws))
+    primary_ws = next((w for w in workspaces if w.role == "primary"), None)
+    data = {
+        "id": t.id,
+        "title": t.title,
+        "prompt": t.prompt,
+        "status": t.status,
+        "priority": t.priority,
+        "position": t.position,
+        "profile_id": t.profile_id,
+        "permission_overrides": t.permission_overrides,
+        "additional_dirs": t.additional_dirs or [],
+        "cwd": t.cwd,
+        "workspace_mode": t.workspace_mode,
+        "worktree_name": primary_ws.worktree_name if primary_ws else None,
+        "worktree_path": primary_ws.worktree_path if primary_ws else None,
+        "workspaces": workspaces,
+        "run_now": t.run_now,
+        "scheduled_after": t.scheduled_after,
+        "current_run_id": t.current_run_id,
+        "next_run_context": t.next_run_context,
+        "next_run_context_updated_at": t.next_run_context_updated_at,
+        "dependencies": deps,
+        "created_at": t.created_at,
+        "updated_at": t.updated_at,
+    }
+    return TicketOut(**data)
+
+
 def build_router(get_session, bearer_token: str) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/tickets",
@@ -49,7 +96,8 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         data["additional_dirs"] = _coerce_dirs(payload.additional_dirs) or []
         data["workspaces"] = _coerce_workspaces(payload.workspaces)
         try:
-            return create_ticket(session, **data)
+            t = create_ticket(session, **data)
+            return _ticket_to_out(t)
         except (InvalidTransition, ValueError) as e:
             raise HTTPException(422, str(e))
 
@@ -59,12 +107,14 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         profile_id: str | None = Query(default=None),
         session: Session = Depends(get_session),
     ):
-        return list_tickets(session, status=status, profile_id=profile_id)
+        tickets = list_tickets(session, status=status, profile_id=profile_id)
+        return [_ticket_to_out(t) for t in tickets]
 
     @router.get("/{tid}", response_model=TicketOut)
     async def show(tid: str, session: Session = Depends(get_session)):
         try:
-            return get_ticket(session, tid)
+            t = get_ticket(session, tid)
+            return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
 
@@ -76,7 +126,8 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         if "workspaces" in fields:
             fields["workspaces"] = _coerce_workspaces(payload.workspaces)
         try:
-            return update_ticket(session, tid, **fields)
+            t = update_ticket(session, tid, **fields)
+            return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except ValueError as e:
@@ -84,12 +135,9 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     @router.post("/{tid}/run-now", response_model=TicketOut)
     async def run_now(tid: str, session: Session = Depends(get_session)):
-        # Flipping the flag without also transitioning draft/review/archived
-        # to queued is a silent no-op — the scheduler only picks tickets
-        # matching status='queued' AND run_now=true. Use the helper so this
-        # endpoint, the UI form, and drag-to-running all agree.
         try:
-            return request_run_now(session, tid)
+            t = request_run_now(session, tid)
+            return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
@@ -97,9 +145,9 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     @router.post("/{tid}/cancel", response_model=TicketOut)
     async def cancel(tid: str, session: Session = Depends(get_session)):
-        # v2: cancel moves running -> review. Worker observes the change.
         try:
-            return transition_status(session, tid, "review")
+            t = transition_status(session, tid, "review")
+            return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
@@ -108,7 +156,8 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     @router.post("/{tid}/requeue", response_model=TicketOut)
     async def requeue_route(tid: str, session: Session = Depends(get_session)):
         try:
-            return requeue(session, tid)
+            t = requeue(session, tid)
+            return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
@@ -120,9 +169,10 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         session: Session = Depends(get_session),
     ):
         try:
-            return transition_with_position(
+            t = transition_with_position(
                 session, tid, payload.status, position=payload.position
             )
+            return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
@@ -131,14 +181,16 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     @router.post("/reorder", response_model=list[TicketOut])
     async def reorder(payload: TicketReorder, session: Session = Depends(get_session)):
         try:
-            return reorder_in_column(session, payload.status, payload.ticket_ids)
+            tickets = reorder_in_column(session, payload.status, payload.ticket_ids)
+            return [_ticket_to_out(t) for t in tickets]
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
 
     @router.post("/{tid}/archive", response_model=TicketOut)
     async def archive_route(tid: str, session: Session = Depends(get_session)):
         try:
-            return archive(session, tid)
+            t = archive(session, tid)
+            return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
@@ -147,7 +199,8 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     @router.post("/{tid}/unarchive", response_model=TicketOut)
     async def unarchive_route(tid: str, session: Session = Depends(get_session)):
         try:
-            return unarchive(session, tid)
+            t = unarchive(session, tid)
+            return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
@@ -161,5 +214,61 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
+
+    # --- Dependency endpoints ---------------------------------------------------
+
+    @router.get("/{tid}/dependencies", response_model=list[DependencyOut])
+    async def list_deps(tid: str, session: Session = Depends(get_session)):
+        try:
+            t = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        out = []
+        for dep in (t.dependencies or []):
+            upstream = dep.depends_on
+            out.append(DependencyOut(
+                id=dep.id,
+                ticket_id=t.id,
+                depends_on_id=dep.depends_on_id,
+                depends_on_title=upstream.title if upstream else "(deleted)",
+                depends_on_status=upstream.status if upstream else "unknown",
+                created_at=dep.created_at,
+            ))
+        return out
+
+    @router.post("/{tid}/dependencies", response_model=DependencyOut,
+                  status_code=status.HTTP_201_CREATED)
+    async def add_dep(
+        tid: str, payload: DependencyCreate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            t = add_dependency(session, tid, payload.depends_on_id)
+        except TicketNotFound:
+            raise HTTPException(404, "ticket not found")
+        except CyclicDependency as e:
+            raise HTTPException(422, str(e))
+        # Find the newly added dependency.
+        for dep in t.dependencies:
+            if dep.depends_on_id == payload.depends_on_id:
+                upstream = dep.depends_on
+                return DependencyOut(
+                    id=dep.id,
+                    ticket_id=t.id,
+                    depends_on_id=dep.depends_on_id,
+                    depends_on_title=upstream.title if upstream else "(deleted)",
+                    depends_on_status=upstream.status if upstream else "unknown",
+                    created_at=dep.created_at,
+                )
+        raise HTTPException(500, "dependency was not created")
+
+    @router.delete("/{tid}/dependencies/{dep_on_id}",
+                    status_code=status.HTTP_204_NO_CONTENT)
+    async def remove_dep(tid: str, dep_on_id: str,
+                         session: Session = Depends(get_session)):
+        try:
+            remove_dependency(session, tid, dep_on_id)
+        except DependencyNotFound:
+            raise HTTPException(404, "dependency not found")
 
     return router

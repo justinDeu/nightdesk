@@ -1,0 +1,131 @@
+{#
+  Dependency section for ticket sidebar/detail.
+  Expects: ticket, upstreams (list of Tickets), downstreams (list of Tickets).
+
+  The whole section is wrapped in an HTMX swap target so adding/removing
+  dependencies re-renders just this fragment.
+#}
+<section id="dependency-section" class="flex flex-col gap-1">
+  <span class="text-fg-muted text-xs uppercase tracking-wide">Dependencies</span>
+
+  {% if upstreams %}
+    <ul class="flex flex-col gap-1">
+      {% for dep in upstreams %}
+        {% set dep_status_class = {
+          'draft': 'text-fg-muted',
+          'queued': 'text-info',
+          'running': 'text-accent',
+          'review': 'text-warn',
+          'archived': 'text-fg-muted',
+        }.get(dep.status, 'text-fg-muted') %}
+        <li class="flex items-center gap-1.5 text-xs rounded border border-border bg-bg-elev-2/40 px-2 py-1">
+          <span class="rounded px-1 py-0.5 {{ dep_status_class }}">{{ dep.status }}</span>
+          <a href="/tickets/{{ dep.id }}" class="text-fg hover:text-accent truncate flex-1">{{ dep.title }}</a>
+          <form hx-post="/board/tickets/{{ ticket.id }}/dependencies/{{ dep.id }}/remove"
+                hx-target="#dependency-section"
+                hx-swap="outerHTML"
+                class="inline">
+            <button type="submit" class="text-fg-muted hover:text-danger text-sm leading-none" title="Remove dependency">&times;</button>
+          </form>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="text-fg-muted/70 text-xs italic">none (runs independently)</p>
+  {% endif %}
+
+  {% if downstreams %}
+    <div class="mt-1">
+      <span class="text-fg-muted text-[10px] uppercase tracking-wide">Depended on by</span>
+      <ul class="flex flex-col gap-1 mt-0.5">
+        {% for dep in downstreams %}
+          <li class="flex items-center gap-1.5 text-xs">
+            <span class="rounded px-1 py-0.5 text-fg-muted border border-border">{{ dep.status }}</span>
+            <a href="/tickets/{{ dep.id }}" class="text-fg hover:text-accent truncate">{{ dep.title }}</a>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  {# Add dependency form with search picker. #}
+  <div class="mt-1 relative">
+    <div class="flex gap-1">
+      <input type="text"
+             id="dep-search-{{ ticket.id }}"
+             placeholder="Search ticket to depend on..."
+             autocomplete="off"
+             class="flex-1 bg-bg-elev-2 border border-border rounded px-2 py-1 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+             oninput="window.ndDepSearch(this, '{{ ticket.id }}')"
+             onfocus="window.ndDepSearch(this, '{{ ticket.id }}')"
+             onblur="setTimeout(function(){ document.getElementById('dep-results-{{ ticket.id }}').classList.add('hidden'); }, 200)"
+      />
+    </div>
+    <div id="dep-results-{{ ticket.id }}"
+         class="absolute left-0 right-0 mt-1 bg-bg-elev border border-border rounded shadow-lg z-50 max-h-40 overflow-y-auto hidden">
+    </div>
+  </div>
+</section>
+
+<script>
+  if (!window.ndDepSearch) {
+    window.ndDepSearch = (function() {
+      var timers = {};
+      return function(input, ticketId) {
+        var key = 'dep-' + ticketId;
+        if (timers[key]) clearTimeout(timers[key]);
+        timers[key] = setTimeout(function() {
+          var q = input.value.trim();
+          if (!q) {
+            document.getElementById('dep-results-' + ticketId).classList.add('hidden');
+            return;
+          }
+          fetch('/board/ticket-search?q=' + encodeURIComponent(q) + '&exclude=' + encodeURIComponent(ticketId))
+            .then(function(r) { return r.json(); })
+            .then(function(results) {
+              var container = document.getElementById('dep-results-' + ticketId);
+              if (!results.length) {
+                container.innerHTML = '<div class="px-2 py-1 text-xs text-fg-muted">No tickets found</div>';
+                container.classList.remove('hidden');
+                return;
+              }
+              var html = '';
+              results.forEach(function(t) {
+                html += '<button type="button" data-dep-id="' + t.id + '" '
+                  + 'class="w-full text-left px-2 py-1.5 text-xs hover:bg-bg-elev-2 flex items-center gap-2 dep-result-item" '
+                  + 'onclick="window.ndDepAdd(\'' + ticketId + '\', \'' + t.id + '\')">'
+                  + '<span class="text-fg truncate">' + t.title + '</span>'
+                  + '<span class="ml-auto text-fg-muted text-[10px]">' + t.status + '</span>'
+                  + '</button>';
+              });
+              container.innerHTML = html;
+              container.classList.remove('hidden');
+            });
+        }, 250);
+      };
+    })();
+  }
+
+  if (!window.ndDepAdd) {
+    window.ndDepAdd = function(ticketId, dependsOnId) {
+      var form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '/board/tickets/' + ticketId + '/dependencies';
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'depends_on_id';
+      input.value = dependsOnId;
+      form.appendChild(input);
+      document.body.appendChild(form);
+      htmx.ajax('POST', '/board/tickets/' + ticketId + '/dependencies', {
+        target: '#dependency-section',
+        swap: 'outerHTML',
+        values: { depends_on_id: dependsOnId },
+      });
+      var results = document.getElementById('dep-results-' + ticketId);
+      if (results) results.classList.add('hidden');
+      var search = document.getElementById('dep-search-' + ticketId);
+      if (search) search.value = '';
+    };
+  }
+</script>

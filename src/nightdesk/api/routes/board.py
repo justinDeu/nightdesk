@@ -6,9 +6,10 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
@@ -16,13 +17,19 @@ from nightdesk.db.models import ConfigRow
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.tickets import (
+    CyclicDependency,
+    DependencyNotFound,
     InvalidTransition,
     TicketNotFound,
+    add_dependency,
     archive,
     create_ticket,
     delete_ticket,
     get_ticket,
+    list_dependencies,
+    list_dependents,
     list_tickets,
+    remove_dependency,
     reorder_in_column,
     set_run_now,
     transition_status,
@@ -245,16 +252,6 @@ def _gather_board(session: Session):
     profiles_by_id = {p.id: p for p in profiles}
 
     # Pull every ticket per real status, then bucket for the visual columns.
-    # The "running" column visually contains:
-    #   - actually running tickets (status == 'running'), and
-    #   - run-now queued tickets (status == 'queued' AND run_now == True),
-    #     which are about to be picked up by the next scheduler tick.
-    #
-    # Surfacing run-now queued tickets in the running column means a
-    # drag-from-queued-to-running doesn't visually snap back to queued
-    # while the worker is still in the <=5s window between the drop and
-    # the actual status transition. The DB stays the source of truth;
-    # this is purely a render-time decision.
     raw = {status: list_tickets(session, status=status, limit=500)
            for status, _ in _COLUMNS}
 
@@ -274,6 +271,21 @@ def _gather_board(session: Session):
             except Exception:
                 pass
 
+    # Build a map of ticket_id -> list of upstream titles for blocked indicators.
+    dep_titles: dict[str, list[str]] = {}
+    all_tickets = []
+    for status in raw:
+        all_tickets.extend(raw[status])
+    for t in all_tickets:
+        if t.dependencies:
+            titles = []
+            for dep in t.dependencies:
+                upstream = dep.depends_on
+                if upstream:
+                    titles.append(upstream.title)
+            if titles:
+                dep_titles[t.id] = titles
+
     columns = [
         {"status": status, "label": label, "tickets": raw[status]}
         for status, label in _COLUMNS
@@ -284,6 +296,7 @@ def _gather_board(session: Session):
         "profiles": profiles,
         "profiles_by_id": profiles_by_id,
         "run_outcomes": review_run_outcomes,
+        "dep_titles": dep_titles,
     }
 
 
@@ -365,6 +378,7 @@ def build_router(
                 "profiles": ctx["profiles"],
                 "profiles_by_id": ctx["profiles_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
+                "dep_titles": ctx["dep_titles"],
                 "mode": "create",
                 "ticket": None,
             },
@@ -388,6 +402,7 @@ def build_router(
                 "columns": ctx["columns"],
                 "profiles_by_id": ctx["profiles_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
+                "dep_titles": ctx["dep_titles"],
             },
         )
 
@@ -401,6 +416,8 @@ def build_router(
         ticket = None
         mode = "create"
         runs: list = []
+        deps_upstreams: list = []
+        deps_downstreams: list = []
         if ticket_id:
             try:
                 ticket = get_ticket(session, ticket_id)
@@ -408,6 +425,8 @@ def build_router(
             except TicketNotFound:
                 raise HTTPException(404, "ticket not found")
             runs = list_runs(session, ticket_id=ticket_id)
+            deps_upstreams = list_dependencies(session, ticket_id)
+            deps_downstreams = list_dependents(session, ticket_id)
         return templates.TemplateResponse(
             request,
             "partials/sidebar.html",
@@ -416,6 +435,8 @@ def build_router(
                 "ticket": ticket,
                 "mode": mode,
                 "runs": runs,
+                "deps_upstreams": deps_upstreams,
+                "deps_downstreams": deps_downstreams,
             },
         )
 
@@ -511,7 +532,9 @@ def build_router(
             request,
             "partials/sidebar.html",
             {"profiles": profiles, "ticket": ticket, "mode": "edit",
-             "runs": list_runs(session, ticket_id=tid)},
+             "runs": list_runs(session, ticket_id=tid),
+             "deps_upstreams": list_dependencies(session, tid),
+             "deps_downstreams": list_dependents(session, tid)},
         )
 
     @router.post("/board/tickets/{tid}/archive", dependencies=[auth])
@@ -539,7 +562,9 @@ def build_router(
             request,
             "partials/sidebar.html",
             {"profiles": profiles, "ticket": ticket, "mode": "edit",
-             "runs": list_runs(session, ticket_id=tid)},
+             "runs": list_runs(session, ticket_id=tid),
+             "deps_upstreams": list_dependencies(session, tid),
+             "deps_downstreams": list_dependents(session, tid)},
         )
 
     @router.post("/board/tickets/{tid}/cancel", dependencies=[auth])
@@ -640,5 +665,108 @@ def build_router(
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
         return Response(status_code=204)
+
+    # --- Dependency management (cookie-auth) ---------------------------------
+
+    @router.get("/board/tickets/{tid}/dependencies", response_class=HTMLResponse,
+                dependencies=[auth])
+    async def deps_fragment(tid: str, request: Request,
+                             session: Session = Depends(get_session)):
+        """Render the dependency section as an HTMX-swappable fragment."""
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        upstreams = list_dependencies(session, tid)
+        downstreams = list_dependents(session, tid)
+        return templates.TemplateResponse(
+            request,
+            "partials/dependency_section.html",
+            {
+                "ticket": ticket,
+                "upstreams": upstreams,
+                "downstreams": downstreams,
+            },
+        )
+
+    @router.post("/board/tickets/{tid}/dependencies", dependencies=[auth])
+    async def add_dep(
+        tid: str, request: Request,
+        depends_on_id: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        try:
+            add_dependency(session, tid, depends_on_id)
+        except TicketNotFound:
+            raise HTTPException(404, "ticket not found")
+        except CyclicDependency as e:
+            raise HTTPException(422, str(e))
+        ticket = get_ticket(session, tid)
+        upstreams = list_dependencies(session, tid)
+        downstreams = list_dependents(session, tid)
+        return templates.TemplateResponse(
+            request,
+            "partials/dependency_section.html",
+            {
+                "ticket": ticket,
+                "upstreams": upstreams,
+                "downstreams": downstreams,
+            },
+        )
+
+    @router.post("/board/tickets/{tid}/dependencies/{dep_on_id}/remove",
+                 dependencies=[auth])
+    async def remove_dep(
+        tid: str, dep_on_id: str, request: Request,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            remove_dependency(session, tid, dep_on_id)
+        except DependencyNotFound:
+            raise HTTPException(404, "dependency not found")
+        ticket = get_ticket(session, tid)
+        upstreams = list_dependencies(session, tid)
+        downstreams = list_dependents(session, tid)
+        return templates.TemplateResponse(
+            request,
+            "partials/dependency_section.html",
+            {
+                "ticket": ticket,
+                "upstreams": upstreams,
+                "downstreams": downstreams,
+            },
+        )
+
+    @router.get("/board/ticket-search", dependencies=[auth])
+    async def ticket_search(
+        q: str = Query(default=""),
+        exclude: str = Query(default=""),
+        limit: int = Query(default=10, ge=1, le=50),
+        session: Session = Depends(get_session),
+    ):
+        """Search tickets for the dependency picker.
+
+        Returns a JSON list of ``{id, title, status}`` objects. Excludes the
+        ticket identified by ``exclude`` (so a ticket can't depend on itself).
+        """
+        from sqlalchemy import or_
+        from nightdesk.db.models import Ticket as TicketModel
+        stmt = select(TicketModel).order_by(
+            TicketModel.created_at.desc()
+        ).limit(limit)
+        if q:
+            stmt = stmt.where(
+                or_(
+                    TicketModel.title.ilike(f"%{q}%"),
+                    TicketModel.id.ilike(f"%{q}%"),
+                )
+            )
+        if exclude:
+            stmt = stmt.where(TicketModel.id != exclude)
+        results = session.scalars(stmt)
+        return [
+            {"id": t.id, "title": t.title, "status": t.status}
+            for t in results
+        ]
 
     return router

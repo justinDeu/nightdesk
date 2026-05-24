@@ -85,6 +85,45 @@ class Ticket(Base):
         cascade="all, delete-orphan",
         order_by="TicketWorkspace.position",
     )
+    # Dependencies: tickets this ticket must wait for.
+    dependencies: Mapped[list["TicketDependency"]] = relationship(
+        foreign_keys="TicketDependency.ticket_id",
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+    )
+    # Dependents: tickets that wait for this one.
+    dependents: Mapped[list["TicketDependency"]] = relationship(
+        foreign_keys="TicketDependency.depends_on_id",
+        back_populates="depends_on",
+        cascade="all, delete-orphan",
+    )
+
+
+class TicketDependency(Base):
+    """A directed edge: the ticket owning this row depends on (must wait for)
+    ``depends_on_id``.  A dependency is satisfied when the upstream ticket's
+    most-recent run has ``exit_status='success'`` AND the upstream is in
+    ``review`` or ``archived``."""
+
+    __tablename__ = "ticket_dependencies"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    ticket_id: Mapped[str] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    depends_on_id: Mapped[str] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    ticket: Mapped["Ticket"] = relationship(
+        foreign_keys=[ticket_id],
+        back_populates="dependencies",
+    )
+    depends_on: Mapped["Ticket"] = relationship(
+        foreign_keys=[depends_on_id],
+        back_populates="dependents",
+    )
 
 
 class Run(Base):

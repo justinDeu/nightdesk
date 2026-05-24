@@ -23,6 +23,13 @@ def in_window(start: time, end: time, now: datetime) -> bool:
     return cur >= start or cur <= end
 
 
+def _has_unsatisfied_deps(session: Session, ticket: Ticket) -> bool:
+    """Return True if the ticket has at least one unsatisfied dependency."""
+    from nightdesk.domain.tickets import check_dependencies_satisfied
+    satisfied, _ = check_dependencies_satisfied(session, ticket.id)
+    return not satisfied
+
+
 def pick_eligible(
     session: Session,
     *,
@@ -41,6 +48,7 @@ def pick_eligible(
        total_running)`` slots from ``status='queued' AND run_now=false``,
        ordered by ``(position ASC, priority DESC, created_at ASC)``.
 
+    Tickets with unsatisfied dependencies are skipped in both passes.
     Capacity is clamped at zero; while running > max_parallel, only run-now
     tickets are picked.
     """
@@ -55,6 +63,8 @@ def pick_eligible(
     )
     for t in session.scalars(run_now_stmt):
         if t.scheduled_after is not None and t.scheduled_after > now:
+            continue
+        if _has_unsatisfied_deps(session, t):
             continue
         out.append(t)
 
@@ -72,6 +82,8 @@ def pick_eligible(
         if remaining <= 0:
             break
         if t.scheduled_after is not None and t.scheduled_after > now:
+            continue
+        if _has_unsatisfied_deps(session, t):
             continue
         out.append(t)
         remaining -= 1

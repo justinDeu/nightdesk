@@ -255,6 +255,7 @@ class TicketOut(BaseModel):
     current_run_id: Optional[str] = None
     next_run_context: Optional[str] = None
     next_run_context_updated_at: Optional[datetime] = None
+    dependencies: list[DependencyOut] = []
     created_at: datetime
     updated_at: datetime
 
@@ -395,3 +396,16 @@ class SearchHit(BaseModel):
     title: str
     snippet: str
     status: str
+
+
+class DependencyOut(BaseModel):
+    id: str
+    ticket_id: str
+    depends_on_id: str
+    depends_on_title: str
+    depends_on_status: str
+    created_at: datetime
+
+
+class DependencyCreate(BaseModel):
+    depends_on_id: str

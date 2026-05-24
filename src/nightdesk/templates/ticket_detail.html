@@ -134,6 +134,40 @@
       {% endif %}
     </header>
 
+    {# --- Dependency chain ------------------------------------------------- #}
+    {% if deps_upstreams or deps_downstreams %}
+    <section class="bg-bg-elev border border-border rounded p-4">
+      <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-2">Dependency chain</h2>
+      {% if deps_upstreams %}
+        <div class="mb-2">
+          <div class="text-xs text-fg-muted mb-1">Depends on</div>
+          <ul class="space-y-1">
+            {% for dep in deps_upstreams %}
+              <li class="flex items-center gap-2 text-xs">
+                <span class="rounded px-1.5 py-0.5 border
+                  {% if dep.status == 'review' or dep.status == 'archived' %}border-accent/40 text-accent{% else %}border-warn/40 text-warn{% endif %}">{{ dep.status }}</span>
+                <a href="/tickets/{{ dep.id }}" class="text-fg hover:text-accent">{{ dep.title }}</a>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+      {% if deps_downstreams %}
+        <div>
+          <div class="text-xs text-fg-muted mb-1">Depended on by</div>
+          <ul class="space-y-1">
+            {% for dep in deps_downstreams %}
+              <li class="flex items-center gap-2 text-xs">
+                <span class="rounded px-1.5 py-0.5 border border-border text-fg-muted">{{ dep.status }}</span>
+                <a href="/tickets/{{ dep.id }}" class="text-fg hover:text-accent">{{ dep.title }}</a>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    </section>
+    {% endif %}
+
     {# --- Filesystem access ----------------------------------------------- #
      # Defines what the agent is *allowed* to touch on disk. Distinct from
      # the Workspaces section below (which lists the actual git worktrees
