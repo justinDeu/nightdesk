@@ -253,6 +253,106 @@ def tool_summary(evt: dict) -> ToolSummary:
 
 
 # ---------------------------------------------------------------------------
+# Sub-agent (Task tool) lifecycle cards.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SubagentSummary:
+    """One-line + body metadata for a sub-agent (Task tool) card.
+
+    ``label`` is the sub-agent type (e.g. ``Explore``); ``detail`` is the
+    current activity (latest description or the tool it last ran). ``status``
+    is the terminal disposition (``completed`` / ``failed``) once the
+    notification phase arrives, empty while running.
+    """
+    label: str
+    phase: str
+    status: str
+    detail: str
+    tool_uses: int
+    duration: str
+    tokens: int
+    summary: str
+    done: bool
+    failed: bool
+
+
+def _fmt_duration_ms(ms) -> str:
+    """Format a millisecond duration as a compact human string ('' if absent)."""
+    try:
+        ms_i = int(ms)
+    except (TypeError, ValueError):
+        return ""
+    if ms_i <= 0:
+        return ""
+    sec = ms_i / 1000.0
+    if sec < 60:
+        return f"{sec:.1f}s"
+    m = int(sec // 60)
+    s = int(sec % 60)
+    if m < 60:
+        return f"{m}m {s}s"
+    h = m // 60
+    m = m % 60
+    return f"{h}h {m}m {s}s"
+
+
+def subagent_summary(evt: dict) -> SubagentSummary:
+    """Return display metadata for a (collapsed) ``subagent`` event."""
+    label = (evt.get("subagent_type") or "").strip() or "subagent"
+    phase = (evt.get("phase") or "progress").strip()
+    status = (evt.get("status") or "").strip()
+    detail = (evt.get("description") or "").strip()
+    if not detail:
+        last = (evt.get("last_tool_name") or "").strip()
+        if last:
+            detail = f"running {last}"
+    usage = evt.get("usage") or {}
+    tool_uses = 0
+    tokens = 0
+    duration = ""
+    if isinstance(usage, dict):
+        try:
+            tool_uses = int(usage.get("tool_uses") or 0)
+        except (TypeError, ValueError):
+            tool_uses = 0
+        try:
+            tokens = int(usage.get("total_tokens") or 0)
+        except (TypeError, ValueError):
+            tokens = 0
+        duration = _fmt_duration_ms(usage.get("duration_ms"))
+    done = phase == "notification"
+    failed = status.lower() in {"failed", "error", "errored"}
+    return SubagentSummary(
+        label=label, phase=phase, status=status, detail=detail,
+        tool_uses=tool_uses, duration=duration, tokens=tokens,
+        summary=(evt.get("summary") or "").strip(),
+        done=done, failed=failed,
+    )
+
+
+_SUBAGENT_MERGE_FIELDS = (
+    "subagent_type", "task_type", "tool_use_id", "task_id", "description",
+    "prompt", "last_tool_name", "status", "summary", "output_file", "usage",
+    "phase", "raw",
+)
+
+
+def _merge_subagent(base: dict, evt: dict) -> None:
+    """Fold a later sub-agent event's fields into the existing card dict.
+
+    Latest non-empty value wins so the single card reflects the most advanced
+    state (e.g. the terminal ``status``/``summary`` from the notification phase
+    and the newest cumulative ``usage``).
+    """
+    for k in _SUBAGENT_MERGE_FIELDS:
+        v = evt.get(k)
+        if v not in (None, "", {}):
+            base[k] = v
+
+
+# ---------------------------------------------------------------------------
 # Event pairing: bind each tool_result to its parent tool_use so the static
 # renderer can place them inside the same card. Mirrored client-side by the
 # live-tail in templates/partials/transcript_panel.html, which uses the
@@ -290,6 +390,10 @@ def accumulate_stats(events) -> dict:
         "tool_count": 0, "model": None, "cost_usd": None,
         "last_seq": -1,
     }
+    # Sub-agent runs report a cumulative tool_uses count per task_id across
+    # many progress events; track the latest per task so the contribution is
+    # counted once (not once per progress event) and added to the total.
+    subagent_tools: dict[str, int] = {}
     for e in events:
         seq = e.get("seq")
         if isinstance(seq, int) and seq > out["last_seq"]:
@@ -297,6 +401,13 @@ def accumulate_stats(events) -> dict:
         t = e.get("type")
         if t == "tool_use":
             out["tool_count"] += 1
+            continue
+        if t == "subagent":
+            tid = e.get("task_id") or e.get("tool_use_id")
+            usage = e.get("usage") or {}
+            tu = usage.get("tool_uses") if isinstance(usage, dict) else None
+            if tid and isinstance(tu, (int, float)):
+                subagent_tools[tid] = int(tu)
             continue
         if t != "stats":
             continue
@@ -316,6 +427,7 @@ def accumulate_stats(events) -> dict:
                 out[k] += int(e.get(k) or 0)
         if e.get("model"):
             out["model"] = e["model"]
+    out["tool_count"] += sum(subagent_tools.values())
     return out
 
 
@@ -369,10 +481,25 @@ def pair_tool_events(events) -> list[PairedEvent]:
             if tid:
                 results_by_id[tid] = e
     paired_ids: set[str] = set()
+    # First sub-agent event per task_id seeds a card; later events for the same
+    # task fold into that card's dict so a flood of progress events renders as
+    # one updating card. The dict is mutated in place, so the PairedEvent that
+    # already holds a reference reflects the merged state.
+    subagent_cards: dict[str, dict] = {}
     out: list[PairedEvent] = []
     for e in events_list:
         t = e.get("type")
         if t == "result" and drop_result:
+            continue
+        if t == "subagent":
+            tid = e.get("task_id") or e.get("tool_use_id")
+            if tid and tid in subagent_cards:
+                _merge_subagent(subagent_cards[tid], e)
+                continue
+            card = dict(e)
+            if tid:
+                subagent_cards[tid] = card
+            out.append(PairedEvent(event=card, paired_result=None))
             continue
         if t == "tool_use":
             tid = e.get("id")

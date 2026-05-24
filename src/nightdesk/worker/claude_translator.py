@@ -191,6 +191,34 @@ def _translate_result(event: dict) -> list[dict]:
     return out
 
 
+_SUBAGENT_PHASES = ("started", "progress", "notification")
+
+
+def _translate_subagent(event: dict) -> list[dict]:
+    """Normalize a sub-agent (Task tool) lifecycle event to one canonical event.
+
+    The runner already collapses the three SDK message classes to a single
+    ``subagent`` event discriminated by ``phase``; this keeps the well-known
+    fields and drops nothing renderable. Per-``task_id`` collapse of the many
+    ``progress`` events into one updating card happens later in the renderer
+    (``transcript_view.pair_tool_events``) since ``translate`` is stateless and
+    sees one event at a time.
+    """
+    phase = str(event.get("phase") or "progress")
+    if phase not in _SUBAGENT_PHASES:
+        phase = "progress"
+    out: dict[str, Any] = {"type": "subagent", "phase": phase}
+    for key in (
+        "task_id", "tool_use_id", "subagent_type", "task_type",
+        "description", "prompt", "status", "output_file", "summary",
+        "last_tool_name", "usage", "raw",
+    ):
+        v = event.get(key)
+        if v is not None and v != "":
+            out[key] = v
+    return [out]
+
+
 def translate(event_dict: dict) -> list[dict]:
     """Translate one SDK event dict to a list of canonical event dicts.
 
@@ -206,6 +234,8 @@ def translate(event_dict: dict) -> list[dict]:
         return _translate_user(event_dict)
     if etype == "result":
         return _translate_result(event_dict)
+    if etype == "subagent":
+        return _translate_subagent(event_dict)
     if etype == "system":
         # System init / config messages — not rendered.
         return []

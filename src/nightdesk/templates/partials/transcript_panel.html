@@ -51,9 +51,10 @@
 
   {% if transcript_raw %}
     {# Legacy raw SDK file: plain pre fallback. #}
-    <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto max-h-[calc(100vh-10rem)] lg:flex-1 lg:min-h-0 lg:max-h-none">{{ transcript_raw }}</pre>
+    <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto"
+         style="max-height: calc(100vh - 10rem);">{{ transcript_raw }}</pre>
   {% else %}
-    <div id="transcript-scroll" class="overflow-y-auto pr-1 max-h-[calc(100vh-10rem)] lg:flex-1 lg:min-h-0 lg:max-h-none">
+    <div id="transcript-scroll" class="overflow-y-auto pr-1" style="max-height: calc(100vh - 10rem);">
       <div id="transcript" class="space-y-2">
         {# Pre-pair tool_result events with their parent tool_use so each
            pair renders as one visual card. Orphan results (no matching
@@ -516,7 +517,69 @@
               `</div>`
             );
           }
+          if (t === 'subagent') {
+            // Mirror evt_subagent in transcript_event.html: a sub-agent (Task
+            // tool) lifecycle card carrying data-subagent-task-id so append()
+            // can update the same node in place across phases. NOT a
+            // worker_error — healthy runs emit these.
+            return el(subagentCardHtml(evt));
+          }
           return null;
+        }
+
+        // Build the inner HTML for a sub-agent card from a (possibly merged)
+        // subagent event. Mirrors tv.subagent_summary + evt_subagent.
+        function subagentCardHtml(evt) {
+          const tid = evt.task_id || evt.tool_use_id || '';
+          const label = String(evt.subagent_type || '').trim() || 'subagent';
+          const phase = String(evt.phase || 'progress').trim();
+          const status = String(evt.status || '').trim();
+          let detail = String(evt.description || '').trim();
+          if (!detail) {
+            const last = String(evt.last_tool_name || '').trim();
+            if (last) detail = 'running ' + last;
+          }
+          const usage = evt.usage || {};
+          const toolUses = parseInt(usage.tool_uses || 0, 10) || 0;
+          const tokens = parseInt(usage.total_tokens || 0, 10) || 0;
+          const durationMs = parseInt(usage.duration_ms || 0, 10) || 0;
+          const done = phase === 'notification';
+          const failed = ['failed', 'error', 'errored'].indexOf(status.toLowerCase()) !== -1;
+          function fmtDur(ms) {
+            if (!isFinite(ms) || ms <= 0) return '';
+            const sec = ms / 1000;
+            if (sec < 60) return sec.toFixed(1) + 's';
+            const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+            if (m < 60) return m + 'm ' + s + 's';
+            return Math.floor(m / 60) + 'h ' + (m % 60) + 'm ' + s + 's';
+          }
+          const duration = fmtDur(durationMs);
+          let metaText;
+          if (done) metaText = failed ? 'failed' : 'completed';
+          else metaText = detail || 'running';
+          const statParts = [];
+          if (toolUses) statParts.push(`<span>${toolUses} tool use${toolUses === 1 ? '' : 's'}</span>`);
+          if (duration) statParts.push(`<span>${escapeHtml(duration)}</span>`);
+          if (tokens) statParts.push(`<span>${Number(tokens).toLocaleString()} tokens</span>`);
+          const detailHtml = (detail && !done)
+            ? `<div class="bash-desc">${escapeHtml(detail)}</div>` : '';
+          const summaryText = String(evt.summary || '').trim();
+          const summaryHtml = summaryText
+            ? `<div class="whitespace-pre-wrap text-sm mt-1 text-fg">${escapeHtml(summaryText)}</div>` : '';
+          return (
+            `<div data-subagent-task-id="${escapeHtml(tid)}" class="space-y-1">` +
+              `<details class="tc-card subagent-card${failed ? ' is-error' : ''}" open>` +
+                `<summary><span class="tc-tag tc-tag-subagent">subagent</span> ` +
+                  `<code class="tc-path">${escapeHtml(label)}</code> ` +
+                  `<span class="tc-meta">${escapeHtml(metaText)}</span></summary>` +
+                `<div class="tc-body">` +
+                  detailHtml +
+                  `<div class="subagent-stats text-xs text-fg-muted">${statParts.join('')}</div>` +
+                  summaryHtml +
+                `</div>` +
+              `</details>` +
+            `</div>`
+          );
         }
 
         // Wire a live countdown into any rate-limit card that hasn't been
@@ -558,12 +621,52 @@
           }
         }
 
-        function append(evt) {
-          // Capture scroll position before any DOM mutation so we can
-          // decide whether to auto-scroll after the new node lands.
-          var scroller = document.getElementById('transcript-scroll');
-          var atBottom = scroller && (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 32);
+        // Merged sub-agent state per task_id so consecutive started/progress/
+        // notification events collapse into one updating card. Mirrors the
+        // server-side collapse in tv.pair_tool_events. Latest non-empty value
+        // wins so the card reflects the most advanced phase.
+        const subagentState = {};
+        const SUBAGENT_MERGE_FIELDS = [
+          'subagent_type', 'task_type', 'tool_use_id', 'task_id', 'description',
+          'prompt', 'last_tool_name', 'status', 'summary', 'output_file',
+          'usage', 'phase', 'raw',
+        ];
 
+        function append(evt) {
+          // Sub-agent lifecycle events collapse into one card per task_id. The
+          // first seeds the card; later phases merge into the stored state and
+          // re-render the same node in place. Mirrors tv.pair_tool_events.
+          if (evt.type === 'subagent') {
+            const tid = evt.task_id || evt.tool_use_id;
+            if (tid) {
+              let state = subagentState[tid];
+              if (!state) {
+                state = subagentState[tid] = Object.assign({}, evt);
+              } else {
+                SUBAGENT_MERGE_FIELDS.forEach(function (k) {
+                  const v = evt[k];
+                  if (v !== undefined && v !== null && v !== '' &&
+                      !(typeof v === 'object' && Object.keys(v).length === 0)) {
+                    state[k] = v;
+                  }
+                });
+              }
+              const fresh = el(subagentCardHtml(state));
+              const existing = container.querySelector(
+                `[data-subagent-task-id="${tid}"]`);
+              if (existing) {
+                existing.replaceWith(fresh);
+              } else {
+                container.appendChild(fresh);
+              }
+              applyCollapsedState(fresh);
+              return;
+            }
+            // No task id to key on — fall through to a standalone append.
+            const node = renderEvent(evt);
+            if (node) { container.appendChild(node); applyCollapsedState(node); }
+            return;
+          }
           // Pair tool_result events with their parent tool_use card so the
           // two render as one visual unit. Mirrors the server-side pairing
           // in tv.pair_tool_events used by the static loop above.
@@ -592,9 +695,6 @@
                   body.appendChild(resultNode);
                   applyCollapsedState(resultNode);
                 }
-                // Paired tool_result mutates an existing card, so re-check
-                // scroll even though it didn't go through container.appendChild.
-                if (atBottom && scroller) scroller.scrollTop = scroller.scrollHeight;
                 return;
               }
             }
@@ -606,7 +706,6 @@
             if (evt.type === 'rate_limit') bindCountdowns(node);
             if (window.ndLocalizeTimes) window.ndLocalizeTimes(node);
             applyCollapsedState(node);
-            if (atBottom && scroller) scroller.scrollTop = scroller.scrollHeight;
           }
         }
 

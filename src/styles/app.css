@@ -15,6 +15,7 @@
   --color-danger: #f87171;
   --color-warn: #fbbf24;
   --color-info: #60a5fa;
+  --color-subagent: #a78bfa;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -128,6 +129,27 @@ li[data-ticket-id][data-selected] {
     background: var(--color-bg-elev-2);
     color: var(--color-fg-muted);
     border-color: var(--color-border);
+  }
+  .tc-tag-subagent {
+    background: color-mix(in oklab, var(--color-subagent) 15%, transparent);
+    color: var(--color-subagent);
+    border-color: color-mix(in oklab, var(--color-subagent) 35%, transparent);
+  }
+
+  /* Sub-agent (Task tool) cards carry a left accent stripe so a spawned
+     sub-agent run reads as a distinct nested unit. The stat row sits below
+     the activity description as small muted, space-separated bits. */
+  .subagent-card {
+    border-left: 3px solid color-mix(in oklab, var(--color-subagent) 60%, transparent);
+  }
+  .subagent-card.is-error {
+    border-left-color: var(--color-danger);
+  }
+  .subagent-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 4px;
   }
 
   .tc-path {

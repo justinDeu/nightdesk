@@ -90,6 +90,88 @@ def _usage_to_dict(usage: Any) -> dict[str, Any] | None:
     return cleaned or None
 
 
+def _subagent_usage(usage: Any) -> dict[str, Any] | None:
+    """Normalize a sub-agent usage object/dict into a plain int dict.
+
+    Sub-agent (Task tool) lifecycle messages carry a usage payload with
+    ``total_tokens`` / ``tool_uses`` / ``duration_ms`` — different fields than
+    the assistant/result usage handled by ``_usage_to_dict``. Accept either a
+    dict or an object and keep every integer-ish field so the renderer can show
+    a live tool-use count and elapsed time.
+    """
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        d = usage
+    else:
+        d = {}
+        for key in (
+            "total_tokens", "tool_uses", "duration_ms",
+            "input_tokens", "output_tokens",
+        ):
+            v = getattr(usage, key, None)
+            if v is not None:
+                d[key] = v
+    cleaned = {k: int(v) for k, v in d.items() if isinstance(v, (int, float))}
+    return cleaned or None
+
+
+# Sub-agent (Task tool) lifecycle message class names -> canonical phase. The
+# SDK yields one dataclass per phase as a sub-agent (e.g. the Explore agent)
+# runs. We collapse all three to a single ``subagent`` event discriminated by
+# ``phase`` so the transcript shows one updating card rather than three.
+_SUBAGENT_PHASE_BY_CLASS = {
+    "TaskStartedMessage": "started",
+    "TaskProgressMessage": "progress",
+    "TaskNotificationMessage": "notification",
+}
+# Same mapping keyed by the ``subtype`` carried on the SDK ``data`` payload, so
+# a build that delivers these as a generic SystemMessage still routes here.
+_SUBAGENT_PHASE_BY_SUBTYPE = {
+    "task_started": "started",
+    "task_progress": "progress",
+    "task_notification": "notification",
+}
+
+# String fields lifted from a sub-agent message (top-level attr first, then the
+# nested ``data`` dict). ``usage`` is handled separately via _subagent_usage.
+_SUBAGENT_FIELDS = (
+    "task_id", "tool_use_id", "subagent_type", "task_type",
+    "description", "prompt", "status", "output_file", "summary",
+    "last_tool_name", "session_id",
+)
+
+
+def _subagent_to_dict(evt: Any, phase: str) -> dict[str, Any]:
+    """Convert a sub-agent lifecycle message to a canonical ``subagent`` dict.
+
+    The SDK may carry the real values either as top-level attributes or nested
+    under ``evt.data`` (a dict), so we read both. A best-effort ``raw`` dump is
+    attached like the RateLimitEvent branch so the renderer can show the full
+    payload regardless of which fields this SDK version provides.
+    """
+    data = getattr(evt, "data", None)
+    if not isinstance(data, dict):
+        data = {}
+
+    def field(key: str) -> Any:
+        v = getattr(evt, key, None)
+        if v is None or v == "":
+            v = data.get(key)
+        return v
+
+    out: dict[str, Any] = {"type": "subagent", "phase": phase}
+    for key in _SUBAGENT_FIELDS:
+        v = field(key)
+        if v is not None and v != "":
+            out[key] = v
+    usage = _subagent_usage(field("usage"))
+    if usage is not None:
+        out["usage"] = usage
+    out["raw"] = _raw_payload(evt)
+    return out
+
+
 def _raw_payload(obj: Any) -> str:
     """Best-effort, JSON-safe text dump of an SDK payload for the raw dropdown.
 
@@ -122,11 +204,25 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
     if isinstance(evt, dict):
         return evt
     name = type(evt).__name__
+    # Sub-agent (Task tool) lifecycle messages. Match by class name to stay
+    # version-agnostic; collapse to a single ``subagent`` event keyed by phase.
+    phase = _SUBAGENT_PHASE_BY_CLASS.get(name)
+    if phase is not None:
+        return _subagent_to_dict(evt, phase)
     if name == "SystemMessage":
+        subtype = getattr(evt, "subtype", "") or ""
+        sys_data = getattr(evt, "data", {}) or {}
+        # Some SDK builds deliver sub-agent lifecycle events as a generic
+        # SystemMessage carrying a task_* subtype rather than a dedicated
+        # Task*Message class. Route those to the same canonical event.
+        sub = subtype or (sys_data.get("subtype") if isinstance(sys_data, dict) else "")
+        phase = _SUBAGENT_PHASE_BY_SUBTYPE.get(sub)
+        if phase is not None:
+            return _subagent_to_dict(evt, phase)
         return {
             "type": "system",
-            "subtype": getattr(evt, "subtype", ""),
-            "data": getattr(evt, "data", {}) or {},
+            "subtype": subtype,
+            "data": sys_data,
         }
     if name == "AssistantMessage":
         msg: dict[str, Any] = {

@@ -21,13 +21,13 @@ from typing import IO, Iterator, Literal, TypedDict
 
 CanonicalEventType = Literal[
     "meta", "assistant_text", "thinking", "tool_use", "tool_result", "result",
-    "worker_error", "rate_limit", "cancelled",
+    "worker_error", "rate_limit", "cancelled", "subagent",
 ]
 
 
 KNOWN_TYPES: frozenset[str] = frozenset(
     {"meta", "assistant_text", "thinking", "tool_use", "tool_result", "result",
-     "worker_error", "rate_limit", "cancelled", "stats"}
+     "worker_error", "rate_limit", "cancelled", "stats", "subagent"}
 )
 
 
@@ -58,6 +58,7 @@ class ToolUseEvent(_BaseEvent, total=False):
     id: str
     tool: str
     input: dict
+    parent_tool_use_id: str
 
 
 class ToolResultEvent(_BaseEvent, total=False):
@@ -66,6 +67,7 @@ class ToolResultEvent(_BaseEvent, total=False):
     output: str
     is_error: bool
     truncated: bool
+    parent_tool_use_id: str
 
 
 class ResultEvent(_BaseEvent, total=False):
@@ -110,6 +112,42 @@ class RateLimitEvent(_BaseEvent, total=False):
     resets_at: int
     rate_limit_type: str
     utilization: float
+    raw: str
+
+
+class SubagentEvent(_BaseEvent, total=False):
+    """A sub-agent (Task tool) lifecycle update surfaced from the agent SDK.
+
+    When the run's agent uses the Task tool to spawn a sub-agent (e.g. the
+    ``Explore`` agent), the SDK yields lifecycle messages. The runner collapses
+    them to a single ``subagent`` event discriminated by ``phase``:
+
+    - ``started`` — the sub-agent was spawned. Carries ``subagent_type``,
+      ``task_type``, ``description``, ``prompt``.
+    - ``progress`` — incremental status; carries an updated ``description``,
+      ``last_tool_name``, and a cumulative ``usage`` (``total_tokens``,
+      ``tool_uses``, ``duration_ms``). Many arrive per run; the renderer
+      collapses consecutive ones per ``task_id`` into one updating card.
+    - ``notification`` — terminal; carries ``status`` (``completed`` |
+      ``failed``), ``summary``, ``output_file``.
+
+    ``task_id`` / ``tool_use_id`` tie the event back to the parent Task
+    tool_use. ``raw`` is a best-effort dump of the full SDK payload.
+    """
+
+    type: Literal["subagent"]
+    phase: str
+    task_id: str
+    tool_use_id: str
+    subagent_type: str
+    task_type: str
+    description: str
+    prompt: str
+    status: str
+    summary: str
+    output_file: str
+    last_tool_name: str
+    usage: dict
     raw: str
 
 

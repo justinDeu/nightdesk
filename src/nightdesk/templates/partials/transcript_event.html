@@ -195,6 +195,38 @@
   </div>
 {% endmacro %}
 
+{# subagent: a sub-agent (Task tool) lifecycle card. The run's agent spawned a
+   sub-agent (e.g. Explore); the SDK streams started/progress/notification
+   updates that the renderer collapses (per task_id) into this single updating
+   card. NOT a worker_error — a healthy run produces these. The card carries
+   ``data-subagent-task-id`` so the live-tail JS can update the same node in
+   place when later phases arrive. The JS live-tail in transcript_panel.html
+   mirrors this shape. #}
+{% macro evt_subagent(evt) %}
+  {% set s = tv.subagent_summary(evt) %}
+  {% set tid = evt.get('task_id') or evt.get('tool_use_id') or '' %}
+  <div data-subagent-task-id="{{ tid }}" class="space-y-1">
+    <details class="tc-card subagent-card{% if s.failed %} is-error{% endif %}" open>
+      <summary>
+        <span class="tc-tag tc-tag-subagent">subagent</span>
+        <code class="tc-path">{{ s.label }}</code>
+        <span class="tc-meta">
+          {% if s.done %}{% if s.failed %}failed{% else %}completed{% endif %}{% elif s.detail %}{{ s.detail }}{% else %}running{% endif %}
+        </span>
+      </summary>
+      <div class="tc-body">
+        {% if s.detail and not s.done %}<div class="bash-desc">{{ s.detail }}</div>{% endif %}
+        <div class="subagent-stats text-xs text-fg-muted">
+          {% if s.tool_uses %}<span>{{ s.tool_uses }} tool use{{ '' if s.tool_uses == 1 else 's' }}</span>{% endif %}
+          {% if s.duration %}<span>{{ s.duration }}</span>{% endif %}
+          {% if s.tokens %}<span>{{ '{:,}'.format(s.tokens) }} tokens</span>{% endif %}
+        </div>
+        {% if s.summary %}<div class="whitespace-pre-wrap text-sm mt-1 text-fg">{{ s.summary }}</div>{% endif %}
+      </div>
+    </details>
+  </div>
+{% endmacro %}
+
 {% macro render_event(evt, paired_result=None) %}
   {% set t = evt.get('type','') %}
   {% if t == 'meta' %}{{ evt_meta(evt) }}
@@ -206,5 +238,6 @@
   {% elif t == 'worker_error' %}{{ evt_worker_error(evt) }}
   {% elif t == 'rate_limit' %}{{ evt_rate_limit(evt) }}
   {% elif t == 'cancelled' %}{{ evt_cancelled(evt) }}
+  {% elif t == 'subagent' %}{{ evt_subagent(evt) }}
   {% endif %}
 {% endmacro %}

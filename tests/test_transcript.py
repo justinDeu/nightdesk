@@ -281,3 +281,17 @@ def test_translate_result_without_usage_emits_no_stats_event():
     evt = {"type": "result", "subtype": "success", "result": "done"}
     out = translate(evt)
     assert all(e.get("type") != "stats" for e in out)
+
+
+def test_tool_events_accept_parent_tool_use_id():
+    from nightdesk.transcript import ToolUseEvent, ToolResultEvent
+    use: ToolUseEvent = {
+        "type": "tool_use", "id": "t1", "tool": "Glob",
+        "input": {}, "parent_tool_use_id": "toolu_agent1",
+    }
+    res: ToolResultEvent = {
+        "type": "tool_result", "tool_use_id": "t1",
+        "output": "x", "parent_tool_use_id": "toolu_agent1",
+    }
+    assert use["parent_tool_use_id"] == "toolu_agent1"
+    assert res["parent_tool_use_id"] == "toolu_agent1"
