@@ -13,6 +13,7 @@
   </p>
 
   <form method="post" action="/settings" class="flex flex-col gap-4">
+    <input type="hidden" name="tz_offset" id="tz_offset" value="" />
     <section class="border border-border rounded p-4 bg-bg-elev">
       <h2 class="font-semibold mb-3">Work hours</h2>
       <p class="text-xs text-fg-muted mb-3">
@@ -46,6 +47,7 @@
                  {% if always_on %}disabled{% endif %}
                  class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
         </div>
+        <p id="tz-indicator" class="text-xs text-fg-muted mt-2"></p>
       </div>
     </section>
 
@@ -117,4 +119,44 @@
     </div>
   </form>
 </div>
+<script>
+// Work-hours timezone conversion: the server stores UTC, the browser
+// converts to/from local time so the user sees and enters local times.
+(function () {
+  var offset = new Date().getTimezoneOffset();
+  var tzField = document.getElementById("tz_offset");
+  if (tzField) tzField.value = offset;
+
+  function utcToLocal(utcHhmm) {
+    var parts = utcHhmm.split(":");
+    var total = parseInt(parts[0]) * 60 + parseInt(parts[1]) - offset;
+    total = ((total % 1440) + 1440) % 1440;
+    return (
+      String(Math.floor(total / 60)).padStart(2, "0") +
+      ":" +
+      String(total % 60).padStart(2, "0")
+    );
+  }
+
+  ["window_start", "window_end"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el && el.value) {
+      el.dataset.utcValue = el.value;
+      el.value = utcToLocal(el.value);
+    }
+  });
+
+  var indicator = document.getElementById("tz-indicator");
+  if (indicator) {
+    var sign = offset <= 0 ? "+" : "-";
+    var absOff = Math.abs(offset);
+    var h = Math.floor(absOff / 60);
+    var m = absOff % 60;
+    var label =
+      "UTC" + sign + h + (m ? ":" + String(m).padStart(2, "0") : "");
+    indicator.textContent =
+      "Times shown in your timezone (" + label + "). Stored as UTC.";
+  }
+})();
+</script>
 {% endblock %}

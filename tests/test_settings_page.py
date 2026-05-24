@@ -201,3 +201,122 @@ async def test_settings_post_persists_worktree_base_ref(cookie_client, session):
     session.expire_all()
     cfg = session.get(ConfigRow, 1)
     assert cfg.worktree_base_ref is None
+
+
+async def test_settings_get_includes_tz_offset_hidden_field(cookie_client, session):
+    """The settings form contains a hidden tz_offset field for the browser
+    timezone offset, populated by JS on load."""
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.get("/settings")
+    assert r.status_code == 200
+    assert 'name="tz_offset"' in r.text
+    assert 'id="tz_offset"' in r.text
+
+
+async def test_settings_post_converts_local_times_to_utc(cookie_client, session):
+    """When the browser sends tz_offset (getTimezoneOffset()), the handler
+    converts local times to UTC before writing to ConfigRow.
+
+    getTimezoneOffset() returns (UTC - local) in minutes.
+    UTC+2 → offset = -120.
+    Local 22:00 + (-120 min) = 20:00 UTC.
+    Local 07:00 + (-120 min) = 05:00 UTC.
+    """
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "max_parallel": "2",
+            "polling_interval_seconds": "5",
+            "window_start": "22:00",
+            "window_end": "07:00",
+            "claude_binary_path": "",
+            "cc_minimum_version": "2.1.80",
+            "tz_offset": "-120",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.window_start == "20:00"
+    assert cfg.window_end == "05:00"
+
+
+async def test_settings_post_utc_conversion_wraps_midnight(cookie_client, session):
+    """UTC conversion wraps around midnight correctly.
+
+    UTC-5 → offset = 300.
+    Local 22:00 + 300 min = 27:00 → 03:00 UTC (wraps).
+    Local 07:00 + 300 min = 12:00 UTC.
+    """
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "max_parallel": "2",
+            "polling_interval_seconds": "5",
+            "window_start": "22:00",
+            "window_end": "07:00",
+            "claude_binary_path": "",
+            "cc_minimum_version": "2.1.80",
+            "tz_offset": "300",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.window_start == "03:00"
+    assert cfg.window_end == "12:00"
+
+
+async def test_settings_post_without_tz_offset_stores_as_is(cookie_client, session):
+    """Without tz_offset (no JS), times are stored as-is (treated as UTC)."""
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "max_parallel": "2",
+            "polling_interval_seconds": "5",
+            "window_start": "21:30",
+            "window_end": "06:15",
+            "claude_binary_path": "",
+            "cc_minimum_version": "2.1.80",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.window_start == "21:30"
+    assert cfg.window_end == "06:15"
+
+
+async def test_settings_post_invalid_tz_offset_stores_as_is(cookie_client, session):
+    """Garbage tz_offset is treated as 0 — no conversion."""
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "max_parallel": "2",
+            "polling_interval_seconds": "5",
+            "window_start": "22:00",
+            "window_end": "07:00",
+            "claude_binary_path": "",
+            "cc_minimum_version": "2.1.80",
+            "tz_offset": "not-a-number",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.window_start == "22:00"
+    assert cfg.window_end == "07:00"

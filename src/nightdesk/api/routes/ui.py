@@ -14,6 +14,16 @@ from nightdesk.domain.tickets import (
 )
 
 
+def _local_to_utc(hhmm: str, offset_minutes: int) -> str:
+    """Convert a local HH:MM time to UTC given getTimezoneOffset() in minutes.
+
+    getTimezoneOffset() returns (UTC - local) in minutes, so UTC = local + offset.
+    """
+    h, m = map(int, hhmm.split(":"))
+    total = (h * 60 + m + offset_minutes) % 1440
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
 def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
                   *, transcript_root: Path) -> APIRouter:
     router = APIRouter(tags=["ui"])
@@ -132,6 +142,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         claude_binary_path: str = Form(""),
         cc_minimum_version: str = Form(""),
         worktree_base_ref: str = Form(""),
+        tz_offset: str = Form(""),
     ):
         import re
 
@@ -144,6 +155,13 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         cfg.max_parallel = max(1, min(int(max_parallel), 16))
         cfg.polling_interval_seconds = max(1, min(int(polling_interval_seconds), 300))
 
+        # Parse browser timezone offset (getTimezoneOffset() in minutes).
+        # Missing or empty means no JS — treat times as already-UTC.
+        try:
+            tz_off = int(tz_offset) if tz_offset.strip() else 0
+        except (ValueError, TypeError):
+            tz_off = 0
+
         # Work-hours block. "Always on" sends 00:00 -> 00:00; the scheduler's
         # in_window() reads equal start and end as "no restriction".
         hhmm_re = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -152,9 +170,9 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             cfg.window_end = "00:00"
         else:
             if hhmm_re.match(window_start or ""):
-                cfg.window_start = window_start
+                cfg.window_start = _local_to_utc(window_start, tz_off)
             if hhmm_re.match(window_end or ""):
-                cfg.window_end = window_end
+                cfg.window_end = _local_to_utc(window_end, tz_off)
 
         cfg.claude_binary_path = (claude_binary_path or "").strip() or None
         cfg.cc_minimum_version = (cc_minimum_version or "").strip() or cfg.cc_minimum_version
