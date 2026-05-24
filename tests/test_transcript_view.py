@@ -818,3 +818,46 @@ def test_accumulate_stats_counts_subagent_tools_once():
     # 1 Agent dispatch + 2 nested tool calls = 3 real tool_use events.
     # The sub-agent's usage.tool_uses (2) must NOT be added on top.
     assert stats["tool_count"] == 3
+
+
+# --- hidden lines rendered inside <details> (BUG glob-lines) ---------------
+#
+# When output exceeds the elision threshold the middle lines must appear inside
+# the <details> body so clicking "N lines hidden" reveals them.
+
+
+def test_elide_output_hidden_lines_field_populated():
+    lines = [f"l{i}" for i in range(30)]
+    e = elide_output("\n".join(lines))
+    assert e.hidden == 15
+    assert e.hidden_lines == lines[10:25]
+
+
+def test_elide_output_hidden_lines_empty_when_not_elided():
+    e = elide_output("\n".join(f"l{i}" for i in range(5)))
+    assert e.hidden == 0
+    assert e.hidden_lines == ()
+
+
+def test_rendered_hidden_lines_inside_details():
+    # 30 lines -> head (0-9), hidden (10-24), tail (25-29).
+    output = "\n".join(f"line-{i}" for i in range(30))
+    html = _render_event({"type": "tool_result", "output": output,
+                          "is_error": False})
+    # The "15 lines hidden" summary must be present.
+    assert "15 lines hidden" in html
+    # The hidden lines must appear inside the <details> body, not just the
+    # summary. Spot-check a few lines from the hidden middle.
+    assert "line-10" in html
+    assert "line-20" in html
+    assert "line-24" in html
+    # The head and tail are still rendered outside the inner <details>.
+    assert "line-0" in html
+    assert "line-29" in html
+
+
+def test_rendered_hidden_lines_not_present_when_short():
+    output = "\n".join(f"line-{i}" for i in range(5))
+    html = _render_event({"type": "tool_result", "output": output,
+                          "is_error": False})
+    assert "lines hidden" not in html
