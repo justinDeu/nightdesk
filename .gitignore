@@ -16,3 +16,10 @@ docs/superpowers/
 .tailwind/
 plan_*.md
 .claude/worktrees/
+
+# Transient / agent run artifacts — never commit
+.playwright-mcp/
+.claude/scheduled_tasks.lock
+nightdesk-run-*.log
+story.txt
+story2.txt
