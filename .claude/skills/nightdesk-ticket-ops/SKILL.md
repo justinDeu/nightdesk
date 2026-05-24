@@ -29,20 +29,57 @@ Valid transitions (`src/nightdesk/domain/tickets.py:13`):
 
 Anything else returns `409 invalid transition`. Dropping into `running` from `draft` or `queued` sets `run_now=true` so the scheduler picks it on the next tick.
 
+## Before creating a ticket
+
+Gather these values before issuing the POST. Do not guess or hard-code them.
+
+### 1. Profile (`profile_id`)
+
+Fetch available profiles and ask the user which one to use:
+
+```bash
+curl -s "${AUTH[@]}" "$BASE/api/v1/profiles" | jq '.[] | {id, name}'
+```
+
+- If only one profile exists, use it without asking.
+- If multiple profiles exist, present the list and ask which to use.
+
+### 2. Workspace mode (`workspace_mode`)
+
+| mode | when to use |
+|---|---|
+| `git_worktree` | **Default for any ticket involving code changes.** Gives the agent an isolated git worktree branched from `cwd`. |
+| `directory` | Tickets that only read files, run queries, or operate on non-git directories. |
+
+If unsure, ask the user. When using `git_worktree`, suggest a `worktree_name` derived from the ticket title (e.g. a ticket titled "Fix login bug" → `fix/login-bug`). Show the derived name to the user before creating the ticket.
+
+### 3. Working directory (`cwd`)
+
+`cwd` should be the repo root the agent operates in. Confirm it with the user or infer it from the current working directory. Never assume a path.
+
+### 4. Quick checklist
+
+Before sending the POST, confirm:
+
+- [ ] `profile_id` resolved (asked user if multiple profiles)
+- [ ] `workspace_mode` chosen (`git_worktree` for code changes, `directory` otherwise)
+- [ ] `cwd` confirmed with user or inferred from `$PWD`
+- [ ] `worktree_name` derived from title and shown to user (when using `git_worktree`)
+
 ## Create a ticket
 
-Required: `title`, `profile_id`, `cwd`. `cwd` is validated as a non-empty string and normalized to an absolute path. New tickets default to `status="draft"`. If only one profile exists, fetch it once with `curl "${AUTH[@]}" "$BASE/api/v1/profiles" | jq -r '.[0].id'`.
+Required: `title`, `profile_id`, `cwd`. `cwd` is validated as a non-empty string and normalized to an absolute path. New tickets default to `status="draft"`.
 
-`workspace_mode` controls how the agent's working directory is set up:
+`workspace_mode` controls how the agent's working directory is set up (see "Before creating a ticket" for selection guidance):
 
 | mode | behavior |
 |---|---|
-| `directory` | agent runs in `cwd` as a plain directory (default) |
+| `directory` | agent runs in `cwd` as a plain directory |
 | `in_place` | agent runs directly in `cwd` (legacy alias for directory) |
 | `git_worktree` | agent gets an isolated git worktree branched from `cwd` |
 | `worktree` | reserved; not yet fully implemented |
 
-For git worktree isolation use `"workspace_mode": "git_worktree"`. Pair with `worktree_name` (optional branch name) or let the server generate one.
+When using `git_worktree`, pair with `worktree_name` (e.g. `fix/my-feature`) — the server generates one if omitted, but an explicit name is clearer.
 
 **Single-line / inline prompt** (fine for short prompts):
 
