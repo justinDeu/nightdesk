@@ -58,8 +58,6 @@
     {% endif %}
   </div>
 
-  {% include "partials/run_stats.html" %}
-
   {% if transcript_raw %}
     {# Legacy raw SDK file: plain pre fallback. #}
     <pre class="bg-bg-elev-2 border border-border rounded p-3 font-mono text-xs whitespace-pre-wrap text-fg overflow-y-auto"
@@ -81,7 +79,7 @@
           {% endfor %}
         </div>
       </div>
-      {% if subagent_agents or todos %}
+      {% if selected_run %}
         {% include "partials/transcript_sidebar.html" %}
       {% endif %}
     </div>
