@@ -225,9 +225,13 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
             "data": sys_data,
         }
     if name == "AssistantMessage":
-        msg: dict[str, Any] = {
-            "content": [_block_to_dict(b) for b in (getattr(evt, "content", None) or [])],
-        }
+        blocks = [_block_to_dict(b) for b in (getattr(evt, "content", None) or [])]
+        ptid = getattr(evt, "parent_tool_use_id", None)
+        if ptid:
+            for b in blocks:
+                if isinstance(b, dict) and b.get("type") in ("tool_use", "tool_result"):
+                    b["parent_tool_use_id"] = ptid
+        msg: dict[str, Any] = {"content": blocks}
         usage = _usage_to_dict(getattr(evt, "usage", None))
         if usage is not None:
             msg["usage"] = usage
@@ -238,8 +242,13 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
         }
     if name == "UserMessage":
         content = getattr(evt, "content", None)
+        ptid = getattr(evt, "parent_tool_use_id", None)
         if isinstance(content, list):
             content_out: Any = [_block_to_dict(b) for b in content]
+            if ptid:
+                for b in content_out:
+                    if isinstance(b, dict) and b.get("type") in ("tool_use", "tool_result"):
+                        b["parent_tool_use_id"] = ptid
         else:
             content_out = content
         return {"type": "user", "message": {"content": content_out}}
