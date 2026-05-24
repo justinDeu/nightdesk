@@ -1,7 +1,8 @@
 {#
   Single ticket card used inside a board column.
   Expects: t (Ticket-like), profiles_by_id (dict id->Profile),
-           run_outcomes (dict ticket_id->exit_status).
+           run_outcomes (dict ticket_id->exit_status),
+           dep_titles (dict ticket_id->list[str] of upstream titles).
 
   Clicking the card opens the sidebar in edit mode for this ticket.
   Clicking the small ↗ link in the corner opens the full ticket detail
@@ -9,6 +10,7 @@
 #}
 {% set profile = profiles_by_id.get(t.profile_id) if profiles_by_id else None %}
 {% set outcome = run_outcomes.get(t.id) if run_outcomes else None %}
+{% set blocked_by = dep_titles.get(t.id) if dep_titles else None %}
 <li
   data-ticket-id="{{ t.id }}"
   class="group rounded-md border border-border bg-bg-elev-2 px-3 py-2 cursor-grab hover:border-accent transition-colors shadow-sm"
@@ -33,6 +35,11 @@
           {% if outcome in ('cancelled', 'worker_crash') %}{% set chip_class = 'text-warn border-warn/40' %}{% endif %}
           <span class="px-1.5 py-0.5 rounded bg-bg-elev border {{ chip_class }}">
             {{ outcome }}
+          </span>
+        {% endif %}
+        {% if blocked_by %}
+          <span class="px-1.5 py-0.5 rounded bg-warn/15 border border-warn/40 text-warn" title="Waiting on: {{ blocked_by | join(', ') }}">
+            blocked by {{ blocked_by | length }}
           </span>
         {% endif %}
       </div>

@@ -23,7 +23,8 @@ from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
 from nightdesk.domain.tickets import (
-    clone_ticket, get_ticket, merge_next_run_context_into_prompt, restart_ticket,
+    clone_ticket, get_ticket, list_dependencies, list_dependents,
+    merge_next_run_context_into_prompt, restart_ticket,
     resume_ticket, retry_ticket, set_next_run_context, update_ticket, TicketNotFound,
 )
 from nightdesk.logging_setup import run_log_path
@@ -99,6 +100,8 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             "project_settings_paths": project_settings_paths,
             "run_workspaces": run_workspaces,
             "profiles": list_profiles(session),
+            "deps_upstreams": list_dependencies(session, tid),
+            "deps_downstreams": list_dependents(session, tid),
             "title": t.title,
             "active_page": "tickets",
         })

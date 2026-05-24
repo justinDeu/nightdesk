@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import ConfigRow, Run, Ticket
@@ -335,6 +336,44 @@ async def _cancel_watcher(
         return
 
 
+def _handoff_to_dependents(session: Session, ticket_id: str, run: Run) -> None:
+    """After a successful run, push a summary into each dependent ticket's
+    next_run_context so the downstream stage sees what happened upstream."""
+    from nightdesk.db.models import TicketDependency
+    from nightdesk.domain.tickets import set_next_run_context, get_ticket
+
+    dep_rows = session.scalars(
+        select(TicketDependency).where(
+            TicketDependency.depends_on_id == ticket_id,
+        )
+    )
+    upstream = get_ticket(session, ticket_id)
+    summary_parts = [
+        f"[Upstream ticket: {upstream.title}]",
+        f"Status: success",
+        f"Run ID: {run.id[:8]}",
+    ]
+    if run.model_used:
+        summary_parts.append(f"Model: {run.model_used}")
+    if run.cost_usd is not None:
+        summary_parts.append(f"Cost: ${run.cost_usd:.4f}")
+    if run.error_summary:
+        summary_parts.append(f"Summary: {run.error_summary}")
+    summary = "\n".join(summary_parts)
+
+    for dep in dep_rows:
+        try:
+            downstream = get_ticket(session, dep.ticket_id)
+            existing = downstream.next_run_context or ""
+            context = existing + "\n\n" + summary if existing else summary
+            set_next_run_context(session, downstream.id, context.strip())
+            log.info("handed off context from ticket %s to dependent %s",
+                     ticket_id, downstream.id)
+        except Exception:
+            log.exception("failed to hand off context to dependent %s",
+                          dep.ticket_id)
+
+
 async def run_one(
     session_factory: Callable[[], Session],
     cfg: RunOneConfig,
@@ -591,6 +630,16 @@ async def run_one(
                 log.info("run %s completed for ticket %s: exit=%s (status already %s)",
                          run.id, ticket.id, result.exit_status,
                          cur.status if cur else "unknown")
+
+            # Context handoff: when a ticket finishes successfully, push a
+            # summary into each dependent ticket's next_run_context so the
+            # downstream stage sees what happened upstream.
+            if result.exit_status == "success":
+                try:
+                    _handoff_to_dependents(session, ticket.id, run)
+                except Exception:
+                    log.exception("context handoff failed for ticket %s",
+                                  ticket.id)
 
             if result.exit_status == "success" and bundle is not None:
                 for owned_ws in bundle.workspaces:

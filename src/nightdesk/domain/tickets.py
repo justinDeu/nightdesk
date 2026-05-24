@@ -6,7 +6,7 @@ from typing import Iterable, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from nightdesk.db.models import Ticket, TicketWorkspace
+from nightdesk.db.models import Ticket, TicketDependency, TicketWorkspace
 
 
 # v2 lifecycle. Run-level outcomes (success/failed/cancelled) now live on Run.exit_status.
@@ -469,6 +469,161 @@ def delete_ticket(session: Session, ticket_id: str) -> None:
         raise InvalidTransition("cannot delete running ticket")
     session.delete(t)
     session.commit()
+
+
+class CyclicDependency(Exception):
+    pass
+
+
+class DependencyNotFound(Exception):
+    pass
+
+
+def add_dependency(session: Session, ticket_id: str, depends_on_id: str) -> Ticket:
+    """Add a dependency edge: ``ticket_id`` waits for ``depends_on_id``.
+
+    Rejects self-dependencies, duplicate edges, and cycles (simple DFS).
+    """
+    if ticket_id == depends_on_id:
+        raise CyclicDependency("ticket cannot depend on itself")
+    t = get_ticket(session, ticket_id)
+    upstream = get_ticket(session, depends_on_id)
+    # Check duplicate.
+    existing = session.scalar(
+        select(TicketDependency).where(
+            TicketDependency.ticket_id == ticket_id,
+            TicketDependency.depends_on_id == depends_on_id,
+        )
+    )
+    if existing is not None:
+        return t
+    # Check cycle: walk from depends_on_id following its own dependencies
+    # back towards ticket_id.
+    if _would_cycle(session, depends_on_id, ticket_id):
+        raise CyclicDependency(
+            f"adding {ticket_id[:8]} -> {depends_on_id[:8]} would create a cycle"
+        )
+    dep = TicketDependency(ticket_id=ticket_id, depends_on_id=depends_on_id)
+    session.add(dep)
+    session.commit()
+    session.refresh(t)
+    return t
+
+
+def remove_dependency(session: Session, ticket_id: str, depends_on_id: str) -> Ticket:
+    """Remove a dependency edge."""
+    dep = session.scalar(
+        select(TicketDependency).where(
+            TicketDependency.ticket_id == ticket_id,
+            TicketDependency.depends_on_id == depends_on_id,
+        )
+    )
+    if dep is None:
+        raise DependencyNotFound(
+            f"no dependency from {ticket_id[:8]} to {depends_on_id[:8]}"
+        )
+    session.delete(dep)
+    session.commit()
+    t = get_ticket(session, ticket_id)
+    return t
+
+
+def list_dependencies(session: Session, ticket_id: str) -> list[Ticket]:
+    """Return the tickets this ticket depends on (upstream)."""
+    _ = get_ticket(session, ticket_id)
+    rows = session.scalars(
+        select(TicketDependency).where(
+            TicketDependency.ticket_id == ticket_id,
+        )
+    )
+    out: list[Ticket] = []
+    for dep in rows:
+        upstream = session.get(Ticket, dep.depends_on_id)
+        if upstream is not None:
+            out.append(upstream)
+    return out
+
+
+def list_dependents(session: Session, ticket_id: str) -> list[Ticket]:
+    """Return the tickets that depend on this one (downstream)."""
+    _ = get_ticket(session, ticket_id)
+    rows = session.scalars(
+        select(TicketDependency).where(
+            TicketDependency.depends_on_id == ticket_id,
+        )
+    )
+    out: list[Ticket] = []
+    for dep in rows:
+        downstream = session.get(Ticket, dep.ticket_id)
+        if downstream is not None:
+            out.append(downstream)
+    return out
+
+
+def _would_cycle(session: Session, start_id: str, target_id: str) -> bool:
+    """DFS from ``start_id`` following dependency edges; returns True if
+    ``target_id`` is reachable."""
+    visited: set[str] = set()
+    stack = [start_id]
+    while stack:
+        current = stack.pop()
+        if current == target_id:
+            return True
+        if current in visited:
+            continue
+        visited.add(current)
+        deps = session.scalars(
+            select(TicketDependency.depends_on_id).where(
+                TicketDependency.ticket_id == current,
+            )
+        )
+        for dep_id in deps:
+            if dep_id not in visited:
+                stack.append(dep_id)
+    return False
+
+
+def check_dependencies_satisfied(session: Session, ticket_id: str) -> tuple[bool, list[dict]]:
+    """Check whether all dependencies for a ticket are satisfied.
+
+    Returns (all_satisfied, list_of_unsatisfied) where each entry is:
+    ``{"ticket_id": ..., "title": ..., "status": ..., "reason": ...}``.
+    A dependency is satisfied when the upstream has a most-recent run with
+    ``exit_status='success'`` and the upstream is in ``review`` or ``archived``.
+    """
+    deps = list_dependencies(session, ticket_id)
+    unsatisfied: list[dict] = []
+    for upstream in deps:
+        satisfied, reason = _is_dependency_satisfied(session, upstream)
+        if not satisfied:
+            unsatisfied.append({
+                "ticket_id": upstream.id,
+                "title": upstream.title,
+                "status": upstream.status,
+                "reason": reason,
+            })
+    return (len(unsatisfied) == 0), unsatisfied
+
+
+def _is_dependency_satisfied(session: Session, upstream: Ticket) -> tuple[bool, str]:
+    """Check if a single upstream dependency is satisfied."""
+    if upstream.status in ("review", "archived"):
+        # Check the most recent run.
+        from nightdesk.domain.runs import list_runs
+        runs = list_runs(session, ticket_id=upstream.id)
+        if not runs:
+            return False, "upstream has no runs"
+        latest = runs[0]  # list_runs orders by started_at DESC
+        if latest.exit_status == "success":
+            return True, ""
+        return False, f"upstream last run exited with '{latest.exit_status}'"
+    if upstream.status == "running":
+        return False, "upstream is still running"
+    if upstream.status == "queued":
+        return False, "upstream is queued (has not run yet)"
+    if upstream.status == "draft":
+        return False, "upstream is in draft (has not been queued)"
+    return False, f"upstream status is '{upstream.status}'"
 
 
 # --- internals ---------------------------------------------------------------

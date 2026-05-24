@@ -123,6 +123,18 @@
         </div>
       {% endif %}
 
+      {# --- Dependencies section ------------------------------------------- #}
+      <div id="dependency-section">
+        {% if is_edit %}
+          {% set upstreams = deps_upstreams if deps_upstreams is defined else [] %}
+          {% set downstreams = deps_downstreams if deps_downstreams is defined else [] %}
+          {% include "partials/dependency_section.html" %}
+        {% else %}
+          <span class="text-fg-muted text-xs uppercase tracking-wide">Dependencies</span>
+          <p class="text-fg-muted/70 text-xs italic">Save ticket first to add dependencies.</p>
+        {% endif %}
+      </div>
+
       {# --- Run history -------------------------------------------------- #
        # Compact list of the selected ticket's runs. The board sidebar has no
        # transcript-panel swap target, so each row links to the ticket detail
