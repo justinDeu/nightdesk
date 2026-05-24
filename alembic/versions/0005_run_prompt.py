@@ -1,7 +1,7 @@
 """add runs.prompt
 
-Revision ID: 0004_run_prompt
-Revises: 0003_config_worktree_base_ref
+Revision ID: 0005_run_prompt
+Revises: 0004_ticket_dependencies
 Create Date: 2026-05-24
 
 Additive: stores the base prompt (ticket.prompt at launch time) on each run
