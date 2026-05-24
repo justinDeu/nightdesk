@@ -510,6 +510,72 @@ def accumulate_stats(events) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Task / TodoWrite: normalize either tool family into a unified todo list.
+# ---------------------------------------------------------------------------
+
+
+_TASK_TOOLS = {"TaskCreate", "TaskUpdate"}
+
+
+def _todos_from_tasks(events) -> list[dict]:
+    items: list[dict] = []          # in creation order
+    by_id: dict[str, dict] = {}     # "1","2",... -> item
+    for e in sorted(events, key=lambda x: x.get("seq", 0)):
+        if e.get("type") != "tool_use":
+            continue
+        tool = e.get("tool")
+        inp = e.get("input") or {}
+        if tool == "TaskCreate":
+            item = {
+                "id": str(len(items) + 1),
+                "label": (inp.get("subject") or "").strip(),
+                "activeForm": (inp.get("activeForm") or "").strip(),
+                "status": "pending",
+            }
+            items.append(item)
+            by_id[item["id"]] = item
+        elif tool == "TaskUpdate":
+            tid = str(inp.get("taskId") or "")
+            status = inp.get("status")
+            item = by_id.get(tid)
+            if item and status:
+                item["status"] = status
+    return [i for i in items if i["status"] != "deleted"]
+
+
+def _todos_from_todowrite(events) -> list[dict]:
+    last = None
+    for e in sorted(events, key=lambda x: x.get("seq", 0)):
+        if e.get("type") == "tool_use" and e.get("tool") == "TodoWrite":
+            last = e
+    if last is None:
+        return []
+    out: list[dict] = []
+    for i, td in enumerate((last.get("input") or {}).get("todos") or []):
+        out.append({
+            "id": str(i + 1),
+            "label": (td.get("content") or "").strip(),
+            "activeForm": (td.get("activeForm") or "").strip(),
+            "status": td.get("status") or "pending",
+        })
+    return out
+
+
+def build_todo_list(events) -> list[dict]:
+    """Normalized todo list from whichever task tool the run used.
+
+    Task* and TodoWrite are mutually exclusive per run; prefer Task* when both
+    somehow appear. Returns ``[]`` when neither is present.
+    """
+    events = list(events)
+    has_task = any(e.get("type") == "tool_use" and e.get("tool") in _TASK_TOOLS
+                   for e in events)
+    if has_task:
+        return _todos_from_tasks(events)
+    return _todos_from_todowrite(events)
+
+
 def result_duplicates_last_assistant(events) -> bool:
     """Return True when the final ``result`` summary echoes the last
     ``assistant_text``.

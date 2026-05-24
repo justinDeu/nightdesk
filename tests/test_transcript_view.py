@@ -698,3 +698,65 @@ def test_group_orphan_parent_stays_top_level():
     groups = group_by_subagent(pair_tool_events(events))
     assert len(groups) == 1
     assert groups[0].event.get("tool") == "Bash"
+
+
+# --- build_todo_list ----------------------------------------------------------
+
+
+def test_todo_list_from_task_tools():
+    from nightdesk.transcript_view import build_todo_list
+    events = [
+        {"type": "tool_use", "id": "c1", "tool": "TaskCreate",
+         "input": {"subject": "alpha", "activeForm": "Doing alpha"}, "seq": 1},
+        {"type": "tool_use", "id": "c2", "tool": "TaskCreate",
+         "input": {"subject": "beta"}, "seq": 2},
+        {"type": "tool_use", "id": "u1", "tool": "TaskUpdate",
+         "input": {"taskId": "1", "status": "completed"}, "seq": 3},
+    ]
+    todos = build_todo_list(events)
+    assert [(t["label"], t["status"]) for t in todos] == [
+        ("alpha", "completed"), ("beta", "pending")]
+    assert todos[0]["activeForm"] == "Doing alpha"
+
+
+def test_todo_list_task_delete_removes_item():
+    from nightdesk.transcript_view import build_todo_list
+    events = [
+        {"type": "tool_use", "id": "c1", "tool": "TaskCreate", "input": {"subject": "a"}, "seq": 1},
+        {"type": "tool_use", "id": "c2", "tool": "TaskCreate", "input": {"subject": "b"}, "seq": 2},
+        {"type": "tool_use", "id": "u1", "tool": "TaskUpdate",
+         "input": {"taskId": "1", "status": "deleted"}, "seq": 3},
+    ]
+    todos = build_todo_list(events)
+    assert [t["label"] for t in todos] == ["b"]
+
+
+def test_todo_list_from_todowrite_snapshot():
+    from nightdesk.transcript_view import build_todo_list
+    events = [
+        {"type": "tool_use", "id": "w1", "tool": "TodoWrite", "seq": 1,
+         "input": {"todos": [{"content": "a", "status": "pending", "activeForm": "A"}]}},
+        {"type": "tool_use", "id": "w2", "tool": "TodoWrite", "seq": 2,
+         "input": {"todos": [
+            {"content": "a", "status": "completed", "activeForm": "A"},
+            {"content": "b", "status": "in_progress", "activeForm": "B"}]}},
+    ]
+    todos = build_todo_list(events)
+    assert [(t["label"], t["status"]) for t in todos] == [
+        ("a", "completed"), ("b", "in_progress")]
+
+
+def test_todo_list_empty_when_no_task_tools():
+    from nightdesk.transcript_view import build_todo_list
+    assert build_todo_list([{"type": "tool_use", "id": "x", "tool": "Read", "input": {}}]) == []
+
+
+def test_todo_list_prefers_task_tools_over_todowrite():
+    from nightdesk.transcript_view import build_todo_list
+    events = [
+        {"type": "tool_use", "id": "c1", "tool": "TaskCreate", "input": {"subject": "from-task"}, "seq": 1},
+        {"type": "tool_use", "id": "w1", "tool": "TodoWrite", "seq": 2,
+         "input": {"todos": [{"content": "from-todo", "status": "pending"}]}},
+    ]
+    todos = build_todo_list(events)
+    assert [t["label"] for t in todos] == ["from-task"]
