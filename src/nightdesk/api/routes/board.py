@@ -297,6 +297,8 @@ def _gather_board(session: Session):
         "profiles_by_id": profiles_by_id,
         "run_outcomes": review_run_outcomes,
         "dep_titles": dep_titles,
+        # Every ticket, for the modal's "Depends on" picker (all statuses).
+        "dep_all": list_tickets(session, limit=500),
     }
 
 
@@ -379,6 +381,7 @@ def build_router(
                 "profiles_by_id": ctx["profiles_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
                 "dep_titles": ctx["dep_titles"],
+                "dep_all": ctx["dep_all"],
                 "mode": "create",
                 "ticket": None,
             },
@@ -437,6 +440,7 @@ def build_router(
                 "runs": runs,
                 "deps_upstreams": deps_upstreams,
                 "deps_downstreams": deps_downstreams,
+                "dep_all": list_tickets(session, limit=500),
             },
         )
 
@@ -464,7 +468,7 @@ def build_router(
                     default_ref = (getattr(cfg, "worktree_base_ref", None) or "").strip() if cfg else ""
                     if default_ref:
                         primary["base_ref"] = default_ref
-            create_ticket(
+            new_ticket = create_ticket(
                 session,
                 title=title,
                 prompt=(form.get("prompt") or ""),
@@ -478,6 +482,17 @@ def build_router(
             )
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
+        # Optional dependencies from the modal's "Depends on" picker. A brand
+        # new ticket can't form a cycle, but guard anyway and skip bad ids.
+        if form.get("deps_form") == "1":
+            for dep_id in form.getlist("depends_on_id"):
+                dep_id = (dep_id or "").strip()
+                if not dep_id or dep_id == new_ticket.id:
+                    continue
+                try:
+                    add_dependency(session, new_ticket.id, dep_id)
+                except (CyclicDependency, TicketNotFound):
+                    pass
         resp = Response(status_code=204)
         resp.headers["HX-Redirect"] = "/"
         return resp
@@ -522,6 +537,23 @@ def build_router(
             update_ticket(session, tid, **fields)
         except TicketNotFound:
             raise HTTPException(404, "not found")
+        # Reconcile dependencies from the modal's "Depends on" picker. Only
+        # touched when the deps section was part of the submission (the modal
+        # sends deps_form=1); an empty selection then means "remove all".
+        if form.get("deps_form") == "1":
+            desired = {d.strip() for d in form.getlist("depends_on_id")
+                       if d.strip() and d.strip() != tid}
+            current = {d.id for d in list_dependencies(session, tid)}
+            for dep_id in desired - current:
+                try:
+                    add_dependency(session, tid, dep_id)
+                except (CyclicDependency, TicketNotFound):
+                    pass
+            for dep_id in current - desired:
+                try:
+                    remove_dependency(session, tid, dep_id)
+                except DependencyNotFound:
+                    pass
         # Return the sidebar partial re-rendered in edit mode for the same
         # ticket so HTMX swaps just the rail in place. Previously this
         # returned HX-Redirect to "/", which reloaded the board and dropped
@@ -534,7 +566,8 @@ def build_router(
             {"profiles": profiles, "ticket": ticket, "mode": "edit",
              "runs": list_runs(session, ticket_id=tid),
              "deps_upstreams": list_dependencies(session, tid),
-             "deps_downstreams": list_dependents(session, tid)},
+             "deps_downstreams": list_dependents(session, tid),
+             "dep_all": list_tickets(session, limit=500)},
         )
 
     @router.post("/board/tickets/{tid}/archive", dependencies=[auth])
@@ -564,7 +597,8 @@ def build_router(
             {"profiles": profiles, "ticket": ticket, "mode": "edit",
              "runs": list_runs(session, ticket_id=tid),
              "deps_upstreams": list_dependencies(session, tid),
-             "deps_downstreams": list_dependents(session, tid)},
+             "deps_downstreams": list_dependents(session, tid),
+             "dep_all": list_tickets(session, limit=500)},
         )
 
     @router.post("/board/tickets/{tid}/cancel", dependencies=[auth])

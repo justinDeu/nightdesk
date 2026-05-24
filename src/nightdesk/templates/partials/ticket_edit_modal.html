@@ -80,6 +80,33 @@
         </select>
       </label>
 
+      {# --- Dependencies -------------------------------------------------- #
+       # Optional. This ticket stays blocked until every selected ticket
+       # reaches review/archived. The server runs a DAG cycle check, so a
+       # selection that would form a loop is rejected and skipped. The hidden
+       # deps_form marks the section as submitted, so an empty selection on
+       # edit means "remove all" rather than "leave untouched".
+       #}
+      {% set _dep_all = dep_all if dep_all is defined else [] %}
+      {% set _current_dep_ids = (ticket.dependencies | map(attribute='depends_on_id') | list) if (_is_edit and ticket.dependencies) else [] %}
+      {% set _dep_options = (_dep_all | rejectattr('id', 'equalto', ticket.id) | list) if _is_edit else _dep_all %}
+      <input type="hidden" name="deps_form" value="1" />
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Depends on</span>
+        <span class="-mt-0.5 text-[11px] text-fg-muted">Won't run until the selected tickets finish. Cycles are rejected automatically.</span>
+        {% if _dep_options %}
+        <select name="depends_on_id" multiple size="5"
+                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg text-xs focus:border-accent outline-none">
+          {% for c in _dep_options %}
+            <option value="{{ c.id }}" {% if c.id in _current_dep_ids %}selected{% endif %}>{{ c.title }} · {{ c.status }}</option>
+          {% endfor %}
+        </select>
+        <span class="text-[10px] text-fg-muted/60">Ctrl/Cmd-click to select multiple, or to deselect.</span>
+        {% else %}
+        <span class="text-xs italic text-fg-muted">No other tickets to depend on yet.</span>
+        {% endif %}
+      </label>
+
       {# --- Workspaces ---------------------------------------------------- #
        # Primary + linked rows in one unified list. Primary is the row the
        # agent runs in (its path is the ticket's cwd; its kind controls the

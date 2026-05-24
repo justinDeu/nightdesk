@@ -117,6 +117,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             "deps_upstreams": deps_upstreams,
             "deps_downstreams": list_dependents(session, tid),
             "dep_candidates": dep_candidates,
+            "dep_all": list_tickets(session, limit=500),
             "title": t.title,
             "active_page": "tickets",
         })
