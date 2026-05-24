@@ -374,14 +374,8 @@
       </div>
 
       {# --- Transcript tab content ----------------------------------------- #}
-      {% set prompt_text = ticket.prompt or '' %}
+      {# Prompt is rendered as the first user message inside transcript_panel. #}
       <div data-tab-content="transcript" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
-        {% if prompt_text %}
-        <details class="user-prompt mb-3">
-          <summary class="user-prompt-author">user</summary>
-          <pre class="user-prompt-body">{{ prompt_text }}</pre>
-        </details>
-        {% endif %}
         <div id="transcript-panel-inner" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
           {% include "partials/transcript_panel.html" %}
         </div>

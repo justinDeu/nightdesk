@@ -60,6 +60,11 @@ async def test_page_renders_for_fresh_ticket(cookie_client, session):
     # Empty states.
     assert "no runs yet" in body
     assert "no run yet" in body
+    # Ticket prompt renders as the first user message inside the transcript
+    # panel (inside the HTMX swap target), not as a detached block above it.
+    assert "do it" in body
+    assert "user-prompt" in body
+    assert "user-prompt-author" in body
 
 
 async def test_canonical_transcript_renders_events_server_side(
@@ -662,3 +667,90 @@ async def test_task_create_renders_as_clean_card(
     # Raw JSON fallback must NOT appear (the literal key "subject": would
     # indicate the generic renderer dumped the input dict).
     assert '"subject":' not in body
+
+
+async def test_run_prompt_renders_per_run_in_transcript_panel(
+    cookie_client, session, tmp_path,
+):
+    """Each run shows its own persisted prompt in the transcript panel.
+
+    After editing the ticket prompt and creating a second run, the transcript
+    panel for each run must show the prompt that was active when THAT run was
+    created — not the current ticket-level prompt.
+    """
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="original prompt",
+                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    log1 = tmp_path / "transcripts" / "run1.log"
+    log1.parent.mkdir(parents=True, exist_ok=True)
+    log1.write_text(json.dumps(
+        {"type": "meta", "ts": "2026-05-16T00:00:00Z", "seq": 0,
+         "run_id": "run1aaaa", "ticket_id": t.id}) + "\n")
+    run1 = start_run(session, ticket_id=t.id,
+                      worktree_path=str(tmp_path / "work"),
+                      transcript_path=str(log1), pid=None, host="testhost",
+                      prompt="original prompt")
+
+    # Edit the ticket prompt, then start a second run.
+    t.prompt = "updated prompt"
+    session.commit()
+    log2 = tmp_path / "transcripts" / "run2.log"
+    log2.write_text(json.dumps(
+        {"type": "meta", "ts": "2026-05-16T00:01:00Z", "seq": 0,
+         "run_id": "run2bbbb", "ticket_id": t.id}) + "\n")
+    run2 = start_run(session, ticket_id=t.id,
+                      worktree_path=str(tmp_path / "work2"),
+                      transcript_path=str(log2), pid=None, host="testhost",
+                      prompt="updated prompt")
+
+    # The second run's transcript panel shows its own prompt.
+    r2 = await cookie_client.get(f"/tickets/{t.id}/runs/{run2.id}/transcript-panel")
+    assert r2.status_code == 200
+    assert "updated prompt" in r2.text
+    assert "original prompt" not in r2.text
+
+    # The first run's transcript panel shows the original prompt.
+    r1 = await cookie_client.get(f"/tickets/{t.id}/runs/{run1.id}/transcript-panel")
+    assert r1.status_code == 200
+    assert "original prompt" in r1.text
+    assert "updated prompt" not in r1.text
+
+
+async def test_run_with_null_prompt_falls_back_to_ticket_prompt(
+    cookie_client, session, tmp_path,
+):
+    """Runs created before the prompt column existed (prompt=NULL) fall back
+    to ticket.prompt at display time."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="ticket-level prompt",
+                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    log = tmp_path / "transcripts" / "old.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(json.dumps(
+        {"type": "meta", "ts": "2026-05-16T00:00:00Z", "seq": 0,
+         "run_id": "oldrun11", "ticket_id": t.id}) + "\n")
+    # Create run without passing prompt — column stays NULL.
+    run = start_run(session, ticket_id=t.id,
+                     worktree_path=str(tmp_path / "work"),
+                     transcript_path=str(log), pid=None, host="testhost")
+
+    r = await cookie_client.get(f"/tickets/{t.id}/runs/{run.id}/transcript-panel")
+    assert r.status_code == 200
+    # Falls back to ticket.prompt.
+    assert "ticket-level prompt" in r.text
+
+
+async def test_no_run_shows_ticket_prompt_as_pending_message(
+    cookie_client, session,
+):
+    """When no runs exist yet, the ticket prompt shows as the first user
+    message so the user can see what will run."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="pending prompt",
+                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert "pending prompt" in body
+    assert "user-prompt" in body
+    assert "no run yet" in body

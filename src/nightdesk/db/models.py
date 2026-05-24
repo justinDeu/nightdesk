@@ -151,6 +151,10 @@ class Run(Base):
     cache_write_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cost_usd: Mapped[Optional[float]] = mapped_column(sa_Float, nullable=True)
     model_used: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # The base prompt (ticket.prompt at launch time), stored per-run so the
+    # transcript panel can show what each run actually used. NULL for runs
+    # created before this column existed; display falls back to ticket.prompt.
+    prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Claude session id reported by the SDK at run completion. Enables resuming
     # the conversation (`claude --resume <session_id>` / SDK resume=).
     session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
