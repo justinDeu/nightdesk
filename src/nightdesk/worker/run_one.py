@@ -443,6 +443,7 @@ async def run_one(
                 parent_run_id=parent_run.id if parent_run is not None else None,
                 headless_policy_version=HEADLESS_POLICY_VERSION,
                 restart_workspace_policy=restart_workspace_policy,
+                prompt=ticket.prompt,
             )
             log.info("run %s started for ticket %s: transcript=%s intent=%s",
                      run.id, ticket.id, run.transcript_path, run_intent)

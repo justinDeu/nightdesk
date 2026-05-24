@@ -326,16 +326,6 @@
     <section id="transcript-panel"
              class="bg-bg-elev border border-border rounded p-4 lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
       <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-2">Latest transcript</h2>
-      {# --- Prompt as first user message -------------------------------- #
-       # Placed above the HTMX swap target so switching runs does not
-       # erase it — the prompt belongs to the ticket, not a specific run. #}
-      {% set prompt_text = ticket.prompt or '' %}
-      {% if prompt_text %}
-      <details class="user-prompt mb-3">
-        <summary class="user-prompt-author">user</summary>
-        <pre class="user-prompt-body">{{ prompt_text }}</pre>
-      </details>
-      {% endif %}
       <div id="transcript-panel-inner" class="lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
         {% include "partials/transcript_panel.html" %}
       </div>

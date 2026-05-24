@@ -16,6 +16,17 @@
 #}
 {% import "partials/transcript_event.html" as te %}
 
+{# Per-run prompt (with ticket fallback) as the first user message.
+   Rendered above ALL run states — no-run, canonical events, and legacy
+   raw fallback — so it always appears as the opening conversation turn. #}
+{% set prompt_text = (selected_run.prompt if selected_run else None) or ticket.prompt or '' %}
+{% if prompt_text %}
+<details class="user-prompt mb-3">
+  <summary class="user-prompt-author">user</summary>
+  <pre class="user-prompt-body">{{ prompt_text }}</pre>
+</details>
+{% endif %}
+
 {% if selected_run is none %}
   <p class="text-fg-muted italic text-sm">no run yet</p>
 {% else %}
