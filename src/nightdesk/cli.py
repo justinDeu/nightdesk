@@ -1310,6 +1310,202 @@ def config_cmd() -> None:
         sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# `nightdesk install-skills` command.
+# ---------------------------------------------------------------------------
+
+
+_VERSION_MARKER = ".nightdesk-skills-version"
+
+
+def _find_bundled_skills_dir() -> Path:
+    """Locate the bundled skills directory relative to the package root.
+
+    Works for editable installs and running from source. The skills live in
+    ``<repo_root>/.claude/skills/``, three directories up from this file
+    (src/nightdesk/cli.py -> repo_root).
+    """
+    # Same navigation pattern as _alembic_config uses for alembic.ini.
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    skills_dir = repo_root / ".claude" / "skills"
+    if not skills_dir.is_dir():
+        print(
+            f"Bundled skills directory not found at {skills_dir}.\n"
+            "This command requires a source or editable install of nightdesk.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return skills_dir
+
+
+def _hash_skills(skills_dir: Path) -> str:
+    """Compute a deterministic SHA-256 hash over all skill file contents.
+
+    Walks directories in sorted order and hashes each file's relative path +
+    content, so the hash is stable regardless of filesystem traversal order.
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    for dirpath, dirnames, filenames in sorted(os.walk(skills_dir)):
+        # Skip the version marker itself if it somehow ended up in the source.
+        dirnames.sort()
+        for fname in sorted(filenames):
+            if fname == _VERSION_MARKER:
+                continue
+            fpath = Path(dirpath) / fname
+            rel = fpath.relative_to(skills_dir)
+            h.update(str(rel).encode())
+            h.update(fpath.read_bytes())
+    return h.hexdigest()
+
+
+def _read_version_marker(target_skills: Path) -> dict | None:
+    """Read the installed version marker. Returns None if missing or invalid."""
+    marker_path = target_skills / _VERSION_MARKER
+    if not marker_path.is_file():
+        return None
+    import json
+
+    try:
+        return json.loads(marker_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_version_marker(target_skills: Path, version: str, skills_hash: str) -> None:
+    """Write the version marker JSON file."""
+    import json
+
+    marker_path = target_skills / _VERSION_MARKER
+    marker_path.write_text(json.dumps(
+        {"nightdesk_version": version, "skills_hash": skills_hash},
+        indent=2,
+    ) + "\n")
+
+
+def _resolve_target(target_arg: str | None) -> Path:
+    """Resolve the installation target directory.
+
+    Priority: explicit --target > git root of cwd > cwd itself.
+    """
+    if target_arg:
+        p = Path(target_arg).resolve()
+        if not p.is_dir():
+            print(f"Target directory does not exist: {p}", file=sys.stderr)
+            sys.exit(1)
+        return p
+
+    # Try git root of cwd.
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except Exception:
+        pass
+
+    return Path.cwd()
+
+
+def install_skills() -> None:
+    """CLI entry point: install nightdesk skills into a target project.
+
+    Copies each bundled skill directory into ``<target>/.claude/skills/`` and
+    writes a version marker for drift detection on subsequent runs.
+
+    Usage:
+        nightdesk-install-skills
+        nightdesk-install-skills --target /path/to/project
+        nightdesk-install-skills --force
+    """
+    import argparse
+    from importlib.metadata import version as pkg_version
+
+    parser = argparse.ArgumentParser(prog="nightdesk-install-skills")
+    parser.add_argument(
+        "--target",
+        metavar="DIR",
+        help="Target project directory (default: git root of cwd, or cwd).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-install all skills even if the version marker matches.",
+    )
+    args = parser.parse_args()
+
+    target = _resolve_target(args.target)
+    bundled = _find_bundled_skills_dir()
+    skills_hash = _hash_skills(bundled)
+
+    try:
+        version = pkg_version("nightdesk")
+    except Exception:
+        version = "0.0.0"
+
+    target_skills = target / ".claude" / "skills"
+    target_skills.mkdir(parents=True, exist_ok=True)
+
+    # Determine which bundled skill directories to install.
+    bundled_skills = sorted(
+        d for d in bundled.iterdir() if d.is_dir()
+    )
+    if not bundled_skills:
+        print("No bundled skills found. Nothing to install.")
+        return
+
+    # Check for drift against the installed marker.
+    marker = _read_version_marker(target_skills)
+    needs_update = args.force
+
+    if marker and not args.force:
+        installed_hash = marker.get("skills_hash", "")
+        installed_version = marker.get("nightdesk_version", "?")
+        if installed_hash == skills_hash:
+            print(f"Skills are up to date (nightdesk {installed_version}). Use --force to reinstall.")
+            return
+        print(f"Skills drift detected (installed from {installed_version}, current {version}).")
+        needs_update = True
+    elif not marker:
+        needs_update = True
+
+    if not needs_update:
+        print("No changes needed.")
+        return
+
+    # Install / update each skill.
+    installed: list[str] = []
+    updated: list[str] = []
+
+    for skill_dir in bundled_skills:
+        name = skill_dir.name
+        dest = target_skills / name
+
+        if dest.exists():
+            shutil.rmtree(dest)
+            shutil.copytree(skill_dir, dest)
+            updated.append(name)
+        else:
+            shutil.copytree(skill_dir, dest)
+            installed.append(name)
+
+    _write_version_marker(target_skills, version, skills_hash)
+
+    # Summary.
+    action = "updated" if marker and not args.force else ("reinstalled" if args.force else "installed")
+    print(f"\nSkills {action} into {target_skills}:")
+    for name in installed:
+        print(f"  + {name} (new)")
+    for name in updated:
+        print(f"  ~ {name} (updated)")
+    if not installed and not updated:
+        print("  (none)")
+    print(f"\nVersion marker: nightdesk {version}, hash {skills_hash[:12]}...")
+
+
 def run_dev() -> None:
     cfg = _init()
     src_dir = str(Path(__file__).parent)
