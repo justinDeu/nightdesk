@@ -213,6 +213,20 @@ async def test_windows_bulk_replace_rejects_bad_timezone(client):
     assert r.status_code == 422
 
 
+async def test_worker_status_reports_active_window(client):
+    # all-day, every-day window so it always matches "now"
+    await client.put("/api/v1/config/windows", json={
+        "timezone": "UTC",
+        "windows": [{"label": "always", "day_mask": 127, "start": "00:00",
+                     "end": "00:00", "max_parallel": 4, "position": 0}],
+    })
+    body = (await client.get("/api/v1/worker/status")).json()
+    assert body["in_window"] is True
+    assert body["active_window"] == "always"
+    assert body["max_parallel"] == 4
+    assert body["schedule_timezone"] == "UTC"
+
+
 async def test_patch_config_sets_and_clears_worktree_base_ref(client):
     r = await client.patch("/api/v1/config", json={"worktree_base_ref": "develop"})
     assert r.status_code == 200

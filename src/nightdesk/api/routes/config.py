@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -17,6 +18,7 @@ from nightdesk.api.schemas import (
     WorkerStatusOut,
 )
 from nightdesk.db.models import ConfigRow, Run, ScheduleWindow, Ticket, WorkerHeartbeat
+from nightdesk.worker.scheduler import capacity_for, window_matches
 
 
 _STALE_THRESHOLD_SECONDS = 30.0
@@ -155,8 +157,6 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
         ) or 0
         normal_running = max(0, total_running - run_now_running)
 
-        from zoneinfo import ZoneInfo
-        from nightdesk.worker.scheduler import capacity_for, window_matches
         tz_name = cfg.schedule_timezone or "UTC"
         try:
             tz = ZoneInfo(tz_name)
