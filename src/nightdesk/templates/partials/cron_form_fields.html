@@ -1,0 +1,60 @@
+{# Shared cron-job form fields. Expects optional `job` (edit) and `profiles`.
+   Worktree options are intentionally absent — cron is directory-only in v1. #}
+{% set job = job|default(none) %}
+<div class="grid grid-cols-[8rem,1fr] gap-x-3 gap-y-3 items-center">
+  <label class="text-fg font-medium">Title</label>
+  <input type="text" name="title" required value="{{ job.title if job else '' }}"
+         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg" />
+
+  <label class="text-fg font-medium">Prompt</label>
+  <textarea name="prompt" rows="3"
+            class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono">{{ job.prompt if job else '' }}</textarea>
+
+  <label class="text-fg font-medium">Profile</label>
+  <select name="profile_id" required
+          class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg">
+    {% for p in profiles %}
+      <option value="{{ p.id }}" {% if job and job.profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+    {% endfor %}
+  </select>
+
+  <label class="text-fg font-medium">Working dir</label>
+  <input type="text" name="cwd" required value="{{ job.cwd if job else '' }}"
+         placeholder="/abs/path"
+         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+
+  <label class="text-fg font-medium">Schedule</label>
+  <input type="text" name="schedule" required value="{{ job.schedule if job else '' }}"
+         placeholder="*/15 * * * *  (min hour dom month dow)"
+         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+
+  <label class="text-fg font-medium">Timezone</label>
+  <input type="text" name="timezone" value="{{ job.timezone if job else '' }}"
+         placeholder="UTC"
+         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+
+  <label class="text-fg font-medium">Workspace</label>
+  <select name="workspace_mode"
+          class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg">
+    {% set wm = job.workspace_mode if job else 'directory' %}
+    <option value="directory" {% if wm == 'directory' %}selected{% endif %}>directory</option>
+    <option value="in_place" {% if wm == 'in_place' %}selected{% endif %}>in_place</option>
+  </select>
+
+  <label class="text-fg font-medium">Priority</label>
+  <input type="number" name="priority" value="{{ job.priority if job else 0 }}"
+         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono w-24" />
+
+  <label class="text-fg font-medium">Overlap</label>
+  <select name="overlap_policy"
+          class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg">
+    {% set op = job.overlap_policy if job else 'skip_if_active' %}
+    <option value="skip_if_active" {% if op == 'skip_if_active' %}selected{% endif %}>skip if previous still active</option>
+    <option value="always" {% if op == 'always' %}selected{% endif %}>always fire</option>
+  </select>
+
+  <label class="text-fg font-medium">Extra dirs</label>
+  <textarea name="additional_dirs" rows="2"
+            placeholder="one absolute path per line"
+            class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono">{{ (job.additional_dirs | map(attribute='path') | join('\n')) if job and job.additional_dirs else '' }}</textarea>
+</div>

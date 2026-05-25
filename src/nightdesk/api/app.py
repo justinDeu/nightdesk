@@ -13,6 +13,8 @@ from nightdesk.api.routes import archive as archive_routes
 from nightdesk.api.routes import auth as auth_routes
 from nightdesk.api.routes import board as board_routes
 from nightdesk.api.routes import config as config_routes
+from nightdesk.api.routes import cron_jobs as cron_jobs_routes
+from nightdesk.api.routes import cron_page as cron_page_routes
 from nightdesk.api.routes import diagnostics as diagnostics_routes
 from nightdesk.api.routes import fs as fs_routes
 from nightdesk.api.routes import header as header_routes
@@ -55,6 +57,7 @@ def create_app(
     ))
     app.include_router(search_routes.build_router(get_session, bearer_token))
     app.include_router(transcript_routes.build_router(get_session, bearer_token))
+    app.include_router(cron_jobs_routes.build_router(get_session, bearer_token))
 
     templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
     # Expose the transcript-renderer helpers so the Jinja macros can compute
@@ -99,6 +102,7 @@ def create_app(
     ))
     app.include_router(archive_routes.build_router(get_session, bearer_token, templates))
     app.include_router(ticket_page_routes.build_router(get_session, bearer_token, templates))
+    app.include_router(cron_page_routes.build_router(get_session, bearer_token, templates))
     app.include_router(header_routes.build_router(
         get_session, bearer_token, templates,
         worktree_root=str(worktree_root), transcript_root=str(transcript_root),

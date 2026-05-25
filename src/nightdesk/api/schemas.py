@@ -383,3 +383,75 @@ class SearchHit(BaseModel):
     title: str
     snippet: str
     status: str
+
+
+# --- Cron jobs ----------------------------------------------------------------
+
+# Cron is directory-only in v1. The API accepts 'directory'/'in_place' and
+# rejects worktree modes (the domain layer enforces this too, with 422).
+CronWorkspaceMode = Literal["directory", "in_place"]
+
+
+class CronJobCreate(BaseModel):
+    title: str
+    prompt: str = ""
+    profile_id: str
+    cwd: str
+    # 5-field cron expression: "minute hour day-of-month month day-of-week".
+    schedule: str
+    # IANA timezone name; JSON API defaults to UTC.
+    timezone: str = "UTC"
+    priority: int = 0
+    workspace_mode: CronWorkspaceMode = "directory"
+    additional_dirs: list[AdditionalDir] = []
+    permission_overrides: Optional[dict] = None
+    enabled: bool = True
+    misfire_policy: Literal["coalesce"] = "coalesce"
+    overlap_policy: Literal["skip_if_active", "always"] = "skip_if_active"
+
+    @field_validator("cwd", mode="before")
+    @classmethod
+    def _cwd_abs(cls, v):
+        return _normalize_cwd(v)
+
+
+class CronJobUpdate(BaseModel):
+    title: Optional[str] = None
+    prompt: Optional[str] = None
+    profile_id: Optional[str] = None
+    cwd: Optional[str] = None
+    schedule: Optional[str] = None
+    timezone: Optional[str] = None
+    priority: Optional[int] = None
+    workspace_mode: Optional[CronWorkspaceMode] = None
+    additional_dirs: Optional[list[AdditionalDir]] = None
+    permission_overrides: Optional[dict] = None
+    misfire_policy: Optional[Literal["coalesce"]] = None
+    overlap_policy: Optional[Literal["skip_if_active", "always"]] = None
+
+    @field_validator("cwd", mode="before")
+    @classmethod
+    def _cwd_abs(cls, v):
+        return _normalize_cwd_optional(v)
+
+
+class CronJobOut(BaseModel):
+    id: str
+    title: str
+    prompt: str
+    profile_id: str
+    cwd: str
+    schedule: str
+    timezone: str
+    priority: int
+    workspace_mode: str
+    additional_dirs: list[AdditionalDir] = []
+    permission_overrides: Optional[dict] = None
+    enabled: bool
+    misfire_policy: str
+    overlap_policy: str
+    next_fire_at: Optional[datetime] = None
+    last_fire_at: Optional[datetime] = None
+    last_ticket_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
