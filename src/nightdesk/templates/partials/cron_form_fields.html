@@ -19,9 +19,17 @@
   </select>
 
   <label class="text-fg font-medium">Working dir</label>
-  <input type="text" name="cwd" required value="{{ job.cwd if job else '' }}"
-         placeholder="/abs/path"
-         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+  <div class="relative">
+    <input id="cron-cwd" name="cwd" required autocomplete="off" spellcheck="false"
+           value="{{ job.cwd if job else '' }}"
+           placeholder="/home/you/project"
+           oninput="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-cwd-suggest')"
+           onfocus="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-cwd-suggest')"
+           onblur="window.ndPathSuggestClose && window.ndPathSuggestClose('cron-cwd-suggest')"
+           onkeydown="window.ndPathSuggestKey && window.ndPathSuggestKey(event, this, 'cron-cwd-suggest')"
+           class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+    <div id="cron-cwd-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
+  </div>
 
   <label class="text-fg font-medium">Schedule</label>
   <div data-cron-builder class="flex flex-col gap-2">
@@ -79,9 +87,15 @@
   </div>
 
   <label class="text-fg font-medium">Timezone</label>
-  <input type="text" name="timezone" value="{{ job.timezone if job else '' }}"
-         placeholder="UTC"
-         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+  {# Full IANA list. New jobs carry data-tz-auto so the builder JS preselects
+     the browser zone; editing keeps the job's saved zone. #}
+  <select name="timezone" {% if not job %}data-tz-auto{% endif %}
+          class="rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+    {% set current_tz = job.timezone if job else 'UTC' %}
+    {% for tz in timezones %}
+      <option value="{{ tz }}" {% if tz == current_tz %}selected{% endif %}>{{ tz }}</option>
+    {% endfor %}
+  </select>
 
   <label class="text-fg font-medium">Workspace</label>
   <select name="workspace_mode"
@@ -103,8 +117,15 @@
     <option value="always" {% if op == 'always' %}selected{% endif %}>always fire</option>
   </select>
 
-  <label class="text-fg font-medium">Extra dirs</label>
-  <textarea name="additional_dirs" rows="2"
-            placeholder="one absolute path per line"
-            class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono">{{ (job.additional_dirs | map(attribute='path') | join('\n')) if job and job.additional_dirs else '' }}</textarea>
+  <label class="text-fg font-medium pt-1 self-start">Resources</label>
+  <div data-cron-resources class="flex flex-col gap-2">
+    <input type="hidden" name="extra_dirs_json" data-extra-dirs-json value="[]" />
+    <div data-resources-list class="flex flex-col gap-2"></div>
+    <button type="button" data-add-resource
+            class="self-start px-2 py-1 text-xs border border-border rounded text-fg-muted hover:text-fg hover:border-accent transition-colors">
+      + Add resource
+    </button>
+    <p class="text-[11px] text-fg-muted">Extra directories the run can access. Read-only for reference material, read/write to let the agent edit them.</p>
+    <script type="application/json" data-resources-data>{{ (job.additional_dirs | tojson) if job and job.additional_dirs else '[]' }}</script>
+  </div>
 </div>

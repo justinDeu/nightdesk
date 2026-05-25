@@ -9,6 +9,7 @@ v1 (see ``domain/cron_jobs``). The board ticket modal carries no cron controls.
 """
 from __future__ import annotations
 
+import zoneinfo
 from datetime import datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -30,15 +31,34 @@ from nightdesk.domain.cron_jobs import (
 from nightdesk.domain.profiles import list_profiles
 
 
-def _parse_additional_dirs(raw: str) -> list[dict]:
-    """One absolute path per line -> [{path, mode:'rw'}]. Non-absolute lines are
-    skipped (the create form is best-effort; the JSON API is the strict path)."""
+def _parse_extra_dirs_json(raw: str) -> list[dict]:
+    """Parse the resources picker's JSON ([{path, mode}]) into additional_dirs.
+
+    ``mode`` is 'rw' or 'ro' (defaults to 'rw'). Non-absolute paths are dropped;
+    duplicates are collapsed. The strict path remains the JSON API."""
+    import json
+    try:
+        rows = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(rows, list):
+        return []
     out: list[dict] = []
-    for line in (raw or "").splitlines():
-        p = line.strip()
-        if p.startswith("/"):
-            out.append({"path": p, "mode": "rw"})
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        p = str(row.get("path", "")).strip()
+        if not p.startswith("/") or p in seen:
+            continue
+        seen.add(p)
+        mode = row.get("mode", "rw")
+        out.append({"path": p, "mode": "ro" if mode == "ro" else "rw"})
     return out
+
+
+# Cached at import; the IANA set is stable for the process lifetime.
+_TIMEZONES = sorted(zoneinfo.available_timezones())
 
 
 def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> APIRouter:
@@ -80,6 +100,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             "pane_mode": pane_mode,
             "error": error,
             "now": datetime.now(timezone.utc),
+            "timezones": _TIMEZONES,
         }
         if pane_mode == "view" and selected is not None:
             ctx["job"] = selected
@@ -143,7 +164,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         priority: int = Form(0),
         workspace_mode: str = Form("directory"),
         overlap_policy: str = Form("skip_if_active"),
-        additional_dirs: str = Form(""),
+        extra_dirs_json: str = Form("[]"),
         session: Session = Depends(get_session),
     ):
         try:
@@ -158,7 +179,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
                 priority=priority,
                 workspace_mode=workspace_mode,
                 overlap_policy=overlap_policy,
-                additional_dirs=_parse_additional_dirs(additional_dirs),
+                additional_dirs=_parse_extra_dirs_json(extra_dirs_json),
             )
         except InvalidCronJob as e:
             return RedirectResponse(url=f"/cron?error={e}", status_code=303)
@@ -176,7 +197,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         priority: int = Form(0),
         workspace_mode: str = Form("directory"),
         overlap_policy: str = Form("skip_if_active"),
-        additional_dirs: str = Form(""),
+        extra_dirs_json: str = Form("[]"),
         session: Session = Depends(get_session),
     ):
         try:
@@ -191,7 +212,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
                 priority=priority,
                 workspace_mode=workspace_mode,
                 overlap_policy=overlap_policy,
-                additional_dirs=_parse_additional_dirs(additional_dirs),
+                additional_dirs=_parse_extra_dirs_json(extra_dirs_json),
             )
         except CronJobNotFound:
             raise HTTPException(404, "not found")

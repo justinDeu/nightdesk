@@ -242,8 +242,88 @@
     }
   }
 
+  // --- Resources picker (extra dirs with rw/ro access) ------------------
+  var resSeq = 0;
+
+  function initResources(root) {
+    if (root.dataset.resInit === "1") return;
+    root.dataset.resInit = "1";
+    var list = root.querySelector("[data-resources-list]");
+    var hidden = root.querySelector("[data-extra-dirs-json]");
+    var addBtn = root.querySelector("[data-add-resource]");
+    var island = root.querySelector("[data-resources-data]");
+    var form = root.closest("form");
+    if (!list || !hidden) return;
+
+    function serialize() {
+      var rows = [];
+      list.querySelectorAll("[data-res-row]").forEach(function (r) {
+        var p = r.querySelector("[data-res-path]").value.trim();
+        if (!p) return;
+        rows.push({ path: p, mode: r.querySelector("[data-res-mode]").value });
+      });
+      hidden.value = JSON.stringify(rows);
+    }
+
+    function addRow(data) {
+      var n = ++resSeq;
+      var hostId = "cron-res-" + n;
+      var row = document.createElement("div");
+      row.setAttribute("data-res-row", "1");
+      row.className = "flex items-center gap-2";
+      row.innerHTML =
+        '<div class="relative flex-1">' +
+        '<input id="' + hostId + '" data-res-path autocomplete="off" spellcheck="false" placeholder="/abs/path" ' +
+        'oninput="window.ndPathSuggest&&window.ndPathSuggest(this,\'' + hostId + '-suggest\')" ' +
+        'onfocus="window.ndPathSuggest&&window.ndPathSuggest(this,\'' + hostId + '-suggest\')" ' +
+        'onblur="window.ndPathSuggestClose&&window.ndPathSuggestClose(\'' + hostId + '-suggest\')" ' +
+        'onkeydown="window.ndPathSuggestKey&&window.ndPathSuggestKey(event,this,\'' + hostId + '-suggest\')" ' +
+        'class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />' +
+        '<div id="' + hostId + '-suggest" class="nd-suggest-host fixed z-50 hidden"></div>' +
+        '</div>' +
+        '<select data-res-mode class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">' +
+        '<option value="rw">Read/write</option>' +
+        '<option value="ro">Read-only</option>' +
+        '</select>' +
+        '<button type="button" data-res-remove class="px-1 text-xs text-fg-muted hover:text-danger">✕</button>';
+      list.appendChild(row);
+      var path = row.querySelector("[data-res-path]");
+      var mode = row.querySelector("[data-res-mode]");
+      if (data) { path.value = data.path || ""; mode.value = data.mode === "ro" ? "ro" : "rw"; }
+      path.addEventListener("input", serialize);
+      mode.addEventListener("change", serialize);
+      row.querySelector("[data-res-remove]").addEventListener("click", function () {
+        row.remove(); serialize();
+      });
+    }
+
+    if (addBtn) addBtn.addEventListener("click", function () { addRow(null); serialize(); });
+    if (form) form.addEventListener("submit", serialize);
+
+    var initial = [];
+    if (island) { try { initial = JSON.parse(island.textContent || "[]"); } catch (e) { initial = []; } }
+    initial.forEach(addRow);
+    serialize();
+  }
+
+  // Timezone <select> with data-tz-auto: preselect the browser zone if listed.
+  function initTzAuto() {
+    document.querySelectorAll('select[name="timezone"][data-tz-auto]').forEach(function (sel) {
+      if (sel.dataset.tzDone === "1") return;
+      sel.dataset.tzDone = "1";
+      try {
+        var b = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (b && Array.prototype.some.call(sel.options, function (o) { return o.value === b; })) {
+          sel.value = b;
+        }
+      } catch (e) {}
+    });
+  }
+
   function init() {
+    initTzAuto();  // set the zone before the builder computes its first preview
     document.querySelectorAll("[data-cron-builder]").forEach(initBuilder);
+    document.querySelectorAll("[data-cron-resources]").forEach(initResources);
   }
 
   if (document.readyState === "loading") {
