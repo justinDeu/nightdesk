@@ -18,7 +18,7 @@ from nightdesk.domain.tickets import (
 )
 
 
-def _windows_payload(session: Session) -> list[dict]:
+def _windows_payload(session: Session) -> list[dict[str, str | int]]:
     """Serialize ScheduleWindow rows for the settings editor / JSON island."""
     rows = session.scalars(
         select(ScheduleWindow).order_by(ScheduleWindow.position.asc(), ScheduleWindow.id.asc())
@@ -34,6 +34,43 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
                   *, transcript_root: Path) -> APIRouter:
     router = APIRouter(tags=["ui"])
     auth = Depends(require_token_cookie_or_bearer(bearer_token))
+
+    def _ensure_cfg(session: Session) -> ConfigRow:
+        cfg = session.get(ConfigRow, 1)
+        if cfg is None:
+            cfg = ConfigRow(id=1, worktree_root="", transcript_root="")
+            session.add(cfg)
+            session.flush()
+        return cfg
+
+    def _settings_context(session: Session, *, category: str, saved: bool):
+        import shutil
+
+        cfg = session.get(ConfigRow, 1)
+        pane_template = {
+            "scheduling": "partials/settings_scheduling_pane.html",
+            "claude": "partials/settings_claude_pane.html",
+            "worktrees": "partials/settings_worktrees_pane.html",
+            "notifications": "partials/settings_notifications_pane.html",
+        }[category]
+        return {
+            "title": "Settings",
+            "active_page": "settings",
+            "settings_category": category,
+            "pane_template": pane_template,
+            "cfg": cfg,
+            "saved": saved,
+            "path_claude_binary": shutil.which("claude"),
+            "windows": _windows_payload(session),
+            "schedule_timezone": (cfg.schedule_timezone if cfg else "UTC"),
+        }
+
+    def _render_settings(request: Request, session: Session, *, category: str, saved: bool):
+        return templates.TemplateResponse(
+            request,
+            "settings_shell.html",
+            _settings_context(session, category=category, saved=saved),
+        )
 
     @router.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request):
@@ -125,36 +162,24 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
 
     @router.get("/settings", response_class=HTMLResponse, dependencies=[auth])
-    async def settings_page(request: Request, session: Session = Depends(get_session)):
-        import shutil
+    async def settings_root():
+        return RedirectResponse(url="/settings/scheduling", status_code=303)
 
-        cfg = session.get(ConfigRow, 1)
-        return templates.TemplateResponse(
-            request, "settings.html",
-            {"title": "Settings", "active_page": "settings", "cfg": cfg,
-             "path_claude_binary": shutil.which("claude"), "saved": False,
-             "windows": _windows_payload(session),
-             "schedule_timezone": (cfg.schedule_timezone if cfg else "UTC")},
-        )
+    @router.get("/settings/scheduling", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_scheduling_page(request: Request, session: Session = Depends(get_session)):
+        return _render_settings(request, session, category="scheduling", saved=False)
 
-    @router.post("/settings", response_class=HTMLResponse, dependencies=[auth])
-    async def settings_save(
+    @router.post("/settings/scheduling", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_scheduling_save(
         request: Request,
         session: Session = Depends(get_session),
         polling_interval_seconds: int = Form(...),
-        claude_binary_path: str = Form(""),
-        cc_minimum_version: str = Form(""),
-        worktree_base_ref: str = Form(""),
-        notify_webhook_url: str = Form(""),
         windows_json: str = Form("[]"),
         schedule_timezone: str = Form("UTC"),
     ):
         import json as _json
 
-        cfg = session.get(ConfigRow, 1)
-        if cfg is None:
-            cfg = ConfigRow(id=1, worktree_root="", transcript_root="")
-            session.add(cfg)
+        cfg = _ensure_cfg(session)
         # Clamp to sane ranges so a fat-finger doesn't wedge the worker.
         cfg.polling_interval_seconds = max(1, min(int(polling_interval_seconds), 300))
 
@@ -170,9 +195,9 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         try:
             rows = _json.loads(windows_json or "[]")
         except _json.JSONDecodeError:
-            rows = []
+            raise HTTPException(422, "windows_json must be valid JSON")
         if not isinstance(rows, list):
-            rows = []
+            raise HTTPException(422, "windows_json must be a JSON list")
         for existing in session.scalars(select(ScheduleWindow)).all():
             session.delete(existing)
         session.flush()
@@ -185,23 +210,57 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
                 max_parallel=max(1, min(int(w.get("max_parallel", 1)), 16)),
                 position=i,
             ))
+        session.commit()
+        return _render_settings(request, session, category="scheduling", saved=True)
 
+    @router.get("/settings/claude", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_claude_page(request: Request, session: Session = Depends(get_session)):
+        return _render_settings(request, session, category="claude", saved=False)
+
+    @router.post("/settings/claude", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_claude_save(
+        request: Request,
+        session: Session = Depends(get_session),
+        claude_binary_path: str = Form(""),
+        cc_minimum_version: str = Form(""),
+    ):
+        cfg = _ensure_cfg(session)
         cfg.claude_binary_path = (claude_binary_path or "").strip() or None
         cfg.cc_minimum_version = (cc_minimum_version or "").strip() or cfg.cc_minimum_version
+        session.commit()
+        return _render_settings(request, session, category="claude", saved=True)
+
+    @router.get("/settings/worktrees", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_worktrees_page(request: Request, session: Session = Depends(get_session)):
+        return _render_settings(request, session, category="worktrees", saved=False)
+
+    @router.post("/settings/worktrees", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_worktrees_save(
+        request: Request,
+        session: Session = Depends(get_session),
+        worktree_base_ref: str = Form(""),
+    ):
+        cfg = _ensure_cfg(session)
         cfg.worktree_base_ref = (worktree_base_ref or "").strip() or None
+        session.commit()
+        return _render_settings(request, session, category="worktrees", saved=True)
+
+    @router.get("/settings/notifications", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_notifications_page(request: Request, session: Session = Depends(get_session)):
+        return _render_settings(request, session, category="notifications", saved=False)
+
+    @router.post("/settings/notifications", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_notifications_save(
+        request: Request,
+        session: Session = Depends(get_session),
+        notify_webhook_url: str = Form(""),
+    ):
+        cfg = _ensure_cfg(session)
         cfg.notify_webhook_url = (notify_webhook_url or "").strip() or None
         session.commit()
-        session.refresh(cfg)
-        import shutil
-        return templates.TemplateResponse(
-            request, "settings.html",
-            {"title": "Settings", "active_page": "settings", "cfg": cfg,
-             "path_claude_binary": shutil.which("claude"), "saved": True,
-             "windows": _windows_payload(session),
-             "schedule_timezone": cfg.schedule_timezone},
-        )
+        return _render_settings(request, session, category="notifications", saved=True)
 
-    @router.post("/settings/test-webhook", dependencies=[auth])
+    @router.post("/settings/notifications/test-webhook", dependencies=[auth])
     async def test_webhook(
         request: Request,
         url: str = Form(""),
@@ -215,5 +274,12 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         payload = build_test_payload(base_url)
         fire_webhook(target, payload)
         return Response(status_code=204)
+
+    @router.post("/settings/test-webhook", dependencies=[auth])
+    async def test_webhook_legacy(
+        request: Request,
+        url: str = Form(""),
+    ):
+        return await test_webhook(request, url)
 
     return router

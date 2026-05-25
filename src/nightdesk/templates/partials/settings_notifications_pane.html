@@ -1,0 +1,39 @@
+<div class="rounded border border-border bg-bg-elev p-5">
+  <header class="mb-5 flex items-center gap-3">
+    <div class="min-w-0 flex-1">
+      <h2 class="text-xl font-semibold text-fg">Notifications</h2>
+      <p class="mt-1 text-sm text-fg-muted">Send a webhook when runs finish and test the payload without leaving the page.</p>
+    </div>
+    {% if saved %}<span class="px-2 py-0.5 text-xs bg-green-900/40 text-green-200 rounded">saved</span>{% endif %}
+  </header>
+
+  <form method="post" action="/settings/notifications" class="flex flex-col gap-5" data-settings-form>
+    <section class="border border-border rounded p-4 bg-bg">
+      <p class="text-xs text-fg-muted mb-3">
+        Receive a notification when a run completes. The webhook fires on every
+        running-to-review transition and can integrate with Slack, Discord, ntfy,
+        or any HTTP endpoint.
+      </p>
+      <div class="grid grid-cols-[1fr,16rem] gap-x-3 gap-y-3 text-sm items-center">
+        <label for="notify_webhook_url" class="text-fg">
+          <div class="font-medium">Webhook URL</div>
+          <div class="text-xs text-fg-muted">POST endpoint for run-completion payloads. Leave blank to disable. Payload includes ticket_id, title, run_id, exit_status, cost_usd, duration_seconds, and a link back to the ticket.</div>
+        </label>
+        <input id="notify_webhook_url" name="notify_webhook_url" type="url"
+               value="{{ (cfg.notify_webhook_url if cfg else '') or '' }}"
+               placeholder="https://ntfy.sh/my-topic"
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+      </div>
+      <div class="flex items-center gap-3 mt-4">
+        <button type="button" id="test-webhook-btn"
+                class="px-3 py-1 text-xs border border-border rounded text-fg-muted hover:text-fg hover:border-accent transition-colors">
+          Test webhook
+        </button>
+        <span id="test-webhook-result" class="text-xs text-fg-muted"></span>
+      </div>
+    </section>
+    <div class="flex justify-end gap-2">
+      <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save notification settings</button>
+    </div>
+  </form>
+</div>

@@ -207,7 +207,7 @@ class TestSettingsWebhook:
         ))
         session.commit()
 
-        r = await cookie_client.get("/settings")
+        r = await cookie_client.get("/settings/notifications")
         assert r.status_code == 200
         assert 'name="notify_webhook_url"' in r.text
         assert "ntfy.sh/my-topic" in r.text
@@ -217,14 +217,8 @@ class TestSettingsWebhook:
         session.commit()
 
         r = await cookie_client.post(
-            "/settings",
+            "/settings/notifications",
             data={
-                "max_parallel": "2",
-                "polling_interval_seconds": "5",
-                "window_start": "22:00",
-                "window_end": "07:00",
-                "claude_binary_path": "",
-                "cc_minimum_version": "2.1.80",
                 "notify_webhook_url": "https://ntfy.sh/test",
             },
         )
@@ -241,14 +235,8 @@ class TestSettingsWebhook:
         session.commit()
 
         r = await cookie_client.post(
-            "/settings",
+            "/settings/notifications",
             data={
-                "max_parallel": "2",
-                "polling_interval_seconds": "5",
-                "window_start": "22:00",
-                "window_end": "07:00",
-                "claude_binary_path": "",
-                "cc_minimum_version": "2.1.80",
                 "notify_webhook_url": "",
             },
         )
@@ -267,7 +255,7 @@ class TestTestWebhookEndpoint:
         session.commit()
 
         r = await cookie_client.post(
-            "/settings/test-webhook",
+            "/settings/notifications/test-webhook",
             data={"url": "https://ntfy.sh/test-topic"},
         )
         assert r.status_code == 204
@@ -281,7 +269,7 @@ class TestTestWebhookEndpoint:
         session.commit()
 
         r = await cookie_client.post(
-            "/settings/test-webhook",
+            "/settings/notifications/test-webhook",
             data={"url": ""},
         )
         assert r.status_code == 422
@@ -291,7 +279,7 @@ class TestTestWebhookEndpoint:
         session.commit()
 
         r = await cookie_client.post(
-            "/settings/test-webhook",
+            "/settings/notifications/test-webhook",
             data={"url": "not-a-url"},
         )
         assert r.status_code == 422

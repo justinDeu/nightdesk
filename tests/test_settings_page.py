@@ -37,19 +37,38 @@ async def cookie_client(app):
         yield ac
 
 
+async def test_settings_root_redirects_to_scheduling(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.get("/settings", follow_redirects=False)
+
+    assert r.status_code == 303
+    assert r.headers["location"] == "/settings/scheduling"
+
+
 async def test_settings_get_renders_windows_editor(cookie_client, session):
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
-    r = await cookie_client.get("/settings")
+    r = await cookie_client.get("/settings/scheduling")
     assert r.status_code == 200
     body = r.text
+    assert 'href="/settings/scheduling"' in body
+    assert 'href="/settings/claude"' in body
+    assert 'href="/settings/worktrees"' in body
+    assert 'href="/settings/notifications"' in body
     # New multi-window UI is present.
     assert "Work windows" in body
     assert 'id="windows-editor"' in body
     assert 'name="windows_json"' in body
     assert 'name="schedule_timezone"' in body
+    assert 'data-dirty-ignore="true"' in body
     assert 'id="windows-data"' in body
+    assert 'id="resolved-schedule-axis"' in body
+    assert 'id="resolved-schedule"' in body
+    assert 'id="resolved-schedule-baseline"' in body
+    assert 'id="resolved-schedule-tooltip"' in body
     # Legacy single-window form is gone.
     assert 'name="window_start"' not in body
     assert 'name="always_on"' not in body
@@ -63,9 +82,36 @@ async def test_settings_get_seeds_windows_data_island(cookie_client, session):
                                end="07:00", max_parallel=3, position=0))
     session.commit()
 
-    r = await cookie_client.get("/settings")
+    r = await cookie_client.get("/settings/scheduling")
     assert r.status_code == 200
     assert "overnight" in r.text
+
+
+async def test_settings_get_renders_claude_category(cookie_client, session, monkeypatch):
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda name: "/opt/cc/bin/claude" if name == "claude" else None)
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.get("/settings/claude")
+
+    assert r.status_code == 200
+    assert "Claude Code" in r.text
+    assert 'name="claude_binary_path"' in r.text
+    assert "/opt/cc/bin/claude" in r.text
+
+
+async def test_settings_get_renders_worktrees_category(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
+                          worktree_base_ref="develop"))
+    session.commit()
+
+    r = await cookie_client.get("/settings/worktrees")
+
+    assert r.status_code == 200
+    assert "Git worktrees" in r.text
+    assert 'name="worktree_base_ref"' in r.text
+    assert "develop" in r.text
 
 
 async def test_settings_post_persists_windows_and_timezone(cookie_client, session):
@@ -75,7 +121,7 @@ async def test_settings_post_persists_windows_and_timezone(cookie_client, sessio
     windows = [{"label": "overnight", "day_mask": 31, "start": "22:00",
                 "end": "07:00", "max_parallel": 3, "position": 0}]
     r = await cookie_client.post(
-        "/settings",
+        "/settings/scheduling",
         data={
             "polling_interval_seconds": "5",
             "claude_binary_path": "",
@@ -103,7 +149,7 @@ async def test_settings_post_replaces_existing_windows(cookie_client, session):
     windows = [{"label": "new", "day_mask": 96, "start": "00:00",
                 "end": "00:00", "max_parallel": 2, "position": 0}]
     r = await cookie_client.post(
-        "/settings",
+        "/settings/scheduling",
         data={
             "polling_interval_seconds": "5",
             "cc_minimum_version": "2.1.80",
@@ -124,7 +170,7 @@ async def test_settings_post_empty_windows_clears_all(cookie_client, session):
     session.commit()
 
     r = await cookie_client.post(
-        "/settings",
+        "/settings/scheduling",
         data={
             "polling_interval_seconds": "5",
             "cc_minimum_version": "2.1.80",
@@ -137,12 +183,33 @@ async def test_settings_post_empty_windows_clears_all(cookie_client, session):
     assert session.query(ScheduleWindow).all() == []
 
 
+async def test_settings_post_bad_windows_json_keeps_existing_rows(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.add(ScheduleWindow(label="kept", day_mask=127, start="00:00",
+                               end="00:00", max_parallel=1, position=0))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings/scheduling",
+        data={
+            "polling_interval_seconds": "5",
+            "windows_json": "{bad json",
+            "schedule_timezone": "UTC",
+        },
+    )
+
+    assert r.status_code == 422
+    session.expire_all()
+    rows = session.query(ScheduleWindow).all()
+    assert [w.label for w in rows] == ["kept"]
+
+
 async def test_settings_post_bad_timezone_falls_back_to_utc(cookie_client, session):
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
     r = await cookie_client.post(
-        "/settings",
+        "/settings/scheduling",
         data={
             "polling_interval_seconds": "5",
             "cc_minimum_version": "2.1.80",
@@ -165,7 +232,7 @@ async def test_settings_binary_path_shows_resolved_default(cookie_client, sessio
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
-    r = await cookie_client.get("/settings")
+    r = await cookie_client.get("/settings/claude")
     assert r.status_code == 200
     body = r.text
     assert "(use PATH lookup)" not in body
@@ -188,11 +255,9 @@ async def test_settings_post_does_not_touch_max_run_duration(cookie_client, sess
     session.commit()
 
     r = await cookie_client.post(
-        "/settings",
+        "/settings/scheduling",
         data={
             "polling_interval_seconds": "5",
-            "claude_binary_path": "",
-            "cc_minimum_version": "2.1.80",
             "windows_json": "[]",
             "schedule_timezone": "UTC",
         },
@@ -209,7 +274,7 @@ async def test_settings_get_renders_worktree_base_ref_field(cookie_client, sessi
                           worktree_base_ref="develop"))
     session.commit()
 
-    r = await cookie_client.get("/settings")
+    r = await cookie_client.get("/settings/worktrees")
     assert r.status_code == 200
     body = r.text
     assert 'name="worktree_base_ref"' in body
@@ -221,14 +286,9 @@ async def test_settings_post_persists_worktree_base_ref(cookie_client, session):
     session.commit()
 
     r = await cookie_client.post(
-        "/settings",
+        "/settings/worktrees",
         data={
-            "polling_interval_seconds": "5",
-            "claude_binary_path": "",
-            "cc_minimum_version": "2.1.80",
             "worktree_base_ref": "develop",
-            "windows_json": "[]",
-            "schedule_timezone": "UTC",
         },
     )
     assert r.status_code == 200
@@ -238,14 +298,9 @@ async def test_settings_post_persists_worktree_base_ref(cookie_client, session):
 
     # Blank submission clears it back to NULL.
     r = await cookie_client.post(
-        "/settings",
+        "/settings/worktrees",
         data={
-            "polling_interval_seconds": "5",
-            "claude_binary_path": "",
-            "cc_minimum_version": "2.1.80",
             "worktree_base_ref": "",
-            "windows_json": "[]",
-            "schedule_timezone": "UTC",
         },
     )
     assert r.status_code == 200
