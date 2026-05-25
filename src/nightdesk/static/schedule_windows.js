@@ -201,34 +201,55 @@
 
     groups.forEach(function (g) {
       var row = document.createElement("div");
-      row.className = "flex items-center gap-2 text-xs";
+      row.className = "flex items-stretch gap-2 text-xs";
+
       var name = document.createElement("div");
-      name.className = "w-16 shrink-0 text-fg-muted";
+      name.className = "w-16 shrink-0 text-fg-muted pt-5";
       name.textContent = g.start === g.end ? DAYS[g.start] : DAYS[g.start] + "–" + DAYS[g.end];
+
+      var col = document.createElement("div");
+      col.className = "flex-1 min-w-0";
+
+      // Time ruler: each transition gets a label + a tick line dropping to the
+      // bar, positioned by percent of the 24h day so it aligns with the bar.
+      var ruler = document.createElement("div");
+      ruler.className = "relative h-5";
+      var bounds = g.segs.map(function (s) { return s.a; });
+      bounds.push(1440);
+      bounds.forEach(function (b, i) {
+        var mark = document.createElement("div");
+        mark.className = "absolute top-0 flex flex-col items-center";
+        mark.style.left = (b / 1440 * 100) + "%";
+        // Keep the first/last labels inside the track instead of clipping.
+        mark.style.transform = i === 0 ? "translateX(0)"
+          : (b === 1440 ? "translateX(-100%)" : "translateX(-50%)");
+        var lbl = document.createElement("span");
+        lbl.className = "text-[9px] text-fg-muted font-mono whitespace-nowrap leading-none";
+        lbl.textContent = fmtMin(b);
+        var tick = document.createElement("div");
+        tick.className = "w-px h-2 bg-fg-muted/50 mt-1";
+        mark.appendChild(lbl); mark.appendChild(tick);
+        ruler.appendChild(mark);
+      });
+
       var bar = document.createElement("div");
-      bar.className = "flex flex-1 h-9 rounded overflow-hidden border border-border";
+      bar.className = "flex h-7 rounded overflow-hidden border border-border";
       g.segs.forEach(function (s, idx) {
         var cell = document.createElement("div");
         cell.style.flexGrow = (s.b - s.a);
-        // A 2px background-colored left edge "breaks" the block at every
-        // transition so adjacent windows read as distinct, not one smear.
-        var divider = idx > 0 ? "border-l-2 border-bg " : "";
-        cell.className = "flex flex-col items-center justify-center overflow-hidden " +
-          "whitespace-nowrap px-1 leading-tight " + divider +
+        // A divider at each transition so adjacent windows read as distinct.
+        var divider = idx > 0 ? "border-l border-fg-muted/40 " : "";
+        cell.className = "flex items-center justify-center overflow-hidden " +
+          "whitespace-nowrap px-1 leading-tight text-[10px] " + divider +
           (s.cap > 0 ? "bg-accent/30 text-fg" : "bg-bg-elev-2 text-fg-muted");
-        // Boundary time = when this segment takes over.
-        var t = document.createElement("span");
-        t.className = "text-[9px] text-fg-muted font-mono";
-        t.textContent = fmtMin(s.a);
-        var v = document.createElement("span");
-        v.className = "text-[10px]";
-        v.textContent = s.cap > 0 ? (s.cap + " · " + s.labels.join(", ")) : "paused";
-        cell.appendChild(t); cell.appendChild(v);
+        cell.textContent = s.cap > 0 ? (s.cap + " · " + s.labels.join(", ")) : "paused";
         cell.title = fmtMin(s.a) + "–" + fmtMin(s.b) + ": " +
           (s.cap > 0 ? ("capacity " + s.cap + " (" + s.labels.join(", ") + ")") : "paused");
         bar.appendChild(cell);
       });
-      row.appendChild(name); row.appendChild(bar);
+
+      col.appendChild(ruler); col.appendChild(bar);
+      row.appendChild(name); row.appendChild(col);
       resolved.appendChild(row);
     });
 
