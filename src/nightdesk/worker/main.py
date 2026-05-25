@@ -16,7 +16,8 @@ from typing import Callable, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from nightdesk.db.models import DaemonStatus, Run, Ticket
+from nightdesk.db.models import ConfigRow, DaemonStatus, Run, Ticket
+from nightdesk.domain.cron_jobs import materialize_due_cron_jobs
 from nightdesk.domain.tickets import transition_status
 from nightdesk.worker.executor import Executor
 from nightdesk.worker.heartbeat import recover_orphaned_runs, write_heartbeat
@@ -163,6 +164,17 @@ class WorkerLoop:
         session = self._session_factory()
         try:
             write_heartbeat(session, host=self.settings.host, pid=os.getpid())
+
+            # Materialize due cron jobs BEFORE any readiness gating. This only
+            # inserts queued ticket rows and brings up no backend, so due cron
+            # jobs become visible queued tickets even when a backend is down;
+            # they then wait until the worker can run them. Keeping it ahead of
+            # the gate holds for today's global CC check AND for the per-backend
+            # gates that replace it later.
+            try:
+                materialize_due_cron_jobs(session, datetime.now(timezone.utc))
+            except Exception:
+                log.exception("cron materialization failed (continuing)")
 
             # Gate: refuse new picks when the CC binary check has not passed.
             ds = session.get(DaemonStatus, 1)

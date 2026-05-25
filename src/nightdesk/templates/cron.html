@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% set title = "Cron" %}
+{% block body %}
+<div class="max-w-5xl mx-auto px-4 py-4 flex flex-col gap-6">
+  <header class="flex items-center gap-4">
+    <h1 class="text-xl font-bold">Cron jobs</h1>
+    <span class="text-xs text-fg-muted">Schedule recurring tickets. A fire materializes one queued ticket that runs through the normal scheduler.</span>
+  </header>
+
+  {% if error %}
+    <div class="px-3 py-2 text-sm bg-red-900/40 text-red-200 border border-red-800 rounded">{{ error }}</div>
+  {% endif %}
+
+  {# ---- Create form ---- #}
+  <details class="border border-border rounded bg-bg-elev">
+    <summary class="px-4 py-2 cursor-pointer font-semibold select-none">+ New cron job</summary>
+    <form method="post" action="/cron" class="p-4 flex flex-col gap-3 text-sm border-t border-border">
+      {% set profiles = profiles %}
+      {% include "partials/cron_form_fields.html" %}
+      <div class="flex justify-end">
+        <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Create</button>
+      </div>
+    </form>
+  </details>
+
+  {# ---- Jobs list ---- #}
+  {% if not jobs %}
+    <p class="text-sm text-fg-muted">No cron jobs yet.</p>
+  {% else %}
+  <div class="border border-border rounded bg-bg-elev overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-bg-elev-2 text-fg-muted text-xs uppercase tracking-wide">
+        <tr>
+          <th class="text-left px-3 py-2">State</th>
+          <th class="text-left px-3 py-2">Title</th>
+          <th class="text-left px-3 py-2">Schedule</th>
+          <th class="text-left px-3 py-2">TZ</th>
+          <th class="text-left px-3 py-2">Next fire</th>
+          <th class="text-left px-3 py-2">Last fire</th>
+          <th class="text-left px-3 py-2">Last ticket</th>
+          <th class="text-right px-3 py-2">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+        <tr class="border-t border-border align-top">
+          <td class="px-3 py-2">
+            {% if job.enabled %}
+              <span class="px-2 py-0.5 text-xs rounded bg-green-900/40 text-green-200">enabled</span>
+            {% else %}
+              <span class="px-2 py-0.5 text-xs rounded bg-bg-elev-2 text-fg-muted">disabled</span>
+            {% endif %}
+          </td>
+          <td class="px-3 py-2 font-medium">{{ job.title }}</td>
+          <td class="px-3 py-2 font-mono text-xs">{{ job.schedule }}</td>
+          <td class="px-3 py-2 text-xs">{{ job.timezone }}</td>
+          <td class="px-3 py-2 text-xs">
+            {% if job.next_fire_at and job.enabled %}
+              <span data-ts="{{ iso_utc(job.next_fire_at) }}">{{ job.next_fire_at }}</span>
+            {% else %}<span class="text-fg-muted">-</span>{% endif %}
+          </td>
+          <td class="px-3 py-2 text-xs">
+            {% if job.last_fire_at %}
+              <span data-ts="{{ iso_utc(job.last_fire_at) }}">{{ job.last_fire_at }}</span>
+            {% else %}<span class="text-fg-muted">never</span>{% endif %}
+          </td>
+          <td class="px-3 py-2 text-xs">
+            {% if job.last_ticket_id %}
+              <a class="text-accent hover:underline" href="/tickets/{{ job.last_ticket_id }}">{{ job.last_ticket_id[:8] }}</a>
+            {% else %}<span class="text-fg-muted">-</span>{% endif %}
+          </td>
+          <td class="px-3 py-2">
+            <div class="flex items-center justify-end gap-1">
+              {% if job.enabled %}
+                <form method="post" action="/cron/{{ job.id }}/disable">
+                  <button type="submit" class="px-2 py-0.5 text-xs border border-border rounded hover:bg-bg-elev-2">Disable</button>
+                </form>
+              {% else %}
+                <form method="post" action="/cron/{{ job.id }}/enable">
+                  <button type="submit" class="px-2 py-0.5 text-xs border border-border rounded hover:bg-bg-elev-2">Enable</button>
+                </form>
+              {% endif %}
+              <form method="post" action="/cron/{{ job.id }}/fire-now">
+                <button type="submit" class="px-2 py-0.5 text-xs border border-accent text-accent rounded hover:bg-accent hover:text-bg">Fire now</button>
+              </form>
+              <form method="post" action="/cron/{{ job.id }}/delete"
+                    hx-confirm="Delete this cron job? Generated tickets are kept.">
+                <button type="submit" class="px-2 py-0.5 text-xs border border-red-800 text-red-300 rounded hover:bg-red-900/40">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        <tr class="border-t border-border/50">
+          <td colspan="8" class="px-3 py-2">
+            <details>
+              <summary class="cursor-pointer text-xs text-fg-muted select-none">Edit</summary>
+              <form method="post" action="/cron/{{ job.id }}/update" class="mt-2 flex flex-col gap-3 text-sm">
+                {% include "partials/cron_form_fields.html" %}
+                <div class="flex justify-end">
+                  <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save</button>
+                </div>
+              </form>
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+// Prefill the browser timezone into any empty timezone input on this page.
+(function () {
+  var tz = "";
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
+  if (!tz) return;
+  document.querySelectorAll('input[name="timezone"]').forEach(function (el) {
+    if (!el.value) el.value = tz;
+  });
+})();
+</script>
+{% endblock %}

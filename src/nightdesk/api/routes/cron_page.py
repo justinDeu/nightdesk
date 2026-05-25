@@ -1,0 +1,164 @@
+"""HTML page for recurring cron jobs at ``/cron``.
+
+Follows the page-route pattern in ``ticket_page.py`` / ``archive.py``: a
+cookie-or-bearer-auth GET that renders the list, plus form-style POST routes
+that redirect back to ``/cron`` (HTML forms can't send PATCH/DELETE).
+
+Worktree options are intentionally NOT offered here — cron is directory-only in
+v1 (see ``domain/cron_jobs``). The board ticket modal carries no cron controls.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
+
+from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain.cron_jobs import (
+    CronJobNotFound, InvalidCronJob,
+    create_cron_job, delete_cron_job, disable_cron_job, enable_cron_job,
+    fire_now, list_cron_jobs, update_cron_job,
+)
+from nightdesk.domain.profiles import list_profiles
+
+
+def _parse_additional_dirs(raw: str) -> list[dict]:
+    """One absolute path per line -> [{path, mode:'rw'}]. Non-absolute lines are
+    skipped (the create form is best-effort; the JSON API is the strict path)."""
+    out: list[dict] = []
+    for line in (raw or "").splitlines():
+        p = line.strip()
+        if p.startswith("/"):
+            out.append({"path": p, "mode": "rw"})
+    return out
+
+
+def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> APIRouter:
+    router = APIRouter(tags=["cron-page"])
+    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+
+    @router.get("/cron", response_class=HTMLResponse, dependencies=[auth])
+    async def cron_page(
+        request: Request,
+        error: Optional[str] = Query(default=None),
+        session: Session = Depends(get_session),
+    ):
+        jobs = list_cron_jobs(session)
+        profiles = list_profiles(session)
+        profile_names = {p.id: p.name for p in profiles}
+        return templates.TemplateResponse(request, "cron.html", {
+            "title": "Cron",
+            "active_page": "cron",
+            "jobs": jobs,
+            "profiles": profiles,
+            "profile_names": profile_names,
+            "error": error,
+            "now": datetime.now(timezone.utc),
+        })
+
+    @router.post("/cron", dependencies=[auth])
+    async def create_form(
+        title: str = Form(...),
+        prompt: str = Form(""),
+        profile_id: str = Form(...),
+        cwd: str = Form(...),
+        schedule: str = Form(...),
+        timezone: str = Form("UTC"),
+        priority: int = Form(0),
+        workspace_mode: str = Form("directory"),
+        overlap_policy: str = Form("skip_if_active"),
+        additional_dirs: str = Form(""),
+        session: Session = Depends(get_session),
+    ):
+        try:
+            create_cron_job(
+                session,
+                title=title.strip(),
+                prompt=prompt,
+                profile_id=profile_id,
+                cwd=cwd.strip(),
+                schedule=schedule,
+                timezone=timezone,
+                priority=priority,
+                workspace_mode=workspace_mode,
+                overlap_policy=overlap_policy,
+                additional_dirs=_parse_additional_dirs(additional_dirs),
+            )
+        except InvalidCronJob as e:
+            return RedirectResponse(url=f"/cron?error={e}", status_code=303)
+        return RedirectResponse(url="/cron", status_code=303)
+
+    @router.post("/cron/{cid}/update", dependencies=[auth])
+    async def update_form(
+        cid: str,
+        title: str = Form(...),
+        prompt: str = Form(""),
+        profile_id: str = Form(...),
+        cwd: str = Form(...),
+        schedule: str = Form(...),
+        timezone: str = Form("UTC"),
+        priority: int = Form(0),
+        workspace_mode: str = Form("directory"),
+        overlap_policy: str = Form("skip_if_active"),
+        additional_dirs: str = Form(""),
+        session: Session = Depends(get_session),
+    ):
+        try:
+            update_cron_job(
+                session, cid,
+                title=title.strip(),
+                prompt=prompt,
+                profile_id=profile_id,
+                cwd=cwd.strip(),
+                schedule=schedule,
+                timezone=timezone,
+                priority=priority,
+                workspace_mode=workspace_mode,
+                overlap_policy=overlap_policy,
+                additional_dirs=_parse_additional_dirs(additional_dirs),
+            )
+        except CronJobNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidCronJob as e:
+            return RedirectResponse(url=f"/cron?error={e}", status_code=303)
+        return RedirectResponse(url="/cron", status_code=303)
+
+    @router.post("/cron/{cid}/enable", dependencies=[auth])
+    async def enable_form(cid: str, session: Session = Depends(get_session)):
+        try:
+            enable_cron_job(session, cid)
+        except CronJobNotFound:
+            raise HTTPException(404, "not found")
+        return RedirectResponse(url="/cron", status_code=303)
+
+    @router.post("/cron/{cid}/disable", dependencies=[auth])
+    async def disable_form(cid: str, session: Session = Depends(get_session)):
+        try:
+            disable_cron_job(session, cid)
+        except CronJobNotFound:
+            raise HTTPException(404, "not found")
+        return RedirectResponse(url="/cron", status_code=303)
+
+    @router.post("/cron/{cid}/fire-now", dependencies=[auth])
+    async def fire_now_form(cid: str, session: Session = Depends(get_session)):
+        try:
+            fire_now(session, cid)
+        except CronJobNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidCronJob as e:
+            return RedirectResponse(url=f"/cron?error={e}", status_code=303)
+        return RedirectResponse(url="/cron", status_code=303)
+
+    @router.post("/cron/{cid}/delete", dependencies=[auth])
+    async def delete_form(cid: str, session: Session = Depends(get_session)):
+        try:
+            delete_cron_job(session, cid)
+        except CronJobNotFound:
+            raise HTTPException(404, "not found")
+        return RedirectResponse(url="/cron", status_code=303)
+
+    return router

@@ -6,6 +6,7 @@ import uuid
 
 from sqlalchemy import (
     String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, Time,
+    UniqueConstraint,
 )
 from sqlalchemy import Float as sa_Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -275,3 +276,89 @@ class WorkerHeartbeat(Base):
     host: Mapped[str] = mapped_column(String)
     pid: Mapped[int] = mapped_column(Integer)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class CronJob(Base):
+    """A recurring ticket template plus a schedule.
+
+    When the schedule fires the worker materializes one ordinary
+    ``status="queued"``, ``run_now=False`` ticket from this template; that
+    ticket then flows through the normal scheduler (active-hours window and
+    ``max_parallel`` capacity), so cron does NOT bypass them.
+
+    Backend neutrality: the agent backend is chosen by the referenced
+    ``Profile.backend``, never by the cron job. This template stores only
+    ``profile_id`` and no engine field — a profile pointed at a non-Claude
+    backend produces tickets that run on that backend with zero cron changes.
+
+    Workspace is directory-only in v1: ``workspace_mode`` is constrained to
+    ``directory``/``in_place`` and generated tickets run in ``cwd`` with no
+    worktree.
+    """
+
+    __tablename__ = "cron_jobs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    # --- ticket template ---
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cwd: Mapped[str] = mapped_column(String, nullable=False)
+    # Constrained to 'directory' | 'in_place' on the API surface (no worktrees).
+    workspace_mode: Mapped[str] = mapped_column(String, default="directory", nullable=False)
+    additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    permission_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # --- schedule ---
+    # Standard 5-field cron expression: "minute hour dom month dow".
+    schedule: Mapped[str] = mapped_column(String, nullable=False)
+    # IANA timezone name (zoneinfo). Next-fire is computed in this tz; all DB
+    # datetimes are stored in UTC.
+    timezone: Mapped[str] = mapped_column(String, default="UTC", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 'coalesce' (default): one ticket for the oldest due fire, then advance past
+    # now. No backfill in v1.
+    misfire_policy: Mapped[str] = mapped_column(String, default="coalesce", nullable=False)
+    # 'skip_if_active' (default): skip a new ticket if the previous generated
+    # ticket is draft/queued/running. 'review' does not block.
+    overlap_policy: Mapped[str] = mapped_column(String, default="skip_if_active", nullable=False)
+    # Nullable while disabled (stale past value is harmless; the materialization
+    # query filters enabled). UTC.
+    next_fire_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_fire_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_ticket_id: Mapped[Optional[str]] = mapped_column(ForeignKey("tickets.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
+
+    fires: Mapped[list["CronJobFire"]] = relationship(
+        back_populates="cron_job", cascade="all, delete-orphan",
+    )
+
+
+class CronJobFire(Base):
+    """Idempotency + audit row for a single (cron_job, fire_at) materialization.
+
+    The unique constraint on ``(cron_job_id, fire_at)`` makes materialization
+    idempotent: a second tick that tries to claim the same fire hits the
+    constraint and skips. ``ticket_id`` is NULL when the fire was skipped
+    (e.g. overlap), with the reason recorded in ``skipped_reason`` so a
+    suppressed run is auditable rather than a silent gap.
+    """
+
+    __tablename__ = "cron_job_fires"
+    __table_args__ = (
+        UniqueConstraint("cron_job_id", "fire_at", name="uq_cron_job_fires_job_fire"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    cron_job_id: Mapped[str] = mapped_column(ForeignKey("cron_jobs.id"), nullable=False, index=True)
+    # The scheduled fire instant (UTC). Minute-granular for scheduled fires,
+    # sub-minute for manual fire-now.
+    fire_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ticket_id: Mapped[Optional[str]] = mapped_column(ForeignKey("tickets.id"), nullable=True)
+    # NULL when a ticket was generated; set (e.g. "overlap") when the fire was
+    # recorded but suppressed.
+    skipped_reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+
+    cron_job: Mapped["CronJob"] = relationship(back_populates="fires")
