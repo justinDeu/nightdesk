@@ -20,10 +20,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.db.models import Ticket
 from nightdesk.domain.cron_jobs import (
     CronJobNotFound, InvalidCronJob,
     create_cron_job, delete_cron_job, disable_cron_job, enable_cron_job,
-    fire_now, list_cron_jobs, update_cron_job,
+    fire_now, get_cron_job, list_cron_jobs, list_fires, update_cron_job,
     validate_schedule, validate_timezone,
 )
 from nightdesk.domain.profiles import list_profiles
@@ -44,6 +45,54 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
     router = APIRouter(tags=["cron-page"])
     auth = Depends(require_token_cookie_or_bearer(bearer_token))
 
+    def _fires_payload(session: Session, job_id: str) -> list[dict]:
+        out: list[dict] = []
+        for f in list_fires(session, job_id, limit=25):
+            status = None
+            if f.ticket_id:
+                t = session.get(Ticket, f.ticket_id)
+                status = t.status if t else None
+            out.append({
+                "fire_at": f.fire_at,
+                "ticket_id": f.ticket_id,
+                "ticket_status": status,
+                "skipped_reason": f.skipped_reason,
+            })
+        return out
+
+    def _render_page(request, session, *, pane_mode, selected=None,
+                     error=None, partial=False):
+        """Render the two-pane cron page (or just the right pane for HX swaps).
+
+        ``pane_mode`` is one of ``'empty'``, ``'view'``, ``'edit'``, ``'new'``.
+        Mirrors the profiles page: the sidebar always lists every job so users
+        flip between jobs with one click; ``partial`` returns only the pane.
+        """
+        jobs = list_cron_jobs(session)
+        profiles = list_profiles(session)
+        ctx: dict = {
+            "title": "Cron",
+            "active_page": "cron",
+            "jobs": jobs,
+            "profiles": profiles,
+            "profile_names": {p.id: p.name for p in profiles},
+            "selected_id": selected.id if selected is not None else None,
+            "pane_mode": pane_mode,
+            "error": error,
+            "now": datetime.now(timezone.utc),
+        }
+        if pane_mode == "view" and selected is not None:
+            ctx["job"] = selected
+            ctx["fires"] = _fires_payload(session, selected.id)
+        elif pane_mode == "edit" and selected is not None:
+            ctx["job"] = selected
+            ctx["form_action"] = f"/cron/{selected.id}/update"
+        elif pane_mode == "new":
+            ctx["job"] = None
+            ctx["form_action"] = "/cron"
+        template = "partials/cron_pane.html" if partial else "cron.html"
+        return templates.TemplateResponse(request, template, ctx)
+
     @router.get("/cron", response_class=HTMLResponse, dependencies=[auth])
     async def cron_page(
         request: Request,
@@ -51,17 +100,37 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         session: Session = Depends(get_session),
     ):
         jobs = list_cron_jobs(session)
-        profiles = list_profiles(session)
-        profile_names = {p.id: p.name for p in profiles}
-        return templates.TemplateResponse(request, "cron.html", {
-            "title": "Cron",
-            "active_page": "cron",
-            "jobs": jobs,
-            "profiles": profiles,
-            "profile_names": profile_names,
-            "error": error,
-            "now": datetime.now(timezone.utc),
-        })
+        if jobs:
+            return _render_page(request, session, pane_mode="view",
+                                selected=jobs[0], error=error)
+        return _render_page(request, session, pane_mode="empty", error=error)
+
+    @router.get("/cron/new", response_class=HTMLResponse, dependencies=[auth])
+    async def cron_new(request: Request, session: Session = Depends(get_session)):
+        partial = request.headers.get("HX-Request") == "true"
+        return _render_page(request, session, pane_mode="new", partial=partial)
+
+    @router.get("/cron/{cid}", response_class=HTMLResponse, dependencies=[auth])
+    async def cron_view(cid: str, request: Request,
+                        session: Session = Depends(get_session)):
+        try:
+            job = get_cron_job(session, cid)
+        except CronJobNotFound:
+            raise HTTPException(404, "not found")
+        partial = request.headers.get("HX-Request") == "true"
+        return _render_page(request, session, pane_mode="view",
+                            selected=job, partial=partial)
+
+    @router.get("/cron/{cid}/edit", response_class=HTMLResponse, dependencies=[auth])
+    async def cron_edit(cid: str, request: Request,
+                        session: Session = Depends(get_session)):
+        try:
+            job = get_cron_job(session, cid)
+        except CronJobNotFound:
+            raise HTTPException(404, "not found")
+        partial = request.headers.get("HX-Request") == "true"
+        return _render_page(request, session, pane_mode="edit",
+                            selected=job, partial=partial)
 
     @router.post("/cron", dependencies=[auth])
     async def create_form(
@@ -78,7 +147,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         session: Session = Depends(get_session),
     ):
         try:
-            create_cron_job(
+            job = create_cron_job(
                 session,
                 title=title.strip(),
                 prompt=prompt,
@@ -93,7 +162,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             )
         except InvalidCronJob as e:
             return RedirectResponse(url=f"/cron?error={e}", status_code=303)
-        return RedirectResponse(url="/cron", status_code=303)
+        return RedirectResponse(url=f"/cron/{job.id}", status_code=303)
 
     @router.post("/cron/{cid}/update", dependencies=[auth])
     async def update_form(
@@ -127,8 +196,8 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         except CronJobNotFound:
             raise HTTPException(404, "not found")
         except InvalidCronJob as e:
-            return RedirectResponse(url=f"/cron?error={e}", status_code=303)
-        return RedirectResponse(url="/cron", status_code=303)
+            return RedirectResponse(url=f"/cron/{cid}?error={e}", status_code=303)
+        return RedirectResponse(url=f"/cron/{cid}", status_code=303)
 
     @router.post("/cron/{cid}/enable", dependencies=[auth])
     async def enable_form(cid: str, session: Session = Depends(get_session)):
@@ -136,7 +205,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             enable_cron_job(session, cid)
         except CronJobNotFound:
             raise HTTPException(404, "not found")
-        return RedirectResponse(url="/cron", status_code=303)
+        return RedirectResponse(url=f"/cron/{cid}", status_code=303)
 
     @router.post("/cron/{cid}/disable", dependencies=[auth])
     async def disable_form(cid: str, session: Session = Depends(get_session)):
@@ -144,7 +213,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             disable_cron_job(session, cid)
         except CronJobNotFound:
             raise HTTPException(404, "not found")
-        return RedirectResponse(url="/cron", status_code=303)
+        return RedirectResponse(url=f"/cron/{cid}", status_code=303)
 
     @router.post("/cron/{cid}/fire-now", dependencies=[auth])
     async def fire_now_form(cid: str, session: Session = Depends(get_session)):
@@ -153,8 +222,8 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         except CronJobNotFound:
             raise HTTPException(404, "not found")
         except InvalidCronJob as e:
-            return RedirectResponse(url=f"/cron?error={e}", status_code=303)
-        return RedirectResponse(url="/cron", status_code=303)
+            return RedirectResponse(url=f"/cron/{cid}?error={e}", status_code=303)
+        return RedirectResponse(url=f"/cron/{cid}", status_code=303)
 
     @router.post("/cron/{cid}/delete", dependencies=[auth])
     async def delete_form(cid: str, session: Session = Depends(get_session)):

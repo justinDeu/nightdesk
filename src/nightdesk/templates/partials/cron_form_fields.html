@@ -85,10 +85,10 @@
 
   <label class="text-fg font-medium">Workspace</label>
   <select name="workspace_mode"
-          class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg">
+          class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
     {% set wm = job.workspace_mode if job else 'directory' %}
-    <option value="directory" {% if wm == 'directory' %}selected{% endif %}>directory</option>
-    <option value="in_place" {% if wm == 'in_place' %}selected{% endif %}>in_place</option>
+    <option value="directory" {% if wm == 'directory' %}selected{% endif %}>Directory</option>
+    <option value="in_place" {% if wm == 'in_place' %}selected{% endif %}>In place</option>
   </select>
 
   <label class="text-fg font-medium">Priority</label>

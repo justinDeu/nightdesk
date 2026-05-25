@@ -206,13 +206,24 @@
       name.className = "w-16 shrink-0 text-fg-muted";
       name.textContent = g.start === g.end ? DAYS[g.start] : DAYS[g.start] + "–" + DAYS[g.end];
       var bar = document.createElement("div");
-      bar.className = "flex flex-1 h-6 rounded overflow-hidden border border-border";
-      g.segs.forEach(function (s) {
+      bar.className = "flex flex-1 h-9 rounded overflow-hidden border border-border";
+      g.segs.forEach(function (s, idx) {
         var cell = document.createElement("div");
         cell.style.flexGrow = (s.b - s.a);
-        cell.className = "flex items-center justify-center overflow-hidden whitespace-nowrap px-1 " +
+        // A 2px background-colored left edge "breaks" the block at every
+        // transition so adjacent windows read as distinct, not one smear.
+        var divider = idx > 0 ? "border-l-2 border-bg " : "";
+        cell.className = "flex flex-col items-center justify-center overflow-hidden " +
+          "whitespace-nowrap px-1 leading-tight " + divider +
           (s.cap > 0 ? "bg-accent/30 text-fg" : "bg-bg-elev-2 text-fg-muted");
-        cell.textContent = s.cap > 0 ? (s.cap + " · " + s.labels.join(", ")) : "paused";
+        // Boundary time = when this segment takes over.
+        var t = document.createElement("span");
+        t.className = "text-[9px] text-fg-muted font-mono";
+        t.textContent = fmtMin(s.a);
+        var v = document.createElement("span");
+        v.className = "text-[10px]";
+        v.textContent = s.cap > 0 ? (s.cap + " · " + s.labels.join(", ")) : "paused";
+        cell.appendChild(t); cell.appendChild(v);
         cell.title = fmtMin(s.a) + "–" + fmtMin(s.b) + ": " +
           (s.cap > 0 ? ("capacity " + s.cap + " (" + s.labels.join(", ") + ")") : "paused");
         bar.appendChild(cell);

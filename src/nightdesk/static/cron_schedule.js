@@ -85,12 +85,21 @@
   }
 
   function initBuilder(root) {
+    if (root.dataset.cronInit === "1") return;  // idempotent across re-scans
+    root.dataset.cronInit = "1";
     var raw = root.querySelector("[data-cron-raw]");
     var descEl = root.querySelector("[data-cron-description]");
     var previewEl = root.querySelector("[data-cron-preview]");
     var advanced = root.querySelector("[data-cron-advanced]");
     var form = root.closest("form");
     if (!raw) return;
+
+    // Prefill an empty timezone input with the browser zone so the preview and
+    // the eventual cron job both default sensibly.
+    var tzInput = form && form.querySelector('[name="timezone"]');
+    if (tzInput && !tzInput.value) {
+      try { tzInput.value = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
+    }
 
     var current = "minutes";
     var previewTimer = null;
@@ -242,6 +251,9 @@
   } else {
     init();
   }
+  // The edit/new form is swapped into the two-pane layout via HTMX, which does
+  // not fire DOMContentLoaded — re-scan after each swap.
+  document.body.addEventListener("htmx:afterSwap", init);
 
   // Expose for tests/debugging.
   window.cronBuilder = { buildCron: buildCron, parseCron: parseCron, describe: describe };
