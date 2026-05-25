@@ -33,6 +33,59 @@ def _emit(evt: Any) -> None:
     sys.stdout.flush()
 
 
+class _AsyncEmitter:
+    """Backpressure-aware NDJSON writer over the stdout pipe.
+
+    The parent (``claude_executor``) spawns this process with
+    ``stderr=STDOUT``, so fd 1 and fd 2 are dups of one pipe open-file-
+    description. The Claude Agent SDK runs its own asyncio loop and flips std
+    pipe fds non-blocking via ``os.set_blocking(fd, False)``; because
+    O_NONBLOCK lives on the shared open-file-description, our stdout becomes
+    non-blocking too. A plain ``sys.stdout.write`` of a large SDK event (e.g. a
+    big ``tool_result`` from a model that echoes full file reads) then exceeds
+    the 64 KiB pipe buffer the parent hasn't drained yet and raises
+    ``BlockingIOError`` [Errno 11] — the "query crashed" failure.
+
+    Routing emits through an asyncio ``StreamWriter`` replaces that crash with
+    cooperative flow control: ``drain()`` suspends the coroutine until the
+    transport buffer falls below its high-water mark, which also throttles the
+    ``async for`` pulling from the SDK — end-to-end backpressure instead of a
+    one-shot write that can blow the pipe buffer.
+    """
+
+    def __init__(self, writer: "asyncio.StreamWriter") -> None:
+        self._w = writer
+
+    @classmethod
+    async def connect(cls, fd: int = 1) -> "_AsyncEmitter":
+        # FlowControlMixin is what supplies StreamWriter.drain()'s pause/resume
+        # machinery; it is the standard primitive for an asyncio writer over a
+        # raw pipe fd. buffering=0 keeps a single buffering layer (the
+        # transport) so byte accounting stays exact.
+        from asyncio.streams import FlowControlMixin
+
+        loop = asyncio.get_running_loop()
+        pipe = os.fdopen(fd, "wb", buffering=0)
+        transport, protocol = await loop.connect_write_pipe(
+            FlowControlMixin, pipe)
+        return cls(asyncio.StreamWriter(transport, protocol, None, loop))
+
+    async def emit(self, evt: Any) -> None:
+        self._w.write((json.dumps(evt, default=str) + "\n").encode("utf-8"))
+        await self._w.drain()
+
+    async def aclose(self) -> None:
+        try:
+            await self._w.drain()
+        except Exception:  # pragma: no cover - best-effort final flush
+            pass
+        self._w.close()
+        try:
+            await self._w.wait_closed()
+        except Exception:  # pragma: no cover - transport already gone
+            pass
+
+
 def _block_to_dict(block: Any) -> dict[str, Any]:
     """Convert a single content block (typed SDK object or dict) to a dict.
 
@@ -312,12 +365,36 @@ _HEADLESS_DISALLOWED = ("AskUserQuestion", "EnterPlanMode", "ExitPlanMode")
 
 
 async def _run(spec: dict[str, Any]) -> int:
+    # All events go through the async emitter so drain()-based backpressure
+    # governs every write. If wiring it fails (unexpected fd state), fall back
+    # to the synchronous _emit rather than losing the event stream entirely.
+    emitter: _AsyncEmitter | None = None
+    try:
+        emitter = await _AsyncEmitter.connect(1)
+    except Exception:  # pragma: no cover - defensive fallback
+        log.exception("failed to set up async stdout emitter; using sync write")
+        emitter = None
+
+    async def emit(evt: Any) -> None:
+        if emitter is not None:
+            await emitter.emit(evt)
+        else:
+            _emit(evt)
+
+    try:
+        return await _run_query(spec, emit)
+    finally:
+        if emitter is not None:
+            await emitter.aclose()
+
+
+async def _run_query(spec: dict[str, Any], emit: Any) -> int:
     try:
         from claude_agent_sdk import query, ClaudeAgentOptions  # type: ignore
     except Exception as exc:  # pragma: no cover - exercised via subprocess only
         log.error("failed to import claude_agent_sdk: %s", exc)
-        _emit({"type": "result", "subtype": "error",
-               "result": f"failed to import claude_agent_sdk: {exc}"})
+        await emit({"type": "result", "subtype": "error",
+                    "result": f"failed to import claude_agent_sdk: {exc}"})
         return 1
 
     opts_kwargs: dict[str, Any] = {}
@@ -348,8 +425,8 @@ async def _run(spec: dict[str, Any]) -> int:
         options = ClaudeAgentOptions(**opts_kwargs)
     except Exception as exc:
         log.error("invalid SDK options: %s", exc)
-        _emit({"type": "result", "subtype": "error",
-               "result": f"invalid options: {exc}"})
+        await emit({"type": "result", "subtype": "error",
+                    "result": f"invalid options: {exc}"})
         return 1
 
     rc = 0
@@ -360,14 +437,14 @@ async def _run(spec: dict[str, Any]) -> int:
             d = _event_to_dict(evt)
             if d is None:
                 continue
-            _emit(d)
+            await emit(d)
             if d.get("type") == "result" \
                     and d.get("subtype") not in (None, "success"):
                 rc = 1
     except Exception as exc:
         log.exception("SDK query crashed")
-        _emit({"type": "result", "subtype": "error",
-               "result": f"query crashed: {exc}"})
+        await emit({"type": "result", "subtype": "error",
+                    "result": f"query crashed: {exc}"})
         rc = 1
     log.info("SDK query finished: rc=%d", rc)
     return rc

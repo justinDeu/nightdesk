@@ -316,6 +316,108 @@ class RunOut(BaseModel):
     cost_usd: Optional[float] = None
 
 
+_HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+# day_mask is a 7-bit field: Mon=1 Tue=2 Wed=4 Thu=8 Fri=16 Sat=32 Sun=64.
+_DAY_MASK_ALL = 127
+
+
+class ScheduleWindowOut(BaseModel):
+    id: int
+    label: str
+    day_mask: int
+    start: str
+    end: str
+    max_parallel: int
+    position: int
+
+    model_config = {"from_attributes": True}
+
+
+class ScheduleWindowCreate(BaseModel):
+    label: str = ""
+    day_mask: int = _DAY_MASK_ALL
+    start: str = "00:00"
+    end: str = "00:00"
+    max_parallel: int = 1
+    position: int = 0
+
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def _validate_hh_mm(cls, v: object) -> object:
+        if not isinstance(v, str) or not _HH_MM_RE.match(v):
+            raise ValueError("must be a valid HH:MM time (00:00-23:59)")
+        return v
+
+    @field_validator("day_mask")
+    @classmethod
+    def _validate_day_mask(cls, v: int) -> int:
+        if v < 0 or v > _DAY_MASK_ALL:
+            raise ValueError(f"day_mask must be between 0 and {_DAY_MASK_ALL}")
+        return v
+
+    @field_validator("max_parallel")
+    @classmethod
+    def _validate_max_parallel(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("max_parallel must be >= 0")
+        return v
+
+
+class ScheduleWindowUpdate(BaseModel):
+    """Sparse PATCH payload. Only provided fields are applied."""
+
+    label: Optional[str] = None
+    day_mask: Optional[int] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    max_parallel: Optional[int] = None
+    position: Optional[int] = None
+
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def _validate_hh_mm(cls, v: object) -> object:
+        if v is None:
+            return v
+        if not isinstance(v, str) or not _HH_MM_RE.match(v):
+            raise ValueError("must be a valid HH:MM time (00:00-23:59)")
+        return v
+
+    @field_validator("day_mask")
+    @classmethod
+    def _validate_day_mask(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        if v < 0 or v > _DAY_MASK_ALL:
+            raise ValueError(f"day_mask must be between 0 and {_DAY_MASK_ALL}")
+        return v
+
+    @field_validator("max_parallel")
+    @classmethod
+    def _validate_max_parallel(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        if v < 0:
+            raise ValueError("max_parallel must be >= 0")
+        return v
+
+
+class ScheduleWindowsReplace(BaseModel):
+    """Full replacement set for the windows editor's atomic save."""
+    timezone: str = "UTC"
+    windows: list[ScheduleWindowCreate] = Field(default_factory=list)
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_tz(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            raise ValueError(f"unknown timezone: {v}")
+        return v
+
+
 class ConfigOut(BaseModel):
     window_start: str
     window_end: str
@@ -324,9 +426,10 @@ class ConfigOut(BaseModel):
     transcript_root: str
     worktree_base_ref: Optional[str] = None
     notify_webhook_url: Optional[str] = None
+    schedule_timezone: str = "UTC"
+    windows: list[ScheduleWindowOut] = Field(default_factory=list)
 
-
-_HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    model_config = {"from_attributes": True}
 
 
 class ConfigUpdate(BaseModel):
@@ -346,6 +449,7 @@ class ConfigUpdate(BaseModel):
     worktree_base_ref: Optional[str] = None
     # Webhook URL for run-completion notifications. Empty string clears it.
     notify_webhook_url: Optional[str] = None
+    schedule_timezone: Optional[str] = None
 
     @field_validator("window_start", "window_end", mode="before")
     @classmethod
@@ -374,6 +478,18 @@ class ConfigUpdate(BaseModel):
             raise ValueError("notify_webhook_url must be a string")
         return v.strip()
 
+    @field_validator("schedule_timezone")
+    @classmethod
+    def _validate_schedule_tz(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            raise ValueError(f"unknown timezone: {v}")
+        return v
+
 
 class WorkerStatusOut(BaseModel):
     host: Optional[str] = None
@@ -384,6 +500,8 @@ class WorkerStatusOut(BaseModel):
     window_start: Optional[str] = None
     window_end: Optional[str] = None
     max_parallel: int = 0
+    active_window: Optional[str] = None
+    schedule_timezone: str = "UTC"
     normal_running: int = 0
     run_now_running: int = 0
     total_running: int = 0
@@ -409,3 +527,80 @@ class DependencyOut(BaseModel):
 
 class DependencyCreate(BaseModel):
     depends_on_id: str
+
+
+# --- Cron jobs ----------------------------------------------------------------
+
+# Cron is directory-only in v1. The API accepts 'directory'/'in_place' and
+# rejects worktree modes (the domain layer enforces this too, with 422).
+CronWorkspaceMode = Literal["directory", "in_place"]
+
+
+class CronJobCreate(BaseModel):
+    title: str
+    prompt: str = ""
+    profile_id: str
+    cwd: str
+    # 5-field cron expression: "minute hour day-of-month month day-of-week".
+    schedule: str
+    # IANA timezone name; JSON API defaults to UTC.
+    timezone: str = "UTC"
+    priority: int = 0
+    workspace_mode: CronWorkspaceMode = "directory"
+    additional_dirs: list[AdditionalDir] = []
+    permission_overrides: Optional[dict] = None
+    enabled: bool = True
+    # When true, generated tickets are run_now=True (dispatched past the queue
+    # and outside the active-hours window).
+    force_run: bool = False
+    misfire_policy: Literal["coalesce"] = "coalesce"
+    overlap_policy: Literal["skip_if_active", "always"] = "skip_if_active"
+
+    @field_validator("cwd", mode="before")
+    @classmethod
+    def _cwd_abs(cls, v):
+        return _normalize_cwd(v)
+
+
+class CronJobUpdate(BaseModel):
+    title: Optional[str] = None
+    prompt: Optional[str] = None
+    profile_id: Optional[str] = None
+    cwd: Optional[str] = None
+    schedule: Optional[str] = None
+    timezone: Optional[str] = None
+    priority: Optional[int] = None
+    workspace_mode: Optional[CronWorkspaceMode] = None
+    additional_dirs: Optional[list[AdditionalDir]] = None
+    permission_overrides: Optional[dict] = None
+    force_run: Optional[bool] = None
+    misfire_policy: Optional[Literal["coalesce"]] = None
+    overlap_policy: Optional[Literal["skip_if_active", "always"]] = None
+
+    @field_validator("cwd", mode="before")
+    @classmethod
+    def _cwd_abs(cls, v):
+        return _normalize_cwd_optional(v)
+
+
+class CronJobOut(BaseModel):
+    id: str
+    title: str
+    prompt: str
+    profile_id: str
+    cwd: str
+    schedule: str
+    timezone: str
+    priority: int
+    workspace_mode: str
+    additional_dirs: list[AdditionalDir] = []
+    permission_overrides: Optional[dict] = None
+    enabled: bool
+    force_run: bool = False
+    misfire_policy: str
+    overlap_policy: str
+    next_fire_at: Optional[datetime] = None
+    last_fire_at: Optional[datetime] = None
+    last_ticket_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime

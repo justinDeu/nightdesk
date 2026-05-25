@@ -170,3 +170,13 @@ def test_heartbeat_row():
         h = WorkerHeartbeat(id=1, host="h", pid=42, last_seen_at=datetime.now(timezone.utc))
         s.add(h); s.commit()
         assert s.get(WorkerHeartbeat, 1).pid == 42
+
+
+def test_config_has_schedule_timezone_default():
+    eng = make_engine()
+    with Session(eng) as s:
+        row = ConfigRow(id=1, worktree_root="/w", transcript_root="/t")
+        s.add(row)
+        s.commit()
+        s.refresh(row)
+        assert row.schedule_timezone == "UTC"

@@ -4,7 +4,7 @@ gate, and context handoff."""
 import pytest
 from datetime import datetime, time, timezone
 
-from nightdesk.db.models import TicketDependency
+from nightdesk.db.models import ScheduleWindow, TicketDependency
 from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import (
     CyclicDependency,
@@ -29,6 +29,17 @@ def _qt(session, profile, **kw):
     )
     fields.update(kw)
     return create_ticket(session, **fields)
+
+
+def _all_days_window(session, *, start="22:00", end="07:00", max_parallel=5):
+    """An always-on schedule window so capacity is available for the normal
+    dispatch pass (multi-window model). Covers every day; 22:00–07:00 spans
+    the 23:00 'now' used in these tests."""
+    w = ScheduleWindow(label="test", day_mask=0b1111111, start=start, end=end,
+                       max_parallel=max_parallel, position=0)
+    session.add(w)
+    session.commit()
+    return w
 
 
 def _make_run(session, ticket, *, exit_status="success"):
@@ -185,11 +196,9 @@ def test_scheduler_skips_ticket_with_unsatisfied_dep(session, sample_profile):
     a = _qt(session, sample_profile, title="A")
     b = _qt(session, sample_profile, title="B", status="queued")
     add_dependency(session, b.id, a.id)
+    _all_days_window(session)
     now = datetime(2026, 5, 9, 23, 0, tzinfo=timezone.utc)
-    picked = pick_eligible(
-        session, now=now, window_start=time(22, 0), window_end=time(7, 0),
-        max_parallel=5, total_running=0,
-    )
+    picked = pick_eligible(session, now=now, total_running=0)
     ids = [t.id for t in picked]
     assert b.id not in ids
 
@@ -199,11 +208,9 @@ def test_scheduler_picks_ticket_after_dep_satisfied(session, sample_profile):
     b = _qt(session, sample_profile, title="B", status="queued")
     add_dependency(session, b.id, a.id)
     _make_run(session, a, exit_status="success")
+    _all_days_window(session)
     now = datetime(2026, 5, 9, 23, 0, tzinfo=timezone.utc)
-    picked = pick_eligible(
-        session, now=now, window_start=time(22, 0), window_end=time(7, 0),
-        max_parallel=5, total_running=0,
-    )
+    picked = pick_eligible(session, now=now, total_running=0)
     ids = [t.id for t in picked]
     assert b.id in ids
 
@@ -213,11 +220,9 @@ def test_scheduler_skips_when_upstream_failed(session, sample_profile):
     b = _qt(session, sample_profile, title="B", status="queued")
     add_dependency(session, b.id, a.id)
     _make_run(session, a, exit_status="failed")
+    _all_days_window(session)
     now = datetime(2026, 5, 9, 23, 0, tzinfo=timezone.utc)
-    picked = pick_eligible(
-        session, now=now, window_start=time(22, 0), window_end=time(7, 0),
-        max_parallel=5, total_running=0,
-    )
+    picked = pick_eligible(session, now=now, total_running=0)
     ids = [t.id for t in picked]
     assert b.id not in ids
 
@@ -229,10 +234,7 @@ def test_scheduler_run_now_blocked_by_unsatisfied_dep(session, sample_profile):
     b = _qt(session, sample_profile, title="B", status="queued", run_now=True)
     add_dependency(session, b.id, a.id)
     now = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
-    picked = pick_eligible(
-        session, now=now, window_start=time(22, 0), window_end=time(7, 0),
-        max_parallel=5, total_running=0,
-    )
+    picked = pick_eligible(session, now=now, total_running=0)
     ids = [t.id for t in picked]
     assert b.id not in ids
 

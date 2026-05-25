@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import ConfigRow, DaemonStatus, Run, Ticket
+from nightdesk.domain.cron_jobs import materialize_due_cron_jobs
 from nightdesk.domain.tickets import transition_status
 from nightdesk.worker.executor import Executor
 from nightdesk.worker.heartbeat import recover_orphaned_runs, write_heartbeat
@@ -24,11 +25,6 @@ from nightdesk.worker.scheduler import pick_eligible
 
 
 log = logging.getLogger(__name__)
-
-
-def _parse_time(s: str) -> time:
-    h, m = s.split(":")
-    return time(int(h), int(m))
 
 
 @dataclass
@@ -169,6 +165,17 @@ class WorkerLoop:
         try:
             write_heartbeat(session, host=self.settings.host, pid=os.getpid())
 
+            # Materialize due cron jobs BEFORE any readiness gating. This only
+            # inserts queued ticket rows and brings up no backend, so due cron
+            # jobs become visible queued tickets even when a backend is down;
+            # they then wait until the worker can run them. Keeping it ahead of
+            # the gate holds for today's global CC check AND for the per-backend
+            # gates that replace it later.
+            try:
+                materialize_due_cron_jobs(session, datetime.now(timezone.utc))
+            except Exception:
+                log.exception("cron materialization failed (continuing)")
+
             # Gate: refuse new picks when the CC binary check has not passed.
             ds = session.get(DaemonStatus, 1)
             if ds is not None and ds.cc_check_status != "ok":
@@ -193,29 +200,17 @@ class WorkerLoop:
             except Exception:
                 log.exception("orphan sweep failed (continuing)")
 
-            cfg = session.get(ConfigRow, 1)
-            if cfg is not None:
-                window_start = _parse_time(cfg.window_start)
-                window_end = _parse_time(cfg.window_end)
-                max_parallel = cfg.max_parallel
-            else:
-                window_start = self.settings.window_start
-                window_end = self.settings.window_end
-                max_parallel = self.settings.max_parallel
-
             # Capacity is driven by actual unfinished Run rows so the count
             # survives restarts and isn't polluted by tickets stuck in
             # 'running' without a Run row (which orphan recovery resets to
-            # 'queued' on startup).
+            # 'queued' on startup). The window/capacity decision now comes from
+            # ScheduleWindow rows, resolved inside pick_eligible.
             total_running = session.scalar(
                 select(func.count()).select_from(Run).where(Run.finished_at.is_(None))
             ) or 0
             picks = pick_eligible(
                 session,
                 now=datetime.now(timezone.utc),
-                window_start=window_start,
-                window_end=window_end,
-                max_parallel=max_parallel,
                 total_running=total_running,
             )
             pick_ids: list[str] = []

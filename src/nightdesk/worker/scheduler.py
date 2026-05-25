@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, time
-from typing import List
+from typing import List, Optional, Sequence
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from nightdesk.db.models import Ticket
+from nightdesk.db.models import ScheduleWindow, Ticket
 
 
 def in_window(start: time, end: time, now: datetime) -> bool:
@@ -30,29 +31,65 @@ def _has_unsatisfied_deps(session: Session, ticket: Ticket) -> bool:
     return not satisfied
 
 
+def _parse_hhmm(s: str) -> time:
+    h, m = s.split(":")
+    return time(int(h), int(m))
+
+
+def window_matches(window: ScheduleWindow, now: datetime, tz: ZoneInfo) -> bool:
+    """True when ``window`` covers the current day-of-week and time in ``tz``.
+
+    ``now`` is an aware UTC instant; it is converted into ``tz`` first so the
+    weekday bit and the HH:MM range are both evaluated against local wall-clock
+    time. ``day_mask`` bit ``1 << local.weekday()`` (Mon=0..Sun=6) must be set.
+    """
+    local = now.astimezone(tz)
+    if not (window.day_mask & (1 << local.weekday())):
+        return False
+    try:
+        start = _parse_hhmm(window.start)
+        end = _parse_hhmm(window.end)
+    except (ValueError, AttributeError):
+        return False
+    return in_window(start, end, local)
+
+
+def capacity_for(windows: Sequence[ScheduleWindow], now: datetime, tz: ZoneInfo) -> Optional[int]:
+    """Resolve the parallelism cap from windows matching ``now`` in ``tz``.
+
+    Returns the highest ``max_parallel`` among matching windows (most
+    permissive). Returns ``None`` when no window matches (capacity 0; run-now
+    still works).
+    """
+    matching = [w for w in windows if window_matches(w, now, tz)]
+    if not matching:
+        return None
+    return max(w.max_parallel for w in matching)
+
+
 def pick_eligible(
     session: Session,
     *,
     now: datetime,
-    window_start: time,
-    window_end: time,
-    max_parallel: int,
     total_running: int,
 ) -> List[Ticket]:
     """Pick tickets for this scheduler tick.
 
     1. Always pick all ``status='queued' AND run_now=true`` tickets, regardless
        of window or capacity. These are user-forced and may push the live count
-       above ``max_parallel`` (overflow).
-    2. If inside the window, fill remaining ``capacity = max(0, max_parallel -
-       total_running)`` slots from ``status='queued' AND run_now=false``,
-       ordered by ``(position ASC, priority DESC, created_at ASC)``.
+       above the cap (overflow).
+    2. Resolve the capacity from ScheduleWindow rows matching ``now``. With at
+       least one matching window, ``max_parallel`` is the highest cap among
+       matching windows. With no matching window, capacity is 0 and no normal
+       jobs dispatch.
+    3. Fill remaining ``capacity = max(0, max_parallel - total_running)`` slots
+       from ``status='queued' AND run_now=false``, ordered by
+       ``(position ASC, priority DESC, created_at ASC)``.
 
     Tickets with unsatisfied dependencies are skipped in both passes.
     Capacity is clamped at zero; while running > max_parallel, only run-now
     tickets are picked.
     """
-    inside_window = in_window(window_start, window_end, now)
     out: list[Ticket] = []
 
     # Forced run-now picks first, unconditional.
@@ -68,8 +105,23 @@ def pick_eligible(
             continue
         out.append(t)
 
+    from nightdesk.db.models import ConfigRow
+    cfg = session.get(ConfigRow, 1)
+    tz_name = cfg.schedule_timezone if cfg and cfg.schedule_timezone else "UTC"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    windows = list(
+        session.scalars(select(ScheduleWindow).order_by(ScheduleWindow.position.asc()))
+    )
+    max_parallel = capacity_for(windows, now, tz)
+    if max_parallel is None:
+        # No window matches the current time/day: no normal dispatch.
+        return out
+
     capacity = max(0, max_parallel - total_running)
-    if capacity == 0 or not inside_window:
+    if capacity == 0:
         return out
 
     normal_stmt = (

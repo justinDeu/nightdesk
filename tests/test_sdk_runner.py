@@ -131,3 +131,50 @@ def test_event_to_dict_user_no_parent_when_top_level():
 
     d = _event_to_dict(UserMessage())
     assert "parent_tool_use_id" not in d["message"]["content"][0]
+
+
+def test_async_emitter_survives_oversized_event_on_nonblocking_pipe():
+    """A >64 KiB event must not crash when stdout is a non-blocking pipe.
+
+    Regression for the zai/glm-5.1 failures: the SDK puts our stdout (fd 1,
+    dup'd to stderr via stderr=STDOUT in the parent) into non-blocking mode,
+    so a single large write of a big tool_result exceeded the 64 KiB pipe
+    buffer and raised BlockingIOError [Errno 11] ("write could not complete
+    without blocking"). The async emitter must apply cooperative backpressure
+    via drain() instead of crashing, and the bytes must round-trip intact.
+    """
+    import asyncio
+    import json
+    import os
+
+    from nightdesk.worker._sdk_runner import _AsyncEmitter
+
+    payload = {"type": "tool_result", "output": "x" * 200_000}
+    expected = (json.dumps(payload, default=str) + "\n").encode("utf-8")
+
+    async def scenario() -> bytes:
+        r, w = os.pipe()
+        os.set_blocking(w, False)  # mimic the SDK flipping stdout non-blocking
+        loop = asyncio.get_running_loop()
+        emitter = await _AsyncEmitter.connect(w)
+
+        buf = bytearray()
+
+        async def reader() -> None:
+            # Small, slow reads force the writer to pause/resume repeatedly so
+            # the test actually exercises the backpressure path.
+            while len(buf) < len(expected):
+                chunk = await loop.run_in_executor(None, os.read, r, 4096)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                await asyncio.sleep(0)
+
+        rt = asyncio.create_task(reader())
+        await emitter.emit(payload)  # raises BlockingIOError under a raw write
+        await emitter.aclose()       # closes w -> reader sees EOF
+        await rt
+        os.close(r)
+        return bytes(buf)
+
+    assert asyncio.run(scenario()) == expected

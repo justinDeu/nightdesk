@@ -1,0 +1,38 @@
+<div class="rounded border border-border bg-bg-elev p-5">
+  <header class="mb-5 flex items-center gap-3">
+    <div class="min-w-0 flex-1">
+      <h2 class="text-xl font-semibold text-fg">Claude Code</h2>
+      <p class="mt-1 text-sm text-fg-muted">Choose the daemon Claude binary and the minimum supported version.</p>
+    </div>
+    {% if saved %}<span class="px-2 py-0.5 text-xs bg-green-900/40 text-green-200 rounded">saved</span>{% endif %}
+  </header>
+
+  <form method="post" action="/settings/claude" class="flex flex-col gap-5" data-settings-form>
+    <section class="border border-border rounded p-4 bg-bg">
+      <div class="grid grid-cols-[1fr,16rem] gap-x-3 gap-y-3 text-sm items-center">
+        <label for="claude_binary_path" class="text-fg">
+          <div class="font-medium">Claude binary path</div>
+          <div class="text-xs text-fg-muted">Leave blank to use <code>claude</code> on the daemon's PATH. Profiles can override per-run.
+            {% if path_claude_binary %}Currently resolves to <code class="text-fg">{{ path_claude_binary }}</code>.{% else %}<span class="text-warn">No <code>claude</code> found on PATH.</span>{% endif %}
+          </div>
+        </label>
+        <input id="claude_binary_path" name="claude_binary_path" type="text"
+               value="{{ (cfg.claude_binary_path if cfg else '') or '' }}"
+               placeholder="{{ path_claude_binary or 'no claude on PATH' }}"
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+
+        <label for="cc_minimum_version" class="text-fg">
+          <div class="font-medium">Minimum CC version</div>
+          <div class="text-xs text-fg-muted">Worker refuses to dispatch runs if installed claude is older. Default 2.1.80.</div>
+        </label>
+        <input id="cc_minimum_version" name="cc_minimum_version" type="text"
+               value="{{ (cfg.cc_minimum_version if cfg else '2.1.80') }}"
+               placeholder="2.1.80"
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+      </div>
+    </section>
+    <div class="flex justify-end gap-2">
+      <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save Claude settings</button>
+    </div>
+  </form>
+</div>

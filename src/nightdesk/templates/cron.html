@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set title = "Cron" %}
+{% set active_page = 'cron' %}
+{% block body %}
+
+{% if error %}
+  <div class="mb-4 rounded border border-red-800 bg-red-900/40 px-3 py-2 text-sm text-red-200">
+    {{ error }}
+  </div>
+{% endif %}
+
+<div class="flex flex-col lg:flex-row gap-4 items-stretch h-[calc(100vh-8rem)]">
+
+  {# ---------- Left sidebar: cron job list -------------------------------- #}
+  <aside class="w-full lg:w-72 lg:flex-none overflow-y-auto">
+    <div class="rounded border border-border bg-bg-elev divide-y divide-border">
+
+      <div class="flex items-center justify-between gap-2 px-3 py-2">
+        <h1 class="text-sm font-semibold text-fg">Cron jobs</h1>
+        <a href="/cron/new"
+           class="rounded bg-accent text-bg px-2 py-0.5 text-xs font-semibold hover:brightness-110"
+           hx-get="/cron/new" hx-target="#cron-pane" hx-swap="outerHTML"
+           hx-push-url="true">
+          + New
+        </a>
+      </div>
+
+      <nav class="divide-y divide-border" id="cron-list">
+        {% for job in jobs %}
+          <a href="/cron/{{ job.id }}"
+             data-cron-row="{{ job.id }}"
+             hx-get="/cron/{{ job.id }}"
+             hx-target="#cron-pane"
+             hx-swap="outerHTML"
+             hx-push-url="true"
+             onclick="document.querySelectorAll('[data-cron-row]').forEach(e=>{e.classList.remove('bg-bg-elev-2');e.style.boxShadow='';});this.classList.add('bg-bg-elev-2');this.style.boxShadow='inset 2px 0 0 var(--color-accent)'"
+             {% if selected_id == job.id %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}
+             class="flex flex-col gap-0.5 px-3 py-2 text-sm hover:bg-bg-elev-2
+                    {% if selected_id == job.id %}bg-bg-elev-2{% endif %}">
+            <span class="flex items-center gap-2 min-w-0">
+              <span class="inline-block w-1.5 h-1.5 rounded-full shrink-0 {{ 'bg-green-400' if job.enabled else 'bg-fg-muted' }}"></span>
+              <span class="font-medium text-fg truncate">{{ job.title }}</span>
+            </span>
+            <span class="text-[10px] text-fg-muted font-mono truncate">{{ job.schedule }} · {{ job.timezone }}</span>
+          </a>
+        {% else %}
+          <div class="px-3 py-3 text-xs text-fg-muted">No cron jobs yet.</div>
+        {% endfor %}
+      </nav>
+    </div>
+  </aside>
+
+  {# ---------- Right pane: empty / view / edit / new ---------------------- #}
+  {% include "partials/cron_pane.html" %}
+
+</div>
+
+<script src="/static/cron_schedule.js" defer></script>
+{% endblock %}

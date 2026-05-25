@@ -21,6 +21,7 @@ dependencies = [
     "claude-agent-sdk>=0.0.18",
     "cryptography>=42.0",
     "itsdangerous>=2.2",
+    "croniter>=2.0",
 ]
 
 [project.optional-dependencies]

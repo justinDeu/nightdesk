@@ -16,7 +16,7 @@
   {% elif not status.in_window and status.total_running == 0 %}
     <span class="inline-block w-2 h-2 rounded-full bg-warn"></span>
     <span class="text-warn">paused</span>
-    <span class="text-fg-muted">· resumes <span data-hhmm-utc="{{ status.window_start }}">{{ status.window_start }}</span></span>
+    <span class="text-fg-muted">· no active window</span>
   {% else %}
     {% set overflow = status.total_running > status.max_parallel %}
     {% set dot_class = "bg-accent" if (overflow or status.in_window) else "bg-warn" %}
@@ -60,25 +60,24 @@
           <span class="text-accent">● online</span>
         {% endif %}
       </div>
-      {# Equal start == end means "no restriction" (the scheduler's always-on
-         convention). Show that instead of a degenerate "8:00 PM–8:00 PM". #}
+      {# Multi-window model: show the window currently driving dispatch and the
+         configured timezone windows are evaluated in. #}
       <div class="flex justify-between gap-4">
-        <span class="text-fg-muted">Window</span>
+        <span class="text-fg-muted">Active window</span>
         <span class="text-fg">
-          {% if status.window_start == status.window_end %}
-            <span class="text-accent">Always on</span>
+          {% if status.active_window %}
+            <span class="text-accent">{{ status.active_window }}</span>
           {% else %}
-            <span data-hhmm-utc="{{ status.window_start }}">{{ status.window_start }}</span>–<span data-hhmm-utc="{{ status.window_end }}">{{ status.window_end }}</span>
-            {% if status.in_window %}
-              <span class="text-accent">(active)</span>
-            {% else %}
-              <span class="text-warn">(inactive)</span>
-            {% endif %}
+            <span class="text-warn">none</span>
           {% endif %}
         </span>
       </div>
       <div class="flex justify-between gap-4">
-        <span class="text-fg-muted">Max parallel</span>
+        <span class="text-fg-muted">Timezone</span>
+        <span class="text-fg">{{ status.schedule_timezone }}</span>
+      </div>
+      <div class="flex justify-between gap-4">
+        <span class="text-fg-muted">Capacity</span>
         <span class="text-fg">{{ status.max_parallel }}</span>
       </div>
     </div>
