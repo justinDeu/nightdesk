@@ -65,6 +65,23 @@ def test_window_totals_sums_cost_and_tokens(session):
     assert last_30d["run_count"] == 3
 
 
+def test_window_totals_cache_hit_rate(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    # 100 fresh input, 300 cache read, 100 cache write, 50 output.
+    # hit rate = 300 / (100 + 300 + 100) = 0.6 (output excluded).
+    _run(session, t, started_at=NOW, input_tokens=100, output_tokens=50,
+         cache_read_tokens=300, cache_write_tokens=100)
+    w = analytics.window_totals(session, start=analytics.start_of_day(NOW))
+    assert w["cache_read_tokens"] == 300
+    assert w["cache_write_tokens"] == 100
+    assert w["cache_hit_rate"] == pytest.approx(0.6)
+
+
+def test_cache_hit_rate_zero_when_no_prompt_tokens():
+    assert analytics.cache_hit_rate(0, 0, 0) == 0.0
+
+
 def test_spend_between_excludes_null_cost(session):
     p = _profile(session)
     t = _ticket(session, p)
@@ -76,34 +93,56 @@ def test_spend_between_excludes_null_cost(session):
 
 
 # --- breakdowns ------------------------------------------------------------
-def test_spend_by_profile_groups_and_orders(session):
+def test_usage_by_profile_groups_and_orders_by_tokens(session):
     pa = _profile(session, "alpha")
     pb = _profile(session, "beta")
     ta = _ticket(session, pa, "ta")
     tb = _ticket(session, pb, "tb")
-    _run(session, ta, started_at=NOW, cost=1.0)
-    _run(session, ta, started_at=NOW, cost=1.5)
-    _run(session, tb, started_at=NOW, cost=4.0)
+    _run(session, ta, started_at=NOW, input_tokens=100)
+    _run(session, ta, started_at=NOW, input_tokens=150)
+    _run(session, tb, started_at=NOW, input_tokens=400)
 
-    rows = analytics.spend_by_profile(
+    rows = analytics.usage_by_profile(
         session, start=analytics.start_of_day(NOW) - timedelta(days=29))
     assert [r["name"] for r in rows] == ["beta", "alpha"]
-    assert rows[0]["cost"] == pytest.approx(4.0)
-    assert rows[1]["cost"] == pytest.approx(2.5)
+    assert rows[0]["total_tokens"] == 400
+    assert rows[1]["total_tokens"] == 250
     assert rows[1]["run_count"] == 2
 
 
-def test_spend_by_ticket_top_n(session):
+def test_usage_by_ticket_top_n_by_tokens(session):
     p = _profile(session)
-    t1 = _ticket(session, p, "cheap")
-    t2 = _ticket(session, p, "spendy")
-    _run(session, t1, started_at=NOW, cost=0.5)
-    _run(session, t2, started_at=NOW, cost=9.0)
+    t1 = _ticket(session, p, "small")
+    t2 = _ticket(session, p, "heavy")
+    _run(session, t1, started_at=NOW, input_tokens=50)
+    _run(session, t2, started_at=NOW, input_tokens=900, output_tokens=100)
 
-    rows = analytics.spend_by_ticket(
+    rows = analytics.usage_by_ticket(
         session, start=analytics.start_of_day(NOW) - timedelta(days=29), limit=10)
-    assert rows[0]["title"] == "spendy"
-    assert rows[0]["cost"] == pytest.approx(9.0)
+    assert rows[0]["title"] == "heavy"
+    assert rows[0]["total_tokens"] == 1000
+
+
+def test_tokens_by_model_groups_and_orders(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    o1 = _run(session, t, started_at=NOW, input_tokens=200, cache_read_tokens=600,
+              cache_write_tokens=200, cost=5.0)
+    o1.model_used = "claude-opus-4-7"
+    s1 = _run(session, t, started_at=NOW, input_tokens=100, cost=0.5)
+    s1.model_used = "claude-sonnet-4-6"
+    # No model recorded -> grouped under "unknown".
+    _run(session, t, started_at=NOW, input_tokens=10)
+    session.commit()
+
+    rows = analytics.tokens_by_model(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=29))
+    # opus has the most tokens (1000) -> first.
+    assert rows[0]["model"] == "claude-opus-4-7"
+    assert rows[0]["total_tokens"] == 1000
+    assert rows[0]["cache_hit_rate"] == pytest.approx(0.6)
+    models = {r["model"] for r in rows}
+    assert "unknown" in models
 
 
 # --- run stats + durations -------------------------------------------------
@@ -148,20 +187,22 @@ def test_duration_percentiles_empty(session):
 
 
 # --- daily series ----------------------------------------------------------
-def test_daily_spend_series_zero_filled(session):
+def test_daily_usage_series_zero_filled(session):
     p = _profile(session)
     t = _ticket(session, p)
-    _run(session, t, started_at=NOW, cost=1.0)
-    _run(session, t, started_at=NOW - timedelta(days=2), cost=3.0)
+    _run(session, t, started_at=NOW, input_tokens=100, output_tokens=20, cost=1.0)
+    _run(session, t, started_at=NOW - timedelta(days=2), input_tokens=300, cost=3.0)
 
-    series = analytics.daily_spend_series(
+    series = analytics.daily_usage_series(
         session, start=analytics.start_of_day(NOW) - timedelta(days=4), now=NOW)
     # 5 days inclusive (today minus 4 .. today).
     assert len(series) == 5
-    by_day = {d["date"]: d["cost"] for d in series}
-    assert by_day["2026-05-24"] == pytest.approx(1.0)
-    assert by_day["2026-05-22"] == pytest.approx(3.0)
-    assert by_day["2026-05-23"] == 0.0
+    by_day = {d["date"]: d["tokens"] for d in series}
+    assert by_day["2026-05-24"] == 120
+    assert by_day["2026-05-22"] == 300
+    assert by_day["2026-05-23"] == 0
+    # cost still rides along for the tooltip.
+    assert {d["date"]: d["cost"] for d in series}["2026-05-24"] == pytest.approx(1.0)
     # ordered oldest -> newest
     assert series[0]["date"] == "2026-05-20"
     assert series[-1]["date"] == "2026-05-24"

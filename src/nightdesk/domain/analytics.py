@@ -84,85 +84,144 @@ def compute_spend_status(session: Session, *, now: datetime) -> SpendStatus:
 # --------------------------------------------------------------------------
 # Dashboard aggregations.
 # --------------------------------------------------------------------------
-def window_totals(
-    session: Session, *, start: datetime, end: Optional[datetime] = None
-) -> dict:
-    """Spend + token totals + run count for runs started in ``[start, end)``."""
-    stmt = select(
-        func.coalesce(func.sum(Run.cost_usd), 0.0),
-        func.coalesce(func.sum(Run.input_tokens), 0),
-        func.coalesce(func.sum(Run.output_tokens), 0),
-        func.coalesce(func.sum(Run.cache_read_tokens), 0),
-        func.coalesce(func.sum(Run.cache_write_tokens), 0),
-        func.count(Run.id),
-    ).where(Run.started_at >= start)
-    if end is not None:
-        stmt = stmt.where(Run.started_at < end)
-    cost, it, ot, cr, cw, n = session.execute(stmt).one()
+def cache_hit_rate(
+    input_tokens: int, cache_read_tokens: int, cache_write_tokens: int
+) -> float:
+    """Share of prompt-side tokens served from cache (0..1).
+
+    Prompt tokens = fresh input + cache writes (first-time priming) + cache
+    reads. Output tokens are excluded since they're generated, never cached.
+    A high rate means most of the context was reused cheaply.
+    """
+    prompt = input_tokens + cache_read_tokens + cache_write_tokens
+    return (cache_read_tokens / prompt) if prompt else 0.0
+
+
+# Token-sum columns reused by several aggregates, in a stable order.
+_TOKEN_SUMS = (
+    func.coalesce(func.sum(Run.input_tokens), 0),
+    func.coalesce(func.sum(Run.output_tokens), 0),
+    func.coalesce(func.sum(Run.cache_read_tokens), 0),
+    func.coalesce(func.sum(Run.cache_write_tokens), 0),
+)
+_TOTAL_TOKENS = (
+    func.coalesce(func.sum(Run.input_tokens), 0)
+    + func.coalesce(func.sum(Run.output_tokens), 0)
+    + func.coalesce(func.sum(Run.cache_read_tokens), 0)
+    + func.coalesce(func.sum(Run.cache_write_tokens), 0)
+)
+
+
+def _token_row(it, ot, cr, cw, n, cost) -> dict:
     it, ot, cr, cw = int(it), int(ot), int(cr), int(cw)
     return {
-        "cost": float(cost),
         "input_tokens": it,
         "output_tokens": ot,
         "cache_read_tokens": cr,
         "cache_write_tokens": cw,
         "total_tokens": it + ot + cr + cw,
+        "cache_hit_rate": cache_hit_rate(it, cr, cw),
         "run_count": int(n),
+        "cost": float(cost),
     }
 
 
-def spend_by_profile(
+def window_totals(
+    session: Session, *, start: datetime, end: Optional[datetime] = None
+) -> dict:
+    """Token totals + cache-hit rate + run count + cost for ``[start, end)``."""
+    stmt = select(
+        *_TOKEN_SUMS,
+        func.count(Run.id),
+        func.coalesce(func.sum(Run.cost_usd), 0.0),
+    ).where(Run.started_at >= start)
+    if end is not None:
+        stmt = stmt.where(Run.started_at < end)
+    it, ot, cr, cw, n, cost = session.execute(stmt).one()
+    return _token_row(it, ot, cr, cw, n, cost)
+
+
+def tokens_by_model(
     session: Session, *, start: datetime, end: Optional[datetime] = None
 ) -> list[dict]:
-    """Spend + run count grouped by profile name, highest spend first."""
+    """Token totals + cache-hit rate grouped by model, most tokens first.
+
+    Runs with no recorded ``model_used`` group under ``"unknown"``.
+    """
+    stmt = (
+        select(
+            Run.model_used,
+            *_TOKEN_SUMS,
+            func.count(Run.id),
+            func.coalesce(func.sum(Run.cost_usd), 0.0),
+        )
+        .where(Run.started_at >= start)
+        .group_by(Run.model_used)
+        .order_by(_TOTAL_TOKENS.desc())
+    )
+    if end is not None:
+        stmt = stmt.where(Run.started_at < end)
+    out = []
+    for model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
+        row = {"model": model or "unknown", **_token_row(it, ot, cr, cw, n, cost)}
+        out.append(row)
+    return out
+
+
+def usage_by_profile(
+    session: Session, *, start: datetime, end: Optional[datetime] = None
+) -> list[dict]:
+    """Token totals + run count grouped by profile name, most tokens first."""
     stmt = (
         select(
             Profile.name,
-            func.coalesce(func.sum(Run.cost_usd), 0.0),
+            *_TOKEN_SUMS,
             func.count(Run.id),
+            func.coalesce(func.sum(Run.cost_usd), 0.0),
         )
         .select_from(Run)
         .join(Ticket, Run.ticket_id == Ticket.id)
         .join(Profile, Ticket.profile_id == Profile.id)
         .where(Run.started_at >= start)
         .group_by(Profile.name)
-        .order_by(func.coalesce(func.sum(Run.cost_usd), 0.0).desc())
+        .order_by(_TOTAL_TOKENS.desc())
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
     return [
-        {"name": name, "cost": float(cost), "run_count": int(n)}
-        for name, cost, n in session.execute(stmt).all()
+        {"name": name, **_token_row(it, ot, cr, cw, n, cost)}
+        for name, it, ot, cr, cw, n, cost in session.execute(stmt).all()
     ]
 
 
-def spend_by_ticket(
+def usage_by_ticket(
     session: Session,
     *,
     start: datetime,
     end: Optional[datetime] = None,
     limit: int = 10,
 ) -> list[dict]:
-    """Top tickets by spend over the window."""
+    """Top tickets by total tokens over the window."""
     stmt = (
         select(
             Ticket.id,
             Ticket.title,
-            func.coalesce(func.sum(Run.cost_usd), 0.0),
+            *_TOKEN_SUMS,
             func.count(Run.id),
+            func.coalesce(func.sum(Run.cost_usd), 0.0),
         )
         .select_from(Run)
         .join(Ticket, Run.ticket_id == Ticket.id)
         .where(Run.started_at >= start)
         .group_by(Ticket.id, Ticket.title)
-        .order_by(func.coalesce(func.sum(Run.cost_usd), 0.0).desc())
+        .order_by(_TOTAL_TOKENS.desc())
         .limit(limit)
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
     return [
-        {"ticket_id": tid, "title": title, "cost": float(cost), "run_count": int(n)}
-        for tid, title, cost, n in session.execute(stmt).all()
+        {"ticket_id": tid, "title": title, **_token_row(it, ot, cr, cw, n, cost)}
+        for tid, title, it, ot, cr, cw, n, cost in session.execute(stmt).all()
     ]
 
 
@@ -230,10 +289,10 @@ def duration_percentiles(
     }
 
 
-def daily_spend_series(
+def daily_usage_series(
     session: Session, *, start: datetime, now: datetime
 ) -> list[dict]:
-    """Per-day spend from ``start`` through the day containing ``now``.
+    """Per-day total tokens (and cost) from ``start`` through ``now``'s day.
 
     Returns one entry per calendar day (UTC), zero-filled, oldest first, so
     the template can render a continuous bar chart.
@@ -241,19 +300,21 @@ def daily_spend_series(
     rows = session.execute(
         select(
             func.date(Run.started_at),
+            _TOTAL_TOKENS,
             func.coalesce(func.sum(Run.cost_usd), 0.0),
         )
         .where(Run.started_at >= start)
         .group_by(func.date(Run.started_at))
     ).all()
-    by_day = {str(day): float(cost) for day, cost in rows}
+    by_day = {str(day): (int(tokens), float(cost)) for day, tokens, cost in rows}
 
     out: list[dict] = []
     day = start_of_day(start)
     last = start_of_day(now)
     while day <= last:
         key = day.strftime("%Y-%m-%d")
-        out.append({"date": key, "cost": by_day.get(key, 0.0)})
+        tokens, cost = by_day.get(key, (0, 0.0))
+        out.append({"date": key, "tokens": tokens, "cost": cost})
         day += timedelta(days=1)
     return out
 
@@ -262,27 +323,25 @@ def build_dashboard(session: Session, *, now: datetime) -> dict:
     """Assemble the full context for the ``/analytics`` page.
 
     Breakdowns and stats use a rolling 30-day window; the headline chips use
-    today / 7-day / 30-day windows.
+    today / 7-day / 30-day windows. Token-focused: cost is a secondary figure.
     """
     today_start = start_of_day(now)
     last_7d_start = today_start - timedelta(days=6)
     last_30d_start = today_start - timedelta(days=29)
 
-    spend = compute_spend_status(session, now=now)
-    series = daily_spend_series(session, start=last_30d_start, now=now)
-    max_daily = max((d["cost"] for d in series), default=0.0)
+    series = daily_usage_series(session, start=last_30d_start, now=now)
+    max_daily_tokens = max((d["tokens"] for d in series), default=0)
 
     return {
         "prices_as_of": PRICES_AS_OF,
         "today": window_totals(session, start=today_start),
         "last_7d": window_totals(session, start=last_7d_start),
         "last_30d": window_totals(session, start=last_30d_start),
-        "by_profile": spend_by_profile(session, start=last_30d_start),
-        "by_ticket": spend_by_ticket(session, start=last_30d_start),
+        "by_model": tokens_by_model(session, start=last_30d_start),
+        "by_profile": usage_by_profile(session, start=last_30d_start),
+        "by_ticket": usage_by_ticket(session, start=last_30d_start),
         "run_stats": run_stats(session, start=last_30d_start),
         "duration": duration_percentiles(session, start=last_30d_start),
         "daily_series": series,
-        "max_daily_cost": max_daily,
-        "day_spend_usd": spend.day_spend_usd,
-        "month_spend_usd": spend.month_spend_usd,
+        "max_daily_tokens": max_daily_tokens,
     }

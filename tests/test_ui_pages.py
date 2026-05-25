@@ -45,20 +45,25 @@ async def test_analytics_page_renders_with_totals(cookie_client, session):
     t = create_ticket(session, title="spendy ticket", prompt="hi",
                       priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
     now = datetime.now(timezone.utc)
-    session.add(Run(ticket_id=t.id, started_at=now, finished_at=now,
-                    exit_status="success", worktree_path="/w",
-                    transcript_path="/x", host="h", cost_usd=3.25,
-                    input_tokens=1000, output_tokens=500))
+    run = Run(ticket_id=t.id, started_at=now, finished_at=now,
+              exit_status="success", worktree_path="/w",
+              transcript_path="/x", host="h", cost_usd=3.25,
+              input_tokens=1000, output_tokens=500, cache_read_tokens=500)
+    run.model_used = "claude-opus-4-7"
+    session.add(run)
     session.commit()
 
     r = await cookie_client.get("/analytics")
     assert r.status_code == 200
     body = r.text
-    assert "Cost &amp; usage analytics" in body
-    # Estimate disclaimer present.
-    assert "estimates" in body
-    # Today's spend reflects the seeded run.
-    assert "$3.25" in body
+    assert "Token &amp; usage analytics" in body
+    # Token-focused sections present.
+    assert "cache hit" in body.lower()
+    assert "By model" in body
+    # 2.0k total tokens (1000 + 500 + 500) surfaces via the token formatter.
+    assert "2.0k" in body
+    # Per-model row shows the model.
+    assert "claude-opus-4-7" in body
     # Profile and ticket breakdowns surface.
     assert "anlz" in body
     assert "spendy ticket" in body
