@@ -162,3 +162,41 @@ def test_overlapping_windows_distinct_days(session, sample_profile):
     # Saturday → weekend cap 8.
     picked = pick_eligible(session, now=SATURDAY, total_running=0)
     assert len(picked) == 8
+
+
+# --- Timezone-aware window evaluation --------------------------------------
+
+
+def test_window_matches_uses_configured_timezone():
+    from zoneinfo import ZoneInfo
+    from nightdesk.worker.scheduler import window_matches
+    w = ScheduleWindow(label="ny-eve", day_mask=1, start="20:00", end="23:00",
+                       max_parallel=1, position=0)  # Monday 20:00-23:00 local
+    tz = ZoneInfo("America/New_York")
+    # Mon 21:00 EDT == Tue 01:00 UTC. UTC eval would see Tuesday and miss it.
+    inside = datetime(2026, 5, 12, 1, 0, tzinfo=timezone.utc)
+    assert window_matches(w, inside, tz) is True
+    # Mon 18:00 EDT == Mon 22:00 UTC, before the window opens.
+    before = datetime(2026, 5, 11, 22, 0, tzinfo=timezone.utc)
+    assert window_matches(w, before, tz) is False
+
+
+def test_window_matches_dst_boundary():
+    from zoneinfo import ZoneInfo
+    from nightdesk.worker.scheduler import window_matches
+    tz = ZoneInfo("America/New_York")
+    w = ScheduleWindow(label="daily9", day_mask=127, start="09:00", end="10:00",
+                       max_parallel=1, position=0)
+    # 2026-03-09 Monday, EDT (UTC-4): 09:30 EDT == 13:30 UTC.
+    assert window_matches(w, datetime(2026, 3, 9, 13, 30, tzinfo=timezone.utc), tz) is True
+    # 2026-01-05 Monday, EST (UTC-5): 09:30 EST == 14:30 UTC.
+    assert window_matches(w, datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc), tz) is True
+
+
+def test_window_matches_utc_default_unchanged():
+    from zoneinfo import ZoneInfo
+    from nightdesk.worker.scheduler import window_matches
+    w = ScheduleWindow(label="w", day_mask=127, start="22:00", end="07:00",
+                       max_parallel=1, position=0)
+    assert window_matches(w, datetime(2026, 5, 9, 23, 0, tzinfo=timezone.utc), ZoneInfo("UTC")) is True
+    assert window_matches(w, datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc), ZoneInfo("UTC")) is False

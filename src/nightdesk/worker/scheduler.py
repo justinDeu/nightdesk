@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, time
 from typing import List, Optional, Sequence
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,34 +36,32 @@ def _parse_hhmm(s: str) -> time:
     return time(int(h), int(m))
 
 
-def window_matches(window: ScheduleWindow, now: datetime) -> bool:
-    """True when ``window`` covers the current day-of-week and time.
+def window_matches(window: ScheduleWindow, now: datetime, tz: ZoneInfo) -> bool:
+    """True when ``window`` covers the current day-of-week and time in ``tz``.
 
-    ``day_mask`` bit ``1 << now.weekday()`` (Mon=0..Sun=6) must be set, and the
-    HH:MM start/end pair must contain ``now`` per ``in_window`` semantics.
+    ``now`` is an aware UTC instant; it is converted into ``tz`` first so the
+    weekday bit and the HH:MM range are both evaluated against local wall-clock
+    time. ``day_mask`` bit ``1 << local.weekday()`` (Mon=0..Sun=6) must be set.
     """
-    if not (window.day_mask & (1 << now.weekday())):
+    local = now.astimezone(tz)
+    if not (window.day_mask & (1 << local.weekday())):
         return False
     try:
         start = _parse_hhmm(window.start)
         end = _parse_hhmm(window.end)
     except (ValueError, AttributeError):
         return False
-    return in_window(start, end, now)
+    return in_window(start, end, local)
 
 
-def capacity_for(windows: Sequence[ScheduleWindow], now: datetime) -> Optional[int]:
-    """Resolve the parallelism cap from matching windows.
+def capacity_for(windows: Sequence[ScheduleWindow], now: datetime, tz: ZoneInfo) -> Optional[int]:
+    """Resolve the parallelism cap from windows matching ``now`` in ``tz``.
 
-    Returns the highest ``max_parallel`` among windows matching ``now`` (most
-    permissive — see notes below). Returns ``None`` when no window matches,
-    signalling "no normal dispatch" (capacity 0; run-now still works).
-
-    Overlap policy: most permissive wins (max of the matching caps). If the UX
-    should instead be most restrictive, switch ``max`` to ``min`` here and
-    revisit. Kept as max per the ticket default.
+    Returns the highest ``max_parallel`` among matching windows (most
+    permissive). Returns ``None`` when no window matches (capacity 0; run-now
+    still works).
     """
-    matching = [w for w in windows if window_matches(w, now)]
+    matching = [w for w in windows if window_matches(w, now, tz)]
     if not matching:
         return None
     return max(w.max_parallel for w in matching)
@@ -106,10 +105,17 @@ def pick_eligible(
             continue
         out.append(t)
 
+    from nightdesk.db.models import ConfigRow
+    cfg = session.get(ConfigRow, 1)
+    tz_name = cfg.schedule_timezone if cfg and cfg.schedule_timezone else "UTC"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
     windows = list(
         session.scalars(select(ScheduleWindow).order_by(ScheduleWindow.position.asc()))
     )
-    max_parallel = capacity_for(windows, now)
+    max_parallel = capacity_for(windows, now, tz)
     if max_parallel is None:
         # No window matches the current time/day: no normal dispatch.
         return out
