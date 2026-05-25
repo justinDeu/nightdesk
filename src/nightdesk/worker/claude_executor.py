@@ -87,11 +87,15 @@ class ClaudeExecutor:
         # Captured as early as the init event so a cancelled run still records
         # its session id (the result event never arrives on cancel).
         session_id: Optional[str] = None
+        # The model the agent actually ran. The SDK puts it on every assistant
+        # message but NOT on the final result event, so capture the last one
+        # seen and use it as the authoritative model for usage/cost.
+        seen_model: Optional[str] = None
 
         seq_counter: list[int] = [0]
 
         async def _drain() -> None:
-            nonlocal final, exit_status, error, last_result_event, assistant_tail, session_id
+            nonlocal final, exit_status, error, last_result_event, assistant_tail, session_id, seen_model
             assert proc.stdout is not None
             buf = bytearray()
             with req.transcript_path.open("ab") as f:
@@ -121,7 +125,7 @@ class ClaudeExecutor:
                     buf.clear()
 
         async def _handle_line(f, line: bytes) -> None:
-            nonlocal final, exit_status, error, last_result_event, assistant_tail, session_id
+            nonlocal final, exit_status, error, last_result_event, assistant_tail, session_id, seen_model
             text = line.decode("utf-8", errors="replace").strip()
             if not text:
                 return
@@ -151,6 +155,11 @@ class ClaudeExecutor:
                 sid = (evt.get("data") or {}).get("session_id")
                 if sid:
                     session_id = str(sid)
+            # The model rides on assistant messages, not the result event.
+            if evt.get("type") == "assistant":
+                m = evt.get("model")
+                if m:
+                    seen_model = str(m)
             # Capture run-completion summary before translation drops it.
             if evt.get("type") == "result":
                 last_result_event = evt
@@ -250,7 +259,12 @@ class ClaudeExecutor:
         if last_result_event is not None:
             try:
                 from nightdesk.domain.cost import extract_usage
-                usage = extract_usage(last_result_event, model_hint=req.permission_spec.default_model)
+                # Prefer the model the agent actually used (assistant stream),
+                # then the profile default. The result event rarely carries it.
+                usage = extract_usage(
+                    last_result_event,
+                    model_hint=seen_model or req.permission_spec.default_model,
+                )
             except Exception:
                 log.exception("usage extraction failed for ticket %s", req.ticket_id)
 

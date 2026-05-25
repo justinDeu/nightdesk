@@ -120,6 +120,40 @@ async def test_claude_executor_writes_transcript_and_final_summary(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_usage_model_taken_from_assistant_stream(tmp_path):
+    """The result event carries no model, so the model the agent actually used
+    is captured from the assistant messages — not left NULL ("unknown")."""
+    transcript = tmp_path / "t.log"
+    lines = [
+        json.dumps({"type": "assistant", "content": "working",
+                    "model": "claude-opus-4-7"}).encode() + b"\n",
+        json.dumps({"type": "result", "subtype": "success",
+                    "result": "done",
+                    "usage": {"input_tokens": 100, "output_tokens": 50}}).encode() + b"\n",
+    ]
+    fake = FakeProc(stdout_lines=lines, returncode=0)
+
+    async def fake_spawn(argv):
+        return fake
+
+    with patch("nightdesk.worker.claude_executor._spawn_sdk_subprocess", new=fake_spawn):
+        from nightdesk.worker.claude_executor import ClaudeExecutor
+        # default_model unset (the common Claude case that produced "unknown").
+        spec = PermissionSpec(allowed_tools=[], denied_tools=[], default_model=None)
+        req = ExecutionRequest(
+            ticket_id="t1", prompt="hi", cwd=tmp_path,
+            transcript_path=transcript,
+            bwrap_argv=["bwrap", "--", "python", "-m", "nightdesk.worker._sdk_runner"],
+            env={}, permission_spec=spec,
+        )
+        res = await ClaudeExecutor().run(req)
+
+    assert res.usage is not None
+    assert res.usage.model == "claude-opus-4-7"
+    assert res.usage.input_tokens == 100
+
+
+@pytest.mark.anyio
 async def test_claude_executor_handles_oversized_json_line(tmp_path):
     transcript = tmp_path / "t.log"
     huge = "x" * (256 * 1024)
