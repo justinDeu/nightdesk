@@ -428,6 +428,9 @@ class ConfigOut(BaseModel):
     notify_webhook_url: Optional[str] = None
     schedule_timezone: str = "UTC"
     windows: list[ScheduleWindowOut] = Field(default_factory=list)
+    # Budget guardrails. NULL = unlimited.
+    daily_budget_usd: Optional[float] = None
+    monthly_budget_usd: Optional[float] = None
 
     model_config = {"from_attributes": True}
 
@@ -450,6 +453,24 @@ class ConfigUpdate(BaseModel):
     # Webhook URL for run-completion notifications. Empty string clears it.
     notify_webhook_url: Optional[str] = None
     schedule_timezone: Optional[str] = None
+    # Budget guardrails (USD). None leaves the value alone (the JSON API can't
+    # clear a budget back to unlimited — use the /settings form for that). A
+    # positive value sets the cap; values must be > 0.
+    daily_budget_usd: Optional[float] = None
+    monthly_budget_usd: Optional[float] = None
+
+    @field_validator("daily_budget_usd", "monthly_budget_usd", mode="before")
+    @classmethod
+    def _positive_budget(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            raise ValueError("budget must be a number")
+        if f <= 0:
+            raise ValueError("budget must be greater than 0")
+        return f
 
     @field_validator("window_start", "window_end", mode="before")
     @classmethod
@@ -507,6 +528,14 @@ class WorkerStatusOut(BaseModel):
     total_running: int = 0
     # Legacy field retained so older clients keep working.
     running_count: int = 0
+    # Budget guardrail state. ``budget_exceeded`` pauses normal picks (run_now
+    # bypasses); ``budget_reason`` is a short human explanation for the pill.
+    daily_budget_usd: Optional[float] = None
+    monthly_budget_usd: Optional[float] = None
+    day_spend_usd: float = 0.0
+    month_spend_usd: float = 0.0
+    budget_exceeded: bool = False
+    budget_reason: Optional[str] = None
 
 
 class SearchHit(BaseModel):

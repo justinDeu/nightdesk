@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow, Run, Ticket, WorkerHeartbeat
+from nightdesk.domain.analytics import compute_budget_status
 from nightdesk.domain.search import FTS5SearchBackend
 from nightdesk.worker.scheduler import in_window
 
@@ -81,12 +82,20 @@ def _collect_worker_status(session: Session, *, worktree_root: str,
     run_now_running = sum(1 for r in running_runs if r["started_as_run_now"])
     normal_running = max(0, total_running - run_now_running)
 
+    now = datetime.now(timezone.utc)
     try:
         ws = _parse_hhmm(cfg.window_start)
         we = _parse_hhmm(cfg.window_end)
-        in_win = in_window(ws, we, datetime.now(timezone.utc))
+        in_win = in_window(ws, we, now)
     except Exception:
         in_win = False
+
+    budget = compute_budget_status(
+        session,
+        now=now,
+        daily_budget_usd=cfg.daily_budget_usd,
+        monthly_budget_usd=cfg.monthly_budget_usd,
+    )
 
     stale = True
     host = None
@@ -114,6 +123,12 @@ def _collect_worker_status(session: Session, *, worktree_root: str,
         "run_now_running": run_now_running,
         "total_running": total_running,
         "running_runs": running_runs,
+        "daily_budget_usd": budget.daily_budget_usd,
+        "monthly_budget_usd": budget.monthly_budget_usd,
+        "day_spend_usd": budget.day_spend_usd,
+        "month_spend_usd": budget.month_spend_usd,
+        "budget_exceeded": budget.exceeded,
+        "budget_reason": budget.reason,
     }
 
 
@@ -145,6 +160,17 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         status = _collect_worker_status(session, worktree_root=worktree_root,
                                           transcript_root=transcript_root)
         return templates.TemplateResponse(request, "partials/worker_pill.html", {
+            "status": status,
+        })
+
+    @router.get("/header/spend-chip", response_class=HTMLResponse,
+                 dependencies=[auth])
+    async def header_spend_chip(request: Request,
+                                 session: Session = Depends(get_session)):
+        """Top-line cost summary for the header (today + month spend)."""
+        status = _collect_worker_status(session, worktree_root=worktree_root,
+                                          transcript_root=transcript_root)
+        return templates.TemplateResponse(request, "partials/spend_chip.html", {
             "status": status,
         })
 

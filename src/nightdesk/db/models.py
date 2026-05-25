@@ -222,6 +222,13 @@ class ConfigRow(Base):
     # "UTC" reproduces the pre-timezone-fix behavior.
     schedule_timezone: Mapped[str] = mapped_column(String, default="UTC", nullable=False)
 
+    # Budget guardrails. NULL = unlimited. When set, the scheduler pauses
+    # normal picks once completed-run spend for the current UTC day / month
+    # reaches the cap (run_now still bypasses). Spend is the estimate from
+    # domain/cost.py summed over Run.cost_usd.
+    daily_budget_usd: Mapped[Optional[float]] = mapped_column(sa_Float, nullable=True)
+    monthly_budget_usd: Mapped[Optional[float]] = mapped_column(sa_Float, nullable=True)
+
 
 class ScheduleWindow(Base):
     """A named time window with its own parallelism cap.

@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% set active_page = 'analytics' %}
+
+{# --- formatting helpers ------------------------------------------------- #}
+{% macro fmt_tokens(n) -%}
+  {%- if n >= 1000000 -%}{{ '%.2f'|format(n / 1000000) }}M
+  {%- elif n >= 1000 -%}{{ '%.1f'|format(n / 1000) }}k
+  {%- else -%}{{ n }}{%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_dur(secs) -%}
+  {%- if secs is none -%}—
+  {%- elif secs >= 3600 -%}{{ '%.1f'|format(secs / 3600) }}h
+  {%- elif secs >= 60 -%}{{ '%.1f'|format(secs / 60) }}m
+  {%- else -%}{{ '%.0f'|format(secs) }}s{%- endif -%}
+{%- endmacro %}
+
+{% block body %}
+<section class="max-w-5xl mx-auto space-y-6">
+  <header class="flex items-center justify-between flex-wrap gap-2">
+    <h1 class="text-xl font-bold">Cost &amp; usage analytics</h1>
+    <span class="text-xs text-fg-muted">
+      Costs are estimates · prices as of {{ prices_as_of }}
+    </span>
+  </header>
+
+  {% if budget.exceeded %}
+    <div class="border border-warn/60 bg-warn/10 rounded-md p-3 text-sm text-warn">
+      Worker paused for normal picks: {{ budget.reason }}. Run-now tickets still
+      dispatch.
+    </div>
+  {% endif %}
+
+  {# --- headline windows ------------------------------------------------- #}
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    {% for label, w in [('Today', today), ('Last 7 days', last_7d), ('Last 30 days', last_30d)] %}
+      <div class="border border-border rounded-md bg-bg-elev p-4">
+        <div class="text-xs uppercase tracking-wide text-fg-muted">{{ label }}</div>
+        <div class="text-2xl font-bold mt-1">${{ '%.2f'|format(w.cost) }}</div>
+        <div class="text-xs text-fg-muted mt-2 space-y-0.5 font-mono">
+          <div>{{ fmt_tokens(w.total_tokens) }} tokens</div>
+          <div>{{ w.run_count }} run{{ '' if w.run_count == 1 else 's' }}</div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  {# --- per-day spend bar chart ------------------------------------------ #}
+  <div class="border border-border rounded-md bg-bg-elev p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold">Daily spend (last 30 days)</h2>
+      <span class="text-xs text-fg-muted">peak ${{ '%.2f'|format(max_daily_cost) }}/day</span>
+    </div>
+    {% if max_daily_cost > 0 %}
+      <div class="flex items-end gap-0.5 h-28">
+        {% for d in daily_series %}
+          {% set pct = (d.cost / max_daily_cost * 100) if max_daily_cost > 0 else 0 %}
+          <div class="flex-1 flex flex-col justify-end h-full group relative"
+               title="{{ d.date }}: ${{ '%.4f'|format(d.cost) }}">
+            <div class="w-full bg-accent rounded-sm {{ 'opacity-30' if d.cost == 0 else '' }}"
+                 style="height: {{ pct if pct > 1 else (1 if d.cost > 0 else 0) }}%"></div>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="flex justify-between text-[10px] text-fg-muted mt-1 font-mono">
+        <span>{{ daily_series[0].date if daily_series else '' }}</span>
+        <span>{{ daily_series[-1].date if daily_series else '' }}</span>
+      </div>
+    {% else %}
+      <p class="text-sm text-fg-muted">No spend recorded in this window.</p>
+    {% endif %}
+  </div>
+
+  {# --- run health + durations (last 30 days) ---------------------------- #}
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div class="border border-border rounded-md bg-bg-elev p-4">
+      <h2 class="font-semibold mb-3">Run outcomes (last 30 days)</h2>
+      <div class="space-y-1.5 text-sm font-mono">
+        <div class="flex justify-between"><span class="text-fg-muted">Completed</span><span>{{ run_stats.completed }}</span></div>
+        <div class="flex justify-between"><span class="text-fg-muted">Success</span><span class="text-accent">{{ run_stats.success }}</span></div>
+        <div class="flex justify-between"><span class="text-fg-muted">Failure</span><span class="{{ 'text-warn' if run_stats.failure else 'text-fg' }}">{{ run_stats.failure }}</span></div>
+        <div class="flex justify-between"><span class="text-fg-muted">Success rate</span><span>{{ '%.0f'|format(run_stats.success_rate * 100) }}%</span></div>
+      </div>
+    </div>
+    <div class="border border-border rounded-md bg-bg-elev p-4">
+      <h2 class="font-semibold mb-3">Run duration (last 30 days)</h2>
+      <div class="space-y-1.5 text-sm font-mono">
+        <div class="flex justify-between"><span class="text-fg-muted">Median</span><span>{{ fmt_dur(duration.median_seconds) }}</span></div>
+        <div class="flex justify-between"><span class="text-fg-muted">p90</span><span>{{ fmt_dur(duration.p90_seconds) }}</span></div>
+        <div class="flex justify-between"><span class="text-fg-muted">Sampled</span><span>{{ duration.count }}</span></div>
+      </div>
+    </div>
+  </div>
+
+  {# --- breakdowns ------------------------------------------------------- #}
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div class="border border-border rounded-md bg-bg-elev p-4">
+      <h2 class="font-semibold mb-3">Spend by profile (last 30 days)</h2>
+      {% if by_profile %}
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase tracking-wide text-fg-muted">
+            <tr><th class="text-left font-medium pb-1">Profile</th><th class="text-right font-medium pb-1">Runs</th><th class="text-right font-medium pb-1">Spend</th></tr>
+          </thead>
+          <tbody class="font-mono">
+            {% for row in by_profile %}
+              <tr class="border-t border-border/50">
+                <td class="py-1 truncate">{{ row.name }}</td>
+                <td class="py-1 text-right text-fg-muted">{{ row.run_count }}</td>
+                <td class="py-1 text-right">${{ '%.2f'|format(row.cost) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="text-sm text-fg-muted">No runs in this window.</p>
+      {% endif %}
+    </div>
+
+    <div class="border border-border rounded-md bg-bg-elev p-4">
+      <h2 class="font-semibold mb-3">Top tickets by spend (last 30 days)</h2>
+      {% if by_ticket %}
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase tracking-wide text-fg-muted">
+            <tr><th class="text-left font-medium pb-1">Ticket</th><th class="text-right font-medium pb-1">Runs</th><th class="text-right font-medium pb-1">Spend</th></tr>
+          </thead>
+          <tbody class="font-mono">
+            {% for row in by_ticket %}
+              <tr class="border-t border-border/50">
+                <td class="py-1 truncate max-w-0">
+                  <a href="/tickets/{{ row.ticket_id }}" class="text-accent hover:underline">{{ row.title }}</a>
+                </td>
+                <td class="py-1 text-right text-fg-muted">{{ row.run_count }}</td>
+                <td class="py-1 text-right">${{ '%.2f'|format(row.cost) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="text-sm text-fg-muted">No runs in this window.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {# --- budget summary --------------------------------------------------- #}
+  <div class="border border-border rounded-md bg-bg-elev p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold">Budget</h2>
+      <a href="/settings" class="text-xs text-accent hover:underline">Edit in settings</a>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm font-mono">
+      <div class="flex justify-between">
+        <span class="text-fg-muted">Today</span>
+        <span class="{{ 'text-warn' if budget.daily_exceeded else 'text-fg' }}">
+          ${{ '%.2f'|format(budget.day_spend_usd) }}{% if budget.daily_budget_usd %} / ${{ '%.2f'|format(budget.daily_budget_usd) }}{% else %} (no cap){% endif %}
+        </span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-fg-muted">This month</span>
+        <span class="{{ 'text-warn' if budget.monthly_exceeded else 'text-fg' }}">
+          ${{ '%.2f'|format(budget.month_spend_usd) }}{% if budget.monthly_budget_usd %} / ${{ '%.2f'|format(budget.monthly_budget_usd) }}{% else %} (no cap){% endif %}
+        </span>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

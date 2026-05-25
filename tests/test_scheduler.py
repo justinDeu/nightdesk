@@ -1,7 +1,7 @@
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from nightdesk.worker.scheduler import in_window, pick_eligible
-from nightdesk.db.models import ScheduleWindow, Ticket
+from nightdesk.db.models import Run, ScheduleWindow, Ticket
 from nightdesk.domain.tickets import create_ticket
 
 
@@ -28,6 +28,17 @@ def _window(session, *, label="w", day_mask=ALL_DAYS, start="22:00",
     session.add(w)
     session.commit()
     return w
+
+
+def _completed_run(session, ticket_id, *, started_at, cost):
+    """Seed a finished, priced run so budget sums see spend."""
+    r = Run(ticket_id=ticket_id, started_at=started_at,
+            finished_at=started_at + timedelta(seconds=10),
+            exit_status="success", worktree_path="/w",
+            transcript_path="/x", host="h", cost_usd=cost)
+    session.add(r)
+    session.commit()
+    return r
 
 
 def test_in_window_simple():
@@ -179,6 +190,67 @@ def test_window_matches_uses_configured_timezone():
     # Mon 18:00 EDT == Mon 22:00 UTC, before the window opens.
     before = datetime(2026, 5, 11, 22, 0, tzinfo=timezone.utc)
     assert window_matches(w, before, tz) is False
+
+
+# --- Budget guardrails -----------------------------------------------------
+# SATURDAY (2026-05-09 23:00 UTC) falls inside the default _window (22:00-07:00,
+# all days), so a window match is never the reason normal picks pause here.
+_NOW = datetime(2026, 5, 9, 23, 0, tzinfo=timezone.utc)
+
+
+def test_budget_under_cap_allows_normal_picks(session, sample_profile):
+    """A daily budget that hasn't been reached doesn't pause normal picks."""
+    _window(session)
+    normal = _qt(session, sample_profile, title="normal", run_now=False)
+    _completed_run(session, normal.id, started_at=_NOW, cost=1.0)
+    picked = pick_eligible(session, now=_NOW, total_running=0, daily_budget_usd=10.0)
+    assert [t.id for t in picked] == [normal.id]
+
+
+def test_daily_budget_exceeded_pauses_normal_but_honors_run_now(session, sample_profile):
+    """Once the daily budget is reached, normal queued picks pause while a
+    run_now ticket still dispatches (user's explicit choice bypasses)."""
+    _window(session)
+    normal = _qt(session, sample_profile, title="normal", run_now=False)
+    forced = _qt(session, sample_profile, title="forced", run_now=True)
+    # Spend $12 today against a $10 daily cap.
+    _completed_run(session, normal.id, started_at=_NOW, cost=12.0)
+
+    picked = pick_eligible(session, now=_NOW, total_running=0, daily_budget_usd=10.0)
+    # Only the run_now ticket is dispatched; the normal one is held.
+    assert [t.id for t in picked] == [forced.id]
+
+
+def test_monthly_budget_exceeded_pauses_normal_picks(session, sample_profile):
+    _window(session)
+    normal = _qt(session, sample_profile, title="normal", run_now=False)
+    # Spread spend across the month so 'today' alone wouldn't trip a daily cap.
+    _completed_run(session, normal.id, started_at=_NOW.replace(day=2), cost=6.0)
+    _completed_run(session, normal.id, started_at=_NOW.replace(day=5), cost=6.0)
+
+    picked = pick_eligible(session, now=_NOW, total_running=0, monthly_budget_usd=10.0)
+    assert picked == []
+
+
+def test_no_budget_set_never_pauses(session, sample_profile):
+    _window(session)
+    normal = _qt(session, sample_profile, title="normal", run_now=False)
+    _completed_run(session, normal.id, started_at=_NOW, cost=999.0)
+    picked = pick_eligible(session, now=_NOW, total_running=0)
+    assert [t.id for t in picked] == [normal.id]
+
+
+def test_pick_eligible_orders_normal_by_position_then_priority(session, sample_profile):
+    """Normal picks honor (position ASC, priority DESC, created_at ASC)."""
+    from nightdesk.domain.tickets import reorder_in_column
+    _window(session)
+    a = _qt(session, sample_profile, title="a", priority=0, run_now=False)
+    b = _qt(session, sample_profile, title="b", priority=9, run_now=False)
+    c = _qt(session, sample_profile, title="c", priority=5, run_now=False)
+    # Force ordering: c, a, b
+    reorder_in_column(session, "queued", [c.id, a.id, b.id])
+    picked = pick_eligible(session, now=SATURDAY, total_running=0)
+    assert [t.id for t in picked] == [c.id, a.id, b.id]
 
 
 def test_window_matches_dst_boundary():

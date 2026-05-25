@@ -307,3 +307,62 @@ async def test_settings_post_persists_worktree_base_ref(cookie_client, session):
     session.expire_all()
     cfg = session.get(ConfigRow, 1)
     assert cfg.worktree_base_ref is None
+
+
+# --- Budget guardrails (notifications pane) --------------------------------
+# Budgets live in the notifications pane (a worker guardrail alongside the
+# run-completion webhook), persisted via POST /settings/notifications.
+
+
+async def test_settings_get_renders_budget_fields(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
+                          daily_budget_usd=15.0, monthly_budget_usd=300.0))
+    session.commit()
+
+    r = await cookie_client.get("/settings/notifications")
+    assert r.status_code == 200
+    body = r.text
+    assert 'name="daily_budget_usd"' in body
+    assert 'name="monthly_budget_usd"' in body
+    assert "15.00" in body
+    assert "300.00" in body
+
+
+async def test_settings_post_persists_and_clears_budgets(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings/notifications",
+        data={"daily_budget_usd": "9.50", "monthly_budget_usd": "250"})
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.daily_budget_usd == 9.50
+    assert cfg.monthly_budget_usd == 250.0
+
+    # Blank submission clears the caps back to unlimited (NULL).
+    r = await cookie_client.post(
+        "/settings/notifications",
+        data={"daily_budget_usd": "", "monthly_budget_usd": ""})
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.daily_budget_usd is None
+    assert cfg.monthly_budget_usd is None
+
+
+async def test_settings_post_ignores_nonpositive_budget(cookie_client, session):
+    """A zero/negative budget is treated as unlimited so a fat-finger can't
+    wedge the worker into a permanent pause."""
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings/notifications",
+        data={"daily_budget_usd": "0", "monthly_budget_usd": "-5"})
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.daily_budget_usd is None
+    assert cfg.monthly_budget_usd is None

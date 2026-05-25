@@ -227,6 +227,52 @@ async def test_worker_status_reports_active_window(client):
     assert body["schedule_timezone"] == "UTC"
 
 
+async def test_worker_status_reports_budget_state(client, session):
+    """When today's spend reaches the daily budget, the status endpoint
+    flags budget_exceeded and supplies a human reason for the pill."""
+    from datetime import datetime, timezone
+    from nightdesk.db.models import ConfigRow, Profile, Run, Ticket
+
+    cfg = session.get(ConfigRow, 1)
+    if cfg is None:
+        cfg = ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t")
+        session.add(cfg)
+    cfg.daily_budget_usd = 5.0
+    session.commit()
+
+    p = Profile(name="bp", fs_read=[], fs_write=[], allowed_tools=[],
+                denied_tools=[], network_mode="off", network_allowlist=[],
+                secret_keys=[])
+    session.add(p); session.commit()
+    t = Ticket(id="tb", title="t", prompt="", status="review", priority=0,
+               profile_id=p.id, cwd="/tmp")
+    session.add(t); session.commit()
+    r = Run(id="rb", ticket_id="tb", started_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc), exit_status="success",
+            worktree_path="/w", transcript_path="/x", host="h", cost_usd=7.5)
+    session.add(r); session.commit()
+
+    body = (await client.get("/api/v1/worker/status")).json()
+    assert body["daily_budget_usd"] == 5.0
+    assert body["day_spend_usd"] == 7.5
+    assert body["budget_exceeded"] is True
+    assert "daily budget" in body["budget_reason"]
+
+
+async def test_patch_config_sets_budgets(client):
+    r = await client.patch("/api/v1/config",
+                           json={"daily_budget_usd": 12.5, "monthly_budget_usd": 200})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["daily_budget_usd"] == 12.5
+    assert body["monthly_budget_usd"] == 200
+
+
+async def test_patch_config_rejects_negative_budget(client):
+    r = await client.patch("/api/v1/config", json={"daily_budget_usd": -1})
+    assert r.status_code == 422
+
+
 async def test_patch_config_sets_and_clears_worktree_base_ref(client):
     r = await client.patch("/api/v1/config", json={"worktree_base_ref": "develop"})
     assert r.status_code == 200

@@ -18,6 +18,7 @@ from nightdesk.api.schemas import (
     WorkerStatusOut,
 )
 from nightdesk.db.models import ConfigRow, Run, ScheduleWindow, Ticket, WorkerHeartbeat
+from nightdesk.domain.analytics import compute_budget_status
 from nightdesk.worker.scheduler import capacity_for, window_matches
 
 
@@ -54,6 +55,8 @@ def _config_out(session: Session, row: ConfigRow) -> ConfigOut:
         notify_webhook_url=row.notify_webhook_url,
         schedule_timezone=row.schedule_timezone,
         windows=windows,
+        daily_budget_usd=row.daily_budget_usd,
+        monthly_budget_usd=row.monthly_budget_usd,
     )
 
 
@@ -169,6 +172,13 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
         active = next((w.label for w in windows if window_matches(w, now, tz)), None)
         effective_max = cap if cap is not None else 0
 
+        budget = compute_budget_status(
+            session,
+            now=now,
+            daily_budget_usd=cfg.daily_budget_usd,
+            monthly_budget_usd=cfg.monthly_budget_usd,
+        )
+
         stale = True
         last_seen_at = None
         host = None
@@ -198,6 +208,12 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
             run_now_running=run_now_running,
             total_running=total_running,
             running_count=total_running,
+            daily_budget_usd=budget.daily_budget_usd,
+            monthly_budget_usd=budget.monthly_budget_usd,
+            day_spend_usd=budget.day_spend_usd,
+            month_spend_usd=budget.month_spend_usd,
+            budget_exceeded=budget.exceeded,
+            budget_reason=budget.reason,
         )
 
     return router

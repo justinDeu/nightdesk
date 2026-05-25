@@ -33,6 +33,43 @@ async def test_board_page_renders(cookie_client, session):
     assert "my ticket" in r.text
 
 
+async def test_analytics_page_renders_with_totals(cookie_client, session):
+    """The /analytics page renders headline windows and breakdowns whose
+    totals match the seeded runs."""
+    from datetime import datetime, timezone
+    from nightdesk.db.models import Run, Ticket
+
+    p = create_profile(session, name="anlz", fs_read=[], fs_write=[], allowed_tools=[],
+                       denied_tools=[], network_mode="off", network_allowlist=[],
+                       secret_keys=[], default_model=None)
+    t = create_ticket(session, title="spendy ticket", prompt="hi",
+                      priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+    now = datetime.now(timezone.utc)
+    session.add(Run(ticket_id=t.id, started_at=now, finished_at=now,
+                    exit_status="success", worktree_path="/w",
+                    transcript_path="/x", host="h", cost_usd=3.25,
+                    input_tokens=1000, output_tokens=500))
+    session.commit()
+
+    r = await cookie_client.get("/analytics")
+    assert r.status_code == 200
+    body = r.text
+    assert "Cost &amp; usage analytics" in body
+    # Estimate disclaimer present.
+    assert "estimates" in body
+    # Today's spend reflects the seeded run.
+    assert "$3.25" in body
+    # Profile and ticket breakdowns surface.
+    assert "anlz" in body
+    assert "spendy ticket" in body
+
+
+async def test_analytics_page_in_nav(cookie_client, session):
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    assert 'href="/analytics"' in r.text
+
+
 async def test_board_sidebar_exposes_workspace_controls(cookie_client, session):
     p = create_profile(session, name="workspace-ui", fs_read=[], fs_write=[],
                        allowed_tools=[], denied_tools=[], network_mode="off",
