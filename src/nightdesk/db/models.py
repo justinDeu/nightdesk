@@ -216,6 +216,11 @@ class ConfigRow(Base):
     # Webhook URL for run-completion notifications (Slack/Discord/ntfy etc.).
     # Best-effort POST on run -> review transition; empty/NULL means disabled.
     notify_webhook_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Global IANA timezone for evaluating ScheduleWindow rows. Window start/end
+    # are wall-clock times in this zone and day_mask bits are local weekdays;
+    # the scheduler converts ``now`` into this zone before matching. Default
+    # "UTC" reproduces the pre-timezone-fix behavior.
+    schedule_timezone: Mapped[str] = mapped_column(String, default="UTC", nullable=False)
 
 
 class ScheduleWindow(Base):
