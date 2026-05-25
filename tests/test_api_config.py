@@ -115,6 +115,67 @@ async def test_worker_status_counts_running_with_overflow(client, session):
     assert body["max_parallel"] == 4
 
 
+async def test_windows_crud_lifecycle(client):
+    # Empty to start.
+    r = await client.get("/api/v1/config/windows")
+    assert r.status_code == 200
+    assert r.json() == []
+
+    # Create two windows.
+    r = await client.post("/api/v1/config/windows", json={
+        "label": "overnight", "day_mask": 127, "start": "22:00",
+        "end": "07:00", "max_parallel": 3, "position": 1,
+    })
+    assert r.status_code == 201
+    w1 = r.json()
+    assert w1["label"] == "overnight"
+    assert w1["max_parallel"] == 3
+    assert isinstance(w1["id"], int)
+
+    r = await client.post("/api/v1/config/windows", json={
+        "label": "weekday-daytime", "day_mask": 31, "start": "09:00",
+        "end": "17:00", "max_parallel": 1, "position": 0,
+    })
+    assert r.status_code == 201
+    w2 = r.json()
+
+    # Listed ordered by position (w2 has position 0).
+    r = await client.get("/api/v1/config/windows")
+    listed = r.json()
+    assert [w["label"] for w in listed] == ["weekday-daytime", "overnight"]
+
+    # ConfigOut surfaces the same windows.
+    r = await client.get("/api/v1/config")
+    assert [w["label"] for w in r.json()["windows"]] == ["weekday-daytime", "overnight"]
+
+    # Sparse PATCH updates only provided fields.
+    r = await client.patch(f"/api/v1/config/windows/{w1['id']}", json={"max_parallel": 9})
+    assert r.status_code == 200
+    patched = r.json()
+    assert patched["max_parallel"] == 9
+    assert patched["start"] == "22:00"  # untouched
+
+    # Delete one.
+    r = await client.delete(f"/api/v1/config/windows/{w2['id']}")
+    assert r.status_code == 204
+    r = await client.get("/api/v1/config/windows")
+    assert [w["id"] for w in r.json()] == [w1["id"]]
+
+
+async def test_window_patch_and_delete_404(client):
+    r = await client.patch("/api/v1/config/windows/9999", json={"max_parallel": 1})
+    assert r.status_code == 404
+    r = await client.delete("/api/v1/config/windows/9999")
+    assert r.status_code == 404
+
+
+async def test_window_create_rejects_bad_time_and_day_mask(client):
+    r = await client.post("/api/v1/config/windows", json={"start": "25:00"})
+    assert r.status_code == 422
+    r = await client.post("/api/v1/config/windows", json={"day_mask": 999})
+    assert r.status_code == 422
+
+
 async def test_patch_config_sets_and_clears_worktree_base_ref(client):
     r = await client.patch("/api/v1/config", json={"worktree_base_ref": "develop"})
     assert r.status_code == 200

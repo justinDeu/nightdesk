@@ -217,6 +217,33 @@ class ConfigRow(Base):
     notify_webhook_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
+class ScheduleWindow(Base):
+    """A named time window with its own parallelism cap.
+
+    Replaces the single ``window_start``/``window_end``/``max_parallel`` triple
+    on ConfigRow with a list of windows. The scheduler unions all matching
+    windows for the current time/day and uses the most permissive cap.
+
+    ``day_mask`` is a bitmask: Mon=1 Tue=2 Wed=4 Thu=8 Fri=16 Sat=32 Sun=64.
+    Bit ``i`` corresponds to ``1 << datetime.weekday()`` (Mon=0..Sun=6). The
+    default 127 (0b1111111) is every day.
+
+    ``start``/``end`` are HH:MM strings with the same wraparound semantics as
+    ``scheduler.in_window`` (equal start/end means always on; start > end wraps
+    past midnight).
+    """
+
+    __tablename__ = "schedule_windows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    label: Mapped[str] = mapped_column(String, default="", nullable=False)
+    day_mask: Mapped[int] = mapped_column(Integer, default=127, nullable=False)
+    start: Mapped[str] = mapped_column(String, default="00:00", nullable=False)
+    end: Mapped[str] = mapped_column(String, default="00:00", nullable=False)
+    max_parallel: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 class RunToken(Base):
     __tablename__ = "run_tokens"
 

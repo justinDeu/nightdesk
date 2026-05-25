@@ -316,6 +316,92 @@ class RunOut(BaseModel):
     cost_usd: Optional[float] = None
 
 
+_HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+# day_mask is a 7-bit field: Mon=1 Tue=2 Wed=4 Thu=8 Fri=16 Sat=32 Sun=64.
+_DAY_MASK_ALL = 127
+
+
+class ScheduleWindowOut(BaseModel):
+    id: int
+    label: str
+    day_mask: int
+    start: str
+    end: str
+    max_parallel: int
+    position: int
+
+    model_config = {"from_attributes": True}
+
+
+class ScheduleWindowCreate(BaseModel):
+    label: str = ""
+    day_mask: int = _DAY_MASK_ALL
+    start: str = "00:00"
+    end: str = "00:00"
+    max_parallel: int = 1
+    position: int = 0
+
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def _validate_hh_mm(cls, v: object) -> object:
+        if not isinstance(v, str) or not _HH_MM_RE.match(v):
+            raise ValueError("must be a valid HH:MM time (00:00-23:59)")
+        return v
+
+    @field_validator("day_mask")
+    @classmethod
+    def _validate_day_mask(cls, v: int) -> int:
+        if v < 0 or v > _DAY_MASK_ALL:
+            raise ValueError(f"day_mask must be between 0 and {_DAY_MASK_ALL}")
+        return v
+
+    @field_validator("max_parallel")
+    @classmethod
+    def _validate_max_parallel(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("max_parallel must be >= 0")
+        return v
+
+
+class ScheduleWindowUpdate(BaseModel):
+    """Sparse PATCH payload. Only provided fields are applied."""
+
+    label: Optional[str] = None
+    day_mask: Optional[int] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    max_parallel: Optional[int] = None
+    position: Optional[int] = None
+
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def _validate_hh_mm(cls, v: object) -> object:
+        if v is None:
+            return v
+        if not isinstance(v, str) or not _HH_MM_RE.match(v):
+            raise ValueError("must be a valid HH:MM time (00:00-23:59)")
+        return v
+
+    @field_validator("day_mask")
+    @classmethod
+    def _validate_day_mask(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        if v < 0 or v > _DAY_MASK_ALL:
+            raise ValueError(f"day_mask must be between 0 and {_DAY_MASK_ALL}")
+        return v
+
+    @field_validator("max_parallel")
+    @classmethod
+    def _validate_max_parallel(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        if v < 0:
+            raise ValueError("max_parallel must be >= 0")
+        return v
+
+
 class ConfigOut(BaseModel):
     window_start: str
     window_end: str
@@ -324,9 +410,9 @@ class ConfigOut(BaseModel):
     transcript_root: str
     worktree_base_ref: Optional[str] = None
     notify_webhook_url: Optional[str] = None
+    windows: list[ScheduleWindowOut] = Field(default_factory=list)
 
-
-_HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    model_config = {"from_attributes": True}
 
 
 class ConfigUpdate(BaseModel):
