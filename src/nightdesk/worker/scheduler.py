@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import ScheduleWindow, Ticket
-from nightdesk.domain.analytics import compute_budget_status
 
 
 def in_window(start: time, end: time, now: datetime) -> bool:
@@ -73,46 +72,27 @@ def pick_eligible(
     *,
     now: datetime,
     total_running: int,
-    daily_budget_usd: Optional[float] = None,
-    monthly_budget_usd: Optional[float] = None,
 ) -> List[Ticket]:
     """Pick tickets for this scheduler tick.
 
     1. Always pick all ``status='queued' AND run_now=true`` tickets, regardless
-       of window, capacity, or budget. These are user-forced and may push the
-       live count above the cap (overflow). Run-now is the user's explicit
-       choice, so it bypasses the budget guardrail too.
+       of window or capacity. These are user-forced and may push the live count
+       above the cap (overflow).
     2. Resolve the capacity from ScheduleWindow rows matching ``now``. With at
        least one matching window, ``max_parallel`` is the highest cap among
        matching windows. With no matching window, capacity is 0 and no normal
        jobs dispatch.
-    3. While within budget, fill remaining ``capacity =
-       max(0, max_parallel - total_running)`` slots from ``status='queued' AND
-       run_now=false``, ordered by ``(position ASC, priority DESC,
-       created_at ASC)``.
+    3. Fill remaining ``capacity = max(0, max_parallel - total_running)`` slots
+       from ``status='queued' AND run_now=false``, ordered by
+       ``(position ASC, priority DESC, created_at ASC)``.
 
     Tickets with unsatisfied dependencies are skipped in both passes.
     Capacity is clamped at zero; while running > max_parallel, only run-now
     tickets are picked.
-
-    Budget guardrail: when ``daily_budget_usd`` / ``monthly_budget_usd`` is set
-    and the current day/month spend estimate has reached it, normal picks pause
-    (mirroring how an out-of-window tick pauses them). Run-now is unaffected.
     """
-    # Only sum spend when a cap is actually set — keeps the common
-    # (no-budget) tick free of extra aggregate queries.
-    budget_exceeded = False
-    if daily_budget_usd is not None or monthly_budget_usd is not None:
-        budget = compute_budget_status(
-            session,
-            now=now,
-            daily_budget_usd=daily_budget_usd,
-            monthly_budget_usd=monthly_budget_usd,
-        )
-        budget_exceeded = budget.exceeded
     out: list[Ticket] = []
 
-    # Forced run-now picks first, unconditional (ignores window AND budget).
+    # Forced run-now picks first, unconditional (ignores window).
     run_now_stmt = (
         select(Ticket)
         .where(Ticket.status == "queued", Ticket.run_now.is_(True))
@@ -141,7 +121,7 @@ def pick_eligible(
         return out
 
     capacity = max(0, max_parallel - total_running)
-    if capacity == 0 or budget_exceeded:
+    if capacity == 0:
         return out
 
     normal_stmt = (

@@ -84,9 +84,8 @@
           }
         })();
       </script>
-      {# Top-line spend summary chip. Links to the analytics dashboard and
-         flips to a warning color when a budget cap is reached. Polled on a
-         relaxed cadence since spend changes slowly. #}
+      {# Top-line spend summary chip. Links to the analytics dashboard.
+         Polled on a relaxed cadence since spend changes slowly. #}
       <a id="spend-chip" href="/analytics"
          class="text-sm text-fg-muted font-mono hover:text-fg transition-colors"
          hx-get="/header/spend-chip"

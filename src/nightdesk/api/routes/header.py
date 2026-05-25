@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow, Run, Ticket, WorkerHeartbeat
-from nightdesk.domain.analytics import compute_budget_status
+from nightdesk.domain.analytics import compute_spend_status
 from nightdesk.domain.search import FTS5SearchBackend
 from nightdesk.worker.scheduler import in_window
 
@@ -90,12 +90,7 @@ def _collect_worker_status(session: Session, *, worktree_root: str,
     except Exception:
         in_win = False
 
-    budget = compute_budget_status(
-        session,
-        now=now,
-        daily_budget_usd=cfg.daily_budget_usd,
-        monthly_budget_usd=cfg.monthly_budget_usd,
-    )
+    spend = compute_spend_status(session, now=now)
 
     stale = True
     host = None
@@ -123,12 +118,8 @@ def _collect_worker_status(session: Session, *, worktree_root: str,
         "run_now_running": run_now_running,
         "total_running": total_running,
         "running_runs": running_runs,
-        "daily_budget_usd": budget.daily_budget_usd,
-        "monthly_budget_usd": budget.monthly_budget_usd,
-        "day_spend_usd": budget.day_spend_usd,
-        "month_spend_usd": budget.month_spend_usd,
-        "budget_exceeded": budget.exceeded,
-        "budget_reason": budget.reason,
+        "day_spend_usd": spend.day_spend_usd,
+        "month_spend_usd": spend.month_spend_usd,
     }
 
 

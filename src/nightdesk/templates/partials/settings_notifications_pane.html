@@ -32,35 +32,6 @@
         <span id="test-webhook-result" class="text-xs text-fg-muted"></span>
       </div>
     </section>
-
-    <section class="border border-border rounded p-4 bg-bg">
-      <h3 class="font-semibold mb-3 text-fg">Budget guardrails</h3>
-      <p class="text-xs text-fg-muted mb-3">
-        Cap estimated spend per day and per month. When a cap is reached the
-        worker pauses normal queued picks until the window rolls over; run-now
-        tickets always bypass the cap. Leave blank for unlimited. Costs are
-        estimates (see <a href="/analytics" class="text-accent hover:underline">analytics</a>).
-      </p>
-      <div class="grid grid-cols-[1fr,16rem] gap-x-3 gap-y-3 text-sm items-center">
-        <label for="daily_budget_usd" class="text-fg">
-          <div class="font-medium">Daily budget (USD)</div>
-          <div class="text-xs text-fg-muted">Pause normal picks once today's spend reaches this.</div>
-        </label>
-        <input id="daily_budget_usd" name="daily_budget_usd" type="number" min="0" step="0.01"
-               value="{{ ('%.2f'|format(cfg.daily_budget_usd)) if (cfg and cfg.daily_budget_usd is not none) else '' }}"
-               placeholder="unlimited"
-               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
-
-        <label for="monthly_budget_usd" class="text-fg">
-          <div class="font-medium">Monthly budget (USD)</div>
-          <div class="text-xs text-fg-muted">Pause normal picks once this calendar month's spend reaches this.</div>
-        </label>
-        <input id="monthly_budget_usd" name="monthly_budget_usd" type="number" min="0" step="0.01"
-               value="{{ ('%.2f'|format(cfg.monthly_budget_usd)) if (cfg and cfg.monthly_budget_usd is not none) else '' }}"
-               placeholder="unlimited"
-               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
-      </div>
-    </section>
     <div class="flex justify-end gap-2">
       <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save notification settings</button>
     </div>

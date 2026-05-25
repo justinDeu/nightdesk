@@ -16,7 +16,7 @@ from typing import Callable, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from nightdesk.db.models import ConfigRow, DaemonStatus, Run, Ticket
+from nightdesk.db.models import DaemonStatus, Run, Ticket
 from nightdesk.domain.cron_jobs import materialize_due_cron_jobs
 from nightdesk.domain.tickets import transition_status
 from nightdesk.worker.executor import Executor
@@ -200,16 +200,6 @@ class WorkerLoop:
             except Exception:
                 log.exception("orphan sweep failed (continuing)")
 
-            # Budget caps come from ConfigRow; the window/capacity decision is
-            # resolved from ScheduleWindow rows inside pick_eligible.
-            cfg = session.get(ConfigRow, 1)
-            if cfg is not None:
-                daily_budget_usd = cfg.daily_budget_usd
-                monthly_budget_usd = cfg.monthly_budget_usd
-            else:
-                daily_budget_usd = None
-                monthly_budget_usd = None
-
             # Capacity is driven by actual unfinished Run rows so the count
             # survives restarts and isn't polluted by tickets stuck in
             # 'running' without a Run row (which orphan recovery resets to
@@ -222,8 +212,6 @@ class WorkerLoop:
                 session,
                 now=datetime.now(timezone.utc),
                 total_running=total_running,
-                daily_budget_usd=daily_budget_usd,
-                monthly_budget_usd=monthly_budget_usd,
             )
             pick_ids: list[str] = []
             for t in picks:

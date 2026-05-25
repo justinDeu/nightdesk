@@ -183,8 +183,8 @@ async def test_worker_pill_run_now_overflow_indicator(cookie_client, session):
     assert "+1" in r.text
 
 
-async def _seed_budget_overshoot(session):
-    """Heartbeat + a finished priced run that overshoots a tiny daily cap."""
+async def _seed_today_spend(session):
+    """Heartbeat + a finished priced run so today's spend is non-zero."""
     from nightdesk.db.models import ConfigRow
     session.add(WorkerHeartbeat(id=1, host="thorpad", pid=1,
                                 last_seen_at=datetime.now(timezone.utc)))
@@ -192,7 +192,6 @@ async def _seed_budget_overshoot(session):
     if cfg is None:
         cfg = ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t")
         session.add(cfg)
-    cfg.daily_budget_usd = 1.0
     session.commit()
     p = Profile(name="bw", fs_read=[], fs_write=[], allowed_tools=[],
                 denied_tools=[], network_mode="off", network_allowlist=[],
@@ -209,23 +208,12 @@ async def _seed_budget_overshoot(session):
     session.commit()
 
 
-async def test_worker_pill_shows_budget_pause(cookie_client, session):
-    """Daily cap reached with nothing running -> pill shows a budget pause."""
-    await _seed_budget_overshoot(session)
-    r = await cookie_client.get("/header/worker-pill")
-    assert r.status_code == 200
-    assert "paused" in r.text
-    assert "daily budget" in r.text
-
-
-async def test_spend_chip_shows_today_spend_and_warning(cookie_client, session):
-    await _seed_budget_overshoot(session)
+async def test_spend_chip_shows_today_spend(cookie_client, session):
+    await _seed_today_spend(session)
     r = await cookie_client.get("/header/spend-chip")
     assert r.status_code == 200
     assert "2.50" in r.text
     assert "today" in r.text
-    # Over budget -> warning marker present.
-    assert "text-warn" in r.text
 
 
 async def test_worker_pill_requires_auth(app):

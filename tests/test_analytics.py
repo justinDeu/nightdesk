@@ -1,4 +1,4 @@
-"""Aggregation correctness + budget helpers for the cost dashboard."""
+"""Aggregation correctness + live-spend helpers for the cost dashboard."""
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -167,46 +167,15 @@ def test_daily_spend_series_zero_filled(session):
     assert series[-1]["date"] == "2026-05-24"
 
 
-# --- budget status ---------------------------------------------------------
-def test_budget_status_within_and_exceeded(session):
+# --- live spend ------------------------------------------------------------
+def test_spend_status_day_and_month(session):
     p = _profile(session)
     t = _ticket(session, p)
-    _run(session, t, started_at=NOW, cost=4.0)
-
-    within = analytics.compute_budget_status(
-        session, now=NOW, daily_budget_usd=10.0, monthly_budget_usd=None)
-    assert within.day_spend_usd == pytest.approx(4.0)
-    assert within.exceeded is False
-    assert within.reason is None
-
-    over = analytics.compute_budget_status(
-        session, now=NOW, daily_budget_usd=4.0, monthly_budget_usd=None)
-    assert over.daily_exceeded is True
-    assert over.exceeded is True
-    assert "daily budget" in over.reason
-
-
-def test_budget_status_monthly(session):
-    p = _profile(session)
-    t = _ticket(session, p)
-    # Two runs earlier this month plus today.
+    # Two runs earlier this month plus today; last month must not count.
     _run(session, t, started_at=NOW.replace(day=2), cost=6.0)
     _run(session, t, started_at=NOW, cost=5.0)
-    # Last month should not count.
     _run(session, t, started_at=NOW.replace(month=4, day=15), cost=50.0)
 
-    status = analytics.compute_budget_status(
-        session, now=NOW, daily_budget_usd=None, monthly_budget_usd=10.0)
+    status = analytics.compute_spend_status(session, now=NOW)
+    assert status.day_spend_usd == pytest.approx(5.0)
     assert status.month_spend_usd == pytest.approx(11.0)
-    assert status.monthly_exceeded is True
-    assert "monthly budget" in status.reason
-
-
-def test_budget_status_unlimited_when_none(session):
-    p = _profile(session)
-    t = _ticket(session, p)
-    _run(session, t, started_at=NOW, cost=999.0)
-    status = analytics.compute_budget_status(
-        session, now=NOW, daily_budget_usd=None, monthly_budget_usd=None)
-    assert status.exceeded is False
-    assert status.day_spend_usd == pytest.approx(999.0)

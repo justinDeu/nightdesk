@@ -13,13 +13,6 @@
   {% if status.stale or not status.host %}
     <span class="inline-block w-2 h-2 rounded-full bg-danger"></span>
     <span class="text-danger">offline</span>
-  {% elif status.budget_exceeded and status.total_running == 0 %}
-    {# Budget cap reached and nothing running: normal picks paused (run-now
-       still bypasses). Surface the cost reason so it's obvious why the queue
-       isn't draining. #}
-    <span class="inline-block w-2 h-2 rounded-full bg-warn"></span>
-    <span class="text-warn">paused</span>
-    <span class="text-fg-muted">· {{ status.budget_reason }}</span>
   {% elif not status.in_window and status.total_running == 0 %}
     <span class="inline-block w-2 h-2 rounded-full bg-warn"></span>
     <span class="text-warn">paused</span>
@@ -32,9 +25,7 @@
     {% if status.run_now_running and status.run_now_running > 0 %}
       <span class="text-accent-strong">⚡+{{ status.run_now_running }}</span>
     {% endif %}
-    {% if status.budget_exceeded %}
-      <span class="text-warn">· budget reached (run-now only)</span>
-    {% elif not status.in_window %}
+    {% if not status.in_window %}
       <span class="text-fg-muted">· run-now only</span>
     {% endif %}
   {% endif %}
@@ -89,18 +80,14 @@
         <span class="text-fg-muted">Capacity</span>
         <span class="text-fg">{{ status.max_parallel }}</span>
       </div>
-      {# Budget rows. Cost is an estimate (see domain/cost.py). #}
+      {# Spend rows. Cost is an estimate (see domain/cost.py). #}
       <div class="flex justify-between gap-4">
         <span class="text-fg-muted">Spend today</span>
-        <span class="{{ 'text-warn' if status.budget_exceeded else 'text-fg' }}">
-          ${{ '%.2f'|format(status.day_spend_usd or 0) }}{% if status.daily_budget_usd %} / ${{ '%.2f'|format(status.daily_budget_usd) }}{% endif %}
-        </span>
+        <span class="text-fg">${{ '%.2f'|format(status.day_spend_usd or 0) }}</span>
       </div>
       <div class="flex justify-between gap-4">
         <span class="text-fg-muted">Spend this month</span>
-        <span class="text-fg">
-          ${{ '%.2f'|format(status.month_spend_usd or 0) }}{% if status.monthly_budget_usd %} / ${{ '%.2f'|format(status.monthly_budget_usd) }}{% endif %}
-        </span>
+        <span class="text-fg">${{ '%.2f'|format(status.month_spend_usd or 0) }}</span>
       </div>
     </div>
 

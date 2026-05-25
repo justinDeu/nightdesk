@@ -24,13 +24,6 @@
     </span>
   </header>
 
-  {% if budget.exceeded %}
-    <div class="border border-warn/60 bg-warn/10 rounded-md p-3 text-sm text-warn">
-      Worker paused for normal picks: {{ budget.reason }}. Run-now tickets still
-      dispatch.
-    </div>
-  {% endif %}
-
   {# --- headline windows ------------------------------------------------- #}
   <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
     {% for label, w in [('Today', today), ('Last 7 days', last_7d), ('Last 30 days', last_30d)] %}
@@ -141,24 +134,17 @@
     </div>
   </div>
 
-  {# --- budget summary --------------------------------------------------- #}
+  {# --- spend summary ---------------------------------------------------- #}
   <div class="border border-border rounded-md bg-bg-elev p-4">
-    <div class="flex items-center justify-between mb-3">
-      <h2 class="font-semibold">Budget</h2>
-      <a href="/settings" class="text-xs text-accent hover:underline">Edit in settings</a>
-    </div>
+    <h2 class="font-semibold mb-3">Spend</h2>
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm font-mono">
       <div class="flex justify-between">
         <span class="text-fg-muted">Today</span>
-        <span class="{{ 'text-warn' if budget.daily_exceeded else 'text-fg' }}">
-          ${{ '%.2f'|format(budget.day_spend_usd) }}{% if budget.daily_budget_usd %} / ${{ '%.2f'|format(budget.daily_budget_usd) }}{% else %} (no cap){% endif %}
-        </span>
+        <span class="text-fg">${{ '%.2f'|format(day_spend_usd) }}</span>
       </div>
       <div class="flex justify-between">
         <span class="text-fg-muted">This month</span>
-        <span class="{{ 'text-warn' if budget.monthly_exceeded else 'text-fg' }}">
-          ${{ '%.2f'|format(budget.month_spend_usd) }}{% if budget.monthly_budget_usd %} / ${{ '%.2f'|format(budget.monthly_budget_usd) }}{% else %} (no cap){% endif %}
-        </span>
+        <span class="text-fg">${{ '%.2f'|format(month_spend_usd) }}</span>
       </div>
     </div>
   </div>

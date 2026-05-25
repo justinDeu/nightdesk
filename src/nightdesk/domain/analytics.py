@@ -1,8 +1,8 @@
-"""Aggregate cost/usage analytics and budget-guardrail helpers.
+"""Aggregate cost/usage analytics and live-spend helpers.
 
 Per-run ``cost_usd`` and token counts live on the ``Run`` row (written by the
 worker via ``domain/cost.py``). This module rolls those up cheaply in SQL for
-the ``/analytics`` dashboard and for the scheduler's budget gate.
+the ``/analytics`` dashboard and the header spend chip / worker pill.
 
 All cost figures are estimates: the price table in ``domain/cost.py`` is dated
 and unknown models contribute ``cost_usd = NULL`` (counted as $0). Callers
@@ -62,68 +62,22 @@ def spend_between(
 
 
 # --------------------------------------------------------------------------
-# Budget guardrails.
+# Live spend (day / month).
 # --------------------------------------------------------------------------
 @dataclass(frozen=True)
-class BudgetStatus:
-    daily_budget_usd: Optional[float]
-    monthly_budget_usd: Optional[float]
+class SpendStatus:
     day_spend_usd: float
     month_spend_usd: float
 
-    @property
-    def daily_exceeded(self) -> bool:
-        return (
-            self.daily_budget_usd is not None
-            and self.day_spend_usd >= self.daily_budget_usd
-        )
 
-    @property
-    def monthly_exceeded(self) -> bool:
-        return (
-            self.monthly_budget_usd is not None
-            and self.month_spend_usd >= self.monthly_budget_usd
-        )
+def compute_spend_status(session: Session, *, now: datetime) -> SpendStatus:
+    """Current day/month completed-run spend (estimate).
 
-    @property
-    def exceeded(self) -> bool:
-        return self.daily_exceeded or self.monthly_exceeded
-
-    @property
-    def reason(self) -> Optional[str]:
-        """Short human reason for a pause, or None when within budget."""
-        if self.daily_exceeded:
-            return (
-                f"daily budget reached "
-                f"(${self.day_spend_usd:.2f} / ${self.daily_budget_usd:.2f})"
-            )
-        if self.monthly_exceeded:
-            return (
-                f"monthly budget reached "
-                f"(${self.month_spend_usd:.2f} / ${self.monthly_budget_usd:.2f})"
-            )
-        return None
-
-
-def compute_budget_status(
-    session: Session,
-    *,
-    now: datetime,
-    daily_budget_usd: Optional[float],
-    monthly_budget_usd: Optional[float],
-) -> BudgetStatus:
-    """Current day/month spend vs the configured budgets.
-
-    Always runs the two cheap SUM queries so the worker pill can show live
-    spend even when no budget is set (the breach flags stay False then).
+    Two cheap SUM queries powering the header spend chip and the worker pill.
     """
-    day_spend = spend_between(session, start=start_of_day(now))
-    month_spend = spend_between(session, start=start_of_month(now))
-    return BudgetStatus(
-        daily_budget_usd=daily_budget_usd,
-        monthly_budget_usd=monthly_budget_usd,
-        day_spend_usd=day_spend,
-        month_spend_usd=month_spend,
+    return SpendStatus(
+        day_spend_usd=spend_between(session, start=start_of_day(now)),
+        month_spend_usd=spend_between(session, start=start_of_month(now)),
     )
 
 
@@ -304,13 +258,7 @@ def daily_spend_series(
     return out
 
 
-def build_dashboard(
-    session: Session,
-    *,
-    now: datetime,
-    daily_budget_usd: Optional[float] = None,
-    monthly_budget_usd: Optional[float] = None,
-) -> dict:
+def build_dashboard(session: Session, *, now: datetime) -> dict:
     """Assemble the full context for the ``/analytics`` page.
 
     Breakdowns and stats use a rolling 30-day window; the headline chips use
@@ -320,12 +268,7 @@ def build_dashboard(
     last_7d_start = today_start - timedelta(days=6)
     last_30d_start = today_start - timedelta(days=29)
 
-    budget = compute_budget_status(
-        session,
-        now=now,
-        daily_budget_usd=daily_budget_usd,
-        monthly_budget_usd=monthly_budget_usd,
-    )
+    spend = compute_spend_status(session, now=now)
     series = daily_spend_series(session, start=last_30d_start, now=now)
     max_daily = max((d["cost"] for d in series), default=0.0)
 
@@ -340,6 +283,6 @@ def build_dashboard(
         "duration": duration_percentiles(session, start=last_30d_start),
         "daily_series": series,
         "max_daily_cost": max_daily,
-        "budget": budget,
-        "month_spend_usd": budget.month_spend_usd,
+        "day_spend_usd": spend.day_spend_usd,
+        "month_spend_usd": spend.month_spend_usd,
     }

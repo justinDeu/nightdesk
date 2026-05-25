@@ -165,16 +165,9 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
     async def analytics_page(request: Request, session: Session = Depends(get_session)):
         from datetime import datetime, timezone
 
-        from nightdesk.db.models import ConfigRow
         from nightdesk.domain import analytics
 
-        cfg = session.get(ConfigRow, 1)
-        data = analytics.build_dashboard(
-            session,
-            now=datetime.now(timezone.utc),
-            daily_budget_usd=cfg.daily_budget_usd if cfg else None,
-            monthly_budget_usd=cfg.monthly_budget_usd if cfg else None,
-        )
+        data = analytics.build_dashboard(session, now=datetime.now(timezone.utc))
         return templates.TemplateResponse(
             request, "analytics.html",
             {"title": "Analytics", "active_page": "analytics", **data},
@@ -273,27 +266,9 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         request: Request,
         session: Session = Depends(get_session),
         notify_webhook_url: str = Form(""),
-        daily_budget_usd: str = Form(""),
-        monthly_budget_usd: str = Form(""),
     ):
         cfg = _ensure_cfg(session)
         cfg.notify_webhook_url = (notify_webhook_url or "").strip() or None
-
-        # Budget guardrails. Blank clears the cap (unlimited). A non-positive or
-        # unparseable value is treated as "leave unlimited" so a fat-finger
-        # can't wedge the worker into a permanent pause.
-        def _parse_budget(raw: str):
-            s = (raw or "").strip()
-            if not s:
-                return None
-            try:
-                val = float(s)
-            except (TypeError, ValueError):
-                return None
-            return val if val > 0 else None
-
-        cfg.daily_budget_usd = _parse_budget(daily_budget_usd)
-        cfg.monthly_budget_usd = _parse_budget(monthly_budget_usd)
         session.commit()
         return _render_settings(request, session, category="notifications", saved=True)
 
