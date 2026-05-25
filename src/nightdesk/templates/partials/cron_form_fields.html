@@ -24,9 +24,59 @@
          class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
 
   <label class="text-fg font-medium">Schedule</label>
-  <input type="text" name="schedule" required value="{{ job.schedule if job else '' }}"
-         placeholder="*/15 * * * *  (min hour dom month dow)"
-         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+  <div data-cron-builder class="flex flex-col gap-2">
+    {% set chip = "px-2 py-0.5 text-xs border border-border rounded hover:bg-bg-elev-2 aria-[pressed=true]:bg-accent aria-[pressed=true]:text-bg aria-[pressed=true]:border-accent" %}
+    <div class="flex flex-wrap gap-1">
+      <button type="button" data-cadence="minutes" aria-pressed="false" class="{{ chip }}">Every N min</button>
+      <button type="button" data-cadence="hourly" aria-pressed="false" class="{{ chip }}">Hourly</button>
+      <button type="button" data-cadence="daily" aria-pressed="false" class="{{ chip }}">Daily</button>
+      <button type="button" data-cadence="weekly" aria-pressed="false" class="{{ chip }}">Weekly</button>
+      <button type="button" data-cadence="monthly" aria-pressed="false" class="{{ chip }}">Monthly</button>
+      <button type="button" data-cadence="advanced" aria-pressed="false" class="{{ chip }}">Advanced</button>
+    </div>
+
+    <div data-fields="minutes" hidden class="flex items-center gap-2 text-sm">
+      every <input type="number" data-f="minutes" min="1" max="59" value="15"
+                   class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> minutes
+    </div>
+    <div data-fields="hourly" hidden class="flex items-center gap-2 text-sm">
+      every <input type="number" data-f="hours" min="1" max="23" value="1"
+                   class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> hours, at minute
+      <input type="number" data-f="atMinute" min="0" max="59" value="0"
+             class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+    </div>
+    <div data-fields="daily" hidden class="flex items-center gap-2 text-sm">
+      at <input type="time" data-f="time"
+                class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+    </div>
+    <div data-fields="weekly" hidden class="flex flex-col gap-2 text-sm">
+      <div class="flex flex-wrap gap-1">
+        {% for d in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),(5,'Sat'),(6,'Sun')] %}
+        <button type="button" data-day="{{ d[0] }}" aria-pressed="false" class="{{ chip }}">{{ d[1] }}</button>
+        {% endfor %}
+      </div>
+      <div class="flex items-center gap-2">at
+        <input type="time" data-f="time"
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+      </div>
+    </div>
+    <div data-fields="monthly" hidden class="flex items-center gap-2 text-sm">
+      on day <input type="number" data-f="dom" min="1" max="31" value="1"
+                    class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> at
+      <input type="time" data-f="time"
+             class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+    </div>
+
+    <div data-cron-description class="text-xs text-fg"></div>
+    <div data-cron-preview class="text-xs"></div>
+
+    <details data-cron-advanced class="text-xs">
+      <summary class="cursor-pointer text-fg-muted select-none">Advanced (raw cron)</summary>
+      <input type="text" name="schedule" data-cron-raw required value="{{ job.schedule if job else '' }}"
+             placeholder="*/15 * * * *  (min hour dom month dow)"
+             class="mt-1 w-full px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+    </details>
+  </div>
 
   <label class="text-fg font-medium">Timezone</label>
   <input type="text" name="timezone" value="{{ job.timezone if job else '' }}"

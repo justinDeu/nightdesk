@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.db.models import ConfigRow, ScheduleWindow
 from nightdesk.domain.notifications import build_test_payload, fire_webhook
 from nightdesk.domain.tickets import (
     archive, requeue, request_run_now, transition_status,
@@ -15,14 +18,16 @@ from nightdesk.domain.tickets import (
 )
 
 
-def _local_to_utc(hhmm: str, offset_minutes: int) -> str:
-    """Convert a local HH:MM time to UTC given getTimezoneOffset() in minutes.
-
-    getTimezoneOffset() returns (UTC - local) in minutes, so UTC = local + offset.
-    """
-    h, m = map(int, hhmm.split(":"))
-    total = (h * 60 + m + offset_minutes) % 1440
-    return f"{total // 60:02d}:{total % 60:02d}"
+def _windows_payload(session: Session) -> list[dict]:
+    """Serialize ScheduleWindow rows for the settings editor / JSON island."""
+    rows = session.scalars(
+        select(ScheduleWindow).order_by(ScheduleWindow.position.asc(), ScheduleWindow.id.asc())
+    ).all()
+    return [
+        {"label": w.label, "day_mask": w.day_mask, "start": w.start,
+         "end": w.end, "max_parallel": w.max_parallel, "position": w.position}
+        for w in rows
+    ]
 
 
 def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
@@ -123,68 +128,63 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
     async def settings_page(request: Request, session: Session = Depends(get_session)):
         import shutil
 
-        from nightdesk.db.models import ConfigRow
         cfg = session.get(ConfigRow, 1)
         return templates.TemplateResponse(
             request, "settings.html",
             {"title": "Settings", "active_page": "settings", "cfg": cfg,
-             "path_claude_binary": shutil.which("claude"), "saved": False},
+             "path_claude_binary": shutil.which("claude"), "saved": False,
+             "windows": _windows_payload(session),
+             "schedule_timezone": (cfg.schedule_timezone if cfg else "UTC")},
         )
 
     @router.post("/settings", response_class=HTMLResponse, dependencies=[auth])
     async def settings_save(
         request: Request,
         session: Session = Depends(get_session),
-        max_parallel: int = Form(...),
         polling_interval_seconds: int = Form(...),
-        window_start: str = Form("22:00"),
-        window_end: str = Form("07:00"),
-        always_on: str = Form(""),
         claude_binary_path: str = Form(""),
         cc_minimum_version: str = Form(""),
         worktree_base_ref: str = Form(""),
-        tz_offset: str = Form(""),
         notify_webhook_url: str = Form(""),
+        windows_json: str = Form("[]"),
+        schedule_timezone: str = Form("UTC"),
     ):
-        import re
+        import json as _json
 
-        from nightdesk.db.models import ConfigRow
         cfg = session.get(ConfigRow, 1)
         if cfg is None:
             cfg = ConfigRow(id=1, worktree_root="", transcript_root="")
             session.add(cfg)
         # Clamp to sane ranges so a fat-finger doesn't wedge the worker.
-        cfg.max_parallel = max(1, min(int(max_parallel), 16))
         cfg.polling_interval_seconds = max(1, min(int(polling_interval_seconds), 300))
 
-        # Parse browser timezone offset (getTimezoneOffset() in minutes).
-        # Missing or empty means no JS — treat times as already-UTC.
+        # Validate the timezone; fall back to UTC on anything unrecognized.
         try:
-            tz_off = int(tz_offset) if tz_offset.strip() else 0
-        except (ValueError, TypeError):
-            tz_off = 0
+            ZoneInfo(schedule_timezone)
+            cfg.schedule_timezone = schedule_timezone
+        except Exception:
+            cfg.schedule_timezone = "UTC"
 
-        # Work-hours block. "Always on" sends 00:00 -> 00:00; the scheduler's
-        # in_window() reads equal start and end as "no restriction".
-        hhmm_re = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-        if always_on:
-            cfg.window_start = "00:00"
-            cfg.window_end = "00:00"
-        else:
-            ws = (_local_to_utc(window_start, tz_off)
-                  if hhmm_re.match(window_start or "") else cfg.window_start)
-            we = (_local_to_utc(window_end, tz_off)
-                  if hhmm_re.match(window_end or "") else cfg.window_end)
-            # Unchecking "always on" must leave a restricted window. But equal
-            # bounds ARE the always-on convention, so a degenerate ws == we
-            # (e.g. both inputs still carry the 00:00 the always-on state was
-            # prefilled from) would silently round-trip straight back to
-            # always-on. Fall back to the default window so the toggle sticks.
-            if ws == we:
-                ws = _local_to_utc("22:00", tz_off)
-                we = _local_to_utc("07:00", tz_off)
-            cfg.window_start = ws
-            cfg.window_end = we
+        # Replace all schedule windows from the editor's JSON. Times are stored
+        # as wall-clock HH:MM in the configured timezone (no UTC conversion).
+        try:
+            rows = _json.loads(windows_json or "[]")
+        except _json.JSONDecodeError:
+            rows = []
+        if not isinstance(rows, list):
+            rows = []
+        for existing in session.scalars(select(ScheduleWindow)).all():
+            session.delete(existing)
+        session.flush()
+        for i, w in enumerate(rows):
+            session.add(ScheduleWindow(
+                label=str(w.get("label", "")),
+                day_mask=int(w.get("day_mask", 127)),
+                start=str(w.get("start", "00:00")),
+                end=str(w.get("end", "00:00")),
+                max_parallel=max(1, min(int(w.get("max_parallel", 1)), 16)),
+                position=i,
+            ))
 
         cfg.claude_binary_path = (claude_binary_path or "").strip() or None
         cfg.cc_minimum_version = (cc_minimum_version or "").strip() or cfg.cc_minimum_version
@@ -196,7 +196,9 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         return templates.TemplateResponse(
             request, "settings.html",
             {"title": "Settings", "active_page": "settings", "cfg": cfg,
-             "path_claude_binary": shutil.which("claude"), "saved": True},
+             "path_claude_binary": shutil.which("claude"), "saved": True,
+             "windows": _windows_payload(session),
+             "schedule_timezone": cfg.schedule_timezone},
         )
 
     @router.post("/settings/test-webhook", dependencies=[auth])

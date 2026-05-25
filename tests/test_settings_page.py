@@ -1,16 +1,18 @@
-"""Cookie-auth tests for the rewritten /settings page.
+"""Cookie-auth tests for the /settings page (multi-window model).
 
 Covers:
-    * GET renders Work hours section with HTML5 time pickers.
-    * POST with ``always_on=on`` writes 00:00/00:00.
-    * POST with explicit times persists them to ConfigRow.
-    * Form no longer surfaces max_run_duration_seconds.
+    * GET renders the Work windows editor (not the legacy work-hours inputs).
+    * POST persists schedule windows + global timezone, replacing prior windows.
+    * Bad timezone falls back to UTC.
+    * Unrelated config fields (worktree_base_ref, max_run_duration) still work.
 """
+import json
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from nightdesk.api.app import create_app
-from nightdesk.db.models import ConfigRow
+from nightdesk.db.models import ConfigRow, ScheduleWindow
 
 
 @pytest.fixture
@@ -35,91 +37,143 @@ async def cookie_client(app):
         yield ac
 
 
-async def test_settings_get_renders_work_hours_with_time_inputs(cookie_client, session):
-    cfg = ConfigRow(
-        id=1,
-        worktree_root="/tmp/w",
-        transcript_root="/tmp/t",
-        window_start="22:00",
-        window_end="07:00",
-    )
-    session.add(cfg)
+async def test_settings_get_renders_windows_editor(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
     r = await cookie_client.get("/settings")
     assert r.status_code == 200
     body = r.text
-    assert "Work hours" in body
-    assert 'type="time"' in body
+    # New multi-window UI is present.
+    assert "Work windows" in body
+    assert 'id="windows-editor"' in body
+    assert 'name="windows_json"' in body
+    assert 'name="schedule_timezone"' in body
+    assert 'id="windows-data"' in body
+    # Legacy single-window form is gone.
+    assert 'name="window_start"' not in body
+    assert 'name="always_on"' not in body
+    assert 'name="tz_offset"' not in body
+
+
+async def test_settings_get_seeds_windows_data_island(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
+                          schedule_timezone="America/New_York"))
+    session.add(ScheduleWindow(label="overnight", day_mask=31, start="22:00",
+                               end="07:00", max_parallel=3, position=0))
+    session.commit()
+
+    r = await cookie_client.get("/settings")
+    assert r.status_code == 200
+    assert "overnight" in r.text
+
+
+async def test_settings_post_persists_windows_and_timezone(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    windows = [{"label": "overnight", "day_mask": 31, "start": "22:00",
+                "end": "07:00", "max_parallel": 3, "position": 0}]
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "polling_interval_seconds": "5",
+            "claude_binary_path": "",
+            "cc_minimum_version": "2.1.80",
+            "windows_json": json.dumps(windows),
+            "schedule_timezone": "America/New_York",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.schedule_timezone == "America/New_York"
+    rows = session.query(ScheduleWindow).all()
+    assert [w.label for w in rows] == ["overnight"]
+    assert rows[0].day_mask == 31
+    assert rows[0].max_parallel == 3
+
+
+async def test_settings_post_replaces_existing_windows(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.add(ScheduleWindow(label="old", day_mask=127, start="00:00",
+                               end="00:00", max_parallel=1, position=0))
+    session.commit()
+
+    windows = [{"label": "new", "day_mask": 96, "start": "00:00",
+                "end": "00:00", "max_parallel": 2, "position": 0}]
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "polling_interval_seconds": "5",
+            "cc_minimum_version": "2.1.80",
+            "windows_json": json.dumps(windows),
+            "schedule_timezone": "UTC",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    rows = session.query(ScheduleWindow).all()
+    assert [w.label for w in rows] == ["new"]
+
+
+async def test_settings_post_empty_windows_clears_all(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.add(ScheduleWindow(label="x", day_mask=127, start="00:00",
+                               end="00:00", max_parallel=1, position=0))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "polling_interval_seconds": "5",
+            "cc_minimum_version": "2.1.80",
+            "windows_json": "[]",
+            "schedule_timezone": "UTC",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    assert session.query(ScheduleWindow).all() == []
+
+
+async def test_settings_post_bad_timezone_falls_back_to_utc(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings",
+        data={
+            "polling_interval_seconds": "5",
+            "cc_minimum_version": "2.1.80",
+            "windows_json": "[]",
+            "schedule_timezone": "Mars/Phobos",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.schedule_timezone == "UTC"
 
 
 async def test_settings_binary_path_shows_resolved_default(cookie_client, session, monkeypatch):
     """The Claude binary path field shows the actual resolved PATH binary as its
     placeholder/hint, not the old generic '(use PATH lookup)' text."""
-    import nightdesk.api.routes.ui as ui_module  # noqa: F401
     import shutil
     monkeypatch.setattr(shutil, "which", lambda name: "/opt/cc/bin/claude" if name == "claude" else None)
+
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
 
     r = await cookie_client.get("/settings")
     assert r.status_code == 200
     body = r.text
     assert "(use PATH lookup)" not in body
     assert "/opt/cc/bin/claude" in body
-    assert 'name="window_start"' in body
-    assert 'name="window_end"' in body
-    assert 'name="always_on"' in body
-    # Drop confirmed: no max_run_duration_seconds form field.
+    # Dropped fields stay dropped.
     assert 'name="max_run_duration_seconds"' not in body
     assert 'name="run_token_grace_seconds"' not in body
-    # Storage paths section is gone.
     assert "Storage paths" not in body
-
-
-async def test_settings_post_always_on_writes_zero_window(cookie_client, session):
-    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-    session.commit()
-
-    r = await cookie_client.post(
-        "/settings",
-        data={
-            "max_parallel": "2",
-            "polling_interval_seconds": "5",
-            "always_on": "on",
-            "window_start": "22:00",
-            "window_end": "07:00",
-            "claude_binary_path": "",
-            "cc_minimum_version": "2.1.80",
-        },
-    )
-    assert r.status_code == 200
-    session.expire_all()
-    cfg = session.get(ConfigRow, 1)
-    assert cfg.window_start == "00:00"
-    assert cfg.window_end == "00:00"
-
-
-async def test_settings_post_explicit_times_persist(cookie_client, session):
-    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-    session.commit()
-
-    r = await cookie_client.post(
-        "/settings",
-        data={
-            "max_parallel": "3",
-            "polling_interval_seconds": "10",
-            "window_start": "21:30",
-            "window_end": "06:15",
-            "claude_binary_path": "",
-            "cc_minimum_version": "2.1.80",
-        },
-    )
-    assert r.status_code == 200
-    session.expire_all()
-    cfg = session.get(ConfigRow, 1)
-    assert cfg.window_start == "21:30"
-    assert cfg.window_end == "06:15"
-    assert cfg.max_parallel == 3
-    assert cfg.polling_interval_seconds == 10
 
 
 async def test_settings_post_does_not_touch_max_run_duration(cookie_client, session):
@@ -136,12 +190,11 @@ async def test_settings_post_does_not_touch_max_run_duration(cookie_client, sess
     r = await cookie_client.post(
         "/settings",
         data={
-            "max_parallel": "2",
             "polling_interval_seconds": "5",
-            "window_start": "22:00",
-            "window_end": "07:00",
             "claude_binary_path": "",
             "cc_minimum_version": "2.1.80",
+            "windows_json": "[]",
+            "schedule_timezone": "UTC",
         },
     )
     assert r.status_code == 200
@@ -170,13 +223,12 @@ async def test_settings_post_persists_worktree_base_ref(cookie_client, session):
     r = await cookie_client.post(
         "/settings",
         data={
-            "max_parallel": "2",
             "polling_interval_seconds": "5",
-            "window_start": "22:00",
-            "window_end": "07:00",
             "claude_binary_path": "",
             "cc_minimum_version": "2.1.80",
             "worktree_base_ref": "develop",
+            "windows_json": "[]",
+            "schedule_timezone": "UTC",
         },
     )
     assert r.status_code == 200
@@ -188,186 +240,15 @@ async def test_settings_post_persists_worktree_base_ref(cookie_client, session):
     r = await cookie_client.post(
         "/settings",
         data={
-            "max_parallel": "2",
             "polling_interval_seconds": "5",
-            "window_start": "22:00",
-            "window_end": "07:00",
             "claude_binary_path": "",
             "cc_minimum_version": "2.1.80",
             "worktree_base_ref": "",
+            "windows_json": "[]",
+            "schedule_timezone": "UTC",
         },
     )
     assert r.status_code == 200
     session.expire_all()
     cfg = session.get(ConfigRow, 1)
     assert cfg.worktree_base_ref is None
-
-
-async def test_settings_get_includes_tz_offset_hidden_field(cookie_client, session):
-    """The settings form contains a hidden tz_offset field for the browser
-    timezone offset, populated by JS on load."""
-    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-    session.commit()
-
-    r = await cookie_client.get("/settings")
-    assert r.status_code == 200
-    assert 'name="tz_offset"' in r.text
-    assert 'id="tz_offset"' in r.text
-
-
-async def test_settings_post_converts_local_times_to_utc(cookie_client, session):
-    """When the browser sends tz_offset (getTimezoneOffset()), the handler
-    converts local times to UTC before writing to ConfigRow.
-
-    getTimezoneOffset() returns (UTC - local) in minutes.
-    UTC+2 → offset = -120.
-    Local 22:00 + (-120 min) = 20:00 UTC.
-    Local 07:00 + (-120 min) = 05:00 UTC.
-    """
-    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-    session.commit()
-
-    r = await cookie_client.post(
-        "/settings",
-        data={
-            "max_parallel": "2",
-            "polling_interval_seconds": "5",
-            "window_start": "22:00",
-            "window_end": "07:00",
-            "claude_binary_path": "",
-            "cc_minimum_version": "2.1.80",
-            "tz_offset": "-120",
-        },
-    )
-    assert r.status_code == 200
-    session.expire_all()
-    cfg = session.get(ConfigRow, 1)
-    assert cfg.window_start == "20:00"
-    assert cfg.window_end == "05:00"
-
-
-async def test_settings_post_utc_conversion_wraps_midnight(cookie_client, session):
-    """UTC conversion wraps around midnight correctly.
-
-    UTC-5 → offset = 300.
-    Local 22:00 + 300 min = 27:00 → 03:00 UTC (wraps).
-    Local 07:00 + 300 min = 12:00 UTC.
-    """
-    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-    session.commit()
-
-    r = await cookie_client.post(
-        "/settings",
-        data={
-            "max_parallel": "2",
-            "polling_interval_seconds": "5",
-            "window_start": "22:00",
-            "window_end": "07:00",
-            "claude_binary_path": "",
-            "cc_minimum_version": "2.1.80",
-            "tz_offset": "300",
-        },
-    )
-    assert r.status_code == 200
-    session.expire_all()
-    cfg = session.get(ConfigRow, 1)
-    assert cfg.window_start == "03:00"
-    assert cfg.window_end == "12:00"
-
-
-async def test_settings_post_without_tz_offset_stores_as_is(cookie_client, session):
-    """Without tz_offset (no JS), times are stored as-is (treated as UTC)."""
-    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-    session.commit()
-
-    r = await cookie_client.post(
-        "/settings",
-        data={
-            "max_parallel": "2",
-            "polling_interval_seconds": "5",
-            "window_start": "21:30",
-            "window_end": "06:15",
-            "claude_binary_path": "",
-            "cc_minimum_version": "2.1.80",
-        },
-    )
-    assert r.status_code == 200
-    session.expire_all()
-    cfg = session.get(ConfigRow, 1)
-    assert cfg.window_start == "21:30"
-    assert cfg.window_end == "06:15"
-
-
-async def test_settings_post_invalid_tz_offset_stores_as_is(cookie_client, session):
-    """Garbage tz_offset is treated as 0 — no conversion."""
-    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-    session.commit()
-
-    r = await cookie_client.post(
-        "/settings",
-        data={
-            "max_parallel": "2",
-            "polling_interval_seconds": "5",
-            "window_start": "22:00",
-            "window_end": "07:00",
-            "claude_binary_path": "",
-            "cc_minimum_version": "2.1.80",
-            "tz_offset": "not-a-number",
-        },
-    )
-    assert r.status_code == 200
-    session.expire_all()
-    cfg = session.get(ConfigRow, 1)
-    assert cfg.window_start == "22:00"
-    assert cfg.window_end == "07:00"
-
-
-async def test_settings_uncheck_always_on_persists(cookie_client, session):
-    """Unchecking 'always on' must leave a restricted window. The form prefills
-    both inputs from the always-on 00:00, so they arrive equal; storing that
-    verbatim would re-infer always-on (start == end). Fall back to the default
-    window instead so the toggle sticks."""
-    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
-                          window_start="00:00", window_end="00:00"))
-    session.commit()
-
-    # No always_on field (unchecked); equal local inputs (20:00 == 20:00).
-    r = await cookie_client.post(
-        "/settings",
-        data={
-            "max_parallel": "2",
-            "polling_interval_seconds": "5",
-            "window_start": "20:00",
-            "window_end": "20:00",
-            "cc_minimum_version": "2.1.80",
-            "tz_offset": "0",
-        },
-    )
-    assert r.status_code == 200
-    session.expire_all()
-    cfg = session.get(ConfigRow, 1)
-    assert cfg.window_start != cfg.window_end  # no longer always-on
-    assert (cfg.window_start, cfg.window_end) == ("22:00", "07:00")
-
-
-async def test_settings_always_on_checked_stores_equal_window(cookie_client, session):
-    """Checking 'always on' stores 00:00/00:00 regardless of the time inputs."""
-    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-    session.commit()
-
-    r = await cookie_client.post(
-        "/settings",
-        data={
-            "max_parallel": "2",
-            "polling_interval_seconds": "5",
-            "window_start": "20:00",
-            "window_end": "08:00",
-            "always_on": "on",
-            "cc_minimum_version": "2.1.80",
-            "tz_offset": "240",
-        },
-    )
-    assert r.status_code == 200
-    session.expire_all()
-    cfg = session.get(ConfigRow, 1)
-    assert cfg.window_start == cfg.window_end == "00:00"

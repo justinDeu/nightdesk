@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% set title = "Settings" %}
 {% block body %}
-{% set always_on = cfg and cfg.window_start == cfg.window_end %}
 <div class="max-w-2xl mx-auto px-4 py-4 flex flex-col gap-6">
   <header class="flex items-center gap-4">
     <h1 class="text-xl font-bold">Settings</h1>
@@ -13,55 +12,30 @@
   </p>
 
   <form method="post" action="/settings" class="flex flex-col gap-4">
-    <input type="hidden" name="tz_offset" id="tz_offset" value="" />
+    <input type="hidden" name="windows_json" id="windows_json" value="" />
+    <input type="hidden" name="schedule_timezone" id="schedule_timezone" value="" />
     <section class="border border-border rounded p-4 bg-bg-elev">
-      <h2 class="font-semibold mb-3">Work hours</h2>
+      <h2 class="font-semibold mb-3">Work windows</h2>
       <p class="text-xs text-fg-muted mb-3">
-        Tickets are dispatched only between start and end. Overnight windows
-        like 22:00 to 07:00 are supported. Run-now tickets ignore this window.
+        Tickets dispatch only inside a window, using that window's parallelism cap.
+        Times are in your local timezone (<span id="tz-name" class="font-mono"></span>).
+        Run-now tickets ignore windows. With no windows, nothing dispatches automatically.
       </p>
-      <div class="flex flex-col gap-3 text-sm">
-        <label class="flex items-center gap-2">
-          <input id="always_on" name="always_on" type="checkbox"
-                 {% if always_on %}checked{% endif %}
-                 onchange="document.querySelectorAll('[data-window-field]').forEach(el => el.disabled = this.checked); if (!this.checked) { var s = document.getElementById('window_start'), e = document.getElementById('window_end'); if (s && e && s.value === e.value) { s.value = '22:00'; e.value = '07:00'; } }" />
-          <span class="font-medium">Always on</span>
-          <span class="text-xs text-fg-muted">(worker may dispatch at any time)</span>
-        </label>
-        <div class="grid grid-cols-[1fr,8rem] gap-x-3 gap-y-3 items-center">
-          <label for="window_start" class="text-fg">
-            <div class="font-medium">Start</div>
-            <div class="text-xs text-fg-muted">Local time when dispatch opens.</div>
-          </label>
-          <input id="window_start" name="window_start" type="time" data-window-field
-                 value="{{ cfg.window_start if cfg else '22:00' }}"
-                 {% if always_on %}disabled{% endif %}
-                 class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
-
-          <label for="window_end" class="text-fg">
-            <div class="font-medium">End</div>
-            <div class="text-xs text-fg-muted">Local time when dispatch closes.</div>
-          </label>
-          <input id="window_end" name="window_end" type="time" data-window-field
-                 value="{{ cfg.window_end if cfg else '07:00' }}"
-                 {% if always_on %}disabled{% endif %}
-                 class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
-        </div>
-        <p id="tz-indicator" class="text-xs text-fg-muted mt-2"></p>
+      <div id="windows-editor" class="flex flex-col gap-3"></div>
+      <button type="button" id="add-window"
+              class="mt-3 px-3 py-1 text-xs border border-border rounded text-fg-muted hover:text-fg hover:border-accent transition-colors">
+        + Add window
+      </button>
+      <div class="mt-4">
+        <h3 class="text-xs font-medium text-fg-muted uppercase tracking-wide mb-2">Resolved schedule</h3>
+        <div id="resolved-schedule" class="flex flex-col gap-1"></div>
       </div>
+      <script type="application/json" id="windows-data">{{ windows | tojson }}</script>
     </section>
 
     <section class="border border-border rounded p-4 bg-bg-elev">
       <h2 class="font-semibold mb-3">Scheduling</h2>
       <div class="grid grid-cols-[1fr,8rem] gap-x-3 gap-y-3 text-sm items-center">
-        <label for="max_parallel" class="text-fg">
-          <div class="font-medium">Max parallel runs</div>
-          <div class="text-xs text-fg-muted">How many tickets the worker may execute at once. Clamped 1 to 16.</div>
-        </label>
-        <input id="max_parallel" name="max_parallel" type="number" min="1" max="16"
-               value="{{ cfg.max_parallel if cfg else 2 }}"
-               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
-
         <label for="polling_interval_seconds" class="text-fg">
           <div class="font-medium">Polling interval (seconds)</div>
           <div class="text-xs text-fg-muted">How often the worker checks for new tickets and re-reads settings.</div>
@@ -146,45 +120,6 @@
   </form>
 </div>
 <script>
-// Work-hours timezone conversion: the server stores UTC, the browser
-// converts to/from local time so the user sees and enters local times.
-(function () {
-  var offset = new Date().getTimezoneOffset();
-  var tzField = document.getElementById("tz_offset");
-  if (tzField) tzField.value = offset;
-
-  function utcToLocal(utcHhmm) {
-    var parts = utcHhmm.split(":");
-    var total = parseInt(parts[0]) * 60 + parseInt(parts[1]) - offset;
-    total = ((total % 1440) + 1440) % 1440;
-    return (
-      String(Math.floor(total / 60)).padStart(2, "0") +
-      ":" +
-      String(total % 60).padStart(2, "0")
-    );
-  }
-
-  ["window_start", "window_end"].forEach(function (id) {
-    var el = document.getElementById(id);
-    if (el && el.value) {
-      el.dataset.utcValue = el.value;
-      el.value = utcToLocal(el.value);
-    }
-  });
-
-  var indicator = document.getElementById("tz-indicator");
-  if (indicator) {
-    var sign = offset <= 0 ? "+" : "-";
-    var absOff = Math.abs(offset);
-    var h = Math.floor(absOff / 60);
-    var m = absOff % 60;
-    var label =
-      "UTC" + sign + h + (m ? ":" + String(m).padStart(2, "0") : "");
-    indicator.textContent =
-      "Times shown in your timezone (" + label + "). Stored as UTC.";
-  }
-})();
-
 // Test webhook button
 (function () {
   var btn = document.getElementById("test-webhook-btn");
@@ -222,4 +157,5 @@
   });
 })();
 </script>
+<script src="/static/schedule_windows.js" defer></script>
 {% endblock %}
