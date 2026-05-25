@@ -289,32 +289,55 @@ def duration_percentiles(
     }
 
 
-def daily_usage_series(
+# Stable, dark-background-friendly palette assigned to models by token rank.
+# Models beyond the palette length cycle back through it.
+MODEL_PALETTE = [
+    "#6ea8fe",  # blue
+    "#34d399",  # green
+    "#fbbf24",  # amber
+    "#a78bfa",  # violet
+    "#f472b6",  # pink
+    "#22d3ee",  # cyan
+    "#fb7185",  # rose
+    "#94a3b8",  # slate (fallback)
+]
+
+
+def daily_usage_by_model_series(
     session: Session, *, start: datetime, now: datetime
 ) -> list[dict]:
-    """Per-day total tokens (and cost) from ``start`` through ``now``'s day.
+    """Per-day token totals broken down by model from ``start`` to ``now``'s day.
 
-    Returns one entry per calendar day (UTC), zero-filled, oldest first, so
-    the template can render a continuous bar chart.
+    Returns one entry per calendar day (UTC), zero-filled, oldest first:
+    ``{date, total_tokens, cost, by_model: {model: tokens}}``. Runs with no
+    recorded model group under ``"unknown"``.
     """
     rows = session.execute(
         select(
             func.date(Run.started_at),
+            Run.model_used,
             _TOTAL_TOKENS,
             func.coalesce(func.sum(Run.cost_usd), 0.0),
         )
         .where(Run.started_at >= start)
-        .group_by(func.date(Run.started_at))
+        .group_by(func.date(Run.started_at), Run.model_used)
     ).all()
-    by_day = {str(day): (int(tokens), float(cost)) for day, tokens, cost in rows}
+
+    by_day: dict[str, dict] = {}
+    for day, model, tokens, cost in rows:
+        key = str(day)
+        slot = by_day.setdefault(key, {"total_tokens": 0, "cost": 0.0, "by_model": {}})
+        slot["by_model"][model or "unknown"] = int(tokens)
+        slot["total_tokens"] += int(tokens)
+        slot["cost"] += float(cost)
 
     out: list[dict] = []
     day = start_of_day(start)
     last = start_of_day(now)
     while day <= last:
         key = day.strftime("%Y-%m-%d")
-        tokens, cost = by_day.get(key, (0, 0.0))
-        out.append({"date": key, "tokens": tokens, "cost": cost})
+        slot = by_day.get(key, {"total_tokens": 0, "cost": 0.0, "by_model": {}})
+        out.append({"date": key, **slot})
         day += timedelta(days=1)
     return out
 
@@ -329,15 +352,27 @@ def build_dashboard(session: Session, *, now: datetime) -> dict:
     last_7d_start = today_start - timedelta(days=6)
     last_30d_start = today_start - timedelta(days=29)
 
-    series = daily_usage_series(session, start=last_30d_start, now=now)
-    max_daily_tokens = max((d["tokens"] for d in series), default=0)
+    by_model = tokens_by_model(session, start=last_30d_start)
+    # Assign each model a stable color by token rank; reuse it in the legend,
+    # the per-model table, and the stacked daily bars.
+    model_colors = {
+        row["model"]: MODEL_PALETTE[i % len(MODEL_PALETTE)]
+        for i, row in enumerate(by_model)
+    }
+    for row in by_model:
+        row["color"] = model_colors[row["model"]]
+    model_legend = [{"model": m, "color": c} for m, c in model_colors.items()]
+
+    series = daily_usage_by_model_series(session, start=last_30d_start, now=now)
+    max_daily_tokens = max((d["total_tokens"] for d in series), default=0)
 
     return {
         "prices_as_of": PRICES_AS_OF,
         "today": window_totals(session, start=today_start),
         "last_7d": window_totals(session, start=last_7d_start),
         "last_30d": window_totals(session, start=last_30d_start),
-        "by_model": tokens_by_model(session, start=last_30d_start),
+        "by_model": by_model,
+        "model_legend": model_legend,
         "by_profile": usage_by_profile(session, start=last_30d_start),
         "by_ticket": usage_by_ticket(session, start=last_30d_start),
         "run_stats": run_stats(session, start=last_30d_start),

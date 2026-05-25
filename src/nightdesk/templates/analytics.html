@@ -47,15 +47,19 @@
     <h2 class="font-semibold mb-3">Token mix &amp; cache efficiency (last 30 days)</h2>
     {% set t = last_30d %}
     {% if t.total_tokens > 0 %}
-      <div class="flex h-3 w-full overflow-hidden rounded-full bg-bg mb-3">
-        {% set inp = t.input_tokens / t.total_tokens * 100 %}
-        {% set out = t.output_tokens / t.total_tokens * 100 %}
-        {% set cr = t.cache_read_tokens / t.total_tokens * 100 %}
-        {% set cw = t.cache_write_tokens / t.total_tokens * 100 %}
-        <div class="bg-accent" style="width: {{ inp }}%" title="input {{ fmt_tokens(t.input_tokens) }}"></div>
-        <div class="bg-accent-strong" style="width: {{ out }}%" title="output {{ fmt_tokens(t.output_tokens) }}"></div>
-        <div class="bg-green-500" style="width: {{ cr }}%" title="cache read {{ fmt_tokens(t.cache_read_tokens) }}"></div>
-        <div class="bg-amber-500" style="width: {{ cw }}%" title="cache write {{ fmt_tokens(t.cache_write_tokens) }}"></div>
+      {% set inp = t.input_tokens / t.total_tokens * 100 %}
+      {% set out = t.output_tokens / t.total_tokens * 100 %}
+      {% set cr = t.cache_read_tokens / t.total_tokens * 100 %}
+      {% set cw = t.cache_write_tokens / t.total_tokens * 100 %}
+      <div class="flex h-3 w-full overflow-visible rounded-full bg-bg mb-3">
+        <div class="bg-accent first:rounded-l-full" style="width: {{ inp }}%"
+             data-tooltip="Input · {{ fmt_tokens(t.input_tokens) }} ({{ '%.0f'|format(inp) }}%)"></div>
+        <div class="bg-accent-strong" style="width: {{ out }}%"
+             data-tooltip="Output · {{ fmt_tokens(t.output_tokens) }} ({{ '%.0f'|format(out) }}%)"></div>
+        <div class="bg-green-500" style="width: {{ cr }}%"
+             data-tooltip="Cache read · {{ fmt_tokens(t.cache_read_tokens) }} ({{ '%.0f'|format(cr) }}%)"></div>
+        <div class="bg-amber-500 last:rounded-r-full" style="width: {{ cw }}%"
+             data-tooltip="Cache write · {{ fmt_tokens(t.cache_write_tokens) }} ({{ '%.0f'|format(cw) }}%)"></div>
       </div>
       <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm font-mono">
         <div><div class="text-xs text-fg-muted">Input</div><div>{{ fmt_tokens(t.input_tokens) }}</div></div>
@@ -69,20 +73,28 @@
     {% endif %}
   </div>
 
-  {# --- per-day token bar chart ------------------------------------------ #}
-  <div class="border border-border rounded-md bg-bg-elev p-4">
+  {# --- per-day token bar chart, stacked by model ------------------------ #}
+  <div id="daily-token-chart" class="border border-border rounded-md bg-bg-elev p-4 relative">
     <div class="flex items-center justify-between mb-3">
-      <h2 class="font-semibold">Daily tokens (last 30 days)</h2>
+      <h2 class="font-semibold">Daily tokens by model (last 30 days)</h2>
       <span class="text-xs text-fg-muted">peak {{ fmt_tokens(max_daily_tokens) }}/day</span>
     </div>
     {% if max_daily_tokens > 0 %}
-      <div class="flex items-end gap-0.5 h-28">
+      <div class="flex items-end gap-0.5 h-28" id="daily-bars">
         {% for d in daily_series %}
-          {% set pctbar = (d.tokens / max_daily_tokens * 100) if max_daily_tokens > 0 else 0 %}
-          <div class="flex-1 flex flex-col justify-end h-full group relative"
-               title="{{ d.date }}: {{ fmt_tokens(d.tokens) }} tokens (${{ '%.4f'|format(d.cost) }})">
-            <div class="w-full bg-accent rounded-sm {{ 'opacity-30' if d.tokens == 0 else '' }}"
-                 style="height: {{ pctbar if pctbar > 1 else (1 if d.tokens > 0 else 0) }}%"></div>
+          <div class="flex-1 h-full flex flex-col-reverse justify-start cursor-default hover:opacity-90"
+               data-day-index="{{ loop.index0 }}">
+            {% if d.total_tokens == 0 %}
+              <div class="w-full bg-accent rounded-sm opacity-20" style="height: 1%"></div>
+            {% else %}
+              {% for m in model_legend %}
+                {% set tk = d.by_model.get(m.model, 0) %}
+                {% if tk > 0 %}
+                  {% set h = tk / max_daily_tokens * 100 %}
+                  <div class="w-full" style="height: {{ h if h > 0.6 else 0.6 }}%; background: {{ m.color }}"></div>
+                {% endif %}
+              {% endfor %}
+            {% endif %}
           </div>
         {% endfor %}
       </div>
@@ -90,6 +102,23 @@
         <span>{{ daily_series[0].date if daily_series else '' }}</span>
         <span>{{ daily_series[-1].date if daily_series else '' }}</span>
       </div>
+      {# legend #}
+      <div class="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs">
+        {% for m in model_legend %}
+          <span class="inline-flex items-center gap-1.5">
+            <span class="inline-block w-2.5 h-2.5 rounded-sm" style="background: {{ m.color }}"></span>
+            <span class="text-fg-muted truncate max-w-[14rem]">{{ m.model }}</span>
+          </span>
+        {% endfor %}
+      </div>
+
+      {# floating hover tooltip (positioned by token_chart.js) #}
+      <div id="token-chart-tip"
+           class="hidden pointer-events-none absolute z-[60] min-w-[11rem] rounded-md border border-border bg-bg-elev-3 px-2.5 py-2 text-xs shadow-lg"
+           style="left:0; top:0;"></div>
+      <script type="application/json" id="daily-usage-data">{{ daily_series | tojson }}</script>
+      <script type="application/json" id="model-legend-data">{{ model_legend | tojson }}</script>
+      <script src="{{ static_v('token_chart.js') }}" defer></script>
     {% else %}
       <p class="text-sm text-fg-muted">No tokens recorded in this window.</p>
     {% endif %}

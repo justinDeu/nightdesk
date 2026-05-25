@@ -187,25 +187,49 @@ def test_duration_percentiles_empty(session):
 
 
 # --- daily series ----------------------------------------------------------
-def test_daily_usage_series_zero_filled(session):
+def test_daily_usage_by_model_series_zero_filled(session):
     p = _profile(session)
     t = _ticket(session, p)
-    _run(session, t, started_at=NOW, input_tokens=100, output_tokens=20, cost=1.0)
-    _run(session, t, started_at=NOW - timedelta(days=2), input_tokens=300, cost=3.0)
+    r1 = _run(session, t, started_at=NOW, input_tokens=100, output_tokens=20, cost=1.0)
+    r1.model_used = "claude-opus-4-7"
+    r2 = _run(session, t, started_at=NOW, input_tokens=80, cost=0.4)
+    r2.model_used = "claude-sonnet-4-6"
+    r3 = _run(session, t, started_at=NOW - timedelta(days=2), input_tokens=300, cost=3.0)
+    r3.model_used = "claude-opus-4-7"
+    session.commit()
 
-    series = analytics.daily_usage_series(
+    series = analytics.daily_usage_by_model_series(
         session, start=analytics.start_of_day(NOW) - timedelta(days=4), now=NOW)
     # 5 days inclusive (today minus 4 .. today).
     assert len(series) == 5
-    by_day = {d["date"]: d["tokens"] for d in series}
-    assert by_day["2026-05-24"] == 120
-    assert by_day["2026-05-22"] == 300
-    assert by_day["2026-05-23"] == 0
-    # cost still rides along for the tooltip.
-    assert {d["date"]: d["cost"] for d in series}["2026-05-24"] == pytest.approx(1.0)
+    by_day = {d["date"]: d for d in series}
+    today = by_day["2026-05-24"]
+    assert today["total_tokens"] == 200  # 120 opus + 80 sonnet
+    assert today["by_model"]["claude-opus-4-7"] == 120
+    assert today["by_model"]["claude-sonnet-4-6"] == 80
+    assert today["cost"] == pytest.approx(1.4)
+    assert by_day["2026-05-22"]["by_model"]["claude-opus-4-7"] == 300
+    # zero-filled empty day
+    assert by_day["2026-05-23"]["total_tokens"] == 0
+    assert by_day["2026-05-23"]["by_model"] == {}
     # ordered oldest -> newest
     assert series[0]["date"] == "2026-05-20"
     assert series[-1]["date"] == "2026-05-24"
+
+
+def test_build_dashboard_assigns_model_colors(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    r = _run(session, t, started_at=NOW, input_tokens=500)
+    r.model_used = "claude-opus-4-7"
+    session.commit()
+
+    data = analytics.build_dashboard(session, now=NOW)
+    legend = data["model_legend"]
+    assert any(m["model"] == "claude-opus-4-7" for m in legend)
+    # Every legend entry carries a color, mirrored onto the by_model rows.
+    assert all(m["color"] for m in legend)
+    assert all("color" in row for row in data["by_model"])
 
 
 # --- live spend ------------------------------------------------------------
