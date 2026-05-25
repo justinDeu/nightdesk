@@ -413,7 +413,7 @@ class ScheduleWindowsReplace(BaseModel):
         from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
         try:
             ZoneInfo(v)
-        except (ZoneInfoNotFoundError, ValueError):
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
             raise ValueError(f"unknown timezone: {v}")
         return v
 
@@ -477,6 +477,18 @@ class ConfigUpdate(BaseModel):
         if not isinstance(v, str):
             raise ValueError("notify_webhook_url must be a string")
         return v.strip()
+
+    @field_validator("schedule_timezone")
+    @classmethod
+    def _validate_schedule_tz(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            raise ValueError(f"unknown timezone: {v}")
+        return v
 
 
 class WorkerStatusOut(BaseModel):
