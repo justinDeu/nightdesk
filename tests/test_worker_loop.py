@@ -242,16 +242,18 @@ async def test_two_runs_of_same_ticket_produce_distinct_transcripts(engine, tmp_
 
 @pytest.mark.anyio
 async def test_tick_re_reads_max_parallel_from_config(engine, tmp_path):
-    """PATCHing max_parallel changes how many tickets the next tick_once picks."""
-    from nightdesk.db.models import ConfigRow
+    """Editing a schedule window's max_parallel changes how many tickets the
+    next tick_once picks. Capacity now comes from ScheduleWindow rows, not the
+    legacy ConfigRow columns."""
+    from nightdesk.db.models import ScheduleWindow
     from sqlalchemy.orm import Session
 
     with Session(engine) as session:
-        # Use a 24-hour window so the test is timezone-insensitive.
-        cfg = ConfigRow(id=1, worktree_root=str(tmp_path / "work"),
-                          transcript_root=str(tmp_path / "transcripts"),
-                          window_start="00:00", window_end="23:59", max_parallel=1)
-        session.add(cfg); session.commit()
+        # Always-on window (00:00 -> 00:00) so the test is timezone-insensitive.
+        win = ScheduleWindow(label="all", day_mask=127, start="00:00",
+                             end="00:00", max_parallel=1, position=0)
+        session.add(win); session.commit()
+        win_id = win.id
         p = create_profile(session, name="p", fs_read=[], fs_write=[], allowed_tools=[],
                             denied_tools=[], network_mode="off", network_allowlist=[],
                             secret_keys=[], default_model=None)
@@ -285,11 +287,11 @@ async def test_tick_re_reads_max_parallel_from_config(engine, tmp_path):
     )
     loop = WorkerLoop(session_factory=lambda: Session(engine), settings=settings)
     await loop.tick_once()
-    assert len(loop._inproc) == 1, "ConfigRow.max_parallel=1 limits to one"
+    assert len(loop._inproc) == 1, "window max_parallel=1 limits to one"
 
-    # Bump max_parallel via DB; next tick should pick up two more.
+    # Bump the window's max_parallel via DB; next tick should pick up two more.
     with Session(engine) as session:
-        row = session.get(ConfigRow, 1)
+        row = session.get(ScheduleWindow, win_id)
         row.max_parallel = 3
         session.commit()
 
@@ -303,20 +305,19 @@ async def test_tick_re_reads_max_parallel_from_config(engine, tmp_path):
 
 @pytest.mark.anyio
 async def test_always_on_window_allows_picks_at_any_time(engine, tmp_path):
-    """ConfigRow with window_start == window_end ("00:00" -> "00:00") means
-    the worker may dispatch at any wall-clock time. Regression guard against
-    the previous in_window behavior, which only matched a single minute when
-    start equaled end and silently parked overnight queues during the day.
+    """A ScheduleWindow with start == end ("00:00" -> "00:00") means the
+    worker may dispatch at any wall-clock time. Regression guard against the
+    previous in_window behavior, which only matched a single minute when start
+    equaled end and silently parked overnight queues during the day.
     """
     from datetime import time as _time
-    from nightdesk.db.models import ConfigRow
+    from nightdesk.db.models import ScheduleWindow
     from sqlalchemy.orm import Session
 
     with Session(engine) as session:
-        session.add(ConfigRow(
-            id=1, worktree_root=str(tmp_path / "w"),
-            transcript_root=str(tmp_path / "t"),
-            window_start="00:00", window_end="00:00", max_parallel=2,
+        session.add(ScheduleWindow(
+            label="all", day_mask=127, start="00:00", end="00:00",
+            max_parallel=2, position=0,
         ))
         session.commit()
         p = create_profile(session, name="p", fs_read=[], fs_write=[], allowed_tools=[],

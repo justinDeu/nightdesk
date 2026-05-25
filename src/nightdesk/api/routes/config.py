@@ -7,8 +7,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_bearer
-from nightdesk.api.schemas import ConfigOut, ConfigUpdate, WorkerStatusOut
-from nightdesk.db.models import ConfigRow, Run, Ticket, WorkerHeartbeat
+from nightdesk.api.schemas import (
+    ConfigOut,
+    ConfigUpdate,
+    ScheduleWindowCreate,
+    ScheduleWindowOut,
+    ScheduleWindowUpdate,
+    WorkerStatusOut,
+)
+from nightdesk.db.models import ConfigRow, Run, ScheduleWindow, Ticket, WorkerHeartbeat
 from nightdesk.worker.scheduler import in_window
 
 
@@ -30,6 +37,27 @@ def _parse_hhmm(s: str) -> time:
     return time(int(h), int(m))
 
 
+def _list_windows(session: Session) -> list[ScheduleWindow]:
+    return list(
+        session.scalars(
+            select(ScheduleWindow).order_by(ScheduleWindow.position.asc(), ScheduleWindow.id.asc())
+        )
+    )
+
+
+def _config_out(session: Session, row: ConfigRow) -> ConfigOut:
+    windows = [ScheduleWindowOut.model_validate(w) for w in _list_windows(session)]
+    return ConfigOut(
+        window_start=row.window_start,
+        window_end=row.window_end,
+        max_parallel=row.max_parallel,
+        worktree_root=row.worktree_root,
+        transcript_root=row.transcript_root,
+        worktree_base_ref=row.worktree_base_ref,
+        windows=windows,
+    )
+
+
 def build_router(get_session, bearer_token: str, *, worktree_root: str,
                   transcript_root: str) -> APIRouter:
     router = APIRouter(
@@ -41,7 +69,7 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
     @router.get("/config", response_model=ConfigOut)
     async def show(session: Session = Depends(get_session)):
         row = _ensure_config(session, worktree_root=worktree_root, transcript_root=transcript_root)
-        return row
+        return _config_out(session, row)
 
     @router.patch("/config", response_model=ConfigOut)
     async def update(payload: ConfigUpdate, session: Session = Depends(get_session)):
@@ -51,7 +79,45 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
                 setattr(row, k, v)
         session.commit()
         session.refresh(row)
-        return row
+        return _config_out(session, row)
+
+    # --- Schedule windows CRUD ---------------------------------------------
+    # Multi-window schedule model. The scheduler unions all matching windows
+    # for the current time/day and uses the most permissive max_parallel.
+
+    @router.get("/config/windows", response_model=list[ScheduleWindowOut])
+    async def list_windows(session: Session = Depends(get_session)):
+        return _list_windows(session)
+
+    @router.post("/config/windows", response_model=ScheduleWindowOut, status_code=201)
+    async def create_window(payload: ScheduleWindowCreate,
+                            session: Session = Depends(get_session)):
+        window = ScheduleWindow(**payload.model_dump())
+        session.add(window)
+        session.commit()
+        session.refresh(window)
+        return window
+
+    @router.patch("/config/windows/{window_id}", response_model=ScheduleWindowOut)
+    async def update_window(window_id: int, payload: ScheduleWindowUpdate,
+                            session: Session = Depends(get_session)):
+        window = session.get(ScheduleWindow, window_id)
+        if window is None:
+            raise HTTPException(404, "schedule window not found")
+        for k, v in payload.model_dump(exclude_unset=True).items():
+            setattr(window, k, v)
+        session.commit()
+        session.refresh(window)
+        return window
+
+    @router.delete("/config/windows/{window_id}", status_code=204)
+    async def delete_window(window_id: int, session: Session = Depends(get_session)):
+        window = session.get(ScheduleWindow, window_id)
+        if window is None:
+            raise HTTPException(404, "schedule window not found")
+        session.delete(window)
+        session.commit()
+        return None
 
     @router.get("/worker/status", response_model=WorkerStatusOut)
     async def worker_status(session: Session = Depends(get_session)):
