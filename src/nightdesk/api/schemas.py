@@ -402,6 +402,22 @@ class ScheduleWindowUpdate(BaseModel):
         return v
 
 
+class ScheduleWindowsReplace(BaseModel):
+    """Full replacement set for the windows editor's atomic save."""
+    timezone: str = "UTC"
+    windows: list[ScheduleWindowCreate] = Field(default_factory=list)
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_tz(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(f"unknown timezone: {v}")
+        return v
+
+
 class ConfigOut(BaseModel):
     window_start: str
     window_end: str
@@ -410,6 +426,7 @@ class ConfigOut(BaseModel):
     transcript_root: str
     worktree_base_ref: Optional[str] = None
     notify_webhook_url: Optional[str] = None
+    schedule_timezone: str = "UTC"
     windows: list[ScheduleWindowOut] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
@@ -432,6 +449,7 @@ class ConfigUpdate(BaseModel):
     worktree_base_ref: Optional[str] = None
     # Webhook URL for run-completion notifications. Empty string clears it.
     notify_webhook_url: Optional[str] = None
+    schedule_timezone: Optional[str] = None
 
     @field_validator("window_start", "window_end", mode="before")
     @classmethod
@@ -470,6 +488,8 @@ class WorkerStatusOut(BaseModel):
     window_start: Optional[str] = None
     window_end: Optional[str] = None
     max_parallel: int = 0
+    active_window: Optional[str] = None
+    schedule_timezone: str = "UTC"
     normal_running: int = 0
     run_now_running: int = 0
     total_running: int = 0
