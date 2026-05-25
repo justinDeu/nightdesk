@@ -204,32 +204,29 @@
       row.className = "flex items-stretch gap-2 text-xs";
 
       var name = document.createElement("div");
-      name.className = "w-16 shrink-0 text-fg-muted pt-5";
+      name.className = "w-16 shrink-0 text-fg-muted pt-4";
       name.textContent = g.start === g.end ? DAYS[g.start] : DAYS[g.start] + "–" + DAYS[g.end];
 
       var col = document.createElement("div");
       col.className = "flex-1 min-w-0";
 
-      // Time ruler: each transition gets a label + a tick line dropping to the
-      // bar, positioned by percent of the 24h day so it aligns with the bar.
+      // Time ruler and bar share the SAME flex layout (each segment's flex-grow
+      // is its duration), so a transition's label, its tick line, and the bar
+      // divider below all line up. Labels live one-per-cell and truncate rather
+      // than stack, so they never overlap.
       var ruler = document.createElement("div");
-      ruler.className = "relative h-5";
-      var bounds = g.segs.map(function (s) { return s.a; });
-      bounds.push(1440);
-      bounds.forEach(function (b, i) {
-        var mark = document.createElement("div");
-        mark.className = "absolute top-0 flex flex-col items-center";
-        mark.style.left = (b / 1440 * 100) + "%";
-        // Keep the first/last labels inside the track instead of clipping.
-        mark.style.transform = i === 0 ? "translateX(0)"
-          : (b === 1440 ? "translateX(-100%)" : "translateX(-50%)");
+      ruler.className = "flex h-3.5 items-end";
+      g.segs.forEach(function (s, idx) {
+        var cell = document.createElement("div");
+        cell.style.flexGrow = (s.b - s.a);
+        cell.style.flexBasis = "0";
+        cell.className = "min-w-0 overflow-hidden " +
+          (idx > 0 ? "border-l border-fg-muted/50 " : "");
         var lbl = document.createElement("span");
-        lbl.className = "text-[9px] text-fg-muted font-mono whitespace-nowrap leading-none";
-        lbl.textContent = fmtMin(b);
-        var tick = document.createElement("div");
-        tick.className = "w-px h-2 bg-fg-muted/50 mt-1";
-        mark.appendChild(lbl); mark.appendChild(tick);
-        ruler.appendChild(mark);
+        lbl.className = "block text-[9px] text-fg-muted font-mono leading-none pl-0.5 truncate";
+        lbl.textContent = fmtMin(s.a);
+        cell.appendChild(lbl);
+        ruler.appendChild(cell);
       });
 
       var bar = document.createElement("div");
@@ -237,9 +234,10 @@
       g.segs.forEach(function (s, idx) {
         var cell = document.createElement("div");
         cell.style.flexGrow = (s.b - s.a);
-        // A divider at each transition so adjacent windows read as distinct.
-        var divider = idx > 0 ? "border-l border-fg-muted/40 " : "";
-        cell.className = "flex items-center justify-center overflow-hidden " +
+        cell.style.flexBasis = "0";
+        // Divider aligns with the ruler tick above.
+        var divider = idx > 0 ? "border-l border-fg-muted/50 " : "";
+        cell.className = "min-w-0 flex items-center justify-center overflow-hidden " +
           "whitespace-nowrap px-1 leading-tight text-[10px] " + divider +
           (s.cap > 0 ? "bg-accent/30 text-fg" : "bg-bg-elev-2 text-fg-muted");
         cell.textContent = s.cap > 0 ? (s.cap + " · " + s.labels.join(", ")) : "paused";
