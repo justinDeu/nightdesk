@@ -157,6 +157,7 @@ def create_cron_job(
     additional_dirs: Optional[list] = None,
     permission_overrides: Optional[dict] = None,
     enabled: bool = True,
+    force_run: bool = False,
     misfire_policy: str = "coalesce",
     overlap_policy: str = "skip_if_active",
     now: Optional[datetime] = None,
@@ -187,6 +188,7 @@ def create_cron_job(
         schedule=schedule,
         timezone=tz,
         enabled=enabled,
+        force_run=bool(force_run),
         misfire_policy=misfire_policy,
         overlap_policy=overlap_policy,
         next_fire_at=compute_next_fire(schedule, tz, now) if enabled else None,
@@ -287,17 +289,19 @@ def delete_cron_job(session: Session, cron_job_id: str) -> None:
 
 
 def _ticket_from_template(session: Session, job: CronJob) -> Ticket:
-    """Create an ordinary queued, run_now=false ticket from the template.
+    """Create an ordinary queued ticket from the template.
 
-    NEVER sets ``run_now=True`` — the generated ticket must wait for the normal
-    scheduler (window + capacity).
+    ``run_now`` follows the job's ``force_run`` flag: false (default) means the
+    ticket waits for the normal scheduler (window + capacity); true means the
+    scheduler dispatches it unconditionally, past the queue and outside the
+    active-hours window.
     """
     return create_ticket(
         session,
         title=job.title,
         prompt=job.prompt,
         status="queued",
-        run_now=False,
+        run_now=bool(job.force_run),
         priority=job.priority,
         profile_id=job.profile_id,
         cwd=job.cwd,
@@ -341,10 +345,10 @@ def _claim_fire(session: Session, job_id: str, fire_at: datetime) -> Optional[Cr
 def fire_now(session: Session, cron_job_id: str, *, now: Optional[datetime] = None) -> Ticket:
     """Manually materialize a ticket from the template immediately.
 
-    Bypasses ``overlap_policy`` (a manual fire is an explicit user request) and
-    does NOT set ``run_now=True`` — the ticket still flows through the scheduler.
-    Uses sub-minute ``now()`` for ``fire_at`` so it won't collide with a
-    minute-granular scheduled fire in the same minute.
+    Bypasses ``overlap_policy`` (a manual fire is an explicit user request). The
+    generated ticket's ``run_now`` follows the job's ``force_run`` flag, same as
+    a scheduled fire. Uses sub-minute ``now()`` for ``fire_at`` so it won't
+    collide with a minute-granular scheduled fire in the same minute.
     """
     job = get_cron_job(session, cron_job_id)
     fire_at = _as_utc(now) or datetime.now(timezone.utc)

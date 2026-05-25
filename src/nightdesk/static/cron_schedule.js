@@ -265,15 +265,30 @@
       hidden.value = JSON.stringify(rows);
     }
 
+    // Renumber the "Workspace N" card titles so they always read 1..N in DOM
+    // order, mirroring the ticket form's linked-workspace rows.
+    function renumber() {
+      list.querySelectorAll("[data-res-row] [data-res-title]").forEach(function (t, i) {
+        t.textContent = "Workspace " + (i + 1);
+      });
+    }
+
+    // Card-style linked-workspace row, matching ticket_edit_modal.html minus
+    // the git-worktree controls (cron is directory-only). Kind is a fixed
+    // readout; only Access (read-only vs read/write) is selectable.
     function addRow(data) {
       var n = ++resSeq;
       var hostId = "cron-res-" + n;
       var row = document.createElement("div");
       row.setAttribute("data-res-row", "1");
-      row.className = "flex items-center gap-2";
+      row.className = "rounded-md border border-border bg-bg-elev-2 p-2 space-y-2";
       row.innerHTML =
-        '<div class="relative flex-1">' +
-        '<input id="' + hostId + '" data-res-path autocomplete="off" spellcheck="false" placeholder="/abs/path" ' +
+        '<div class="flex items-center justify-between gap-2">' +
+        '<span class="text-xs font-medium text-fg" data-res-title>Workspace</span>' +
+        '<button type="button" data-res-remove class="rounded px-2 py-0.5 text-xs text-fg-muted hover:bg-bg hover:text-danger" title="Remove workspace">&times;</button>' +
+        '</div>' +
+        '<div class="relative">' +
+        '<input id="' + hostId + '" data-res-path autocomplete="off" spellcheck="false" placeholder="/home/you/other-repo" ' +
         'oninput="window.ndPathSuggest&&window.ndPathSuggest(this,\'' + hostId + '-suggest\')" ' +
         'onfocus="window.ndPathSuggest&&window.ndPathSuggest(this,\'' + hostId + '-suggest\')" ' +
         'onblur="window.ndPathSuggestClose&&window.ndPathSuggestClose(\'' + hostId + '-suggest\')" ' +
@@ -281,23 +296,37 @@
         'class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />' +
         '<div id="' + hostId + '-suggest" class="nd-suggest-host fixed z-50 hidden"></div>' +
         '</div>' +
+        '<div class="grid grid-cols-2 gap-2">' +
+        '<div class="flex flex-col gap-1">' +
+        '<span class="text-fg-muted text-[11px] uppercase tracking-wide">Kind</span>' +
+        '<div class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg-muted">Directory</div>' +
+        '</div>' +
+        '<label class="flex flex-col gap-1">' +
+        '<span class="text-fg-muted text-[11px] uppercase tracking-wide">Access</span>' +
         '<select data-res-mode class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">' +
-        '<option value="rw">Read/write</option>' +
         '<option value="ro">Read-only</option>' +
+        '<option value="rw">Read/write</option>' +
         '</select>' +
-        '<button type="button" data-res-remove class="px-1 text-xs text-fg-muted hover:text-danger">✕</button>';
+        '</label>' +
+        '</div>';
       list.appendChild(row);
       var path = row.querySelector("[data-res-path]");
       var mode = row.querySelector("[data-res-mode]");
-      if (data) { path.value = data.path || ""; mode.value = data.mode === "ro" ? "ro" : "rw"; }
+      if (data) { path.value = data.path || ""; mode.value = data.mode === "rw" ? "rw" : "ro"; }
       path.addEventListener("input", serialize);
       mode.addEventListener("change", serialize);
       row.querySelector("[data-res-remove]").addEventListener("click", function () {
-        row.remove(); serialize();
+        row.remove(); renumber(); serialize();
       });
+      renumber();
     }
 
-    if (addBtn) addBtn.addEventListener("click", function () { addRow(null); serialize(); });
+    if (addBtn) addBtn.addEventListener("click", function () {
+      addRow(null); serialize();
+      var rows = list.querySelectorAll("[data-res-row]");
+      var last = rows[rows.length - 1];
+      if (last) last.querySelector("[data-res-path]").focus();
+    });
     if (form) form.addEventListener("submit", serialize);
 
     var initial = [];

@@ -550,6 +550,9 @@ class CronJobCreate(BaseModel):
     additional_dirs: list[AdditionalDir] = []
     permission_overrides: Optional[dict] = None
     enabled: bool = True
+    # When true, generated tickets are run_now=True (dispatched past the queue
+    # and outside the active-hours window).
+    force_run: bool = False
     misfire_policy: Literal["coalesce"] = "coalesce"
     overlap_policy: Literal["skip_if_active", "always"] = "skip_if_active"
 
@@ -570,6 +573,7 @@ class CronJobUpdate(BaseModel):
     workspace_mode: Optional[CronWorkspaceMode] = None
     additional_dirs: Optional[list[AdditionalDir]] = None
     permission_overrides: Optional[dict] = None
+    force_run: Optional[bool] = None
     misfire_policy: Optional[Literal["coalesce"]] = None
     overlap_policy: Optional[Literal["skip_if_active", "always"]] = None
 
@@ -592,6 +596,7 @@ class CronJobOut(BaseModel):
     additional_dirs: list[AdditionalDir] = []
     permission_overrides: Optional[dict] = None
     enabled: bool
+    force_run: bool = False
     misfire_policy: str
     overlap_policy: str
     next_fire_at: Optional[datetime] = None

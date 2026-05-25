@@ -1,131 +1,214 @@
 {# Shared cron-job form fields. Expects optional `job` (edit) and `profiles`.
-   Worktree options are intentionally absent — cron is directory-only in v1. #}
+   Layout mirrors the ticket create/edit modal (ticket_edit_modal.html) so the
+   two flows feel like the same product: label-above-input basics, then card
+   sections for Schedule, Workspaces, and Options.
+
+   Cron is directory-only in v1: the primary workspace is always a plain
+   directory (no git worktree), so the primary card shows Kind/Access as locked
+   readouts and the linked rows only choose read-only vs read/write. #}
 {% set job = job|default(none) %}
-<div class="grid grid-cols-[8rem,1fr] gap-x-3 gap-y-3 items-center">
-  <label class="text-fg font-medium">Title</label>
-  <input type="text" name="title" required value="{{ job.title if job else '' }}"
-         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg" />
+<div class="space-y-4">
 
-  <label class="text-fg font-medium">Prompt</label>
-  <textarea name="prompt" rows="3"
-            class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono">{{ job.prompt if job else '' }}</textarea>
+  <label class="flex flex-col gap-1 text-sm">
+    <span class="text-fg-muted text-xs uppercase tracking-wide">Title</span>
+    <input type="text" name="title" required value="{{ job.title if job else '' }}"
+           class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none" />
+  </label>
 
-  <label class="text-fg font-medium">Profile</label>
-  <select name="profile_id" required
-          class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg">
-    {% for p in profiles %}
-      <option value="{{ p.id }}" {% if job and job.profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
-    {% endfor %}
-  </select>
+  <label class="flex flex-col gap-1 text-sm">
+    <span class="text-fg-muted text-xs uppercase tracking-wide">Prompt</span>
+    <textarea name="prompt" rows="8"
+              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none">{{ job.prompt if job else '' }}</textarea>
+  </label>
 
-  <label class="text-fg font-medium">Working dir</label>
-  <div class="relative">
-    <input id="cron-cwd" name="cwd" required autocomplete="off" spellcheck="false"
-           value="{{ job.cwd if job else '' }}"
-           placeholder="/home/you/project"
-           oninput="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-cwd-suggest')"
-           onfocus="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-cwd-suggest')"
-           onblur="window.ndPathSuggestClose && window.ndPathSuggestClose('cron-cwd-suggest')"
-           onkeydown="window.ndPathSuggestKey && window.ndPathSuggestKey(event, this, 'cron-cwd-suggest')"
-           class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
-    <div id="cron-cwd-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
-  </div>
+  <label class="flex flex-col gap-1 text-sm">
+    <span class="text-fg-muted text-xs uppercase tracking-wide">Profile</span>
+    <select name="profile_id" required
+            class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
+      {% for p in profiles %}
+        <option value="{{ p.id }}" {% if job and job.profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
 
-  <label class="text-fg font-medium">Schedule</label>
-  <div data-cron-builder class="flex flex-col gap-2">
-    {% set chip = "px-2 py-0.5 text-xs border border-border rounded hover:bg-bg-elev-2 aria-[pressed=true]:bg-accent aria-[pressed=true]:text-bg aria-[pressed=true]:border-accent" %}
-    <div class="flex flex-wrap gap-1">
-      <button type="button" data-cadence="minutes" aria-pressed="false" class="{{ chip }}">Every N min</button>
-      <button type="button" data-cadence="hourly" aria-pressed="false" class="{{ chip }}">Hourly</button>
-      <button type="button" data-cadence="daily" aria-pressed="false" class="{{ chip }}">Daily</button>
-      <button type="button" data-cadence="weekly" aria-pressed="false" class="{{ chip }}">Weekly</button>
-      <button type="button" data-cadence="monthly" aria-pressed="false" class="{{ chip }}">Monthly</button>
-      <button type="button" data-cadence="advanced" aria-pressed="false" class="{{ chip }}">Advanced</button>
+  {# --- Schedule ------------------------------------------------------------ #
+   # Cadence chips build a 5-field cron string (kept in the hidden raw input);
+   # a live description + server-computed next-fire preview render below. The
+   # timezone lives here because it only governs how the schedule resolves. #}
+  <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm">
+    <div class="mb-2">
+      <h3 class="text-sm font-medium text-fg">Schedule</h3>
+      <p class="mt-0.5 text-xs leading-snug text-fg-muted">When this job fires. Each fire queues one ticket.</p>
     </div>
 
-    <div data-fields="minutes" hidden class="flex items-center gap-2 text-sm">
-      every <input type="number" data-f="minutes" min="1" max="59" value="15"
-                   class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> minutes
-    </div>
-    <div data-fields="hourly" hidden class="flex items-center gap-2 text-sm">
-      every <input type="number" data-f="hours" min="1" max="23" value="1"
-                   class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> hours, at minute
-      <input type="number" data-f="atMinute" min="0" max="59" value="0"
-             class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
-    </div>
-    <div data-fields="daily" hidden class="flex items-center gap-2 text-sm">
-      at <input type="time" data-f="time"
-                class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
-    </div>
-    <div data-fields="weekly" hidden class="flex flex-col gap-2 text-sm">
+    <div data-cron-builder class="flex flex-col gap-2">
+      {% set chip = "px-2 py-0.5 text-xs border border-border rounded hover:bg-bg-elev-2 aria-[pressed=true]:bg-accent aria-[pressed=true]:text-bg aria-[pressed=true]:border-accent" %}
       <div class="flex flex-wrap gap-1">
-        {% for d in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),(5,'Sat'),(6,'Sun')] %}
-        <button type="button" data-day="{{ d[0] }}" aria-pressed="false" class="{{ chip }}">{{ d[1] }}</button>
-        {% endfor %}
+        <button type="button" data-cadence="minutes" aria-pressed="false" class="{{ chip }}">Every N min</button>
+        <button type="button" data-cadence="hourly" aria-pressed="false" class="{{ chip }}">Hourly</button>
+        <button type="button" data-cadence="daily" aria-pressed="false" class="{{ chip }}">Daily</button>
+        <button type="button" data-cadence="weekly" aria-pressed="false" class="{{ chip }}">Weekly</button>
+        <button type="button" data-cadence="monthly" aria-pressed="false" class="{{ chip }}">Monthly</button>
+        <button type="button" data-cadence="advanced" aria-pressed="false" class="{{ chip }}">Advanced</button>
       </div>
-      <div class="flex items-center gap-2">at
+
+      <div data-fields="minutes" hidden class="flex items-center gap-2 text-sm">
+        every <input type="number" data-f="minutes" min="1" max="59" value="15"
+                     class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> minutes
+      </div>
+      <div data-fields="hourly" hidden class="flex items-center gap-2 text-sm">
+        every <input type="number" data-f="hours" min="1" max="23" value="1"
+                     class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> hours, at minute
+        <input type="number" data-f="atMinute" min="0" max="59" value="0"
+               class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+      </div>
+      <div data-fields="daily" hidden class="flex items-center gap-2 text-sm">
+        at <input type="time" data-f="time"
+                  class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+      </div>
+      <div data-fields="weekly" hidden class="flex flex-col gap-2 text-sm">
+        <div class="flex flex-wrap gap-1">
+          {% for d in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),(5,'Sat'),(6,'Sun')] %}
+          <button type="button" data-day="{{ d[0] }}" aria-pressed="false" class="{{ chip }}">{{ d[1] }}</button>
+          {% endfor %}
+        </div>
+        <div class="flex items-center gap-2">at
+          <input type="time" data-f="time"
+                 class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+        </div>
+      </div>
+      <div data-fields="monthly" hidden class="flex items-center gap-2 text-sm">
+        on day <input type="number" data-f="dom" min="1" max="31" value="1"
+                      class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> at
         <input type="time" data-f="time"
                class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
       </div>
+
+      <div data-cron-description class="text-xs text-fg"></div>
+      <div data-cron-preview class="text-xs"></div>
+
+      <details data-cron-advanced class="text-xs">
+        <summary class="cursor-pointer text-fg-muted select-none">Advanced (raw cron)</summary>
+        <input type="text" name="schedule" data-cron-raw required value="{{ job.schedule if job else '' }}"
+               placeholder="*/15 * * * *  (min hour dom month dow)"
+               class="mt-1 w-full px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+      </details>
     </div>
-    <div data-fields="monthly" hidden class="flex items-center gap-2 text-sm">
-      on day <input type="number" data-f="dom" min="1" max="31" value="1"
-                    class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> at
-      <input type="time" data-f="time"
-             class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+
+    <label class="mt-3 flex flex-col gap-1 text-sm">
+      <span class="text-fg-muted text-[11px] uppercase tracking-wide">Timezone</span>
+      {# Full IANA list. New jobs carry data-tz-auto so the builder JS preselects
+         the browser zone; editing keeps the job's saved zone. #}
+      <select name="timezone" {% if not job %}data-tz-auto{% endif %}
+              class="rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+        {% set current_tz = job.timezone if job else 'UTC' %}
+        {% for tz in timezones %}
+          <option value="{{ tz }}" {% if tz == current_tz %}selected{% endif %}>{{ tz }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </section>
+
+  {# --- Workspaces ---------------------------------------------------------- #
+   # Mirrors the ticket modal's Workspaces section: a primary card (where the
+   # agent runs == cwd) plus linked rows (extra dirs the run can access).
+   # Cron has no git worktrees, so the primary Kind/Access are fixed readouts
+   # and linked rows are always directories — only their access toggles.
+   #
+   # JS contract (cron_schedule.js initResources): the section is the root
+   # [data-cron-resources]; linked rows live in [data-resources-list]; the
+   # hidden [data-extra-dirs-json] is the submitted value; [data-resources-data]
+   # seeds existing rows on edit. #}
+  <section data-cron-resources class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm">
+    <div class="mb-2 flex items-start justify-between gap-2">
+      <div>
+        <h3 class="text-sm font-medium text-fg">Workspaces</h3>
+        <p class="mt-0.5 text-xs leading-snug text-fg-muted">Where the agent runs and which other repos/dirs it can see.</p>
+      </div>
+      <button type="button" data-add-resource
+              class="shrink-0 rounded border border-border px-2 py-1 text-xs text-accent hover:border-accent hover:bg-bg">+ Add</button>
     </div>
 
-    <div data-cron-description class="text-xs text-fg"></div>
-    <div data-cron-preview class="text-xs"></div>
-
-    <details data-cron-advanced class="text-xs">
-      <summary class="cursor-pointer text-fg-muted select-none">Advanced (raw cron)</summary>
-      <input type="text" name="schedule" data-cron-raw required value="{{ job.schedule if job else '' }}"
-             placeholder="*/15 * * * *  (min hour dom month dow)"
-             class="mt-1 w-full px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
-    </details>
-  </div>
-
-  <label class="text-fg font-medium">Timezone</label>
-  {# Full IANA list. New jobs carry data-tz-auto so the builder JS preselects
-     the browser zone; editing keeps the job's saved zone. #}
-  <select name="timezone" {% if not job %}data-tz-auto{% endif %}
-          class="rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
-    {% set current_tz = job.timezone if job else 'UTC' %}
-    {% for tz in timezones %}
-      <option value="{{ tz }}" {% if tz == current_tz %}selected{% endif %}>{{ tz }}</option>
-    {% endfor %}
-  </select>
-
-  <label class="text-fg font-medium">Workspace</label>
-  <select name="workspace_mode"
-          class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
-    {% set wm = job.workspace_mode if job else 'directory' %}
-    <option value="directory" {% if wm == 'directory' %}selected{% endif %}>Directory</option>
-    <option value="in_place" {% if wm == 'in_place' %}selected{% endif %}>In place</option>
-  </select>
-
-  <label class="text-fg font-medium">Priority</label>
-  <input type="number" name="priority" value="{{ job.priority if job else 0 }}"
-         class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono w-24" />
-
-  <label class="text-fg font-medium">Overlap</label>
-  <select name="overlap_policy"
-          class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg">
-    {% set op = job.overlap_policy if job else 'skip_if_active' %}
-    <option value="skip_if_active" {% if op == 'skip_if_active' %}selected{% endif %}>skip if previous still active</option>
-    <option value="always" {% if op == 'always' %}selected{% endif %}>always fire</option>
-  </select>
-
-  <label class="text-fg font-medium pt-1 self-start">Resources</label>
-  <div data-cron-resources class="flex flex-col gap-2">
     <input type="hidden" name="extra_dirs_json" data-extra-dirs-json value="[]" />
-    <div data-resources-list class="flex flex-col gap-2"></div>
-    <button type="button" data-add-resource
-            class="self-start px-2 py-1 text-xs border border-border rounded text-fg-muted hover:text-fg hover:border-accent transition-colors">
-      + Add resource
-    </button>
-    <p class="text-[11px] text-fg-muted">Extra directories the run can access. Read-only for reference material, read/write to let the agent edit them.</p>
+    {# Cron is directory-only; post the mode the job was saved with (defaults to
+       directory) so editing never silently flips it. directory/in_place behave
+       identically at runtime. #}
+    <input type="hidden" name="workspace_mode" value="{{ job.workspace_mode if job else 'directory' }}" />
+
+    {# --- Primary workspace (== cwd) --------------------------------------- #}
+    <div class="rounded-md border border-accent/40 bg-bg-elev-2 p-2 space-y-2 mb-2">
+      <div class="flex items-center justify-between gap-2">
+        <span class="rounded-full border border-accent/40 bg-accent/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">primary · agent runs here</span>
+      </div>
+      <div class="relative">
+        <input id="cron-cwd" name="cwd" required autocomplete="off" spellcheck="false"
+               value="{{ job.cwd if job else '' }}"
+               placeholder="/home/you/project"
+               oninput="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-cwd-suggest')"
+               onfocus="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-cwd-suggest')"
+               onblur="window.ndPathSuggestClose && window.ndPathSuggestClose('cron-cwd-suggest')"
+               onkeydown="window.ndPathSuggestKey && window.ndPathSuggestKey(event, this, 'cron-cwd-suggest')"
+               class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+        <div id="cron-cwd-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div class="flex flex-col gap-1">
+          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Kind</span>
+          <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg-muted">
+            Directory <span class="text-fg-muted/60">(cron is directory-only)</span>
+          </div>
+        </div>
+        <div class="flex flex-col gap-1">
+          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Access</span>
+          <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg-muted">
+            read/write <span class="text-fg-muted/60">(primary is always rw)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# --- Linked workspace rows (extra dirs) ------------------------------- #}
+    <div data-resources-list class="space-y-2"></div>
     <script type="application/json" data-resources-data>{{ (job.additional_dirs | tojson) if job and job.additional_dirs else '[]' }}</script>
-  </div>
+  </section>
+
+  {# --- Options ------------------------------------------------------------- #}
+  <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm">
+    <div class="mb-2">
+      <h3 class="text-sm font-medium text-fg">Options</h3>
+      <p class="mt-0.5 text-xs leading-snug text-fg-muted">How fires queue and what happens when one is still running.</p>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="flex items-center gap-1.5 text-fg-muted text-[11px] uppercase tracking-wide">
+          Priority
+          <span tabindex="0" role="note" aria-label="What does priority do?"
+                data-tooltip="Queue ordering hint. Among tickets waiting at the same board position, higher numbers run first. Default 0; lower defers. Mostly matters when several jobs compete for the same slot."
+                data-tip-align="start"
+                class="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-border text-[9px] font-semibold leading-none text-fg-muted normal-case hover:border-accent hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">?</span>
+        </span>
+        <input type="number" name="priority" value="{{ job.priority if job else 0 }}"
+               class="px-2 py-1.5 bg-bg border border-border rounded text-fg font-mono text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+      </label>
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-[11px] uppercase tracking-wide">Overlap</span>
+        <select name="overlap_policy"
+                class="px-2 py-1.5 bg-bg border border-border rounded text-fg text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+          {% set op = job.overlap_policy if job else 'skip_if_active' %}
+          <option value="skip_if_active" {% if op == 'skip_if_active' %}selected{% endif %}>skip if previous still active</option>
+          <option value="always" {% if op == 'always' %}selected{% endif %}>always fire</option>
+        </select>
+      </label>
+    </div>
+
+    <label class="mt-3 flex items-start gap-2 text-sm cursor-pointer">
+      <input type="checkbox" name="force_run" value="1" {% if job and job.force_run %}checked{% endif %}
+             class="mt-0.5 accent-accent" />
+      <span class="flex flex-col">
+        <span class="text-fg">Force run <span class="text-fg-muted">(skip queue &amp; window)</span></span>
+        <span class="text-[11px] leading-snug text-fg-muted">Fires even when the queue is full or you're outside work hours. Generated tickets run immediately, ignoring the capacity cap. Overlap policy still applies.</span>
+      </span>
+    </label>
+  </section>
+
 </div>

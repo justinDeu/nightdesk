@@ -141,6 +141,41 @@ def test_materialize_creates_queued_run_now_false_ticket(session):
     assert job.last_ticket_id == ticket.id
 
 
+def test_force_run_materializes_run_now_ticket(session):
+    p = _profile(session)
+    now = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
+    job = _job(session, p.id, schedule="*/15 * * * *", force_run=True,
+               now=now - timedelta(minutes=1))
+    assert job.force_run is True
+    fires = materialize_due_cron_jobs(session, now)
+    ticket = session.get(Ticket, fires[0].ticket_id)
+    # force_run jobs produce run_now tickets the scheduler dispatches past the
+    # queue and the active-hours window.
+    assert ticket.run_now is True
+    assert ticket.status == "queued"
+
+
+def test_force_run_defaults_false(session):
+    p = _profile(session)
+    assert _job(session, p.id).force_run is False
+
+
+def test_fire_now_honors_force_run(session):
+    p = _profile(session)
+    job = _job(session, p.id, force_run=True)
+    ticket = fire_now(session, job.id)
+    assert ticket.run_now is True
+
+
+def test_update_can_toggle_force_run(session):
+    p = _profile(session)
+    job = _job(session, p.id)
+    job = update_cron_job(session, job.id, force_run=True)
+    assert job.force_run is True
+    job = update_cron_job(session, job.id, force_run=False)
+    assert job.force_run is False
+
+
 def test_materialize_idempotent_per_job_fire(session):
     """Re-materializing the same (cron_job_id, fire_at) must not duplicate."""
     p = _profile(session)
@@ -374,6 +409,40 @@ async def test_api_crud_lifecycle(client):
     r = await client.delete(f"/api/v1/cron-jobs/{cid}")
     assert r.status_code == 204
     assert (await client.get(f"/api/v1/cron-jobs/{cid}")).status_code == 404
+
+
+@pytest.mark.anyio
+async def test_api_force_run_roundtrips(client):
+    pid = await _api_profile(client)
+    r = await client.post("/api/v1/cron-jobs", json={
+        "title": "x", "profile_id": pid, "cwd": "/tmp",
+        "schedule": "0 9 * * *", "force_run": True,
+    })
+    assert r.status_code == 201, r.text
+    cid = r.json()["id"]
+    assert r.json()["force_run"] is True
+    # default omitted -> false
+    r2 = await client.post("/api/v1/cron-jobs", json={
+        "title": "y", "profile_id": pid, "cwd": "/tmp", "schedule": "0 9 * * *",
+    })
+    assert r2.json()["force_run"] is False
+    # patch toggles it
+    r3 = await client.patch(f"/api/v1/cron-jobs/{cid}", json={"force_run": False})
+    assert r3.json()["force_run"] is False
+
+
+@pytest.mark.anyio
+async def test_cron_page_create_with_force_run(client):
+    pid = await _api_profile(client)
+    r = await client.post("/cron", data={
+        "title": "forced", "profile_id": pid, "cwd": "/tmp",
+        "schedule": "*/5 * * * *", "timezone": "UTC", "workspace_mode": "directory",
+        "overlap_policy": "skip_if_active", "priority": "0", "prompt": "",
+        "force_run": "1", "extra_dirs_json": "[]",
+    }, follow_redirects=False)
+    assert r.status_code == 303
+    cid = r.headers["location"].rsplit("/", 1)[-1]
+    assert (await client.get(f"/api/v1/cron-jobs/{cid}")).json()["force_run"] is True
 
 
 @pytest.mark.anyio

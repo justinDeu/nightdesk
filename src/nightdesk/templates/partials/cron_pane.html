@@ -39,6 +39,10 @@
       {% else %}
         <span class="rounded border border-border text-fg-muted bg-bg-elev-2 px-2 py-0.5 text-xs">disabled</span>
       {% endif %}
+      {% if job.force_run %}
+        <span class="rounded border border-warn/50 text-warn bg-warn/10 px-2 py-0.5 text-xs"
+              data-tooltip="Generated tickets run immediately, past the queue and outside work hours.">force run</span>
+      {% endif %}
       <div class="flex items-center gap-1.5">
         <a href="/cron/{{ job.id }}/edit"
            hx-get="/cron/{{ job.id }}/edit" hx-target="#cron-pane" hx-swap="outerHTML" hx-push-url="true"
@@ -65,8 +69,27 @@
     {# Config. #}
     <div class="px-4 py-3 divide-y divide-border/60">
       {{ _kv('Profile', profile_names.get(job.profile_id, job.profile_id)) }}
-      {{ _kv('Working dir', job.cwd) }}
-      {{ _kv('Workspace', job.workspace_mode) }}
+
+      {# Workspaces: primary (cwd) + any linked dirs, in the same lingo the
+         edit form and ticket modal use. Cron is directory-only. #}
+      <div class="grid grid-cols-[140px_1fr] gap-3 py-1.5 text-sm">
+        <dt class="text-fg-muted text-xs uppercase tracking-wide pt-0.5">Workspaces</dt>
+        <dd class="text-fg text-xs space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="rounded-full border border-accent/40 bg-accent/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-accent">primary</span>
+            <code class="break-all font-mono">{{ job.cwd }}</code>
+            <span class="text-fg-muted/70">· rw</span>
+          </div>
+          {% for d in (job.additional_dirs or []) %}
+          <div class="flex items-center gap-2">
+            <span class="rounded-full border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-fg-muted">linked</span>
+            <code class="break-all font-mono">{{ d.path }}</code>
+            <span class="text-fg-muted/70">· {{ 'ro' if d.mode == 'ro' else 'rw' }}</span>
+          </div>
+          {% endfor %}
+        </dd>
+      </div>
+
       {{ _kv('Priority', job.priority) }}
       {{ _kv('Overlap', job.overlap_policy) }}
       <div class="grid grid-cols-[140px_1fr] gap-3 py-1.5 text-sm">

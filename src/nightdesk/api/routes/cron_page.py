@@ -6,6 +6,9 @@ that redirect back to ``/cron`` (HTML forms can't send PATCH/DELETE).
 
 Worktree options are intentionally NOT offered here — cron is directory-only in
 v1 (see ``domain/cron_jobs``). The board ticket modal carries no cron controls.
+
+The ``force_run`` flag makes a job materialize ``run_now=True`` tickets, which
+the scheduler dispatches past the queue and outside the active-hours window.
 """
 from __future__ import annotations
 
@@ -164,6 +167,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         priority: int = Form(0),
         workspace_mode: str = Form("directory"),
         overlap_policy: str = Form("skip_if_active"),
+        force_run: bool = Form(False),
         extra_dirs_json: str = Form("[]"),
         session: Session = Depends(get_session),
     ):
@@ -179,6 +183,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
                 priority=priority,
                 workspace_mode=workspace_mode,
                 overlap_policy=overlap_policy,
+                force_run=force_run,
                 additional_dirs=_parse_extra_dirs_json(extra_dirs_json),
             )
         except InvalidCronJob as e:
@@ -197,6 +202,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         priority: int = Form(0),
         workspace_mode: str = Form("directory"),
         overlap_policy: str = Form("skip_if_active"),
+        force_run: bool = Form(False),
         extra_dirs_json: str = Form("[]"),
         session: Session = Depends(get_session),
     ):
@@ -212,6 +218,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
                 priority=priority,
                 workspace_mode=workspace_mode,
                 overlap_policy=overlap_policy,
+                force_run=force_run,
                 additional_dirs=_parse_extra_dirs_json(extra_dirs_json),
             )
         except CronJobNotFound:

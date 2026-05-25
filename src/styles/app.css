@@ -251,6 +251,40 @@ li[data-ticket-id][data-selected] {
     font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--color-accent);
   }
+  .nd-tooltip.nd-tooltip-schedule {
+    min-width: 0;
+    width: max-content;
+    max-width: min(16rem, calc(100vw - 24px));
+    padding: 0.25rem 0.4rem;
+    background: var(--color-bg-elev-2);
+    border-color: var(--color-border);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28);
+    border-radius: 4px;
+    backdrop-filter: none;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.12rem;
+  }
+  .nd-tooltip.nd-tooltip-schedule .nd-tooltip-title {
+    font-size: 0.74rem;
+    line-height: 1.05;
+    font-weight: 600;
+    color: var(--color-fg);
+    white-space: nowrap;
+  }
+  .nd-tooltip.nd-tooltip-schedule .nd-tooltip-body {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.63rem;
+    line-height: 1.1;
+    font-weight: 600 !important;
+    color: var(--color-fg) !important;
+    opacity: 0.82;
+    white-space: nowrap;
+  }
 
   .tc-path {
     font-family: var(--font-mono);
@@ -776,6 +810,25 @@ li[data-ticket-id][data-selected] {
   opacity: 1;
 }
 
+/* Left-aligned variant: the tip grows rightward from the element's left edge
+   instead of centering on it. Use [data-tooltip][data-tip-align="start"] on
+   small anchors (e.g. a "?" help badge) sitting inside narrow, overflow-clipped
+   panes — a centered tip there would spill past the container's left edge and
+   get clipped. Higher specificity (two attribute selectors) overrides the
+   centered defaults regardless of source order. */
+[data-tooltip][data-tip-align="start"]::after {
+  left: 0;
+  transform: translateX(0) translateY(3px);
+}
+[data-tooltip][data-tip-align="start"]::before {
+  left: 8px;
+  transform: translateX(0);
+}
+[data-tooltip][data-tip-align="start"]:hover::after,
+[data-tooltip][data-tip-align="start"]:focus-visible::after {
+  transform: translateX(0) translateY(0);
+}
+
 /* Copy-command button: a real child tooltip shown BELOW the button (so it
    stays on-screen when the buttons sit at the top of a panel). Carries a
    plain-language label of the action plus the exact command it copies. Used
@@ -839,4 +892,3 @@ dialog button[aria-label="Close"]:focus-visible {
   border-radius: 0.25rem;
   box-shadow: 0 0 0 2px var(--color-accent);
 }
-

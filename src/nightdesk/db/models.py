@@ -287,9 +287,11 @@ class CronJob(Base):
     """A recurring ticket template plus a schedule.
 
     When the schedule fires the worker materializes one ordinary
-    ``status="queued"``, ``run_now=False`` ticket from this template; that
-    ticket then flows through the normal scheduler (active-hours window and
-    ``max_parallel`` capacity), so cron does NOT bypass them.
+    ``status="queued"`` ticket from this template; that ticket then flows
+    through the normal scheduler (active-hours window and ``max_parallel``
+    capacity). Set ``force_run=True`` to instead materialize ``run_now=True``
+    tickets, which the scheduler dispatches unconditionally — past a full queue
+    and outside the active-hours window (overflow above ``max_parallel``).
 
     Backend neutrality: the agent backend is chosen by the referenced
     ``Profile.backend``, never by the cron job. This template stores only
@@ -314,6 +316,10 @@ class CronJob(Base):
     workspace_mode: Mapped[str] = mapped_column(String, default="directory", nullable=False)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     permission_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # When true, generated tickets are created with run_now=True so the
+    # scheduler dispatches them unconditionally (ignores active-hours window
+    # and max_parallel capacity). Pairs with overlap_policy to avoid stacking.
+    force_run: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # --- schedule ---
     # Standard 5-field cron expression: "minute hour dom month dow".
     schedule: Mapped[str] = mapped_column(String, nullable=False)

@@ -4,9 +4,11 @@ Mirrors the ``build_router(get_session, bearer_token)`` pattern used by
 ``tickets.py``. Routes live under ``/api/v1/cron-jobs`` with bearer auth.
 
 A cron job is a ticket template plus a schedule; ``fire-now`` materializes a
-queued ticket immediately (it does NOT set ``run_now=true``) and records a fire
-row. ``DELETE`` removes only the schedule (and its audit rows), never the
-generated tickets. Invalid cron expr / unknown tz / worktree workspace -> 422.
+queued ticket immediately and records a fire row. Generated tickets are
+``run_now=False`` unless the job has ``force_run=True`` (then ``run_now=True``,
+dispatched past the queue and active-hours window). ``DELETE`` removes only the
+schedule (and its audit rows), never the generated tickets. Invalid cron expr /
+unknown tz / worktree workspace -> 422.
 """
 from __future__ import annotations
 
