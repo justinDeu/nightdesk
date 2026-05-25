@@ -6,7 +6,7 @@ from datetime import datetime, time, timedelta, timezone
 
 import pytest
 
-from nightdesk.db.models import CronJobFire, DaemonStatus, Ticket
+from nightdesk.db.models import CronJobFire, DaemonStatus, ScheduleWindow, Ticket
 from nightdesk.domain.cron_jobs import (
     InvalidCronJob,
     compute_next_fire,
@@ -284,6 +284,11 @@ async def test_tick_materializes_before_picking(engine, tmp_path):
                    now=datetime.now(timezone.utc) - timedelta(hours=1))
         # make it due now
         job.next_fire_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        # Cron tickets are window-gated normal tickets (run_now=False), so an
+        # always-on schedule window must exist for the pick to happen.
+        session.add(ScheduleWindow(label="always", day_mask=0b1111111,
+                                   start="00:00", end="23:59", max_parallel=5,
+                                   position=0))
         session.commit()
         jid = job.id
 

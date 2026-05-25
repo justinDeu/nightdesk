@@ -54,6 +54,7 @@ def _config_out(session: Session, row: ConfigRow) -> ConfigOut:
         worktree_root=row.worktree_root,
         transcript_root=row.transcript_root,
         worktree_base_ref=row.worktree_base_ref,
+        notify_webhook_url=row.notify_webhook_url,
         windows=windows,
     )
 
