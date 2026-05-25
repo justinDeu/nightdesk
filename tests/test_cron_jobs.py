@@ -478,3 +478,20 @@ async def test_cron_page_enable_disable_fire_delete_forms(client, session):
     assert (await client.post(f"/cron/{cid}/fire-now", follow_redirects=False)).status_code == 303
     assert (await client.post(f"/cron/{cid}/delete", follow_redirects=False)).status_code == 303
     assert (await client.get(f"/api/v1/cron-jobs/{cid}")).status_code == 404
+
+
+@pytest.mark.anyio
+async def test_cron_preview_returns_next_fires(client):
+    r = await client.post("/cron/preview",
+                          data={"schedule": "0 9 * * *", "timezone": "America/New_York"})
+    assert r.status_code == 200
+    body = r.text
+    assert "9:00" in body or "09:00" in body  # next fire rendered
+
+
+@pytest.mark.anyio
+async def test_cron_preview_invalid_schedule_is_inline_error(client):
+    r = await client.post("/cron/preview",
+                          data={"schedule": "not a cron", "timezone": "UTC"})
+    assert r.status_code == 200  # inline error partial, never 500
+    assert "invalid" in r.text.lower()

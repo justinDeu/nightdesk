@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
+from croniter import croniter
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -22,6 +24,7 @@ from nightdesk.domain.cron_jobs import (
     CronJobNotFound, InvalidCronJob,
     create_cron_job, delete_cron_job, disable_cron_job, enable_cron_job,
     fire_now, list_cron_jobs, update_cron_job,
+    validate_schedule, validate_timezone,
 )
 from nightdesk.domain.profiles import list_profiles
 
@@ -160,5 +163,25 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         except CronJobNotFound:
             raise HTTPException(404, "not found")
         return RedirectResponse(url="/cron", status_code=303)
+
+    @router.post("/cron/preview", response_class=HTMLResponse, dependencies=[auth])
+    async def cron_preview(
+        request: Request,
+        schedule: str = Form(""),
+        timezone: str = Form("UTC"),
+    ):
+        try:
+            sched = validate_schedule(schedule)
+            tzname = validate_timezone(timezone or "UTC")
+        except InvalidCronJob as exc:
+            return templates.TemplateResponse(
+                request, "partials/cron_preview.html", {"error": str(exc)})
+        tz = ZoneInfo(tzname)
+        base = datetime.now(tz)
+        it = croniter(sched, base)
+        fires = [it.get_next(datetime).strftime("%a %b %d, %I:%M %p") for _ in range(5)]
+        return templates.TemplateResponse(
+            request, "partials/cron_preview.html",
+            {"error": None, "fires": fires, "timezone": tzname})
 
     return router
