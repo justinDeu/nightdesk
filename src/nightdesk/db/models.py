@@ -54,6 +54,27 @@ class Profile(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    cwd: Mapped[str] = mapped_column(String, nullable=False)
+    default_workspace_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    default_worktree_name_template: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    default_base_ref: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    default_linked_workspaces: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    color: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="project")
+
+
+
 
 class Ticket(Base):
     __tablename__ = "tickets"
@@ -64,6 +85,7 @@ class Ticket(Base):
     status: Mapped[str] = mapped_column(String, default="draft", index=True)
     priority: Mapped[int] = mapped_column(Integer, default=0, index=True)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    project_id: Mapped[Optional[str]] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"))
     permission_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
@@ -79,6 +101,7 @@ class Ticket(Base):
     next_run_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     next_run_context_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    project: Mapped[Optional["Project"]] = relationship(back_populates="tickets")
     profile: Mapped["Profile"] = relationship(lazy="joined")
     runs: Mapped[list["Run"]] = relationship(back_populates="ticket", foreign_keys="Run.ticket_id")
     workspaces: Mapped[list["TicketWorkspace"]] = relationship(

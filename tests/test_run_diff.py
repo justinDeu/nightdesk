@@ -321,6 +321,70 @@ async def test_diff_endpoint_with_git_repo(client, session, tmp_path):
     assert "b.txt" in paths
 
 
+
+async def test_diff_endpoint_ticket_workspace_fallback_uses_worktree_path(
+    client, session, tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), capture_output=True, check=True)
+    (repo / "a.txt").write_text("aaa\n")
+    subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    (repo / "a.txt").write_text("bbb\n")
+    (repo / "b.txt").write_text("new\n")
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "edit"], cwd=str(repo), capture_output=True, check=True)
+
+    main_checkout = tmp_path / "main-checkout"
+    subprocess.run(["git", "clone", str(repo), str(main_checkout)], capture_output=True, check=True)
+    subprocess.run(["git", "checkout", base], cwd=str(main_checkout), capture_output=True, check=True)
+
+    profile = create_profile(
+        session, name="dp3", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(session, title="dt3", prompt="", priority=0,
+                      profile_id=profile.id, run_now=False,
+                      status="review", cwd=str(repo))
+    run = Run(
+        ticket_id=t.id,
+        started_at=datetime.now(timezone.utc),
+        worktree_path=str(repo),
+        transcript_path="/tmp/tr3",
+        host="testhost",
+    )
+    session.add(run)
+    session.flush()
+    ws = TicketWorkspace(
+        ticket_id=t.id,
+        run_id=None,
+        role="primary",
+        kind="git_worktree",
+        source_path=str(main_checkout),
+        resolved_path=str(repo),
+        repo_root=str(main_checkout),
+        worktree_path=str(repo),
+        base_sha=base,
+        branch="feat-test",
+        state="ready",
+    )
+    session.add(ws)
+    session.commit()
+
+    r = await client.get(f"/api/v1/runs/{run.id}/diff")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_files"] == 2
+    assert data["head_sha"] != data["base_sha"]
+
 async def test_diff_endpoint_run_not_found(client):
     r = await client.get("/api/v1/runs/nonexistent/diff")
     assert r.status_code == 404

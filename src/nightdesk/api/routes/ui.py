@@ -11,6 +11,14 @@ from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow, ScheduleWindow
+from nightdesk.domain.projects import (
+    ProjectNameTaken,
+    ProjectNotFound,
+    archive_project,
+    create_project,
+    list_projects,
+    update_project,
+)
 from nightdesk.domain.notifications import build_test_payload, fire_webhook
 from nightdesk.domain.tickets import (
     archive, requeue, request_run_now, transition_status,
@@ -52,6 +60,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "claude": "partials/settings_claude_pane.html",
             "worktrees": "partials/settings_worktrees_pane.html",
             "notifications": "partials/settings_notifications_pane.html",
+            "projects": "partials/settings_projects_pane.html",
         }[category]
         return {
             "title": "Settings",
@@ -63,6 +72,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "path_claude_binary": shutil.which("claude"),
             "windows": _windows_payload(session),
             "schedule_timezone": (cfg.schedule_timezone if cfg else "UTC"),
+            "projects": list_projects(session, include_archived=True),
         }
 
     def _render_settings(request: Request, session: Session, *, category: str, saved: bool):
@@ -256,6 +266,111 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         cfg.worktree_base_ref = (worktree_base_ref or "").strip() or None
         session.commit()
         return _render_settings(request, session, category="worktrees", saved=True)
+
+    @router.get("/settings/projects", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_projects_page(request: Request, session: Session = Depends(get_session)):
+        return _render_settings(request, session, category="projects", saved=False)
+
+
+    def _project_linked_workspaces(form) -> list[dict]:
+        linked_workspaces = []
+        linked_paths = list(form.getlist("linked_workspace_path"))
+        linked_kinds = list(form.getlist("linked_workspace_kind"))
+        linked_accesses = list(form.getlist("linked_workspace_access"))
+        for idx, raw_path in enumerate(linked_paths):
+            path = (raw_path or "").strip()
+            if not path:
+                continue
+            kind = linked_kinds[idx] if idx < len(linked_kinds) else "directory"
+            access = linked_accesses[idx] if idx < len(linked_accesses) else "read_only"
+            linked_workspaces.append({
+                "role": "linked",
+                "label": Path(path).name or f"linked-{idx + 1}",
+                "kind": kind,
+                "access": access,
+                "source_path": path,
+            })
+        return linked_workspaces
+
+    @router.post("/settings/projects", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_projects_save(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        cwd: str = Form(...),
+        default_workspace_mode: str = Form("directory"),
+        default_worktree_name_template: str = Form(""),
+        default_base_ref: str = Form(""),
+    ):
+        form = await request.form()
+        linked_workspaces = _project_linked_workspaces(form)
+        if default_workspace_mode != "git_worktree":
+            default_worktree_name_template = ""
+            default_base_ref = ""
+        try:
+            create_project(
+                session,
+                name=name,
+                cwd=cwd,
+                default_workspace_mode=default_workspace_mode or None,
+                default_worktree_name_template=default_worktree_name_template or None,
+                default_base_ref=default_base_ref or None,
+                default_linked_workspaces=linked_workspaces or None,
+            )
+        except ProjectNameTaken:
+            raise HTTPException(409, "project name or slug already exists")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        return _render_settings(request, session, category="projects", saved=True)
+
+    @router.post("/settings/projects/{project_id}", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_projects_update(
+        request: Request,
+        project_id: str,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        cwd: str = Form(...),
+        default_workspace_mode: str = Form("directory"),
+        default_worktree_name_template: str = Form(""),
+        default_base_ref: str = Form(""),
+    ):
+        form = await request.form()
+        linked_workspaces = _project_linked_workspaces(form)
+        if default_workspace_mode != "git_worktree":
+            default_worktree_name_template = ""
+            default_base_ref = ""
+        try:
+            update_project(
+                session,
+                project_id,
+                name=name,
+                cwd=cwd,
+                default_workspace_mode=default_workspace_mode or None,
+                default_worktree_name_template=default_worktree_name_template or None,
+                default_base_ref=default_base_ref or None,
+                default_linked_workspaces=linked_workspaces or None,
+            )
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        except ProjectNameTaken:
+            raise HTTPException(409, "project name or slug already exists")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        return _render_settings(request, session, category="projects", saved=True)
+
+
+    @router.post("/settings/projects/{project_id}/archive", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_projects_archive(
+        request: Request,
+        project_id: str,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            archive_project(session, project_id)
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        return _render_settings(request, session, category="projects", saved=True)
+
 
     @router.get("/settings/notifications", response_class=HTMLResponse, dependencies=[auth])
     async def settings_notifications_page(request: Request, session: Session = Depends(get_session)):

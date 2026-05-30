@@ -1,0 +1,274 @@
+{% set input_class = "rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg placeholder:text-fg-muted caret-accent focus:border-accent focus:bg-bg-elev-2 focus:text-fg focus:outline-none focus:ring-2 focus:ring-accent/30" %}
+{% set mono_input_class = input_class ~ " font-mono text-xs" %}
+
+{% macro project_form(action, submit_label, project=None, dialog_id='') %}
+  {% set workspace_mode = project.default_workspace_mode if project else 'directory' %}
+  {% set linked = project.default_linked_workspaces if project and project.default_linked_workspaces else [] %}
+  <form method="post" action="{{ action }}" data-settings-form data-project-form class="space-y-3" style="color-scheme: dark;">
+    <label class="flex flex-col gap-1 text-sm">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Name</span>
+      <input name="name" required class="{{ input_class }}" placeholder="nightdesk" value="{{ project.name if project else '' }}" oninput="window.ndProjectSlugPreview && window.ndProjectSlugPreview(this.form)" />
+      <span class="text-[11px] text-fg-muted">Slug: <code data-slug-preview>{{ project.slug if project else 'project' }}</code></span>
+    </label>
+
+    <label class="flex flex-col gap-1 text-sm">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Working directory</span>
+      <div class="relative">
+        {% set cwd_id = (dialog_id ~ '-cwd') if dialog_id else 'project-cwd' %}
+        {% set suggest_id = cwd_id ~ '-suggest' %}
+        <input id="{{ cwd_id }}"
+               name="cwd"
+               required
+               class="{{ mono_input_class }}"
+               placeholder="/home/you/repo"
+               value="{{ project.cwd if project else '' }}"
+               oninput="window.ndPathSuggest && window.ndPathSuggest(this, '{{ suggest_id }}')"
+               onfocus="window.ndPathSuggest && window.ndPathSuggest(this, '{{ suggest_id }}')"
+               onblur="window.ndPathSuggestClose && window.ndPathSuggestClose('{{ suggest_id }}')"
+               onkeydown="window.ndPathSuggestKey && window.ndPathSuggestKey(event, this, '{{ suggest_id }}')" />
+        <div id="{{ suggest_id }}" class="nd-suggest-host fixed z-50 hidden"></div>
+      </div>
+    </label>
+
+    <label class="flex flex-col gap-1 text-sm">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Default workspace mode</span>
+      <select name="default_workspace_mode" class="{{ input_class }}" onchange="window.ndProjectModeChanged && window.ndProjectModeChanged(this.form)">
+        <option value="directory" {% if workspace_mode == 'directory' %}selected{% endif %}>Directory</option>
+        <option value="git_worktree" {% if workspace_mode == 'git_worktree' %}selected{% endif %}>Git worktree</option>
+      </select>
+    </label>
+
+    <div data-worktree-template-fields class="{% if workspace_mode != 'git_worktree' %}hidden {% endif %}space-y-3 rounded border border-border bg-bg-elev-2/40 p-2">
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Worktree name template</span>
+        <input name="default_worktree_name_template" class="{{ mono_input_class }}" placeholder="feat/{slug}" value="{{ project.default_worktree_name_template if project and project.default_worktree_name_template else '' }}" {% if workspace_mode != 'git_worktree' %}disabled{% endif %} />
+        <span class="text-[11px] text-fg-muted">Available token: <code>{slug}</code>, the ticket title slug.</span>
+      </label>
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Default base ref</span>
+        <input name="default_base_ref" class="{{ mono_input_class }}" placeholder="main" value="{{ project.default_base_ref if project and project.default_base_ref else '' }}" {% if workspace_mode != 'git_worktree' %}disabled{% endif %} />
+      </label>
+    </div>
+
+    <section class="rounded border border-border bg-bg-elev-2/40 p-2" data-linked-workspaces>
+      <div class="flex items-center justify-between gap-2">
+        <div>
+          <h4 class="text-sm font-medium text-fg">Default linked workspaces</h4>
+          <p class="text-[11px] text-fg-muted">Optional extra repos or directories to add when creating tickets.</p>
+        </div>
+        <button type="button" onclick="window.ndProjectAddWorkspaceRow && window.ndProjectAddWorkspaceRow(this.form)" class="rounded border border-border px-2 py-1 text-xs text-accent hover:border-accent">+ Add</button>
+      </div>
+      <div class="mt-2 space-y-2" data-linked-workspace-rows>
+        {% for ws in linked %}
+          {% set row_id = (dialog_id ~ '-linked-' ~ loop.index0) if dialog_id else ('project-linked-' ~ loop.index0) %}
+          <div class="rounded border border-border bg-bg p-2 space-y-2" data-linked-row="true">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium text-fg">Linked workspace</span>
+              <button type="button" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" onclick="this.closest('[data-linked-row]').remove()">&times;</button>
+            </div>
+            <div class="grid gap-2">
+              <div class="relative">
+                <input id="{{ row_id }}"
+                       name="linked_workspace_path"
+                       class="{{ mono_input_class }}"
+                       placeholder="/home/you/other-repo"
+                       value="{{ ws.source_path if ws.source_path else '' }}"
+                       oninput="window.ndPathSuggest&&window.ndPathSuggest(this,'{{ row_id }}-suggest')"
+                       onfocus="window.ndPathSuggest&&window.ndPathSuggest(this,'{{ row_id }}-suggest')"
+                       onblur="window.ndPathSuggestClose&&window.ndPathSuggestClose('{{ row_id }}-suggest')"
+                       onkeydown="window.ndPathSuggestKey&&window.ndPathSuggestKey(event,this,'{{ row_id }}-suggest')" />
+                <div id="{{ row_id }}-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <select name="linked_workspace_kind" class="{{ input_class }}">
+                  <option value="directory" {% if ws.kind == 'directory' %}selected{% endif %}>Directory</option>
+                  <option value="git_worktree" {% if ws.kind == 'git_worktree' %}selected{% endif %}>Git worktree</option>
+                </select>
+                <select name="linked_workspace_access" class="{{ input_class }}">
+                  <option value="read_only" {% if ws.access == 'read_only' %}selected{% endif %}>Read-only</option>
+                  <option value="read_write" {% if ws.access == 'read_write' %}selected{% endif %}>Read/write</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <div class="flex justify-end gap-2 pt-1">
+      {% if dialog_id %}
+        <button type="button" onclick="document.getElementById('{{ dialog_id }}').close()" class="rounded border border-border px-3 py-1.5 text-sm text-fg-muted hover:text-fg">Cancel</button>
+      {% endif %}
+      <button type="submit" class="rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:brightness-110">{{ submit_label }}</button>
+    </div>
+  </form>
+{% endmacro %}
+
+<div class="rounded border border-border bg-bg-elev overflow-hidden">
+  <div class="border-b border-border px-4 py-4 bg-bg-elev-2/60">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-fg-muted">Work contexts</div>
+        <h2 class="mt-2 text-lg font-semibold text-fg">Projects</h2>
+        <p class="mt-1 text-xs text-fg-muted">Define optional project contexts for filtering and ticket creation defaults.</p>
+      </div>
+      <button type="button"
+              data-create-project-toggle
+              onclick="document.getElementById('project-create-modal').showModal()"
+              class="shrink-0 rounded border border-border bg-bg px-3 py-1.5 text-sm font-medium text-accent hover:bg-bg-elev-2">
+        Create project
+      </button>
+    </div>
+  </div>
+
+  {% if saved %}
+    <div class="mx-4 mt-4 rounded border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-accent">Saved.</div>
+  {% endif %}
+
+  <section class="p-4">
+    {% if projects %}
+      <ul class="divide-y divide-border rounded border border-border bg-bg p-3">
+        {% for project in projects %}
+          <li class="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-medium text-fg">{{ project.name }}</span>
+                <code class="rounded border border-border bg-bg-elev-2 px-1.5 py-0.5 text-[11px] text-fg-muted">{{ project.slug }}</code>
+                {% if project.archived_at %}
+                  <span class="rounded border border-border px-1.5 py-0.5 text-[11px] text-fg-muted">archived</span>
+                {% endif %}
+              </div>
+              <code class="mt-1 block truncate text-xs text-fg-muted">{{ project.cwd }}</code>
+              <div class="mt-1 flex flex-wrap gap-1 text-[11px] text-fg-muted">
+                {% if project.default_workspace_mode %}<span>mode: {{ project.default_workspace_mode }}</span>{% endif %}
+                {% if project.default_base_ref %}<span>base: {{ project.default_base_ref }}</span>{% endif %}
+                {% if project.default_worktree_name_template %}<span>worktree: {{ project.default_worktree_name_template }}</span>{% endif %}
+                {% if project.default_linked_workspaces %}<span>{{ project.default_linked_workspaces | length }} linked workspace{% if project.default_linked_workspaces | length != 1 %}s{% endif %}</span>{% endif %}
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              {% if not project.archived_at %}
+                <button type="button"
+                        onclick="document.getElementById('project-edit-modal-{{ project.id }}').showModal()"
+                        class="rounded border border-border px-2 py-1 text-xs text-fg-muted hover:border-accent hover:text-accent">
+                  Edit
+                </button>
+                <form method="post" action="/settings/projects/{{ project.id }}/archive">
+                  <button type="submit"
+                          class="rounded border border-border px-2 py-1 text-xs text-fg-muted hover:border-warn hover:text-warn">
+                    Archive
+                  </button>
+                </form>
+              {% endif %}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div data-projects-empty-state class="rounded border border-border bg-bg px-4 py-6 text-sm text-fg-muted">
+        <p><span class="text-fg">No projects yet.</span> Use Create project to add one.</p>
+      </div>
+    {% endif %}
+  </section>
+</div>
+
+<dialog id="project-create-modal"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[620px] max-w-[calc(100vw-2rem)]"
+        style="margin:auto; max-height: 92vh;">
+  <div class="flex items-center justify-between px-5 py-3 border-b border-border bg-bg-elev sticky top-0 z-10">
+    <div>
+      <h3 class="text-base font-semibold">Create project</h3>
+      <p class="text-[11px] text-fg-muted">Saved work context for filtering and ticket defaults.</p>
+    </div>
+    <button type="button" onclick="document.getElementById('project-create-modal').close()" class="text-fg-muted hover:text-fg text-2xl leading-none px-2" aria-label="Close">&times;</button>
+  </div>
+  <div class="px-5 py-4 overflow-y-auto max-h-[calc(92vh-4rem)]">
+    {{ project_form('/settings/projects', 'Create project', None, 'project-create-modal') }}
+  </div>
+</dialog>
+
+{% for project in projects %}
+  {% if not project.archived_at %}
+    <dialog id="project-edit-modal-{{ project.id }}"
+            class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[620px] max-w-[calc(100vw-2rem)]"
+            style="margin:auto; max-height: 92vh;">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-border bg-bg-elev sticky top-0 z-10">
+        <div>
+          <h3 class="text-base font-semibold">Edit project</h3>
+          <p class="text-[11px] text-fg-muted">Update project defaults and linked workspaces.</p>
+        </div>
+        <button type="button" onclick="document.getElementById('project-edit-modal-{{ project.id }}').close()" class="text-fg-muted hover:text-fg text-2xl leading-none px-2" aria-label="Close">&times;</button>
+      </div>
+      <div class="px-5 py-4 overflow-y-auto max-h-[calc(92vh-4rem)]">
+        {{ project_form('/settings/projects/' ~ project.id, 'Save changes', project, 'project-edit-modal-' ~ project.id) }}
+      </div>
+    </dialog>
+  {% endif %}
+{% endfor %}
+
+<script>
+(function () {
+  function slugify(value) {
+    var slug = (value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return slug || 'project';
+  }
+  window.ndProjectSlugPreview = function (form) {
+    if (!form) return;
+    var name = form.querySelector('[name="name"]');
+    var preview = form.querySelector('[data-slug-preview]');
+    if (preview) preview.textContent = slugify(name && name.value);
+  };
+  window.ndProjectModeChanged = function (form) {
+    if (!form) return;
+    var mode = form.querySelector('[name="default_workspace_mode"]');
+    var box = form.querySelector('[data-worktree-template-fields]');
+    if (!mode || !box) return;
+    var enabled = mode.value === 'git_worktree';
+    box.classList.toggle('hidden', !enabled);
+    box.querySelectorAll('input').forEach(function (input) {
+      input.disabled = !enabled;
+      if (!enabled) input.value = '';
+    });
+  };
+  var linkedSeq = 0;
+  window.ndProjectAddWorkspaceRow = function (form) {
+    if (!form) return;
+    var host = form.querySelector('[data-linked-workspace-rows]');
+    if (!host) return;
+    linkedSeq += 1;
+    var rowId = 'project-linked-' + linkedSeq;
+    var row = document.createElement('div');
+    row.className = 'rounded border border-border bg-bg p-2 space-y-2';
+    row.setAttribute('data-linked-row', 'true');
+    row.innerHTML = '' +
+      '<div class="flex items-center justify-between gap-2">' +
+      '<span class="text-xs font-medium text-fg">Linked workspace</span>' +
+      '<button type="button" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" onclick="this.closest(\'[data-linked-row]\').remove()">&times;</button>' +
+      '</div>' +
+      '<div class="grid gap-2">' +
+      '<div class="relative">' +
+      '<input id="' + rowId + '" name="linked_workspace_path" class="{{ mono_input_class }}" placeholder="/home/you/other-repo" ' +
+      'oninput="window.ndPathSuggest&&window.ndPathSuggest(this,\'' + rowId + '-suggest\')" ' +
+      'onfocus="window.ndPathSuggest&&window.ndPathSuggest(this,\'' + rowId + '-suggest\')" ' +
+      'onblur="window.ndPathSuggestClose&&window.ndPathSuggestClose(\'' + rowId + '-suggest\')" ' +
+      'onkeydown="window.ndPathSuggestKey&&window.ndPathSuggestKey(event,this,\'' + rowId + '-suggest\')" />' +
+      '<div id="' + rowId + '-suggest" class="nd-suggest-host fixed z-50 hidden"></div>' +
+      '</div>' +
+      '<div class="grid grid-cols-2 gap-2">' +
+      '<select name="linked_workspace_kind" class="{{ input_class }}"><option value="directory">Directory</option><option value="git_worktree">Git worktree</option></select>' +
+      '<select name="linked_workspace_access" class="{{ input_class }}"><option value="read_only">Read-only</option><option value="read_write">Read/write</option></select>' +
+      '</div>' +
+      '</div>';
+    host.appendChild(row);
+  };
+  document.querySelectorAll('[data-project-form]').forEach(function (form) {
+    window.ndProjectSlugPreview(form);
+    window.ndProjectModeChanged(form);
+  });
+  document.querySelectorAll('dialog[id^="project-"]').forEach(function (dialog) {
+    dialog.addEventListener('click', function (event) {
+      if (event.target === dialog) dialog.close();
+    });
+  });
+})();
+</script>

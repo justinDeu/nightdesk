@@ -9,6 +9,7 @@
   page (with the live transcript / SSE tail).
 #}
 {% set profile = profiles_by_id.get(t.profile_id) if profiles_by_id else None %}
+{% set project = projects_by_id.get(t.project_id) if projects_by_id and t.project_id else none %}
 {% set outcome = run_outcomes.get(t.id) if run_outcomes else None %}
 {% set blocked_by = dep_titles.get(t.id) if dep_titles else None %}
 <li
@@ -26,6 +27,12 @@
         {% if profile %}
           <span class="px-1.5 py-0.5 rounded bg-bg-elev border border-border text-fg-muted">
             {{ profile.name }}
+          </span>
+        {% endif %}
+        {% if project %}
+          <span class="px-1.5 py-0.5 rounded bg-bg-elev border border-border text-fg-muted">
+            {% if project.color %}<span style="color: {{ project.color }}">●</span>{% endif %}
+            {{ project.name }}
           </span>
         {% endif %}
         {% if t.status == 'review' and outcome %}

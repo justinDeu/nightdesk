@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, joinedload
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow, Run, Ticket, WorkerHeartbeat
 from nightdesk.domain.analytics import compute_spend_status
+from nightdesk.domain.projects import ProjectNotFound, get_project_by_slug
 from nightdesk.domain.search import FTS5SearchBackend
 from nightdesk.worker.scheduler import in_window
 
@@ -133,13 +134,22 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         request: Request,
         q: str = Query(default=""),
         session: Session = Depends(get_session),
+        project: str = Query(default=""),
     ):
         query = (q or "").strip()
         if len(query) < _MIN_QUERY_LEN:
             hits: list = []
         else:
+            project_id = None
+            if project == "none":
+                project_id = "null"
+            elif project:
+                try:
+                    project_id = get_project_by_slug(session, project).id
+                except ProjectNotFound:
+                    project_id = "__missing__"
             backend = FTS5SearchBackend(session)
-            hits = backend.search(query, limit=20)
+            hits = backend.search(query, limit=20, project_id=project_id)
         return templates.TemplateResponse(request, "partials/search_results.html", {
             "hits": hits, "q": query,
         })

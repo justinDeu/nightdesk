@@ -23,8 +23,9 @@ from sqlalchemy import select
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import TicketWorkspace
-from nightdesk.domain.diff import compute_run_diff
+from nightdesk.domain.diff import compute_run_diff, diff_repo_path
 from nightdesk.domain.profiles import list_profiles
+from nightdesk.domain.projects import list_projects
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
 from nightdesk.domain.tickets import (
     add_dependency, clone_ticket, get_ticket, list_dependencies, list_dependents,
@@ -118,6 +119,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             "deps_downstreams": list_dependents(session, tid),
             "dep_candidates": dep_candidates,
             "dep_all": list_tickets(session, limit=500),
+            "projects": list_projects(session),
             "title": t.title,
             "active_page": "tickets",
         })
@@ -174,9 +176,10 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
 
         ws = _find_workspace(session, rid, run.ticket_id)
         diff_result = None
-        if ws is not None and ws.repo_root:
+        repo_path = diff_repo_path(ws) if ws is not None else ""
+        if ws is not None and repo_path:
             diff_result = compute_run_diff(
-                repo_root=ws.repo_root,
+                repo_root=repo_path,
                 base_sha=ws.base_sha,
                 head_sha=ws.head_sha,
                 branch=ws.branch,

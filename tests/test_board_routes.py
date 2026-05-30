@@ -149,12 +149,15 @@ async def test_sidebar_edit_no_runs_shows_empty_state(cookie_client, session, pr
 
 
 async def test_board_grid_pins_row_height(cookie_client):
-    """The board grid declares an explicit single-row track so it can't grow
-    past the viewport (which used to drag the pinned sidebar when the page
-    scrolled)."""
+    """The board layout reserves the viewport height once, then lets the grid
+    consume the remaining space under the filter bar so columns scroll
+    internally and the sidebar stays pinned."""
     r = await cookie_client.get("/")
     assert r.status_code == 200
+    assert 'style="height: calc(100vh - 6rem);"' in r.text
+    assert 'id="board-grid"' in r.text
     assert "grid-rows-1" in r.text
+    assert "flex-1 min-h-0 overflow-hidden" in r.text
 
 
 async def test_create_ticket_via_form(cookie_client, session, profile):

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow
+from nightdesk.domain.projects import ProjectNotFound, get_project_by_slug, list_projects
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.tickets import (
@@ -247,12 +248,27 @@ def _preview_worktree_path(*, cwd: str, name: Optional[str],
     return worktree_root / source.name / wt_name, "Nightdesk worktree root"
 
 
-def _gather_board(session: Session):
+def _project_filter(session: Session, project: str) -> tuple[Optional[str], object | None]:
+    if project == "none":
+        return "null", None
+    if not project:
+        return None, None
+    try:
+        selected = get_project_by_slug(session, project)
+    except ProjectNotFound:
+        return "__missing__", None
+    return selected.id, selected
+
+
+def _gather_board(session: Session, *, project: str = ""):
+    project_id, selected_project = _project_filter(session, project)
+    projects = list_projects(session)
+    projects_by_id = {p.id: p for p in projects}
     profiles = list_profiles(session)
     profiles_by_id = {p.id: p for p in profiles}
 
     # Pull every ticket per real status, then bucket for the visual columns.
-    raw = {status: list_tickets(session, status=status, limit=500)
+    raw = {status: list_tickets(session, status=status, project_id=project_id, limit=500)
            for status, _ in _COLUMNS}
 
     queued_all = raw["queued"]
@@ -297,8 +313,13 @@ def _gather_board(session: Session):
         "profiles_by_id": profiles_by_id,
         "run_outcomes": review_run_outcomes,
         "dep_titles": dep_titles,
+        "projects": projects,
+        "projects_by_id": projects_by_id,
+        "selected_project": selected_project,
+        "project_filter": project,
+        "project_id_filter": project_id,
         # Every ticket, for the modal's "Depends on" picker (all statuses).
-        "dep_all": list_tickets(session, limit=500),
+        "dep_all": list_tickets(session, project_id=project_id, limit=500),
     }
 
 
@@ -369,8 +390,12 @@ def build_router(
             f'{ref_line}'
         )
     @router.get("/", response_class=HTMLResponse, dependencies=[auth])
-    async def board(request: Request, session: Session = Depends(get_session)):
-        ctx = _gather_board(session)
+    async def board(
+        request: Request,
+        project: str = Query(default=""),
+        session: Session = Depends(get_session),
+    ):
+        ctx = _gather_board(session, project=project)
         return templates.TemplateResponse(
             request,
             "board.html",
@@ -382,13 +407,22 @@ def build_router(
                 "run_outcomes": ctx["run_outcomes"],
                 "dep_titles": ctx["dep_titles"],
                 "dep_all": ctx["dep_all"],
+                "projects": ctx["projects"],
+                "projects_by_id": ctx["projects_by_id"],
+                "selected_project": ctx["selected_project"],
+                "project_filter": ctx["project_filter"],
+                "project_id_filter": ctx["project_id_filter"],
                 "mode": "create",
                 "ticket": None,
             },
         )
 
     @router.get("/board/columns", response_class=HTMLResponse, dependencies=[auth])
-    async def columns(request: Request, session: Session = Depends(get_session)):
+    async def columns(
+        request: Request,
+        project: str = Query(default=""),
+        session: Session = Depends(get_session),
+    ):
         """Polled fragment returning the four column sections as OOB swaps.
 
         The board template polls this every few seconds. The response carries
@@ -397,13 +431,14 @@ def build_router(
         The sidebar is outside those ids and is never touched, so unsaved
         edits in the editor survive every poll cycle.
         """
-        ctx = _gather_board(session)
+        ctx = _gather_board(session, project=project)
         return templates.TemplateResponse(
             request,
             "partials/board_columns_oob.html",
             {
                 "columns": ctx["columns"],
                 "profiles_by_id": ctx["profiles_by_id"],
+                "projects_by_id": ctx["projects_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
                 "dep_titles": ctx["dep_titles"],
             },
@@ -441,11 +476,16 @@ def build_router(
                 "deps_upstreams": deps_upstreams,
                 "deps_downstreams": deps_downstreams,
                 "dep_all": list_tickets(session, limit=500),
+                "projects": list_projects(session),
             },
         )
 
     @router.get("/board/new-ticket-modal", response_class=HTMLResponse, dependencies=[auth])
-    async def new_ticket_modal(request: Request, session: Session = Depends(get_session)):
+    async def new_ticket_modal(
+        request: Request,
+        project: str = Query(default=""),
+        session: Session = Depends(get_session),
+    ):
         """The create-ticket modal as a standalone partial so any page can
         lazy-load and open it. The board includes it inline; other pages fetch
         it into a host container on demand (see ndOpenCreateTicket)."""
@@ -457,6 +497,8 @@ def build_router(
                 "ticket": None,
                 "modal_id": "ticket-create-modal",
                 "dep_all": list_tickets(session, limit=500),
+                "projects": list_projects(session),
+                "selected_project": _project_filter(session, project)[1],
             },
         )
 
@@ -472,6 +514,7 @@ def build_router(
         profile_id = form.get("profile_id")
         if not profile_id:
             raise HTTPException(422, "profile_id required")
+        project_id = (form.get("project_id") or "").strip() or None
         try:
             workspace_mode, worktree_name, worktree_path, workspaces = _workspace_payload_from_form(form)
             # Global default: a git-worktree ticket created without an explicit
@@ -489,6 +532,7 @@ def build_router(
                 title=title,
                 prompt=(form.get("prompt") or ""),
                 profile_id=profile_id,
+                project_id=project_id,
                 cwd=_normalize_cwd(form.get("cwd")),
                 workspace_mode=workspace_mode,
                 worktree_name=worktree_name,
@@ -496,6 +540,8 @@ def build_router(
                 workspaces=workspaces,
                 additional_dirs=_parse_additional_dirs(form.getlist("additional_dirs")),
             )
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
         # Optional dependencies from the modal's "Depends on" picker. A brand
@@ -539,6 +585,8 @@ def build_router(
             fields["profile_id"] = profile_id
         if "prompt" in form:
             fields["prompt"] = form.get("prompt") or ""
+        if "project_id" in form:
+            fields["project_id"] = (form.get("project_id") or "").strip() or None
         if "cwd" in form:
             fields["cwd"] = _normalize_cwd(form.get("cwd"))
             if form.get("workspace_form") == "1":
@@ -553,6 +601,8 @@ def build_router(
             update_ticket(session, tid, **fields)
         except TicketNotFound:
             raise HTTPException(404, "not found")
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
         # Reconcile dependencies from the modal's "Depends on" picker. Only
         # touched when the deps section was part of the submission (the modal
         # sends deps_form=1); an empty selection then means "remove all".
@@ -583,7 +633,8 @@ def build_router(
              "runs": list_runs(session, ticket_id=tid),
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
-             "dep_all": list_tickets(session, limit=500)},
+             "dep_all": list_tickets(session, limit=500),
+             "projects": list_projects(session)},
         )
 
     @router.post("/board/tickets/{tid}/archive", dependencies=[auth])
@@ -614,7 +665,8 @@ def build_router(
              "runs": list_runs(session, ticket_id=tid),
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
-             "dep_all": list_tickets(session, limit=500)},
+             "dep_all": list_tickets(session, limit=500),
+             "projects": list_projects(session)},
         )
 
     @router.post("/board/tickets/{tid}/cancel", dependencies=[auth])

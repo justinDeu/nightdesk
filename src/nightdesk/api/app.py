@@ -20,6 +20,7 @@ from nightdesk.api.routes import fs as fs_routes
 from nightdesk.api.routes import header as header_routes
 from nightdesk.api.routes import health
 from nightdesk.api.routes import profiles as profiles_routes
+from nightdesk.api.routes import projects as projects_routes
 from nightdesk.api.routes import runs as runs_routes
 from nightdesk.api.routes import search as search_routes
 from nightdesk.api.routes import ticket_page as ticket_page_routes
@@ -49,6 +50,7 @@ def create_app(
 
     get_session = get_session_dep(engine)
     app.include_router(profiles_routes.build_router(get_session, bearer_token))
+    app.include_router(projects_routes.build_router(get_session, bearer_token))
     app.include_router(tickets_routes.build_router(get_session, bearer_token))
     app.include_router(runs_routes.build_router(get_session, bearer_token))
     app.include_router(config_routes.build_router(

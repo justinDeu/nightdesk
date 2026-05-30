@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Ticket, TicketDependency, TicketWorkspace
+from nightdesk.domain.projects import apply_project_defaults, get_project
 
 
 # v2 lifecycle. Run-level outcomes (success/failed/cancelled) now live on Run.exit_status.
@@ -104,6 +105,7 @@ def _apply_workspaces(session: Session, ticket: Ticket,
 
 def create_ticket(session: Session, **fields) -> Ticket:
     """Create a ticket. Defaults to status='draft' (v2)."""
+    fields = apply_project_defaults(session, fields)
     workspace_specs = fields.pop("workspaces", None)
     worktree_name = fields.pop("worktree_name", None)
     worktree_path = fields.pop("worktree_path", None)
@@ -163,6 +165,7 @@ def list_tickets(
     session: Session,
     status: Optional[str] = None,
     profile_id: Optional[str] = None,
+    project_id: Optional[str] = None,
     limit: int = 200,
 ) -> list[Ticket]:
     stmt = (
@@ -174,6 +177,11 @@ def list_tickets(
         stmt = stmt.where(Ticket.status == status)
     if profile_id is not None:
         stmt = stmt.where(Ticket.profile_id == profile_id)
+    if project_id is not None:
+        if project_id == "null":
+            stmt = stmt.where(Ticket.project_id.is_(None))
+        else:
+            stmt = stmt.where(Ticket.project_id == project_id)
     return list(session.scalars(stmt))
 
 
@@ -188,6 +196,8 @@ def update_ticket(session: Session, ticket_id: str, **fields) -> Ticket:
             raise ValueError("cwd cannot be empty")
     if "workspace_mode" in fields:
         fields["workspace_mode"] = _normalize_workspace_kind(fields["workspace_mode"])
+    if fields.get("project_id") is not None:
+        get_project(session, fields["project_id"])
     for k, v in fields.items():
         setattr(t, k, v)
     if workspace_specs is not None:
@@ -452,6 +462,7 @@ def clone_ticket(session: Session, ticket_id: str, *, title: Optional[str],
         additional_dirs=list(t.additional_dirs or []),
         cwd=t.cwd,
         workspace_mode=t.workspace_mode,
+        project_id=t.project_id,
         workspaces=workspace_specs,
     )
 

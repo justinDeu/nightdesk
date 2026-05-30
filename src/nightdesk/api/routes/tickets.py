@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_bearer
+from nightdesk.domain.projects import ProjectNotFound
 from nightdesk.api.schemas import (
     DependencyCreate, DependencyOut,
     TicketCreate, TicketOut, TicketReorder, TicketTransition, TicketUpdate,
@@ -60,6 +61,7 @@ def _ticket_to_out(t) -> TicketOut:
         "status": t.status,
         "priority": t.priority,
         "position": t.position,
+        "project_id": t.project_id,
         "profile_id": t.profile_id,
         "permission_overrides": t.permission_overrides,
         "additional_dirs": t.additional_dirs or [],
@@ -93,11 +95,15 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         # If caller didn't specify status, let domain default it (to 'draft').
         if data.get("status") is None:
             data.pop("status", None)
+        if "workspace_mode" not in payload.model_fields_set:
+            data.pop("workspace_mode", None)
         data["additional_dirs"] = _coerce_dirs(payload.additional_dirs) or []
         data["workspaces"] = _coerce_workspaces(payload.workspaces)
         try:
             t = create_ticket(session, **data)
             return _ticket_to_out(t)
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
         except (InvalidTransition, ValueError) as e:
             raise HTTPException(422, str(e))
 
@@ -105,9 +111,10 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     async def lst(
         status: str | None = Query(default=None),
         profile_id: str | None = Query(default=None),
+        project_id: str | None = Query(default=None),
         session: Session = Depends(get_session),
     ):
-        tickets = list_tickets(session, status=status, profile_id=profile_id)
+        tickets = list_tickets(session, status=status, profile_id=profile_id, project_id=project_id)
         return [_ticket_to_out(t) for t in tickets]
 
     @router.get("/{tid}", response_model=TicketOut)
@@ -120,7 +127,10 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     @router.patch("/{tid}", response_model=TicketOut)
     async def update(tid: str, payload: TicketUpdate, session: Session = Depends(get_session)):
-        fields = {k: v for k, v in payload.model_dump().items() if v is not None}
+        data = payload.model_dump()
+        fields = {k: v for k, v in data.items() if v is not None}
+        if "project_id" in payload.model_fields_set:
+            fields["project_id"] = data["project_id"]
         if "additional_dirs" in fields:
             fields["additional_dirs"] = _coerce_dirs(payload.additional_dirs) or []
         if "workspaces" in fields:
@@ -130,6 +140,8 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
         except ValueError as e:
             raise HTTPException(422, str(e))
 

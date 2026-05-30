@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -851,3 +852,61 @@ async def test_no_run_shows_ticket_prompt_as_pending_message(
     assert "pending prompt" in body
     assert "user-prompt" in body
     assert "no run yet" in body
+
+
+async def test_changes_tab_uses_worktree_checkout_for_ticket_workspace_fallback(
+    cookie_client, session, tmp_path,
+):
+    p = _make_profile(session)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), capture_output=True, check=True)
+    (repo / "a.txt").write_text("aaa\n")
+    subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    (repo / "a.txt").write_text("bbb\n")
+    subprocess.run(["git", "add", "a.txt"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "edit"], cwd=str(repo), capture_output=True, check=True)
+
+    main_checkout = tmp_path / "main-checkout"
+    subprocess.run(["git", "clone", str(repo), str(main_checkout)], capture_output=True, check=True)
+    subprocess.run(["git", "checkout", base], cwd=str(main_checkout), capture_output=True, check=True)
+
+    t = create_ticket(session, title="diff ticket", prompt="p",
+                      priority=0, profile_id=p.id, run_now=False, cwd=str(repo))
+    transition_status(session, t.id, "queued")
+    transition_status(session, t.id, "running")
+    run = start_run(session, ticket_id=t.id, worktree_path=str(repo),
+                    transcript_path=str(tmp_path / "transcripts" / "x.log"),
+                    pid=None, host="testhost")
+    transition_status(session, t.id, "review")
+    from nightdesk.db.models import TicketWorkspace
+    session.add(TicketWorkspace(
+        ticket_id=t.id,
+        run_id=None,
+        role="primary",
+        kind="git_worktree",
+        source_path=str(main_checkout),
+        resolved_path=str(repo),
+        repo_root=str(main_checkout),
+        worktree_path=str(repo),
+        base_sha=base,
+        head_sha=None,
+        branch="feat-test",
+        state="ready",
+        access="read_write",
+        label="primary",
+        position=0,
+        retention="preserve",
+    ))
+    session.commit()
+
+    r = await cookie_client.get(f"/tickets/{t.id}/runs/{run.id}/diff-panel")
+    assert r.status_code == 200
+    assert "a.txt" in r.text

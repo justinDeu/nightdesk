@@ -19,10 +19,15 @@ class SearchHit:
     title: str
     snippet: str
     status: str
+    project_id: str | None = None
+    project_name: str | None = None
+    project_color: str | None = None
 
 
 class SearchBackend(Protocol):
-    def search(self, query: str, limit: int = 20) -> list[SearchHit]: ...
+    def search(
+        self, query: str, limit: int = 20, project_id: str | None = None,
+    ) -> list[SearchHit]: ...
 
 
 def _escape_fts_query(q: str) -> str:
@@ -55,28 +60,43 @@ class FTS5SearchBackend:
     def __init__(self, session: Session):
         self._session = session
 
-    def search(self, query: str, limit: int = 20) -> list[SearchHit]:
+    def search(self, query: str, limit: int = 20, project_id: str | None = None) -> list[SearchHit]:
         match = _escape_fts_query(query)
         if not match:
             return []
         # snippet(): column index 0 = title, with the result limited to 8
         # tokens around the match.
+        where = "WHERE tickets_fts MATCH :q "
+        params = {"q": match, "n": int(limit)}
+        if project_id == "null":
+            where += "AND tickets.project_id IS NULL "
+        elif project_id:
+            where += "AND tickets.project_id = :project_id "
+            params["project_id"] = project_id
         stmt = text(
             "SELECT tickets.id AS id, tickets.title AS title, "
             "snippet(tickets_fts, 0, '<b>', '</b>', '…', 8) AS snippet, "
-            "tickets.status AS status "
+            "tickets.status AS status, tickets.project_id AS project_id, "
+            "projects.name AS project_name, projects.color AS project_color "
             "FROM tickets_fts "
             "JOIN tickets ON tickets.id = tickets_fts.id "
-            "WHERE tickets_fts MATCH :q "
+            "LEFT JOIN projects ON projects.id = tickets.project_id "
+            f"{where}"
             "LIMIT :n"
         )
         try:
-            rows = self._session.execute(stmt, {"q": match, "n": int(limit)}).all()
+            rows = self._session.execute(stmt, params).all()
         except Exception:
             return []
         return [
             SearchHit(
-                id=row.id, title=row.title, snippet=row.snippet, status=row.status
+                id=row.id,
+                title=row.title,
+                snippet=row.snippet,
+                status=row.status,
+                project_id=row.project_id,
+                project_name=row.project_name,
+                project_color=row.project_color,
             )
             for row in rows
         ]

@@ -19,10 +19,11 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     async def search(
         q: str = Query(default=""),
         limit: int = Query(default=20, ge=1, le=100),
+        project_id: str | None = Query(default=None),
         session: Session = Depends(get_session),
     ):
         backend = FTS5SearchBackend(session)
-        hits = backend.search(q, limit=limit)
+        hits = backend.search(q, limit=limit, project_id=project_id)
         return [SearchHitSchema(**h.__dict__) for h in hits]
 
     return router

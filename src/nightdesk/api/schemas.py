@@ -192,12 +192,66 @@ class TicketWorkspaceOut(BaseModel):
     state: str
     position: int
 
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    slug: Optional[str] = None
+    cwd: str
+    default_workspace_mode: Optional[Literal["directory", "git_worktree", "in_place", "worktree"]] = None
+    default_worktree_name_template: Optional[str] = None
+    default_base_ref: Optional[str] = None
+    default_linked_workspaces: Optional[list[TicketWorkspaceIn]] = None
+    color: Optional[str] = None
+    position: int = 0
+
+    @field_validator("cwd", mode="before")
+    @classmethod
+    def _cwd_abs(cls, v):
+        return _normalize_cwd(v)
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    cwd: Optional[str] = None
+    default_workspace_mode: Optional[Literal["directory", "git_worktree", "in_place", "worktree"]] = None
+    default_worktree_name_template: Optional[str] = None
+    default_base_ref: Optional[str] = None
+    default_linked_workspaces: Optional[list[TicketWorkspaceIn]] = None
+    color: Optional[str] = None
+    position: Optional[int] = None
+
+    @field_validator("cwd", mode="before")
+    @classmethod
+    def _cwd_abs(cls, v):
+        return _normalize_cwd_optional(v)
+
+
+class ProjectOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: str
+    name: str
+    slug: str
+    cwd: str
+    default_workspace_mode: Optional[str] = None
+    default_worktree_name_template: Optional[str] = None
+    default_base_ref: Optional[str] = None
+    default_linked_workspaces: Optional[list[dict]] = None
+    color: Optional[str] = None
+    position: int
+    archived_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
 class TicketCreate(BaseModel):
     title: str
     prompt: str = ""
     status: Optional[str] = None  # defaults to 'draft' server-side
     priority: int = 0
     profile_id: str
+    project_id: Optional[str] = None
     permission_overrides: Optional[dict] = None
     additional_dirs: list[AdditionalDir] = []
     cwd: Optional[str] = None
@@ -219,6 +273,7 @@ class TicketUpdate(BaseModel):
     prompt: Optional[str] = None
     priority: Optional[int] = None
     profile_id: Optional[str] = None
+    project_id: Optional[str] = None
     permission_overrides: Optional[dict] = None
     additional_dirs: Optional[list[AdditionalDir]] = None
     cwd: Optional[str] = None
@@ -242,6 +297,7 @@ class TicketOut(BaseModel):
     status: str
     priority: int
     position: int
+    project_id: Optional[str] = None
     profile_id: str
     permission_overrides: Optional[dict] = None
     additional_dirs: list[AdditionalDir] = []
@@ -517,6 +573,9 @@ class SearchHit(BaseModel):
     title: str
     snippet: str
     status: str
+    project_id: Optional[str] = None
+    project_name: Optional[str] = None
+    project_color: Optional[str] = None
 
 
 class DependencyOut(BaseModel):

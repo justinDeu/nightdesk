@@ -56,6 +56,17 @@ _MAX_LINES = 5000
 _MAX_FILES = 200
 
 
+
+
+def diff_repo_path(workspace) -> str:
+    return (
+        getattr(workspace, "resolved_path", None)
+        or getattr(workspace, "worktree_path", None)
+        or getattr(workspace, "repo_root", None)
+        or ""
+    )
+
+
 def compute_run_diff(
     repo_root: str,
     base_sha: Optional[str],

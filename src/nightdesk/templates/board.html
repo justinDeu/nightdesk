@@ -1,17 +1,28 @@
 {% extends "base.html" %}
 {% set active_page = 'board' %}
 {% block body %}
-<div
-  id="board-grid"
-  {# grid-rows-1 (minmax(0,1fr)) pins the single row to the container height.
-     Without an explicit row track the implicit `auto` row grows to fit the
-     tallest column's full card list, overflowing h-[calc(100vh-6rem)] and
-     forcing the whole page to scroll — which dragged the sidebar with it.
-     min-h-0 lets the grid items shrink to the track so their own
-     overflow-y-auto handles internal scrolling (columns and sidebar each
-     scroll independently); the sidebar stays pinned. #}
-  class="grid gap-3 grid-cols-[1fr_1fr_1fr_1fr_480px] grid-rows-1 h-[calc(100vh-6rem)] min-h-0 overflow-hidden"
->
+<div class="flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
+  <form method="get" action="/" class="flex flex-wrap items-center gap-2 rounded border border-border bg-bg-elev px-3 py-2 text-sm">
+    <label class="flex items-center gap-2">
+      <span class="text-xs uppercase tracking-wide text-fg-muted">Project</span>
+      <select name="project" onchange="this.form.submit()" class="rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg">
+        <option value="" {% if not project_filter %}selected{% endif %}>All projects</option>
+        <option value="none" {% if project_filter == 'none' %}selected{% endif %}>No project</option>
+        {% for p in projects %}
+          <option value="{{ p.slug }}" {% if project_filter == p.slug %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+  <div
+    id="board-grid"
+    {# grid-rows-1 (minmax(0,1fr)) pins the single row to the container height.
+       Without an explicit row track the implicit `auto` row grows to fit the
+       tallest column's full card list, overflowing the viewport and forcing
+       the whole page to scroll. min-h-0 lets the grid items shrink to the
+       track so their own overflow-y-auto handles internal scrolling. #}
+    class="grid flex-1 min-h-0 overflow-hidden gap-3 grid-cols-[1fr_1fr_1fr_1fr_480px] grid-rows-1"
+  >
   {% for col in columns %}
     {% set column_status = col.status %}
     {% set column_label = col.label %}
@@ -20,6 +31,7 @@
   {% endfor %}
 
   {% include "partials/sidebar.html" %}
+</div>
 </div>
 
 {# Create-mode modal always present on the board so the "+ New ticket"
@@ -39,7 +51,7 @@
 #}
 <div
   id="board-columns-poll"
-  hx-get="/board/columns"
+  hx-get="/board/columns{% if project_filter %}?project={{ project_filter }}{% endif %}"
   hx-trigger="every 3s, poll"
   hx-swap="none"
   hx-include="unset"

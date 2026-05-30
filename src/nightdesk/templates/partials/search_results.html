@@ -6,7 +6,15 @@
            class="block px-3 py-2 hover:bg-bg-elev-2">
           <div class="font-bold text-fg truncate">{{ hit.title }}</div>
           <div class="text-xs text-fg-muted truncate">{{ hit.snippet | safe }}</div>
-          <div class="text-[10px] text-accent uppercase tracking-wide">{{ hit.status }}</div>
+          <div class="flex items-center gap-2 text-[10px] uppercase tracking-wide">
+            <span class="text-accent">{{ hit.status }}</span>
+            {% if hit.project_name %}
+              <span class="text-fg-muted normal-case tracking-normal">
+                {% if hit.project_color %}<span style="color: {{ hit.project_color }}">●</span>{% endif %}
+                {{ hit.project_name }}
+              </span>
+            {% endif %}
+          </div>
         </a>
       </li>
     {% endfor %}

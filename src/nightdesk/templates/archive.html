@@ -39,6 +39,20 @@
     </label>
 
     <label class="flex flex-col gap-1">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Project</span>
+      <select name="project"
+              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg">
+        <option value="" {% if not filters.project %}selected{% endif %}>any</option>
+        <option value="none" {% if filters.project == 'none' %}selected{% endif %}>No project</option>
+        {% for p in projects %}
+          <option value="{{ p.slug }}" {% if filters.project == p.slug %}selected{% endif %}>
+            {{ p.name }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="flex flex-col gap-1">
       <span class="text-fg-muted text-xs uppercase tracking-wide">Since</span>
       <input type="date" name="since" value="{{ filters_iso.since }}"
              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg" />

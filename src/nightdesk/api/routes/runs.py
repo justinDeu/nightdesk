@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from nightdesk.api.auth import require_bearer
 from nightdesk.api.schemas import RunOut
 from nightdesk.db.models import TicketWorkspace
-from nightdesk.domain.diff import RunDiff, compute_run_diff
+from nightdesk.domain.diff import RunDiff, compute_run_diff, diff_repo_path
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
 from nightdesk.logging_setup import run_log_path
 
@@ -61,7 +61,8 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
                 .limit(1)
             ).scalar_one_or_none()
 
-        if ws is None or not ws.repo_root:
+        repo_path = diff_repo_path(ws) if ws is not None else ""
+        if ws is None or not repo_path:
             return JSONResponse({
                 "files": [],
                 "total_added": 0,
@@ -78,7 +79,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             })
 
         result = compute_run_diff(
-            repo_root=ws.repo_root,
+            repo_root=repo_path,
             base_sha=ws.base_sha,
             head_sha=ws.head_sha,
             branch=ws.branch,

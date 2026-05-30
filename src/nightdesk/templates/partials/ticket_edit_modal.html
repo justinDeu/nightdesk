@@ -20,7 +20,12 @@
 {% set _is_edit = ticket is defined and ticket %}
 {% set _linked_workspaces = (ticket.workspaces|selectattr('role', 'equalto', 'linked')|list if _is_edit and ticket.workspaces else []) %}
 {% set _primary_ws = (ticket.workspaces | selectattr('role', 'equalto', 'primary') | first) if _is_edit and ticket.workspaces else none %}
-{% set _use_worktree = (ticket.workspace_mode in ['git_worktree', 'worktree']) if _is_edit and ticket.workspace_mode else false %}
+{% set _projects = projects if projects is defined else [] %}
+{% set _selected_project = selected_project if selected_project is defined else none %}
+{% set _project_id = ticket.project_id if _is_edit and ticket.project_id else (_selected_project.id if _selected_project else '') %}
+{% set _create_mode = (_selected_project.default_workspace_mode if _selected_project and _selected_project.default_workspace_mode else 'directory') %}
+{% set _create_use_worktree = _create_mode in ['git_worktree', 'worktree'] %}
+{% set _use_worktree = ((ticket.workspace_mode in ['git_worktree', 'worktree']) if _is_edit and ticket.workspace_mode else _create_use_worktree) %}
 {% set _form_action = ('/board/tickets/' ~ ticket.id) if _is_edit else '/board/tickets' %}
 
 <dialog id="{{ _mid }}"
@@ -76,6 +81,17 @@
           {% if not _is_edit %}<option value="">-- select --</option>{% endif %}
           {% for p in profiles %}
             <option value="{{ p.id }}" {% if _is_edit and ticket.profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Project</span>
+        <select name="project_id"
+                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
+          <option value="" {% if not _project_id %}selected{% endif %}>No project</option>
+          {% for p in _projects %}
+            <option value="{{ p.id }}" {% if _project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
           {% endfor %}
         </select>
       </label>
@@ -151,7 +167,7 @@
                    autocomplete="off"
                    spellcheck="false"
                    placeholder="/home/you/project"
-                   value="{{ ticket.cwd if _is_edit and ticket.cwd else '' }}"
+                   value="{{ ticket.cwd if _is_edit and ticket.cwd else (_selected_project.cwd if _selected_project else '') }}"
                    oninput="window.ndPathSuggest(this, '{{ _mid }}-cwd-suggest')"
                    onfocus="window.ndPathSuggest(this, '{{ _mid }}-cwd-suggest')"
                    onblur="window.ndPathSuggestClose('{{ _mid }}-cwd-suggest')"
@@ -210,7 +226,7 @@
                      autocomplete="off"
                      spellcheck="false"
                      placeholder="HEAD"
-                     value="{{ _primary_ws.base_ref if _primary_ws and _primary_ws.base_ref else '' }}"
+                     value="{{ _primary_ws.base_ref if _primary_ws and _primary_ws.base_ref else (_selected_project.default_base_ref if _selected_project and _selected_project.default_base_ref else '') }}"
                      {% if not _use_worktree %}disabled{% endif %} data-worktree-field data-base-ref-input
                      oninput="window.ndScheduleWorktreePreview(250, this.closest('[data-ticket-form]'))"
                      class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45" />
