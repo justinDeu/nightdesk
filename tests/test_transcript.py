@@ -109,12 +109,12 @@ def test_append_worker_error_creates_file_when_missing(tmp_path: Path):
     helper must still write the error event so the user has something to
     read in the transcript view."""
     path = tmp_path / "nested" / "t.log"
-    append_worker_error(path, kind="setup_error", summary="cwd missing")
+    append_worker_error(path, kind="setup_error", summary="source path missing")
     events = list(read_events(path))
     assert len(events) == 1
     assert events[0]["type"] == "worker_error"
     assert events[0]["seq"] == 0
-    assert events[0]["summary"] == "cwd missing"
+    assert events[0]["summary"] == "source path missing"
     # traceback omitted when not provided.
     assert "traceback" not in events[0]
 

@@ -33,7 +33,7 @@ def _mk_run(session) -> str:
     )
     t = create_ticket(session, title="t", prompt="hi", priority=0,
                       profile_id=profile.id, run_now=False,
-                      status="queued", cwd="/tmp")
+                      status="queued", source_path="/tmp")
     run = Run(
         ticket_id=t.id,
         started_at=datetime.now(timezone.utc),

@@ -7,9 +7,8 @@ subprocess segfaults, the daemon notices via the orphaned-Run sweep and
 the user sees a 'review' ticket with a system comment.
 
 Anything that needs to behave like the daemon (profile -> spec merge,
-ticket.cwd / additional_dirs handling, run-now bookkeeping, transcript
-schema, status transitions, cancel signaling) lives here so the CLI and
-the daemon never drift.
+workspace handling, run-now bookkeeping, transcript schema, status transitions,
+cancel signaling) lives here so the CLI and the daemon never drift.
 """
 from __future__ import annotations
 
@@ -107,7 +106,6 @@ class RunOneConfig:
 def _profile_to_spec(
     ticket: Ticket,
     *,
-    include_legacy_fs: bool = True,
     secret_box: Optional[ProfileSecretBox] = None,
     default_claude_binary: Optional[str] = None,
 ) -> PermissionSpec:
@@ -146,57 +144,25 @@ def _profile_to_spec(
         system_prompt=getattr(p, "system_prompt", None),
     )
     spec = merge_permissions(base, ticket.permission_overrides)
-    if not include_legacy_fs:
-        return spec
-    extras_rw: list[str] = []
-    for entry in (ticket.additional_dirs or []):
-        if not isinstance(entry, dict):
-            continue
-        mode = entry.get("mode", "rw")
-        path = entry.get("path")
-        if not isinstance(path, str) or not path:
-            continue
-        if mode == "rw":
-            extras_rw.append(path)
-        else:
-            log.warning("ticket %s additional_dirs entry mode=%r ignored "
-                        "(only 'rw' is honored)", ticket.id, mode)
-    if extras_rw:
-        existing = set(spec.fs_write)
-        for p_ in extras_rw:
-            if p_ not in existing:
-                spec.fs_write.append(p_)
-                existing.add(p_)
-    if ticket.cwd and ticket.cwd not in spec.fs_write:
-        spec.fs_write.append(ticket.cwd)
     return spec
 
 def _workspace_specs_for_ticket(ticket: Ticket) -> list[WorkspaceSpec]:
-    if getattr(ticket, "workspaces", None):
-        return [
-            WorkspaceSpec(
-                role=w.role,
-                label=w.label,
-                kind=w.kind,
-                access=w.access,
-                source_path=w.source_path,
-                worktree_name=w.worktree_name,
-                worktree_path=w.worktree_path,
-                branch=w.branch,
-                base_ref=w.base_ref,
-                retention=w.retention,
-            )
-            for w in ticket.workspaces
-        ]
-
+    if not getattr(ticket, "workspaces", None):
+        raise RuntimeError("ticket has no primary workspace")
     specs = [
         WorkspaceSpec(
-            role="primary",
-            label="primary",
-            kind=getattr(ticket, "workspace_mode", None) or "directory",
-            access="read_write",
-            source_path=ticket.cwd,
+            role=w.role,
+            label=w.label,
+            kind=w.kind,
+            access=w.access,
+            source_path=w.source_path,
+            worktree_name=w.worktree_name,
+            worktree_path=w.worktree_path,
+            branch=w.branch,
+            base_ref=w.base_ref,
+            retention=w.retention,
         )
+        for w in ticket.workspaces
     ]
     for idx, entry in enumerate(ticket.additional_dirs or []):
         if not isinstance(entry, dict):
@@ -487,7 +453,6 @@ async def run_one(
             spec = _apply_workspace_permissions(
                 _profile_to_spec(
                     ticket,
-                    include_legacy_fs=False,
                     secret_box=secret_box,
                     default_claude_binary=default_claude_binary,
                 ),
@@ -567,7 +532,7 @@ async def run_one(
             _setup_phase = "bwrap_build"
             argv = build_bwrap_argv(
                 spec,
-                cwd=str(ws.path),
+                working_dir=str(ws.path),
                 cmd=[sys.executable, "-m", "nightdesk.worker._sdk_runner"],
                 env=env,
                 cc_sessions_dir=cc_sessions_dir,
@@ -585,7 +550,7 @@ async def run_one(
             )
             request = ExecutionRequest(
                 ticket_id=ticket.id, prompt=prompt,
-                cwd=ws.path, transcript_path=Path(run.transcript_path),
+                working_dir=ws.path, transcript_path=Path(run.transcript_path),
                 bwrap_argv=argv, env=env, permission_spec=spec,
                 cancel_event=cancel_event,
             )

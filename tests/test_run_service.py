@@ -7,7 +7,7 @@ from nightdesk.domain.tickets import create_ticket
 def test_start_and_finish_run(session, sample_profile):
     t = create_ticket(session, title="t", prompt="p",
                        priority=0, profile_id=sample_profile.id,
-                       cwd="/tmp", run_now=False)
+                       source_path="/tmp", run_now=False)
     r = start_run(session, ticket_id=t.id, worktree_path="/w", transcript_path="/w/log",
                    pid=1234, host="h")
     assert r.id
@@ -21,7 +21,7 @@ def test_start_and_finish_run(session, sample_profile):
 def test_list_runs_filters_by_ticket(session, sample_profile):
     t = create_ticket(session, title="t", prompt="p",
                        priority=0, profile_id=sample_profile.id,
-                       cwd="/tmp", run_now=False)
+                       source_path="/tmp", run_now=False)
     r = start_run(session, ticket_id=t.id, worktree_path="/w", transcript_path="/w/log",
                    pid=1, host="h")
     runs = list_runs(session, ticket_id=t.id)
@@ -31,7 +31,7 @@ def test_list_runs_filters_by_ticket(session, sample_profile):
 def test_start_run_records_intent_and_parent(session, sample_profile):
     t = create_ticket(session, title="t", prompt="p",
                        priority=0, profile_id=sample_profile.id,
-                       cwd="/tmp", run_now=False)
+                       source_path="/tmp", run_now=False)
     first = start_run(session, ticket_id=t.id, worktree_path="/w1", transcript_path="/w/1.log",
                       pid=1, host="h")
     second = start_run(

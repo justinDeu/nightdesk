@@ -10,9 +10,9 @@
 {% set is_edit = (mode == 'edit' and ticket) %}
 {% set existing_dirs = (ticket.additional_dirs if is_edit else []) or [] %}
 {% set existing_linked_workspaces = (ticket.workspaces|selectattr('role', 'equalto', 'linked')|list if is_edit and ticket.workspaces else []) %}
-{% set current_mode = (ticket.workspace_mode if is_edit and ticket.workspace_mode else 'directory') %}
-{% set use_worktree = current_mode in ['git_worktree', 'worktree'] %}
 {% set primary_ws = ticket.workspaces | selectattr('role', 'equalto', 'primary') | first if is_edit and ticket.workspaces else none %}
+{% set current_mode = (primary_ws.kind if primary_ws else 'directory') %}
+{% set use_worktree = current_mode in ['git_worktree', 'worktree'] %}
 {% set ticket_profile = (profiles | selectattr('id', 'equalto', ticket.profile_id) | first) if is_edit else none %}
 {% set status_chip_class = {
     'draft':    'border-border text-fg-muted',
@@ -69,8 +69,8 @@
       </div>
 
       <div class="flex flex-col gap-1">
-        <span class="text-fg-muted text-xs uppercase tracking-wide">Working dir</span>
-        <code class="block break-all font-mono text-xs text-fg">{{ ticket.cwd or '—' }}</code>
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Primary workspace source</span>
+        <code class="block break-all font-mono text-xs text-fg">{{ primary_ws.source_path if primary_ws and primary_ws.source_path else '—' }}</code>
       </div>
 
       <div class="flex flex-col gap-1">
@@ -93,7 +93,7 @@
             {% endif %}
           </div>
         {% else %}
-          <code class="block break-all font-mono text-xs text-fg">{{ ticket.cwd or '—' }}</code>
+          <code class="block break-all font-mono text-xs text-fg">—</code>
         {% endif %}
       </div>
 

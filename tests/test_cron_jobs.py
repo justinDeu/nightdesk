@@ -36,7 +36,7 @@ def _profile(session):
 def _job(session, profile_id, **kw):
     kw.setdefault("title", "nightly")
     kw.setdefault("prompt", "do the thing")
-    kw.setdefault("cwd", "/tmp")
+    kw.setdefault("source_path", "/tmp")
     kw.setdefault("schedule", "0 9 * * *")
     return create_cron_job(session, profile_id=profile_id, **kw)
 
@@ -135,7 +135,7 @@ def test_materialize_creates_queued_run_now_false_ticket(session):
     assert ticket.run_now is False
     assert ticket.title == "nightly"
     assert ticket.profile_id == p.id
-    assert ticket.cwd == "/tmp"
+    assert ticket.workspaces[0].source_path == "/tmp"
     # template copies no engine field; backend comes from the profile.
     job = get_cron_job(session, job.id)
     assert job.last_ticket_id == ticket.id
@@ -226,7 +226,7 @@ def test_skip_if_active_blocks_active_statuses(session, blocking_status):
     job = _job(session, p.id, schedule="*/15 * * * *", overlap_policy="skip_if_active", now=now)
     # Seed a previous generated ticket in a blocking status.
     prev = create_ticket(session, title="prev", prompt="x", profile_id=p.id,
-                         cwd="/tmp", status="queued", run_now=False)
+                         source_path="/tmp", status="queued", run_now=False)
     if blocking_status == "draft":
         prev.status = "draft"
     elif blocking_status == "running":
@@ -251,7 +251,7 @@ def test_skip_if_active_does_not_block_review(session):
     now = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
     job = _job(session, p.id, schedule="*/15 * * * *", overlap_policy="skip_if_active", now=now)
     prev = create_ticket(session, title="prev", prompt="x", profile_id=p.id,
-                         cwd="/tmp", status="queued", run_now=False)
+                         source_path="/tmp", status="queued", run_now=False)
     # review must NOT block a new fire.
     prev.status = "review"
     session.commit()
@@ -270,7 +270,7 @@ def test_fire_now_bypasses_overlap_and_no_run_now(session):
     now = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
     job = _job(session, p.id, overlap_policy="skip_if_active", now=now)
     prev = create_ticket(session, title="prev", prompt="x", profile_id=p.id,
-                         cwd="/tmp", status="queued", run_now=False)
+                         source_path="/tmp", status="queued", run_now=False)
     job.last_ticket_id = prev.id
     session.commit()
 
@@ -386,7 +386,7 @@ async def _api_profile(client):
 async def test_api_crud_lifecycle(client):
     pid = await _api_profile(client)
     r = await client.post("/api/v1/cron-jobs", json={
-        "title": "nightly", "profile_id": pid, "cwd": "/tmp",
+        "title": "nightly", "profile_id": pid, "source_path": "/tmp",
         "schedule": "0 9 * * *", "timezone": "UTC",
     })
     assert r.status_code == 201, r.text
@@ -415,7 +415,7 @@ async def test_api_crud_lifecycle(client):
 async def test_api_force_run_roundtrips(client):
     pid = await _api_profile(client)
     r = await client.post("/api/v1/cron-jobs", json={
-        "title": "x", "profile_id": pid, "cwd": "/tmp",
+        "title": "x", "profile_id": pid, "source_path": "/tmp",
         "schedule": "0 9 * * *", "force_run": True,
     })
     assert r.status_code == 201, r.text
@@ -423,7 +423,7 @@ async def test_api_force_run_roundtrips(client):
     assert r.json()["force_run"] is True
     # default omitted -> false
     r2 = await client.post("/api/v1/cron-jobs", json={
-        "title": "y", "profile_id": pid, "cwd": "/tmp", "schedule": "0 9 * * *",
+        "title": "y", "profile_id": pid, "source_path": "/tmp", "schedule": "0 9 * * *",
     })
     assert r2.json()["force_run"] is False
     # patch toggles it
@@ -435,7 +435,7 @@ async def test_api_force_run_roundtrips(client):
 async def test_cron_page_create_with_force_run(client):
     pid = await _api_profile(client)
     r = await client.post("/cron", data={
-        "title": "forced", "profile_id": pid, "cwd": "/tmp",
+        "title": "forced", "profile_id": pid, "source_path": "/tmp",
         "schedule": "*/5 * * * *", "timezone": "UTC", "workspace_mode": "directory",
         "overlap_policy": "skip_if_active", "priority": "0", "prompt": "",
         "force_run": "1", "extra_dirs_json": "[]",
@@ -448,7 +448,7 @@ async def test_cron_page_create_with_force_run(client):
 @pytest.mark.anyio
 async def test_api_invalid_schedule_and_tz_return_422(client):
     pid = await _api_profile(client)
-    base = {"title": "x", "profile_id": pid, "cwd": "/tmp"}
+    base = {"title": "x", "profile_id": pid, "source_path": "/tmp"}
     assert (await client.post("/api/v1/cron-jobs", json={**base, "schedule": "0 0 * * * *"})).status_code == 422
     assert (await client.post("/api/v1/cron-jobs", json={**base, "schedule": "nope"})).status_code == 422
     assert (await client.post("/api/v1/cron-jobs",
@@ -459,7 +459,7 @@ async def test_api_invalid_schedule_and_tz_return_422(client):
 async def test_api_worktree_workspace_rejected_422(client):
     pid = await _api_profile(client)
     r = await client.post("/api/v1/cron-jobs", json={
-        "title": "x", "profile_id": pid, "cwd": "/tmp",
+        "title": "x", "profile_id": pid, "source_path": "/tmp",
         "schedule": "0 9 * * *", "workspace_mode": "git_worktree",
     })
     assert r.status_code == 422
@@ -469,7 +469,7 @@ async def test_api_worktree_workspace_rejected_422(client):
 async def test_api_fire_now_creates_queued_ticket(client, session):
     pid = await _api_profile(client)
     cid = (await client.post("/api/v1/cron-jobs", json={
-        "title": "x", "profile_id": pid, "cwd": "/tmp", "schedule": "0 9 * * *",
+        "title": "x", "profile_id": pid, "source_path": "/tmp", "schedule": "0 9 * * *",
     })).json()["id"]
 
     r = await client.post(f"/api/v1/cron-jobs/{cid}/fire-now")
@@ -485,7 +485,7 @@ async def test_api_fire_now_creates_queued_ticket(client, session):
 async def test_api_delete_keeps_generated_tickets(client):
     pid = await _api_profile(client)
     cid = (await client.post("/api/v1/cron-jobs", json={
-        "title": "x", "profile_id": pid, "cwd": "/tmp", "schedule": "0 9 * * *",
+        "title": "x", "profile_id": pid, "source_path": "/tmp", "schedule": "0 9 * * *",
     })).json()["id"]
     tid = (await client.post(f"/api/v1/cron-jobs/{cid}/fire-now")).json()["id"]
 
@@ -510,7 +510,7 @@ async def test_cron_page_renders_and_nav_present(client):
 async def test_cron_page_create_and_list(client):
     pid = await _api_profile(client)
     r = await client.post("/cron", data={
-        "title": "ui-job", "profile_id": pid, "cwd": "/tmp",
+        "title": "ui-job", "profile_id": pid, "source_path": "/tmp",
         "schedule": "*/5 * * * *", "timezone": "UTC",
         "workspace_mode": "directory", "overlap_policy": "skip_if_active",
         "priority": "0", "prompt": "", "additional_dirs": "",
@@ -524,7 +524,7 @@ async def test_cron_page_create_and_list(client):
 async def test_cron_page_invalid_schedule_shows_error(client):
     pid = await _api_profile(client)
     r = await client.post("/cron", data={
-        "title": "bad", "profile_id": pid, "cwd": "/tmp",
+        "title": "bad", "profile_id": pid, "source_path": "/tmp",
         "schedule": "totally-not-cron", "timezone": "UTC",
         "workspace_mode": "directory", "overlap_policy": "skip_if_active",
         "priority": "0", "prompt": "", "additional_dirs": "",
@@ -537,7 +537,7 @@ async def test_cron_page_invalid_schedule_shows_error(client):
 async def test_cron_page_enable_disable_fire_delete_forms(client, session):
     pid = await _api_profile(client)
     cid = (await client.post("/api/v1/cron-jobs", json={
-        "title": "x", "profile_id": pid, "cwd": "/tmp", "schedule": "0 9 * * *",
+        "title": "x", "profile_id": pid, "source_path": "/tmp", "schedule": "0 9 * * *",
     })).json()["id"]
 
     assert (await client.post(f"/cron/{cid}/disable", follow_redirects=False)).status_code == 303

@@ -49,7 +49,7 @@ def _archive_ticket(session, *, profile_id: str, title: str = "archived ticket",
     """Create a ticket, run it through the lifecycle, finish the run, archive it."""
     t = create_ticket(session, title=title, prompt="hi",
                        priority=0, profile_id=profile_id, run_now=False,
-                       status="queued", cwd="/tmp")
+                       status="queued", source_path="/tmp")
     transition_status(session, t.id, "running")
     # Attach a finished run so the archive page has an outcome to show.
     run = Run(

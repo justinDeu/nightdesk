@@ -40,7 +40,7 @@ def _seed_ticket(engine, *, profile_name: str | None = None) -> tuple[str, str]:
         p = Profile(name=profile_name or f"p-{_u.uuid4().hex[:6]}")
         s.add(p)
         s.commit()
-        t = Ticket(title="t", prompt="x", profile_id=p.id, cwd="/tmp")
+        t = Ticket(title="t", prompt="x", profile_id=p.id)
         s.add(t)
         s.commit()
         r = Run(ticket_id=t.id, started_at=datetime.now(timezone.utc),

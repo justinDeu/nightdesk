@@ -46,12 +46,12 @@ def _default_color(slug: str) -> str:
     return _PROJECT_COLORS[total % len(_PROJECT_COLORS)]
 
 
-def normalize_cwd(value: str) -> str:
+def normalize_source_path(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ValueError("cwd is required")
+        raise ValueError("source_path is required")
     path = os.path.expanduser(value.strip())
     if not path.startswith("/"):
-        raise ValueError("cwd must be absolute (start with '/')")
+        raise ValueError("source_path must be absolute (start with '/')")
     return path.rstrip("/") or "/"
 
 
@@ -63,7 +63,7 @@ def create_project(session: Session, **fields: Any) -> Project:
     fields["slug"] = slugify(str(fields.get("slug") or fields["name"]))
     if not fields.get("color"):
         fields["color"] = _default_color(fields["slug"])
-    fields["cwd"] = normalize_cwd(fields.get("cwd"))
+    fields["source_path"] = normalize_source_path(fields.get("source_path"))
     _validate_workspace_mode(fields.get("default_workspace_mode"))
     project = Project(**fields)
     session.add(project)
@@ -106,8 +106,8 @@ def update_project(session: Session, project_id: str, **fields: Any) -> Project:
         fields["name"] = name.strip()
     if "slug" in fields and fields["slug"] is not None:
         fields["slug"] = slugify(str(fields["slug"]))
-    if "cwd" in fields:
-        fields["cwd"] = normalize_cwd(fields["cwd"])
+    if "source_path" in fields:
+        fields["source_path"] = normalize_source_path(fields["source_path"])
     if "default_workspace_mode" in fields:
         _validate_workspace_mode(fields["default_workspace_mode"])
     for key, value in fields.items():
@@ -135,28 +135,15 @@ def apply_project_defaults(session: Session, fields: dict[str, Any]) -> dict[str
         return fields
     project = get_project(session, project_id)
     out = dict(fields)
-    out.setdefault("cwd", project.cwd)
-    if not out.get("cwd"):
-        out["cwd"] = project.cwd
+    if "workspaces" not in out or out["workspaces"] is None:
+        out["workspaces"] = _default_workspaces(project, out)
     if project.default_workspace_mode and not out.get("workspace_mode"):
         out["workspace_mode"] = project.default_workspace_mode
-    if "workspaces" not in out or out["workspaces"] is None:
-        workspaces = _default_workspaces(project, out)
-        if workspaces:
-            out["workspaces"] = workspaces
     return out
 
 
 def _default_workspaces(project: Project, fields: dict[str, Any]) -> list[dict[str, Any]]:
     linked = list(project.default_linked_workspaces or [])
-    needs_primary = bool(
-        project.default_workspace_mode
-        or project.default_worktree_name_template
-        or project.default_base_ref
-        or linked
-    )
-    if not needs_primary:
-        return []
     worktree_name = fields.get("worktree_name")
     if not worktree_name:
         worktree_name = _resolve_worktree_name(project, str(fields.get("title") or ""))
@@ -165,7 +152,7 @@ def _default_workspaces(project: Project, fields: dict[str, Any]) -> list[dict[s
         "label": "primary",
         "kind": fields.get("workspace_mode") or project.default_workspace_mode or "directory",
         "access": "read_write",
-        "source_path": fields.get("cwd") or project.cwd,
+        "source_path": fields.get("source_path") or project.source_path,
         "worktree_name": worktree_name,
         "worktree_path": fields.get("worktree_path"),
         "base_ref": project.default_base_ref,

@@ -111,7 +111,7 @@
 
   {# --- Workspaces ---------------------------------------------------------- #
    # Mirrors the ticket modal's Workspaces section: a primary card (where the
-   # agent runs == cwd) plus linked rows (extra dirs the run can access).
+   # agent runs == source path) plus linked rows (extra dirs the run can access).
    # Cron has no git worktrees, so the primary Kind/Access are fixed readouts
    # and linked rows are always directories — only their access toggles.
    #
@@ -135,21 +135,21 @@
        identically at runtime. #}
     <input type="hidden" name="workspace_mode" value="{{ job.workspace_mode if job else 'directory' }}" />
 
-    {# --- Primary workspace (== cwd) --------------------------------------- #}
+    {# --- Primary workspace (== source path) --------------------------------------- #}
     <div class="rounded-md border border-accent/40 bg-bg-elev-2 p-2 space-y-2 mb-2">
       <div class="flex items-center justify-between gap-2">
         <span class="rounded-full border border-accent/40 bg-accent/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">primary · agent runs here</span>
       </div>
       <div class="relative">
-        <input id="cron-cwd" name="cwd" required autocomplete="off" spellcheck="false"
-               value="{{ job.cwd if job else '' }}"
+        <input id="cron-source-path" name="source_path" required autocomplete="off" spellcheck="false"
+               value="{{ job.source_path if job else '' }}"
                placeholder="/home/you/project"
-               oninput="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-cwd-suggest')"
-               onfocus="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-cwd-suggest')"
-               onblur="window.ndPathSuggestClose && window.ndPathSuggestClose('cron-cwd-suggest')"
-               onkeydown="window.ndPathSuggestKey && window.ndPathSuggestKey(event, this, 'cron-cwd-suggest')"
+               oninput="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-source-path-suggest')"
+               onfocus="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-source-path-suggest')"
+               onblur="window.ndPathSuggestClose && window.ndPathSuggestClose('cron-source-path-suggest')"
+               onkeydown="window.ndPathSuggestKey && window.ndPathSuggestKey(event, this, 'cron-source-path-suggest')"
                class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
-        <div id="cron-cwd-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
+        <div id="cron-source-path-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
       </div>
       <div class="grid grid-cols-2 gap-2">
         <div class="flex flex-col gap-1">

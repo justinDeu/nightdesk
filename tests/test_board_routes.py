@@ -3,6 +3,7 @@ from httpx import ASGITransport, AsyncClient
 
 from nightdesk.api.app import create_app
 from nightdesk.domain.profiles import create_profile
+from nightdesk.domain.projects import create_project
 from nightdesk.domain.tickets import (
     create_ticket,
     get_ticket,
@@ -58,10 +59,10 @@ async def test_board_root_renders_columns(cookie_client):
 
 async def test_board_shows_tickets_in_each_column(cookie_client, session, profile):
     create_ticket(
-        session, title="draft-ticket", prompt="x", profile_id=profile.id, status="draft", cwd="/tmp"
+        session, title="draft-ticket", prompt="x", profile_id=profile.id, status="draft", source_path="/tmp"
     )
     create_ticket(
-        session, title="queued-ticket", prompt="x", profile_id=profile.id, status="queued", cwd="/tmp"
+        session, title="queued-ticket", prompt="x", profile_id=profile.id, status="queued", source_path="/tmp"
     )
     r = await cookie_client.get("/")
     assert r.status_code == 200
@@ -77,7 +78,7 @@ async def test_sidebar_create_mode_default(cookie_client, profile):
 
 async def test_sidebar_edit_mode(cookie_client, session, profile):
     t = create_ticket(
-        session, title="edit-me", prompt="p", profile_id=profile.id, status="draft", cwd="/tmp"
+        session, title="edit-me", prompt="p", profile_id=profile.id, status="draft", source_path="/tmp"
     )
     r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
     assert r.status_code == 200
@@ -108,7 +109,7 @@ async def test_sidebar_edit_lists_runs(cookie_client, session, profile):
 
     t = create_ticket(
         session, title="has-runs", prompt="p", profile_id=profile.id,
-        status="review", cwd="/tmp",
+        status="review", source_path="/tmp",
     )
     older = start_run(
         session, ticket_id=t.id, worktree_path="/tmp/w",
@@ -141,7 +142,7 @@ async def test_sidebar_edit_lists_runs(cookie_client, session, profile):
 async def test_sidebar_edit_no_runs_shows_empty_state(cookie_client, session, profile):
     t = create_ticket(
         session, title="no-runs", prompt="p", profile_id=profile.id,
-        status="draft", cwd="/tmp",
+        status="draft", source_path="/tmp",
     )
     r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
     assert r.status_code == 200
@@ -168,7 +169,7 @@ async def test_create_ticket_via_form(cookie_client, session, profile):
             "title": "from-form",
             "prompt": "p",
             "profile_id": profile.id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
             "additional_dirs": ["/home/me/a", "/home/me/b"],
         },
     )
@@ -191,7 +192,7 @@ async def test_create_ticket_via_form_accepts_multiple_linked_workspaces(cookie_
             "title": "multi-linked",
             "prompt": "p",
             "profile_id": profile.id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
             "use_worktree": "1",
             "worktree_name": "feature",
             "linked_workspace_path": ["/home/me/api", "/home/me/docs"],
@@ -223,7 +224,7 @@ async def test_board_form_forces_linked_git_worktree_read_write(cookie_client, s
         data={
             "title": "linked-git-forced-rw",
             "profile_id": profile.id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
             "use_worktree": "1",
             "worktree_name": "feature",
             "linked_workspace_path": "/home/me/api",
@@ -244,7 +245,7 @@ async def test_partial_board_update_preserves_linked_workspaces(cookie_client, s
         title="partial-workspace",
         prompt="p",
         profile_id=profile.id,
-        cwd="/tmp/old",
+        source_path="/tmp/old",
         workspaces=[
             {
                 "role": "primary",
@@ -265,7 +266,7 @@ async def test_partial_board_update_preserves_linked_workspaces(cookie_client, s
 
     r = await cookie_client.post(
         f"/board/tickets/{t.id}",
-        data={"cwd": "/tmp/new"},
+        data={"source_path": "/tmp/new"},
     )
 
     assert r.status_code == 200
@@ -281,7 +282,7 @@ async def test_worktree_preview_resolves_default_path(cookie_client, tmp_path):
     repo.mkdir()
     r = await cookie_client.get(
         "/board/worktree-preview",
-        params={"cwd": str(repo), "name": "feature"},
+        params={"source_path": str(repo), "name": "feature"},
     )
 
     assert r.status_code == 200
@@ -299,7 +300,7 @@ async def test_worktree_preview_uses_bare_container_root(cookie_client, tmp_path
 
     r = await cookie_client.get(
         "/board/worktree-preview",
-        params={"cwd": str(container), "name": "feature"},
+        params={"source_path": str(container), "name": "feature"},
     )
 
     assert r.status_code == 200
@@ -318,7 +319,7 @@ async def test_worktree_preview_formats_source_as_title_suffix(cookie_client, tm
 
     r = await cookie_client.get(
         "/board/worktree-preview",
-        params={"cwd": str(container), "name": "asdf"},
+        params={"source_path": str(container), "name": "asdf"},
     )
 
     assert r.status_code == 200
@@ -338,7 +339,7 @@ async def test_worktree_preview_returns_json_for_stable_dom_updates(cookie_clien
 
     r = await cookie_client.get(
         "/board/worktree-preview",
-        params={"cwd": str(container), "name": "asdf", "format": "json"},
+        params={"source_path": str(container), "name": "asdf", "format": "json"},
     )
 
     assert r.status_code == 200
@@ -359,7 +360,7 @@ async def test_worktree_preview_strips_cwd_whitespace(cookie_client, tmp_path):
 
     r = await cookie_client.get(
         "/board/worktree-preview",
-        params={"cwd": f" {container} ", "name": "feature"},
+        params={"source_path": f" {container} ", "name": "feature"},
     )
 
     assert r.status_code == 200
@@ -373,7 +374,7 @@ async def test_create_form_ignores_run_now_param(cookie_client, session, profile
         data={
             "title": "runny",
             "profile_id": profile.id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
             "run_now": "1",
         },
     )
@@ -384,7 +385,7 @@ async def test_create_form_ignores_run_now_param(cookie_client, session, profile
 
 async def test_update_ticket_via_form(cookie_client, session, profile):
     t = create_ticket(
-        session, title="old", prompt="op", profile_id=profile.id, status="draft", cwd="/tmp"
+        session, title="old", prompt="op", profile_id=profile.id, status="draft", source_path="/tmp"
     )
     r = await cookie_client.post(
         f"/board/tickets/{t.id}",
@@ -392,7 +393,7 @@ async def test_update_ticket_via_form(cookie_client, session, profile):
             "title": "new",
             "prompt": "np",
             "profile_id": profile.id,
-            "cwd": "/home/me/project",
+            "source_path": "/home/me/project",
         },
     )
     # Save returns the sidebar partial re-rendered in edit mode for the
@@ -402,12 +403,12 @@ async def test_update_ticket_via_form(cookie_client, session, profile):
     session.expire_all()
     after = get_ticket(session, t.id)
     assert after.title == "new"
-    assert after.cwd == "/home/me/project"
+    assert after.workspaces[0].source_path == "/home/me/project"
 
 
 async def test_delete_ticket(cookie_client, session, profile):
     t = create_ticket(
-        session, title="kill-me", prompt="", profile_id=profile.id, status="draft", cwd="/tmp"
+        session, title="kill-me", prompt="", profile_id=profile.id, status="draft", source_path="/tmp"
     )
     r = await cookie_client.request("DELETE", f"/board/tickets/{t.id}")
     assert r.status_code == 204
@@ -416,7 +417,7 @@ async def test_delete_ticket(cookie_client, session, profile):
 
 async def test_move_endpoint_changes_status(cookie_client, session, profile):
     t = create_ticket(
-        session, title="mover", prompt="", profile_id=profile.id, status="draft", cwd="/tmp"
+        session, title="mover", prompt="", profile_id=profile.id, status="draft", source_path="/tmp"
     )
     r = await cookie_client.post(
         f"/board/tickets/{t.id}/move",
@@ -430,7 +431,7 @@ async def test_move_endpoint_changes_status(cookie_client, session, profile):
 
 async def test_move_to_running_sets_run_now(cookie_client, session, profile):
     t = create_ticket(
-        session, title="hurry", prompt="", profile_id=profile.id, status="queued", cwd="/tmp"
+        session, title="hurry", prompt="", profile_id=profile.id, status="queued", source_path="/tmp"
     )
     r = await cookie_client.post(
         f"/board/tickets/{t.id}/move",
@@ -448,13 +449,13 @@ async def test_move_to_running_sets_run_now(cookie_client, session, profile):
 
 async def test_reorder_within_column(cookie_client, session, profile):
     a = create_ticket(
-        session, title="a", prompt="", profile_id=profile.id, status="queued", cwd="/tmp"
+        session, title="a", prompt="", profile_id=profile.id, status="queued", source_path="/tmp"
     )
     b = create_ticket(
-        session, title="b", prompt="", profile_id=profile.id, status="queued", cwd="/tmp"
+        session, title="b", prompt="", profile_id=profile.id, status="queued", source_path="/tmp"
     )
     c = create_ticket(
-        session, title="c", prompt="", profile_id=profile.id, status="queued", cwd="/tmp"
+        session, title="c", prompt="", profile_id=profile.id, status="queued", source_path="/tmp"
     )
     # Reverse order.
     r = await cookie_client.post(
@@ -474,54 +475,74 @@ async def test_unauthenticated_board_blocked(app):
         assert r.status_code == 401
 
 
-async def test_create_rejects_missing_cwd(cookie_client, session, profile):
-    """Form submit without a cwd should 422, not silently land a NULL ticket."""
+async def test_create_rejects_missing_source_path(cookie_client, session, profile):
+    """Form submit without a source path should 422, not silently land a NULL ticket."""
     r = await cookie_client.post(
         "/board/tickets",
-        data={"title": "no-cwd", "profile_id": profile.id},
+        data={"title": "no-source-path", "profile_id": profile.id},
     )
     assert r.status_code == 422
     assert list_tickets(session, status="draft") == []
 
 
-async def test_create_rejects_blank_cwd(cookie_client, session, profile):
+async def test_create_rejects_blank_source_path(cookie_client, session, profile):
     r = await cookie_client.post(
         "/board/tickets",
-        data={"title": "blank-cwd", "profile_id": profile.id, "cwd": "   "},
+        data={"title": "blank-source-path", "profile_id": profile.id, "source_path": "   "},
     )
     assert r.status_code == 422
     assert list_tickets(session, status="draft") == []
 
 
-async def test_create_expands_tilde_in_cwd(cookie_client, session, profile, monkeypatch):
-    """A ~-prefixed cwd from the autocomplete should round-trip as an absolute path."""
+async def test_create_expands_tilde_in_source_path(cookie_client, session, profile, monkeypatch):
+    """A ~-prefixed source path from the autocomplete should round-trip as an absolute path."""
     monkeypatch.setenv("HOME", "/home/expanded")
     r = await cookie_client.post(
         "/board/tickets",
-        data={"title": "tilde", "profile_id": profile.id, "cwd": "~/proj"},
+        data={"title": "tilde", "profile_id": profile.id, "source_path": "~/proj"},
     )
     assert r.status_code == 204
     [t] = list_tickets(session, status="draft")
-    assert t.cwd == "/home/expanded/proj"
+    assert t.workspaces[0].source_path == "/home/expanded/proj"
 
+async def test_board_project_filter_prefills_create_modal_workspaces(cookie_client, session, profile):
+    create_project(
+        session,
+        name="Nightdesk",
+        source_path="/tmp/nightdesk",
+        default_workspace_mode="git_worktree",
+        default_base_ref="main",
+        default_linked_workspaces=[{
+            "role": "linked",
+            "label": "docs",
+            "kind": "directory",
+            "access": "read_only",
+            "source_path": "/tmp/docs",
+        }],
+    )
+    r = await cookie_client.get("/?project=nightdesk")
+    assert r.status_code == 200
+    assert 'value="/tmp/nightdesk"' in r.text
+    assert 'value="/tmp/docs"' in r.text
+    assert 'value="git_worktree"' in r.text
 
 async def test_update_rejects_blank_cwd(cookie_client, session, profile):
     t = create_ticket(
         session, title="t", prompt="", profile_id=profile.id,
-        status="draft", cwd="/home/me/project",
+        status="draft", source_path="/home/me/project",
     )
     r = await cookie_client.post(
         f"/board/tickets/{t.id}",
         data={
             "title": "still-t",
             "profile_id": profile.id,
-            "cwd": "",
+            "source_path": "",
         },
     )
     assert r.status_code == 422
     session.expire_all()
     after = get_ticket(session, t.id)
-    assert after.cwd == "/home/me/project"  # unchanged
+    assert after.workspaces[0].source_path == "/home/me/project"  # unchanged
 
 
 async def test_sidebar_create_has_no_run_now_checkbox(cookie_client, profile):
@@ -546,7 +567,7 @@ async def test_sidebar_edit_shows_run_now_action(cookie_client, session, profile
     """
     t = create_ticket(
         session, title="rn", prompt="", profile_id=profile.id,
-        status=ticket_status, cwd="/tmp",
+        status=ticket_status, source_path="/tmp",
     )
     r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
     assert r.status_code == 200
@@ -564,7 +585,7 @@ async def test_sidebar_edit_running_hides_run_now_action(cookie_client, session,
     bypass."""
     t = create_ticket(
         session, title="rn", prompt="", profile_id=profile.id,
-        status="running", cwd="/tmp",
+        status="running", source_path="/tmp",
     )
     r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
     assert r.status_code == 200
@@ -608,11 +629,11 @@ async def test_run_now_queued_renders_in_running_column(
     """
     fast = create_ticket(
         session, title="fast",  prompt="", profile_id=profile.id,
-        status="queued", run_now=True, cwd="/tmp",
+        status="queued", run_now=True, source_path="/tmp",
     )
     slow = create_ticket(
         session, title="slow",  prompt="", profile_id=profile.id,
-        status="queued", run_now=False, cwd="/tmp",
+        status="queued", run_now=False, source_path="/tmp",
     )
     r = await cookie_client.get("/")
     assert r.status_code == 200
@@ -635,7 +656,7 @@ async def test_columns_endpoint_returns_oob_sections(
     """
     create_ticket(
         session, title="poll-me", prompt="", profile_id=profile.id,
-        status="queued", cwd="/tmp",
+        status="queued", source_path="/tmp",
     )
     r = await cookie_client.get("/board/columns")
     assert r.status_code == 200
@@ -656,7 +677,7 @@ async def test_drag_to_queued_clears_run_now(cookie_client, session, profile):
     """
     t = create_ticket(
         session, title="cooldown", prompt="", profile_id=profile.id,
-        status="queued", run_now=True, cwd="/tmp",
+        status="queued", run_now=True, source_path="/tmp",
     )
     r = await cookie_client.post(
         f"/board/tickets/{t.id}/move",
@@ -675,7 +696,7 @@ async def test_drag_to_queued_from_review_works(cookie_client, session, profile)
     """
     t = create_ticket(
         session, title="redo", prompt="", profile_id=profile.id, status="review",
-        cwd="/tmp",
+        source_path="/tmp",
     )
     r = await cookie_client.post(
         f"/board/tickets/{t.id}/move",
@@ -701,7 +722,7 @@ async def test_create_form_threads_base_ref(cookie_client, session, profile):
         data={
             "title": "with-base-ref",
             "profile_id": profile.id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
             "use_worktree": "1",
             "worktree_name": "feature",
             "base_ref": "develop",
@@ -725,7 +746,7 @@ async def test_create_form_inherits_config_base_ref_default(cookie_client, sessi
         data={
             "title": "inherits-default",
             "profile_id": profile.id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
             "use_worktree": "1",
             "worktree_name": "feature",
         },
@@ -748,7 +769,7 @@ async def test_create_form_explicit_base_ref_overrides_default(cookie_client, se
         data={
             "title": "explicit-wins",
             "profile_id": profile.id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
             "use_worktree": "1",
             "worktree_name": "feature",
             "base_ref": "release-1.2",
@@ -772,7 +793,7 @@ async def test_directory_ticket_does_not_inherit_base_ref_default(cookie_client,
         data={
             "title": "plain-dir",
             "profile_id": profile.id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
         },
     )
     assert r.status_code == 204
@@ -796,7 +817,7 @@ async def test_worktree_preview_flags_missing_base_ref(cookie_client, tmp_path):
 
     r = await cookie_client.get(
         "/board/worktree-preview",
-        params={"cwd": str(repo), "name": "feat", "base_ref": "no-such-branch",
+        params={"source_path": str(repo), "name": "feat", "base_ref": "no-such-branch",
                 "format": "json"},
     )
     assert r.status_code == 200
@@ -804,7 +825,7 @@ async def test_worktree_preview_flags_missing_base_ref(cookie_client, tmp_path):
 
     r2 = await cookie_client.get(
         "/board/worktree-preview",
-        params={"cwd": str(repo), "name": "feat", "base_ref": "HEAD",
+        params={"source_path": str(repo), "name": "feat", "base_ref": "HEAD",
                 "format": "json"},
     )
     assert r2.status_code == 200
@@ -825,7 +846,7 @@ async def test_worktree_preview_html_warns_about_missing_base_ref(cookie_client,
 
     r = await cookie_client.get(
         "/board/worktree-preview",
-        params={"cwd": str(repo), "name": "feat", "base_ref": "ghost"},
+        params={"source_path": str(repo), "name": "feat", "base_ref": "ghost"},
     )
     assert r.status_code == 200
     assert "not found" in r.text
@@ -840,7 +861,7 @@ async def test_sidebar_shows_branch_for_worktree_workspace(cookie_client, sessio
         prompt="p",
         priority=0,
         profile_id=profile.id,
-        cwd="/tmp",
+        source_path="/tmp",
         run_now=False,
         workspaces=[
             {
@@ -871,7 +892,7 @@ async def test_sidebar_omits_branch_for_directory_workspace(cookie_client, sessi
         prompt="p",
         priority=0,
         profile_id=profile.id,
-        cwd="/tmp",
+        source_path="/tmp",
         run_now=False,
     )
     r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")

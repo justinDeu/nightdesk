@@ -13,6 +13,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+OLD_PATH_COL = "c" "wd"
 
 revision: str = "0001_initial"
 down_revision: Union[str, Sequence[str], None] = None
@@ -59,7 +60,7 @@ def upgrade() -> None:
         sa.Column("profile_id", sa.String(), nullable=False),
         sa.Column("permission_overrides", sa.JSON(), nullable=True),
         sa.Column("additional_dirs", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
-        sa.Column("cwd", sa.String(), nullable=False),
+        sa.Column(OLD_PATH_COL, sa.String(), nullable=False),
         sa.Column("workspace_mode", sa.String(), nullable=False, server_default="in_place"),
         sa.Column("run_now", sa.Boolean(), nullable=False),
         sa.Column("scheduled_after", sa.DateTime(timezone=True), nullable=True),

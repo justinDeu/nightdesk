@@ -17,7 +17,7 @@ async def _create_profile(client):
 
 
 async def _create_ticket(client, pid, **kw):
-    body = {"title": "t", "profile_id": pid, "cwd": "/tmp"}
+    body = {"title": "t", "profile_id": pid, "source_path": "/tmp"}
     body.update(kw)
     r = await client.post("/api/v1/tickets", json=body)
     assert r.status_code == 201, r.text
@@ -92,8 +92,8 @@ async def test_create_accepts_workspace_list(client):
     })
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["cwd"] == "/home/thor/fun/nightdesk"
-    assert body["workspace_mode"] == "git_worktree"
+    assert body["workspaces"][0]["source_path"] == "/home/thor/fun/nightdesk"
+    assert body["workspaces"][0]["kind"] == "git_worktree"
     assert body["workspaces"][0]["role"] == "primary"
     assert body["workspaces"][0]["worktree_name"] == "workspace-support"
     assert body["workspaces"][1]["access"] == "read_only"

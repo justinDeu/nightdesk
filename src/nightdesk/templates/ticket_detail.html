@@ -194,7 +194,7 @@
     {# --- Filesystem access ----------------------------------------------- #
      # Defines what the agent is *allowed* to touch on disk. Distinct from
      # the Workspaces section below (which lists the actual git worktrees
-     # that were created at runtime). cwd is shown read-only — to change
+     # that were created at runtime). source path is shown read-only — to change
      # it, edit the ticket via the board sidebar. Additional rw paths are
      # editable here since they're commonly tweaked between runs.
      #}
@@ -203,8 +203,8 @@
       <p class="text-[11px] text-fg-muted mb-3">Paths the agent can read or write at runtime.</p>
 
       <div class="mb-3">
-        <div class="text-xs text-fg-muted mb-1">working directory (cwd)</div>
-        <div class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-xs font-mono text-fg break-all">{{ ticket.cwd }}</div>
+        <div class="text-xs text-fg-muted mb-1">primary workspace source</div>
+        <div class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-xs font-mono text-fg break-all">{{ ticket.workspaces[0].source_path if ticket.workspaces else "—" }}</div>
       </div>
 
       <div class="mb-3">

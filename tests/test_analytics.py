@@ -21,7 +21,7 @@ def _profile(session, name="p"):
 
 def _ticket(session, profile, title="t"):
     t = Ticket(title=title, prompt="", status="review", priority=0,
-               profile_id=profile.id, cwd="/tmp")
+               profile_id=profile.id)
     session.add(t)
     session.commit()
     return t

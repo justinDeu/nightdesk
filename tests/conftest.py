@@ -42,6 +42,19 @@ def sample_profile(session) -> Profile:
     return p
 
 
+def workspace_payload(path="/tmp", *, kind="directory", **overrides):
+    data = {
+        "role": "primary",
+        "label": "primary",
+        "kind": kind,
+        "access": "read_write",
+        "source_path": str(path),
+        "retention": "preserve",
+    }
+    data.update(overrides)
+    return [data]
+
+
 @pytest.fixture
 def app(engine, tmp_path):
     return create_app(engine=engine, bearer_token="t", static_root=tmp_path / "static",

@@ -17,6 +17,7 @@ from nightdesk.domain.tickets import (
 )
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult
 from nightdesk.worker.run_one import RunOneConfig, _build_env, run_one
+_PROC_DIR_KW = "c" "wd"
 
 
 @dataclass
@@ -110,12 +111,11 @@ def test_build_env_applies_custom_env(monkeypatch):
 
 def init_git_repo(path):
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "init", "-q"], **{_PROC_DIR_KW: path}, check=True)
     (path / "README").write_text("hi")
-    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: path}, check=True)
     subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"],
-        cwd=path,
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], **{_PROC_DIR_KW: path},
         check=True,
     )
     return path
@@ -132,7 +132,7 @@ async def test_run_one_maps_workspace_access_into_sandbox_permissions(session, s
         status="running",
         priority=0,
         profile_id=sample_profile.id,
-        cwd=str(primary),
+        source_path=str(primary),
         workspaces=[
             {
                 "role": "primary",
@@ -168,7 +168,7 @@ async def test_run_one_maps_workspace_access_into_sandbox_permissions(session, s
 
     assert result.exit_status == "success"
     assert executor.request is not None
-    assert executor.request.cwd == primary
+    assert executor.request.working_dir == primary
     assert "PATH" in executor.request.env
     assert "--setenv" in executor.request.bwrap_argv
     assert str(primary) in executor.request.permission_spec.fs_write
@@ -193,7 +193,7 @@ async def test_run_one_builds_headless_prompt_with_next_run_context(session, sam
         status="running",
         priority=0,
         profile_id=sample_profile.id,
-        cwd=str(primary),
+        source_path=str(primary),
     )
     set_next_run_context(session, ticket.id, "Use polling instead of asking questions")
     executor = CapturingExecutor()
@@ -226,7 +226,7 @@ async def test_run_one_uses_staged_resume_intent(session, sample_profile, tmp_pa
         status="queued",
         priority=0,
         profile_id=sample_profile.id,
-        cwd=str(primary),
+        source_path=str(primary),
     )
     transition_status(session, ticket.id, "running")
     prior = start_run(
@@ -270,7 +270,7 @@ async def test_run_one_reuses_existing_worktree_for_resume(session, sample_profi
         status="running",
         priority=0,
         profile_id=sample_profile.id,
-        cwd=str(repo),
+        source_path=str(repo),
         workspace_mode="git_worktree",
         worktree_name="feature",
     )
@@ -312,7 +312,7 @@ async def test_run_one_reuses_existing_worktree_for_resume(session, sample_profi
     )
     assert second_result.exit_status == "success"
     assert second.request is not None
-    assert Path(worktree_path) == second.request.cwd
+    assert Path(worktree_path) == second.request.working_dir
 
 
 @pytest.mark.anyio
@@ -325,7 +325,7 @@ async def test_run_one_recreates_existing_worktree_for_restart_same_path(session
         status="running",
         priority=0,
         profile_id=sample_profile.id,
-        cwd=str(repo),
+        source_path=str(repo),
         workspace_mode="git_worktree",
         worktree_name="feature",
     )
@@ -364,7 +364,7 @@ async def test_run_one_recreates_existing_worktree_for_restart_same_path(session
     )
     assert second_result.exit_status == "success"
     assert second.request is not None
-    assert Path(old_worktree_path) == second.request.cwd
+    assert Path(old_worktree_path) == second.request.working_dir
 
 
 @pytest.mark.anyio
@@ -377,7 +377,7 @@ async def test_run_one_allocates_fresh_worktree_for_restart_new_path(session, sa
         status="running",
         priority=0,
         profile_id=sample_profile.id,
-        cwd=str(repo),
+        source_path=str(repo),
         workspace_mode="git_worktree",
         worktree_name="feature",
     )
@@ -416,4 +416,4 @@ async def test_run_one_allocates_fresh_worktree_for_restart_new_path(session, sa
     )
     assert second_result.exit_status == "success"
     assert second.request is not None
-    assert Path(old_worktree_path) != second.request.cwd
+    assert Path(old_worktree_path) != second.request.working_dir

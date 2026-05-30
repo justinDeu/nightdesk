@@ -6,12 +6,12 @@
 
 ## Problem
 
-Users often run Nightdesk against the same repositories. Today each ticket carries its own `cwd`, `workspace_mode`, `worktree_name`, linked workspaces, and profile. That keeps tickets independent, but it creates repeated setup and makes old work harder to find.
+Users often run Nightdesk against the same repositories. Today each ticket carries its own workspace list, worktree details, and profile. That keeps tickets independent, but it creates repeated setup and makes old work harder to find.
 
 The sharp problems are:
 
 1. **Repeated workspace setup.** The same repo path, worktree mode, base ref, worktree naming pattern, and linked workspaces get entered again and again.
-2. **Wrong-directory risk.** A ticket can be created against the wrong `cwd`. Since Nightdesk can run write-capable agents, this is more than a convenience issue.
+2. **Wrong-directory risk.** A ticket can be created against the wrong source path. Since Nightdesk can run write-capable agents, this is more than a convenience issue.
 3. **Weak filtering.** The board, archive, and search do not have a repo-level filter. Users infer context from titles or paths.
 4. **Poor archive archaeology.** Users need to answer questions like "what did Nightdesk already try in this repo?" without scanning unrelated tickets.
 5. **Context loss in child tickets.** A run that creates follow-up tickets should usually keep the same work context.
@@ -23,7 +23,7 @@ A project is an optional saved work context.
 A project is:
 
 - A named label for a repo or work area.
-- A source `cwd` default.
+- A source `source_path` default.
 - A bundle of workspace defaults used when creating tickets.
 - A filter value for board, archive, and search.
 
@@ -50,7 +50,7 @@ v1 includes:
 - Search filter.
 - Ticket card and archive badges.
 - Project defaults for workspace fields.
-- Backfill by `cwd` with dry-run.
+- Backfill by `source_path` with dry-run.
 - Parent-to-child project inheritance for child tickets created through Nightdesk APIs.
 
 v1 does not include:
@@ -87,7 +87,7 @@ If repeated profile selection becomes a clear pain later, add a nullable `sugges
 | `id` | `String` | PK | UUID |
 | `name` | `String` | unique, not null | Human-readable name |
 | `slug` | `String` | unique, not null | URL-safe identifier, derived from name unless provided |
-| `cwd` | `String` | not null | Source repo or work area path |
+| `source_path` | `String` | not null | Source repo or work area path |
 | `default_workspace_mode` | `String` | nullable | `"in_place"`, `"directory"`, or `"git_worktree"` |
 | `default_worktree_name_template` | `String` | nullable | Example: `"{slug}"` or `"feat/{slug}"` |
 | `default_base_ref` | `String` | nullable | Default base ref for worktrees |
@@ -98,7 +98,7 @@ If repeated profile selection becomes a clear pain later, add a nullable `sugges
 | `created_at` | `DateTime` | tz=True | |
 | `updated_at` | `DateTime` | tz=True | |
 
-`cwd` should be normalized before storage. The exact normalization should match existing ticket path behavior where possible. Backfill must compare normalized paths, not raw strings.
+`source_path` should be normalized before storage. The exact normalization should match existing ticket path behavior where possible. Backfill must compare normalized paths, not raw strings.
 
 ### 3.2 Tickets association
 
@@ -114,7 +114,7 @@ The default board, archive, and search results include all tickets. A project fi
 
 ### 3.3 Workspace semantics
 
-Project `cwd` is the source working context. Ticket `cwd` remains the execution directory.
+Project `source_path` is the source working context. Ticket `source_path` remains the execution directory.
 
 This distinction matters for worktrees:
 
@@ -122,13 +122,13 @@ This distinction matters for worktrees:
 - A ticket may execute in a generated worktree under `~/.local/share/nightdesk/work/...`.
 - The ticket should still belong to the project.
 
-Project assignment must not rely only on ticket execution `cwd` after a worktree is created.
+Project assignment must not rely only on ticket execution `source_path` after a worktree is created.
 
 ### 3.4 Defaults applied at ticket creation
 
 When a ticket is created with a project:
 
-1. Pre-fill `cwd` from `project.cwd`.
+1. Pre-fill `source_path` from `project.source_path`.
 2. Pre-fill `workspace_mode` from `project.default_workspace_mode` if present.
 3. Pre-fill `base_ref` from `project.default_base_ref` if present.
 4. Resolve `default_worktree_name_template` from the ticket title if present.
@@ -165,7 +165,7 @@ Backfill assigns tickets to projects based on normalized paths.
 Rules:
 
 1. Never overwrite a non-null `ticket.project_id`.
-2. Prefer exact normalized `ticket.cwd == project.cwd` matches.
+2. Prefer exact normalized primary workspace source path equals `project.source_path` matches.
 3. Optionally allow path-boundary descendant matches.
 4. If more than one project matches, choose the longest matching project path.
 5. Never use naive string prefix matching.
@@ -198,7 +198,7 @@ Fields:
 
 - `name`
 - `slug`, optional. Derived from name when omitted.
-- `cwd`
+- `source_path`
 - `default_workspace_mode`, optional.
 - `default_worktree_name_template`, optional.
 - `default_base_ref`, optional.
@@ -360,7 +360,7 @@ Add Projects under Settings.
 
 Settings should support:
 
-- List projects with name, cwd, active or archived state, and ticket count.
+- List projects with name, source path, active or archived state, and ticket count.
 - Create project.
 - Edit project.
 - Archive project.

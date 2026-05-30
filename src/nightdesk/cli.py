@@ -1021,7 +1021,7 @@ def run_ticket() -> None:
                              ticket_id=t.id, api_url=f"http://{cfg.bind_host}:{cfg.bind_port}")
             argv = build_bwrap_argv(
                 spec,
-                cwd=str(t.cwd or (spec.fs_write[0] if spec.fs_write else "/tmp")),
+                working_dir=str(spec.fs_write[0] if spec.fs_write else "/tmp"),
                 cmd=["python", "-m", "nightdesk.worker._sdk_runner"],
                 env=env,
             )

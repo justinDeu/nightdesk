@@ -53,13 +53,14 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         ).scalar_one_or_none()
 
         if ws is None:
-            # Fall back to ticket-level workspace.
-            ws = session.execute(
+            # Fall back to ticket-level workspace, preferring one with resolved
+            # git metadata over a placeholder source-only row.
+            candidates = list(session.execute(
                 select(TicketWorkspace)
                 .where(TicketWorkspace.ticket_id == run.ticket_id)
                 .order_by(TicketWorkspace.position)
-                .limit(1)
-            ).scalar_one_or_none()
+            ).scalars())
+            ws = next((item for item in candidates if diff_repo_path(item)), None)
 
         repo_path = diff_repo_path(ws) if ws is not None else ""
         if ws is None or not repo_path:

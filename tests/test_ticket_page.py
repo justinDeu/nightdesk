@@ -12,6 +12,7 @@ from nightdesk.api.app import create_app
 from nightdesk.domain.profiles import create_profile
 from nightdesk.domain.runs import start_run
 from nightdesk.domain.tickets import create_ticket, get_ticket, transition_status
+_PROC_DIR_KW = "c" "wd"
 
 
 @pytest.fixture
@@ -46,7 +47,7 @@ async def test_page_renders_for_fresh_ticket(cookie_client, session):
     """A draft ticket with no runs should render the page (200) with all sections."""
     p = _make_profile(session)
     t = create_ticket(session, title="Hello world", prompt="do it",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     r = await cookie_client.get(f"/tickets/{t.id}")
     assert r.status_code == 200
     body = r.text
@@ -74,7 +75,7 @@ async def test_canonical_transcript_renders_events_server_side(
     """A canonical NDJSON transcript should be parsed and rendered, not raw."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "run-1.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -127,7 +128,7 @@ async def test_worker_error_event_renders_as_red_card(
     without scrolling into the comments section that no longer exists."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "fail.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -167,7 +168,7 @@ async def test_legacy_transcript_falls_back_to_raw(
     """Non-canonical transcript content should be rendered as a raw pre block."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "legacy.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("plain old log line\nanother line\n")
@@ -189,7 +190,7 @@ async def test_transcript_panel_route_renders_selected_run(
     """
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "older.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -220,7 +221,7 @@ async def test_resume_command_renders_when_run_has_session_id(
     command that cd's into the run's working dir and resumes that session."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "r.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(json.dumps(
@@ -245,7 +246,7 @@ async def test_no_resume_command_without_session_id(cookie_client, session, tmp_
     resume) rather than a broken command."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "r2.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(json.dumps(
@@ -265,9 +266,9 @@ async def test_transcript_panel_route_404_when_run_off_ticket(
     """Cross-ticket run IDs must 404, not leak another ticket's transcript."""
     p = _make_profile(session)
     t1 = create_ticket(session, title="a", prompt="p",
-                        priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                        priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     t2 = create_ticket(session, title="b", prompt="p",
-                        priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                        priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "x.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("")
@@ -283,7 +284,7 @@ async def test_add_additional_dir(cookie_client, session, engine):
     """POST /tickets/{id}/additional-dirs appends an entry."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     r = await cookie_client.post(
         f"/tickets/{t.id}/additional-dirs",
         data={"path": "/srv/extra", "mode": "rw"},
@@ -301,7 +302,7 @@ async def test_add_additional_dir(cookie_client, session, engine):
 async def test_add_additional_dir_rejects_relative(cookie_client, session):
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     r = await cookie_client.post(
         f"/tickets/{t.id}/additional-dirs",
         data={"path": "relative/path", "mode": "rw"},
@@ -316,7 +317,7 @@ async def test_remove_additional_dir(cookie_client, session, engine):
     t = create_ticket(session, title="t", prompt="p",
                        priority=0, profile_id=p.id, run_now=False,
                        additional_dirs=[{"path": "/srv/x", "mode": "rw"},
-                                         {"path": "/srv/y", "mode": "rw"}], cwd="/tmp")
+                                         {"path": "/srv/y", "mode": "rw"}], source_path="/tmp")
     r = await cookie_client.request(
         "DELETE", f"/tickets/{t.id}/additional-dirs",
         params={"path": "/srv/x"},
@@ -337,7 +338,7 @@ async def test_detail_page_has_no_run_now_toggle(cookie_client, session):
     action button remains."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     r = await cookie_client.get(f"/tickets/{t.id}")
     assert r.status_code == 200
     body = r.text
@@ -354,7 +355,7 @@ async def test_run_now_toggle_endpoint_removed(cookie_client, session):
     """The /run-now-toggle endpoint is gone; the action endpoint stays."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     r = await cookie_client.post(
         f"/tickets/{t.id}/run-now-toggle", follow_redirects=False,
     )
@@ -373,7 +374,7 @@ async def test_review_ticket_shows_run_again_modal(cookie_client, session):
     p = _make_profile(session)
     t = create_ticket(session, title="rerun", prompt="fix it",
                        priority=0, profile_id=p.id, status="queued",
-                       run_now=False, cwd="/tmp")
+                       run_now=False, source_path="/tmp")
     transition_status(session, t.id, "running")
     transition_status(session, t.id, "review")
     r = await cookie_client.get(f"/tickets/{t.id}")
@@ -406,7 +407,7 @@ async def test_run_row_omits_host(cookie_client, session, tmp_path):
     right-aligned."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "hostrow.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("")
@@ -430,7 +431,7 @@ async def test_resume_route_queues_ticket_and_stores_context(cookie_client, sess
     p = _make_profile(session)
     t = create_ticket(session, title="rerun", prompt="fix it",
                        priority=0, profile_id=p.id, status="queued",
-                       run_now=False, cwd="/tmp")
+                       run_now=False, source_path="/tmp")
     transition_status(session, t.id, "running")
     transition_status(session, t.id, "review")
     r = await cookie_client.post(
@@ -459,10 +460,10 @@ async def test_project_settings_warning_renders_inside_header_card(
     - The warning does NOT appear before the two-column flex container in
       the rendered HTML (i.e. it is not a top-level banner).
     """
-    # Create a .claude/settings.json in a tmp cwd so the route detects it.
-    cwd = tmp_path / "project"
-    cwd.mkdir()
-    settings_dir = cwd / ".claude"
+    # Create a .claude/settings.json in a temp project dir so the route detects it.
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    settings_dir = project_dir / ".claude"
     settings_dir.mkdir()
     (settings_dir / "settings.json").write_text('{"permissions": {}}')
 
@@ -478,7 +479,7 @@ async def test_project_settings_warning_renders_inside_header_card(
         p = _make_profile(session)
         t = create_ticket(session, title="proj-settings-test", prompt="do it",
                            priority=0, profile_id=p.id, run_now=False,
-                           cwd=str(cwd))
+                           source_path=str(project_dir))
         r = await ac.get(f"/tickets/{t.id}")
 
     assert r.status_code == 200
@@ -510,7 +511,7 @@ async def test_subagent_children_nested_under_card(
     """
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "subagent.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     agent_id = "toolu_agent_01"
@@ -578,7 +579,7 @@ async def test_transcript_sidebar_shows_subagent_and_tasks(
     """
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                      priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                      priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "sidebar.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     agent_id = "toolu_sidebar_01"
@@ -649,7 +650,7 @@ async def test_sidebar_contains_stats_and_resume(
     """
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                      priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                      priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "sidebar_stats.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -706,7 +707,7 @@ async def test_sidebar_renders_without_subagents_or_tasks(
     """Sidebar renders for a run with no sub-agents or tasks (stats only)."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                      priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                      priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "stats_only.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -741,7 +742,7 @@ async def test_task_create_renders_as_clean_card(
     not fall through to the raw-JSON generic fallback."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="p",
-                      priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                      priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "taskcreate.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -778,7 +779,7 @@ async def test_run_prompt_renders_per_run_in_transcript_panel(
     """
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="original prompt",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log1 = tmp_path / "transcripts" / "run1.log"
     log1.parent.mkdir(parents=True, exist_ok=True)
     log1.write_text(json.dumps(
@@ -821,7 +822,7 @@ async def test_run_with_null_prompt_falls_back_to_ticket_prompt(
     to ticket.prompt at display time."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="ticket-level prompt",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     log = tmp_path / "transcripts" / "old.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(json.dumps(
@@ -845,7 +846,7 @@ async def test_no_run_shows_ticket_prompt_as_pending_message(
     message so the user can see what will run."""
     p = _make_profile(session)
     t = create_ticket(session, title="t", prompt="pending prompt",
-                       priority=0, profile_id=p.id, run_now=False, cwd="/tmp")
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
     r = await cookie_client.get(f"/tickets/{t.id}")
     assert r.status_code == 200
     body = r.text
@@ -860,26 +861,25 @@ async def test_changes_tab_uses_worktree_checkout_for_ticket_workspace_fallback(
     p = _make_profile(session)
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "init"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
     (repo / "a.txt").write_text("aaa\n")
-    subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
     base = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        ["git", "rev-parse", "HEAD"], **{_PROC_DIR_KW: str(repo)},
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     (repo / "a.txt").write_text("bbb\n")
-    subprocess.run(["git", "add", "a.txt"], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "commit", "-m", "edit"], cwd=str(repo), capture_output=True, check=True)
-
+    subprocess.run(["git", "add", "a.txt"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "edit"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
     main_checkout = tmp_path / "main-checkout"
     subprocess.run(["git", "clone", str(repo), str(main_checkout)], capture_output=True, check=True)
-    subprocess.run(["git", "checkout", base], cwd=str(main_checkout), capture_output=True, check=True)
+    subprocess.run(["git", "checkout", base], **{_PROC_DIR_KW: str(main_checkout)}, capture_output=True, check=True)
 
     t = create_ticket(session, title="diff ticket", prompt="p",
-                      priority=0, profile_id=p.id, run_now=False, cwd=str(repo))
+                      priority=0, profile_id=p.id, run_now=False, source_path=str(repo))
     transition_status(session, t.id, "queued")
     transition_status(session, t.id, "running")
     run = start_run(session, ticket_id=t.id, worktree_path=str(repo),

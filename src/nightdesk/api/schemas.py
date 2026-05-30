@@ -145,25 +145,21 @@ class AdditionalDir(BaseModel):
         return v
 
 
-def _normalize_cwd(v: object) -> str:
-    """Expand ``~`` and require an absolute path. Empty values are rejected.
-
-    Shared by ``TicketCreate`` (required) and ``TicketUpdate`` (only when
-    the caller actually sends a value — see ``_normalize_cwd_optional``).
-    """
+def _normalize_source_path(v: object) -> str:
+    """Expand ``~`` and require an absolute path. Empty values are rejected."""
     if not isinstance(v, str) or not v.strip():
-        raise ValueError("cwd is required")
+        raise ValueError("source_path is required")
     p = os.path.expanduser(v.strip())
     if not p.startswith("/"):
-        raise ValueError("cwd must be absolute (start with '/')")
+        raise ValueError("source_path must be absolute (start with '/')")
     return p
 
 
-def _normalize_cwd_optional(v: object) -> Optional[str]:
+def _normalize_source_path_optional(v: object) -> Optional[str]:
     """PATCH-friendly variant: ``None`` means 'leave alone'; empty string is rejected."""
     if v is None:
         return None
-    return _normalize_cwd(v)
+    return _normalize_source_path(v)
 
 
 
@@ -197,7 +193,7 @@ class TicketWorkspaceOut(BaseModel):
 class ProjectCreate(BaseModel):
     name: str
     slug: Optional[str] = None
-    cwd: str
+    source_path: str
     default_workspace_mode: Optional[Literal["directory", "git_worktree", "in_place", "worktree"]] = None
     default_worktree_name_template: Optional[str] = None
     default_base_ref: Optional[str] = None
@@ -205,16 +201,16 @@ class ProjectCreate(BaseModel):
     color: Optional[str] = None
     position: int = 0
 
-    @field_validator("cwd", mode="before")
+    @field_validator("source_path", mode="before")
     @classmethod
-    def _cwd_abs(cls, v):
-        return _normalize_cwd(v)
+    def _source_path_abs(cls, v):
+        return _normalize_source_path(v)
 
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     slug: Optional[str] = None
-    cwd: Optional[str] = None
+    source_path: Optional[str] = None
     default_workspace_mode: Optional[Literal["directory", "git_worktree", "in_place", "worktree"]] = None
     default_worktree_name_template: Optional[str] = None
     default_base_ref: Optional[str] = None
@@ -222,10 +218,10 @@ class ProjectUpdate(BaseModel):
     color: Optional[str] = None
     position: Optional[int] = None
 
-    @field_validator("cwd", mode="before")
+    @field_validator("source_path", mode="before")
     @classmethod
-    def _cwd_abs(cls, v):
-        return _normalize_cwd_optional(v)
+    def _source_path_abs(cls, v):
+        return _normalize_source_path_optional(v)
 
 
 class ProjectOut(BaseModel):
@@ -234,7 +230,7 @@ class ProjectOut(BaseModel):
     id: str
     name: str
     slug: str
-    cwd: str
+    source_path: str
     default_workspace_mode: Optional[str] = None
     default_worktree_name_template: Optional[str] = None
     default_base_ref: Optional[str] = None
@@ -254,7 +250,7 @@ class TicketCreate(BaseModel):
     project_id: Optional[str] = None
     permission_overrides: Optional[dict] = None
     additional_dirs: list[AdditionalDir] = []
-    cwd: Optional[str] = None
+    source_path: Optional[str] = None
     workspace_mode: Literal["directory", "git_worktree", "in_place", "worktree"] = "directory"
     worktree_name: Optional[str] = None
     worktree_path: Optional[str] = None
@@ -262,10 +258,11 @@ class TicketCreate(BaseModel):
     run_now: bool = False
     scheduled_after: Optional[datetime] = None
 
-    @field_validator("cwd", mode="before")
+    @field_validator("source_path", mode="before")
     @classmethod
-    def _cwd_abs(cls, v):
-        return _normalize_cwd_optional(v)
+    def _source_path_abs(cls, v):
+        return _normalize_source_path_optional(v)
+
 
 
 class TicketUpdate(BaseModel):
@@ -276,7 +273,7 @@ class TicketUpdate(BaseModel):
     project_id: Optional[str] = None
     permission_overrides: Optional[dict] = None
     additional_dirs: Optional[list[AdditionalDir]] = None
-    cwd: Optional[str] = None
+    source_path: Optional[str] = None
     workspace_mode: Optional[Literal["directory", "git_worktree", "in_place", "worktree"]] = None
     worktree_name: Optional[str] = None
     worktree_path: Optional[str] = None
@@ -284,10 +281,11 @@ class TicketUpdate(BaseModel):
     run_now: Optional[bool] = None
     scheduled_after: Optional[datetime] = None
 
-    @field_validator("cwd", mode="before")
+    @field_validator("source_path", mode="before")
     @classmethod
-    def _cwd_abs(cls, v):
-        return _normalize_cwd_optional(v)
+    def _source_path_abs(cls, v):
+        return _normalize_source_path_optional(v)
+
 
 
 class TicketOut(BaseModel):
@@ -301,10 +299,6 @@ class TicketOut(BaseModel):
     profile_id: str
     permission_overrides: Optional[dict] = None
     additional_dirs: list[AdditionalDir] = []
-    cwd: str
-    workspace_mode: str = "directory"
-    worktree_name: Optional[str] = None
-    worktree_path: Optional[str] = None
     workspaces: list[TicketWorkspaceOut] = []
     run_now: bool
     scheduled_after: Optional[datetime] = None
@@ -602,7 +596,7 @@ class CronJobCreate(BaseModel):
     title: str
     prompt: str = ""
     profile_id: str
-    cwd: str
+    source_path: str
     # 5-field cron expression: "minute hour day-of-month month day-of-week".
     schedule: str
     # IANA timezone name; JSON API defaults to UTC.
@@ -618,17 +612,17 @@ class CronJobCreate(BaseModel):
     misfire_policy: Literal["coalesce"] = "coalesce"
     overlap_policy: Literal["skip_if_active", "always"] = "skip_if_active"
 
-    @field_validator("cwd", mode="before")
+    @field_validator("source_path", mode="before")
     @classmethod
-    def _cwd_abs(cls, v):
-        return _normalize_cwd(v)
+    def _source_path_abs(cls, v):
+        return _normalize_source_path(v)
 
 
 class CronJobUpdate(BaseModel):
     title: Optional[str] = None
     prompt: Optional[str] = None
     profile_id: Optional[str] = None
-    cwd: Optional[str] = None
+    source_path: Optional[str] = None
     schedule: Optional[str] = None
     timezone: Optional[str] = None
     priority: Optional[int] = None
@@ -639,10 +633,10 @@ class CronJobUpdate(BaseModel):
     misfire_policy: Optional[Literal["coalesce"]] = None
     overlap_policy: Optional[Literal["skip_if_active", "always"]] = None
 
-    @field_validator("cwd", mode="before")
+    @field_validator("source_path", mode="before")
     @classmethod
-    def _cwd_abs(cls, v):
-        return _normalize_cwd_optional(v)
+    def _source_path_abs(cls, v):
+        return _normalize_source_path_optional(v)
 
 
 class CronJobOut(BaseModel):
@@ -650,7 +644,7 @@ class CronJobOut(BaseModel):
     title: str
     prompt: str
     profile_id: str
-    cwd: str
+    source_path: str
     schedule: str
     timezone: str
     priority: int

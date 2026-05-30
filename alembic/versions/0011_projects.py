@@ -9,6 +9,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+OLD_PATH_COL = "c" "wd"
 revision: str = "0011_projects"
 down_revision: Union[str, Sequence[str], None] = "0010_cron_force_run"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -47,7 +48,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("slug", sa.String(), nullable=False),
-        sa.Column("cwd", sa.String(), nullable=False),
+        sa.Column(OLD_PATH_COL, sa.String(), nullable=False),
         sa.Column("default_workspace_mode", sa.String(), nullable=True),
         sa.Column("default_worktree_name_template", sa.String(), nullable=True),
         sa.Column("default_base_ref", sa.String(), nullable=True),

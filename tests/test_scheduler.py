@@ -15,7 +15,7 @@ MONDAY = datetime(2026, 5, 11, 23, 0, tzinfo=timezone.utc)
 
 def _qt(session, sample_profile, **kw):
     fields = dict(title="t", prompt="", priority=0,
-                   profile_id=sample_profile.id, cwd="/tmp",
+                   profile_id=sample_profile.id, source_path="/tmp",
                    run_now=False, status="queued")
     fields.update(kw)
     return create_ticket(session, **fields)

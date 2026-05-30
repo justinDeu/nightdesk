@@ -3,6 +3,7 @@ from httpx import ASGITransport, AsyncClient
 
 from nightdesk.api.app import create_app
 from nightdesk.domain.profiles import create_profile
+from nightdesk.domain.projects import create_project
 from nightdesk.domain.tickets import create_ticket
 
 
@@ -27,7 +28,7 @@ async def test_board_page_renders(cookie_client, session):
                         denied_tools=[], network_mode="off", network_allowlist=[],
                         secret_keys=[], default_model=None)
     create_ticket(session, title="my ticket", prompt="hi",
-                    priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+                    priority=0, profile_id=p.id, source_path="/tmp", run_now=False)
     r = await cookie_client.get("/")
     assert r.status_code == 200
     assert "my ticket" in r.text
@@ -43,7 +44,7 @@ async def test_analytics_page_renders_with_totals(cookie_client, session):
                        denied_tools=[], network_mode="off", network_allowlist=[],
                        secret_keys=[], default_model=None)
     t = create_ticket(session, title="spendy ticket", prompt="hi",
-                      priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+                      priority=0, profile_id=p.id, source_path="/tmp", run_now=False)
     now = datetime.now(timezone.utc)
     run = Run(ticket_id=t.id, started_at=now, finished_at=now,
               exit_status="success", worktree_path="/w",
@@ -80,7 +81,7 @@ async def test_board_sidebar_exposes_workspace_controls(cookie_client, session):
                        allowed_tools=[], denied_tools=[], network_mode="off",
                        network_allowlist=[], secret_keys=[], default_model=None)
     create_ticket(session, title="workspace ticket", prompt="hi",
-                  priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+                  priority=0, profile_id=p.id, source_path="/tmp", run_now=False)
 
     r = await cookie_client.get("/")
 
@@ -106,14 +107,42 @@ async def test_board_sidebar_exposes_workspace_controls(cookie_client, session):
     # The suggestion dropdown host overlays the modal (position: fixed,
     # JS-positioned) instead of expanding inside the overflow-y-auto body
     # and resizing the modal. It also starts hidden until results render.
-    assert '-cwd-suggest" class="nd-suggest-host fixed z-50 hidden"' in r.text
+    assert '-source-path-suggest" class="nd-suggest-host fixed z-50 hidden"' in r.text
+async def test_create_modal_project_picker_exposes_workspace_defaults(cookie_client, session):
+    p = create_profile(session, name="project-workspace-ui", fs_read=[], fs_write=[],
+                       allowed_tools=[], denied_tools=[], network_mode="off",
+                       network_allowlist=[], secret_keys=[], default_model=None)
+    create_project(
+        session,
+        name="Nightdesk",
+        source_path="/tmp/nightdesk",
+        default_workspace_mode="git_worktree",
+        default_base_ref="main",
+        default_linked_workspaces=[{
+            "role": "linked",
+            "label": "docs",
+            "kind": "directory",
+            "access": "read_only",
+            "source_path": "/tmp/docs",
+        }],
+    )
+    create_ticket(session, title="workspace ticket", prompt="hi",
+                  priority=0, profile_id=p.id, source_path="/tmp", run_now=False)
+
+    r = await cookie_client.get("/")
+
+    assert r.status_code == 200
+    assert 'name="project_id"' in r.text
+    assert "ndProjectChanged" in r.text
+    assert "data-project-workspace-defaults" in r.text
+    assert '"source_path": "/tmp/docs"' in r.text
 
 async def test_workspace_preview_uses_debounced_updates(cookie_client, session):
     p = create_profile(session, name="workspace-debounce-ui", fs_read=[], fs_write=[],
                        allowed_tools=[], denied_tools=[], network_mode="off",
                        network_allowlist=[], secret_keys=[], default_model=None)
     create_ticket(session, title="workspace ticket", prompt="hi",
-                  priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+                  priority=0, profile_id=p.id, source_path="/tmp", run_now=False)
 
     r = await cookie_client.get("/")
 
@@ -131,7 +160,7 @@ async def test_linked_workspace_ui_has_git_specific_controls(cookie_client, sess
                        allowed_tools=[], denied_tools=[], network_mode="off",
                        network_allowlist=[], secret_keys=[], default_model=None)
     create_ticket(session, title="workspace ticket", prompt="hi",
-                  priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+                  priority=0, profile_id=p.id, source_path="/tmp", run_now=False)
 
     r = await cookie_client.get("/")
 
@@ -233,7 +262,7 @@ async def test_run_now_htmx_returns_204_and_queues_draft(cookie_client, session)
     )
     t = create_ticket(
         session, title="rn", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False,
+        source_path="/tmp", run_now=False,
     )
     assert t.status == "draft"
 
@@ -266,7 +295,7 @@ async def test_run_now_non_htmx_falls_back_to_303(cookie_client, session):
     )
     t = create_ticket(
         session, title="rn", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False,
+        source_path="/tmp", run_now=False,
     )
     r = await cookie_client.post(
         f"/tickets/{t.id}/run-now",
@@ -295,7 +324,7 @@ async def test_run_now_on_running_returns_409(cookie_client, session):
     )
     t = create_ticket(
         session, title="rn", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False, status="running",
+        source_path="/tmp", run_now=False, status="running",
     )
     r = await cookie_client.post(
         f"/tickets/{t.id}/run-now",
@@ -323,7 +352,7 @@ async def test_archive_htmx_returns_204_and_transitions(cookie_client, session):
     )
     t = create_ticket(
         session, title="arch", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False, status="review",
+        source_path="/tmp", run_now=False, status="review",
     )
 
     r = await cookie_client.post(
@@ -353,7 +382,7 @@ async def test_archive_non_htmx_falls_back_to_303(cookie_client, session):
     )
     t = create_ticket(
         session, title="arch", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False, status="review",
+        source_path="/tmp", run_now=False, status="review",
     )
 
     r = await cookie_client.post(
@@ -383,7 +412,7 @@ async def test_archive_on_draft_returns_409(cookie_client, session):
     )
     t = create_ticket(
         session, title="arch", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False,  # default status='draft'
+        source_path="/tmp", run_now=False,  # default status='draft'
     )
 
     r = await cookie_client.post(
@@ -418,7 +447,7 @@ async def test_sidebar_review_pane_shows_archive_button(cookie_client, session):
     )
     t = create_ticket(
         session, title="rev", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False, status="review",
+        source_path="/tmp", run_now=False, status="review",
     )
 
     r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
@@ -444,7 +473,7 @@ async def test_sidebar_draft_pane_omits_archive_button(cookie_client, session):
     )
     t = create_ticket(
         session, title="dft", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False,  # default status='draft'
+        source_path="/tmp", run_now=False,  # default status='draft'
     )
 
     r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
@@ -469,7 +498,7 @@ async def test_board_archive_route_returns_sidebar_partial(cookie_client, sessio
     )
     t = create_ticket(
         session, title="rev2", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False, status="review",
+        source_path="/tmp", run_now=False, status="review",
     )
 
     r = await cookie_client.post(
@@ -505,7 +534,7 @@ async def test_board_archive_on_draft_returns_409(cookie_client, session):
     )
     t = create_ticket(
         session, title="d", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False,
+        source_path="/tmp", run_now=False,
     )
 
     r = await cookie_client.post(
@@ -533,7 +562,7 @@ async def test_detail_page_archive_button_uses_cookie_auth_route(
     )
     t = create_ticket(
         session, title="rev3", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False, status="review",
+        source_path="/tmp", run_now=False, status="review",
     )
     r = await cookie_client.get(f"/tickets/{t.id}")
     assert r.status_code == 200
@@ -564,7 +593,7 @@ async def test_detail_page_delete_button_uses_cookie_auth_route(
     )
     t = create_ticket(
         session, title="d", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False,
+        source_path="/tmp", run_now=False,
     )
     r = await cookie_client.get(f"/tickets/{t.id}")
     assert r.status_code == 200
@@ -588,7 +617,7 @@ async def test_run_now_on_queued_only_sets_flag(cookie_client, session):
     )
     t = create_ticket(
         session, title="rn", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False, status="queued",
+        source_path="/tmp", run_now=False, status="queued",
     )
     r = await cookie_client.post(
         f"/tickets/{t.id}/run-now",
@@ -614,7 +643,7 @@ def _running_ticket(session, name):
     )
     t = create_ticket(
         session, title="cnl", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False, status="queued",
+        source_path="/tmp", run_now=False, status="queued",
     )
     transition_status(session, t.id, "running")
     return t
@@ -676,7 +705,7 @@ async def test_board_cancel_on_non_running_returns_409(cookie_client, session):
     )
     t = create_ticket(
         session, title="d", prompt="", priority=0, profile_id=p.id,
-        cwd="/tmp", run_now=False,  # default status='draft'
+        source_path="/tmp", run_now=False,  # default status='draft'
     )
     r = await cookie_client.post(
         f"/board/tickets/{t.id}/cancel",

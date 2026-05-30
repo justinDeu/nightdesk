@@ -424,7 +424,7 @@ def seed(
     db_path: Path,
     transcript_root: Path,
     *,
-    cwd: str,
+    source_path: str,
 ) -> None:
     """Seed the demo database. Creates profiles, tickets, runs, transcripts."""
     engine = make_engine(db_path)
@@ -457,7 +457,7 @@ def seed(
                 prompt=spec["prompt"],
                 status=spec["status"],
                 profile_id=profile_id,
-                cwd=cwd,
+                source_path=source_path,
                 priority=idx % 3,
             )
 
@@ -469,7 +469,7 @@ def seed(
                 run = start_run(
                     session,
                     ticket_id=ticket.id,
-                    worktree_path=cwd,
+                    worktree_path=source_path,
                     transcript_path=trans_path,
                     pid=10_000 + idx,
                     host="demo-host",
@@ -572,14 +572,14 @@ def main() -> None:
     print(f"Running migrations against {db_path} ...")
     run_migrations(db_path)
 
-    # Determine cwd: prefer repo root, fall back to /tmp
-    cwd = str(Path(__file__).parent.parent.parent)
-    if not Path(cwd).is_dir():
-        cwd = "/tmp"
+    # Determine source path: prefer repo root, fall back to /tmp
+    source_path = str(Path(__file__).parent.parent.parent)
+    if not Path(source_path).is_dir():
+        source_path = "/tmp"
 
     # Seed
     print("Seeding demo data ...")
-    seed(db_path, transcript_root, cwd=cwd)
+    seed(db_path, transcript_root, source_path=source_path)
 
     # Print instructions
     print()

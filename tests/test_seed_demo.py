@@ -43,7 +43,7 @@ def test_all_five_statuses_present(demo_engine, demo_session, demo_transcript_ro
     seed_demo(
         db_path=Path(demo_engine.url.database),
         transcript_root=demo_transcript_root,
-        cwd=str(tmp_path),
+        source_path=str(tmp_path),
     )
     statuses = set(
         demo_session.execute(
@@ -57,7 +57,7 @@ def test_profiles_seeded(demo_engine, demo_session, demo_transcript_root, tmp_pa
     seed_demo(
         db_path=Path(demo_engine.url.database),
         transcript_root=demo_transcript_root,
-        cwd=str(tmp_path),
+        source_path=str(tmp_path),
     )
     names = set(
         demo_session.execute(
@@ -73,7 +73,7 @@ def test_running_ticket_has_unfinished_run(demo_engine, demo_session, demo_trans
     seed_demo(
         db_path=Path(demo_engine.url.database),
         transcript_root=demo_transcript_root,
-        cwd=str(tmp_path),
+        source_path=str(tmp_path),
     )
     # There should be at least one run with finished_at IS NULL
     unfinished = demo_session.execute(
@@ -97,7 +97,7 @@ def test_worker_heartbeat_for_running_ticket(demo_engine, demo_session, demo_tra
     seed_demo(
         db_path=Path(demo_engine.url.database),
         transcript_root=demo_transcript_root,
-        cwd=str(tmp_path),
+        source_path=str(tmp_path),
     )
     heartbeats = demo_session.execute(
         text("SELECT id FROM worker_heartbeat")
@@ -109,7 +109,7 @@ def test_transcripts_written_and_parseable(demo_engine, demo_session, demo_trans
     seed_demo(
         db_path=Path(demo_engine.url.database),
         transcript_root=demo_transcript_root,
-        cwd=str(tmp_path),
+        source_path=str(tmp_path),
     )
     runs = demo_session.execute(
         text("SELECT id, transcript_path FROM runs")
@@ -143,7 +143,7 @@ def test_transcript_has_rich_events(demo_engine, demo_session, demo_transcript_r
     seed_demo(
         db_path=Path(demo_engine.url.database),
         transcript_root=demo_transcript_root,
-        cwd=str(tmp_path),
+        source_path=str(tmp_path),
     )
 
     # Find a success transcript (review_success or archived_success)
@@ -182,7 +182,7 @@ def test_failed_run_has_worker_error(demo_engine, demo_session, demo_transcript_
     seed_demo(
         db_path=Path(demo_engine.url.database),
         transcript_root=demo_transcript_root,
-        cwd=str(tmp_path),
+        source_path=str(tmp_path),
     )
 
     failed_runs = demo_session.execute(
@@ -209,7 +209,7 @@ def test_cancelled_run_has_cancelled_event(demo_engine, demo_session, demo_trans
     seed_demo(
         db_path=Path(demo_engine.url.database),
         transcript_root=demo_transcript_root,
-        cwd=str(tmp_path),
+        source_path=str(tmp_path),
     )
 
     cancelled_runs = demo_session.execute(
@@ -237,7 +237,7 @@ def test_fts_populated(demo_engine, demo_session, demo_transcript_root, tmp_path
     seed_demo(
         db_path=Path(demo_engine.url.database),
         transcript_root=demo_transcript_root,
-        cwd=str(tmp_path),
+        source_path=str(tmp_path),
     )
 
     # Search for "dark mode" (matches the draft ticket "Add dark mode toggle")
@@ -258,12 +258,12 @@ def test_fts_populated(demo_engine, demo_session, demo_transcript_root, tmp_path
 def test_idempotent_second_run(demo_engine, demo_session, demo_transcript_root, tmp_path):
     """Running seed twice should not crash (profiles are idempotent, tickets accumulate)."""
     db_path = Path(demo_engine.url.database)
-    seed_demo(db_path=db_path, transcript_root=demo_transcript_root, cwd=str(tmp_path))
+    seed_demo(db_path=db_path, transcript_root=demo_transcript_root, source_path=str(tmp_path))
     first_count = demo_session.execute(
         text("SELECT COUNT(*) FROM tickets")
     ).scalar()
 
-    seed_demo(db_path=db_path, transcript_root=demo_transcript_root, cwd=str(tmp_path))
+    seed_demo(db_path=db_path, transcript_root=demo_transcript_root, source_path=str(tmp_path))
     second_count = demo_session.execute(
         text("SELECT COUNT(*) FROM tickets")
     ).scalar()

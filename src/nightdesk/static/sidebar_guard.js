@@ -1,7 +1,7 @@
 // Sidebar view/edit pane swap + dirty-state navigation guard.
 //
 // Edit mode renders two panes in the sidebar:
-//   * data-sidebar-view  — readonly summary (title, prompt, cwd, workspace,
+//   * data-sidebar-view  — readonly summary (title, prompt, source path, workspace,
 //                          actions). Visible by default.
 //   * data-sidebar-form-pane (also has data-sidebar-form) — the full form,
 //                          initially `hidden`. Clicking Edit shows it and

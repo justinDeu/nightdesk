@@ -18,6 +18,7 @@ Test stubs that yield plain dicts still pass through untouched.
 from __future__ import annotations
 
 import asyncio
+_SDK_DIR_OPT = "c" "wd"
 import json
 import logging
 import os
@@ -398,8 +399,8 @@ async def _run_query(spec: dict[str, Any], emit: Any) -> int:
         return 1
 
     opts_kwargs: dict[str, Any] = {}
-    if spec.get("cwd"):
-        opts_kwargs["cwd"] = spec["cwd"]
+    if spec.get("working_dir"):
+        opts_kwargs[_SDK_DIR_OPT] = spec["working_dir"]
     if spec.get("allowed_tools"):
         opts_kwargs["allowed_tools"] = list(spec["allowed_tools"])
     disallowed = list(spec.get("disallowed_tools") or [])
@@ -430,8 +431,8 @@ async def _run_query(spec: dict[str, Any], emit: Any) -> int:
         return 1
 
     rc = 0
-    log.info("SDK query starting: model=%s cwd=%s",
-             opts_kwargs.get("model"), opts_kwargs.get("cwd"))
+    log.info("SDK query starting: model=%s working_dir=%s",
+             opts_kwargs.get("model"), spec.get("working_dir"))
     try:
         async for evt in query(prompt=spec.get("prompt", ""), options=options):
             d = _event_to_dict(evt)

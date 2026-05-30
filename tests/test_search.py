@@ -28,7 +28,6 @@ def _seed_ticket(session, *, tid, title, prompt="", status="draft"):
     t = Ticket(
         id=tid, title=title, prompt=prompt,
         status=status, priority=0, position=0, profile_id=_profile_id(session),
-        additional_dirs=[], cwd="/tmp", run_now=False,
     )
     session.add(t)
     session.commit()

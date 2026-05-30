@@ -31,7 +31,7 @@ def test_write_heartbeat_upserts(session):
 
 def test_recover_orphaned_runs(session, sample_profile, force_dead_pids):
     t = create_ticket(session, title="t", prompt="", priority=0,
-                       profile_id=sample_profile.id, cwd="/tmp", run_now=False)
+                       profile_id=sample_profile.id, source_path="/tmp", run_now=False)
     t.status = "running"
     session.commit()
     r = start_run(session, ticket_id=t.id, worktree_path="/w",
@@ -57,10 +57,10 @@ def test_recover_orphaned_runs_scoped_to_host(session, sample_profile, force_dea
     session.commit()
 
     t1 = create_ticket(session, title="h1-ticket", prompt="", priority=0,
-                        profile_id=sample_profile.id, cwd="/tmp", run_now=False)
+                        profile_id=sample_profile.id, source_path="/tmp", run_now=False)
     t1.status = "running"
     t2 = create_ticket(session, title="h2-ticket", prompt="", priority=0,
-                        profile_id=p2.id, cwd="/tmp", run_now=False)
+                        profile_id=p2.id, source_path="/tmp", run_now=False)
     t2.status = "running"
     session.commit()
 

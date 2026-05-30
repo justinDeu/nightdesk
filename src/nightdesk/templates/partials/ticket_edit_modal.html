@@ -18,14 +18,15 @@
 #}
 {% set _mid = modal_id or 'ticket-edit-modal' %}
 {% set _is_edit = ticket is defined and ticket %}
-{% set _linked_workspaces = (ticket.workspaces|selectattr('role', 'equalto', 'linked')|list if _is_edit and ticket.workspaces else []) %}
-{% set _primary_ws = (ticket.workspaces | selectattr('role', 'equalto', 'primary') | first) if _is_edit and ticket.workspaces else none %}
 {% set _projects = projects if projects is defined else [] %}
 {% set _selected_project = selected_project if selected_project is defined else none %}
+{% set _create_linked_workspaces = ((_selected_project.default_linked_workspaces or []) if (not _is_edit and _selected_project and _selected_project.default_linked_workspaces) else []) %}
+{% set _linked_workspaces = (ticket.workspaces|selectattr('role', 'equalto', 'linked')|list if _is_edit and ticket.workspaces else _create_linked_workspaces) %}
+{% set _primary_ws = (ticket.workspaces | selectattr('role', 'equalto', 'primary') | first) if _is_edit and ticket.workspaces else none %}
 {% set _project_id = ticket.project_id if _is_edit and ticket.project_id else (_selected_project.id if _selected_project else '') %}
 {% set _create_mode = (_selected_project.default_workspace_mode if _selected_project and _selected_project.default_workspace_mode else 'directory') %}
 {% set _create_use_worktree = _create_mode in ['git_worktree', 'worktree'] %}
-{% set _use_worktree = ((ticket.workspace_mode in ['git_worktree', 'worktree']) if _is_edit and ticket.workspace_mode else _create_use_worktree) %}
+{% set _use_worktree = ((_primary_ws.kind in ['git_worktree', 'worktree']) if _primary_ws else _create_use_worktree) %}
 {% set _form_action = ('/board/tickets/' ~ ticket.id) if _is_edit else '/board/tickets' %}
 
 <dialog id="{{ _mid }}"
@@ -43,6 +44,7 @@
         hx-on::after-request="if (event.detail.successful) { document.getElementById('{{ _mid }}').close(); window.location.reload(); }"
         {% endif %}
         data-ticket-form
+        data-ticket-mode="{{ 'edit' if _is_edit else 'create' }}"
         class="flex flex-col max-h-[92vh]">
 
     {# Sticky header so Save / Cancel stay visible while scrolling. #}
@@ -65,6 +67,7 @@
       <label class="flex flex-col gap-1 text-sm">
         <span class="text-fg-muted text-xs uppercase tracking-wide">Title</span>
         <input name="title" required value="{{ ticket.title if _is_edit else '' }}"
+               data-title-input
                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none" />
       </label>
 
@@ -88,12 +91,34 @@
       <label class="flex flex-col gap-1 text-sm">
         <span class="text-fg-muted text-xs uppercase tracking-wide">Project</span>
         <select name="project_id"
+                data-project-select
+                onchange="window.ndProjectChanged(this)"
                 class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
           <option value="" {% if not _project_id %}selected{% endif %}>No project</option>
           {% for p in _projects %}
             <option value="{{ p.id }}" {% if _project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
           {% endfor %}
         </select>
+        {% if not _is_edit %}
+        <div class="mt-1 flex justify-end">
+          <button type="button"
+                  onclick="window.ndResetProjectWorkspaceDefaults(this)"
+                  class="rounded border border-border px-2 py-1 text-[11px] text-fg-muted hover:border-accent hover:text-fg">
+            Copy project workspaces again
+          </button>
+        </div>
+        {% endif %}
+        <script type="application/json" data-project-workspace-defaults>{
+          {% for p in _projects %}
+          {{ p.id | tojson }}: {
+            "source_path": {{ p.source_path | tojson }},
+            "default_workspace_mode": {{ p.default_workspace_mode | tojson }},
+            "default_worktree_name_template": {{ p.default_worktree_name_template | tojson }},
+            "default_base_ref": {{ p.default_base_ref | tojson }},
+            "default_linked_workspaces": {{ (p.default_linked_workspaces or []) | tojson }}
+          }{{ "," if not loop.last }}
+          {% endfor %}
+        }</script>
       </label>
 
       {# --- Dependencies -------------------------------------------------- #
@@ -139,7 +164,7 @@
 
       {# --- Workspaces ---------------------------------------------------- #
        # Primary + linked rows in one unified list. Primary is the row the
-       # agent runs in (its path is the ticket's cwd; its kind controls the
+       # agent runs in (its path is the ticket's source path; its kind controls the
        # use_worktree flag). The shape mirrors a linked row so the user
        # doesn't have to learn two different layouts for the same concept.
        #}
@@ -154,26 +179,26 @@
                   class="shrink-0 rounded border border-border px-2 py-1 text-xs text-accent hover:border-accent hover:bg-bg">+ Add</button>
         </div>
 
-        {# --- Primary workspace row (== cwd + worktree opts) ------------- #}
+        {# --- Primary workspace row (== source path + worktree opts) ------------- #}
         <div class="rounded-md border border-accent/40 bg-bg-elev-2 p-2 space-y-2 mb-2">
           <div class="flex items-center justify-between gap-2">
             <span class="rounded-full border border-accent/40 bg-accent/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">primary · agent runs here</span>
           </div>
           <div class="relative">
-            <input id="{{ _mid }}-cwd"
-                   name="cwd"
-                   data-cwd-input
+            <input id="{{ _mid }}-source-path"
+                   name="source_path"
+                   data-source-path-input
                    required
                    autocomplete="off"
                    spellcheck="false"
                    placeholder="/home/you/project"
-                   value="{{ ticket.cwd if _is_edit and ticket.cwd else (_selected_project.cwd if _selected_project else '') }}"
-                   oninput="window.ndPathSuggest(this, '{{ _mid }}-cwd-suggest')"
-                   onfocus="window.ndPathSuggest(this, '{{ _mid }}-cwd-suggest')"
-                   onblur="window.ndPathSuggestClose('{{ _mid }}-cwd-suggest')"
-                   onkeydown="window.ndPathSuggestKey(event, this, '{{ _mid }}-cwd-suggest')"
+                   value="{{ _primary_ws.source_path if _primary_ws and _primary_ws.source_path else (_selected_project.source_path if _selected_project else '') }}"
+                   oninput="window.ndPathSuggest(this, '{{ _mid }}-source-path-suggest')"
+                   onfocus="window.ndPathSuggest(this, '{{ _mid }}-source-path-suggest')"
+                   onblur="window.ndPathSuggestClose('{{ _mid }}-source-path-suggest')"
+                   onkeydown="window.ndPathSuggestKey(event, this, '{{ _mid }}-source-path-suggest')"
                    class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
-            <div id="{{ _mid }}-cwd-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
+            <div id="{{ _mid }}-source-path-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <label class="flex flex-col gap-1">

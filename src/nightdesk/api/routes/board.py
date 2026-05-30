@@ -72,20 +72,13 @@ def _parse_additional_dirs(values: list[str] | None) -> list[dict]:
     return out
 
 
-def _normalize_cwd(raw: Optional[str]) -> str:
-    """Normalize a cwd form value to an absolute path.
-
-    Expands a leading ``~`` so paths picked from the autocomplete dropdown
-    (which preserves the tilde token for display) round-trip through the
-    server. Empty or non-absolute values are rejected with 422 — the
-    previous silent ``None`` return made the sidebar look like it had
-    saved while actually clearing the field.
-    """
+def _normalize_source_path(raw: Optional[str]) -> str:
+    """Normalize a source path form value to an absolute path."""
     if raw is None or not raw.strip():
-        raise HTTPException(422, "cwd is required")
+        raise HTTPException(422, "source_path is required")
     p = os.path.expanduser(raw.strip())
     if not p.startswith("/"):
-        raise HTTPException(422, "cwd must be an absolute path")
+        raise HTTPException(422, "source_path must be an absolute path")
     return p
 
 
@@ -114,7 +107,7 @@ def _optional_abs_path(raw: object) -> Optional[str]:
 
 
 def _workspace_payload_from_form(form) -> tuple[str, Optional[str], Optional[str], list[dict]]:
-    cwd = _normalize_cwd(form.get("cwd"))
+    source_path = _normalize_source_path(form.get("source_path") or form.get("primary_source_path"))
     mode = "git_worktree" if form.get("use_worktree") else "directory"
     worktree_name = (form.get("worktree_name") or "").strip() or None
     worktree_path = _optional_abs_path(form.get("worktree_path"))
@@ -124,7 +117,7 @@ def _workspace_payload_from_form(form) -> tuple[str, Optional[str], Optional[str
         "label": "primary",
         "kind": mode,
         "access": "read_write",
-        "source_path": cwd,
+        "source_path": source_path,
         "worktree_name": worktree_name,
         "worktree_path": worktree_path,
         "base_ref": base_ref,
@@ -173,10 +166,10 @@ def _safe_preview_name(name: Optional[str]) -> str:
     return safe.strip(".-_") or "ticket-worktree"
 
 
-def _git_value(cwd: Path, *args: str) -> Optional[str]:
+def _git_value(source_dir: Path, *args: str) -> Optional[str]:
     try:
         result = subprocess.run(
-            ["git", "-C", str(cwd), *args],
+            ["git", "-C", str(source_dir), *args],
             check=True,
             capture_output=True,
             text=True,
@@ -186,11 +179,10 @@ def _git_value(cwd: Path, *args: str) -> Optional[str]:
     return result.stdout.strip() or None
 
 
+def _base_ref_status(source_path: str, base_ref: Optional[str]) -> Optional[str]:
+    """Return whether ``base_ref`` resolves to a commit in the repo at ``source_path``.
 
-def _base_ref_status(cwd: str, base_ref: Optional[str]) -> Optional[str]:
-    """Return whether ``base_ref`` resolves to a commit in the repo at ``cwd``.
-
-    - ``None``  -> nothing to check (no base_ref, or cwd not a usable git dir).
+    - ``None``  -> nothing to check (no base_ref, or source_path not a usable git dir).
     - ``"ok"``  -> the ref resolves to a commit; the worktree branch can start there.
     - ``"missing"`` -> the ref does not resolve. The "branch is gone" case the
       UI must warn about: ``git worktree add ... <base_ref>`` would fail at run
@@ -201,7 +193,7 @@ def _base_ref_status(cwd: str, base_ref: Optional[str]) -> Optional[str]:
     if not ref:
         return None
     try:
-        source = Path(os.path.expanduser(cwd.strip())).resolve()
+        source = Path(os.path.expanduser(source_path.strip())).resolve()
     except Exception:
         return None
     # Confirm this is actually a git working area before judging the ref.
@@ -224,12 +216,12 @@ def _is_bare_container(path: Path) -> bool:
     return _git_value(bare, "rev-parse", "--is-bare-repository") == "true"
 
 
-def _preview_worktree_path(*, cwd: str, name: Optional[str],
+def _preview_worktree_path(*, source_path: str, name: Optional[str],
                            custom_path: Optional[str],
                            worktree_root: Path) -> tuple[Path, str]:
     if custom_path and custom_path.strip():
         return Path(os.path.expanduser(custom_path.strip())), "custom path"
-    source = Path(os.path.expanduser(cwd.strip())).resolve()
+    source = Path(os.path.expanduser(source_path.strip())).resolve()
     wt_name = _safe_preview_name(name)
     if _is_bare_container(source):
         return source / wt_name, "bare-container layout"
@@ -337,19 +329,19 @@ def build_router(
 
     @router.get("/board/worktree-preview", response_class=HTMLResponse, dependencies=[auth])
     async def worktree_preview(
-        cwd: str = "",
+        source_path: str = "",
         name: Optional[str] = None,
         path: Optional[str] = None,
         base_ref: Optional[str] = None,
         format: str = "html",
     ):
-        if not cwd.strip() and not (path and path.strip()):
+        if not source_path.strip() and not (path and path.strip()):
             return HTMLResponse(
-                '<span class="text-fg-muted">Enable worktree and choose a working dir.</span>'
+                '<span class="text-fg-muted">Enable worktree and choose a source path.</span>'
             )
         try:
             preview_path, source = _preview_worktree_path(
-                cwd=cwd or "/",
+                source_path=source_path or "/",
                 name=name,
                 custom_path=path,
                 worktree_root=worktree_root,
@@ -359,7 +351,7 @@ def build_router(
                 '<span class="text-warn">Preview unavailable until the path is valid.</span>'
             )
         ref = (base_ref or "").strip()
-        ref_status = _base_ref_status(cwd, ref) if cwd.strip() else None
+        ref_status = _base_ref_status(source_path, ref) if source_path.strip() else None
         if format == "json":
             payload: dict = {"path": str(preview_path), "source": source}
             # Only attach base-ref fields when a ref was supplied so callers
@@ -533,10 +525,6 @@ def build_router(
                 prompt=(form.get("prompt") or ""),
                 profile_id=profile_id,
                 project_id=project_id,
-                cwd=_normalize_cwd(form.get("cwd")),
-                workspace_mode=workspace_mode,
-                worktree_name=worktree_name,
-                worktree_path=worktree_path,
                 workspaces=workspaces,
                 additional_dirs=_parse_additional_dirs(form.getlist("additional_dirs")),
             )
@@ -587,16 +575,14 @@ def build_router(
             fields["prompt"] = form.get("prompt") or ""
         if "project_id" in form:
             fields["project_id"] = (form.get("project_id") or "").strip() or None
-        if "cwd" in form:
-            fields["cwd"] = _normalize_cwd(form.get("cwd"))
+        if "source_path" in form or "primary_source_path" in form:
             if form.get("workspace_form") == "1":
                 workspace_mode, worktree_name, worktree_path, workspaces = _workspace_payload_from_form(form)
-                fields["workspace_mode"] = workspace_mode
-                fields["worktree_name"] = worktree_name
-                fields["worktree_path"] = worktree_path
                 fields["workspaces"] = workspaces
                 if "additional_dirs" in form:
                     fields["additional_dirs"] = _parse_additional_dirs(form.getlist("additional_dirs"))
+            else:
+                fields["source_path"] = _normalize_source_path(form.get("source_path"))
         try:
             update_ticket(session, tid, **fields)
         except TicketNotFound:

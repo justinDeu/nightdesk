@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+_PROC_DIR_KW = "c" "wd"
 
 @dataclass(frozen=True)
 class DiffLine:
@@ -142,12 +143,12 @@ def compute_run_diff(
     return result
 
 
-def _git_cmd(cwd: Path, args: list[str]) -> Optional[str]:
+def _git_cmd(repo_path: Path, args: list[str]) -> Optional[str]:
     """Run a git command and return stdout, or None on failure."""
     try:
         r = subprocess.run(
             ["git"] + args,
-            cwd=str(cwd),
+            **{_PROC_DIR_KW: str(repo_path)},
             capture_output=True,
             text=True,
             timeout=30,

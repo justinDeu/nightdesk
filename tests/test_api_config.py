@@ -94,8 +94,7 @@ async def test_worker_status_counts_running_with_overflow(client, session):
         tid = f"tk{idx}"
         t = Ticket(id=tid, title=f"t{idx}", prompt="",
                     status="running", priority=0, position=idx, profile_id=p.id,
-                    permission_overrides=None, additional_dirs=[],
-                    cwd="/tmp", run_now=False)
+                    permission_overrides=None, additional_dirs=[], run_now=False)
         session.add(t); session.commit()
         r = Run(id=f"r{idx}", ticket_id=tid,
                  started_at=datetime.now(timezone.utc),
@@ -243,7 +242,7 @@ async def test_worker_status_reports_day_spend(client, session):
                 secret_keys=[])
     session.add(p); session.commit()
     t = Ticket(id="tb", title="t", prompt="", status="review", priority=0,
-               profile_id=p.id, cwd="/tmp")
+               profile_id=p.id)
     session.add(t); session.commit()
     r = Run(id="rb", ticket_id="tb", started_at=datetime.now(timezone.utc),
             finished_at=datetime.now(timezone.utc), exit_status="success",

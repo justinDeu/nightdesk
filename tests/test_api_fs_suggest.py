@@ -119,7 +119,7 @@ def test_absolute_path_unchanged_when_no_tilde(sample_tree: Path) -> None:
 async def test_html_partial_round_trip(client, sample_tree, monkeypatch):
     """The HTMX-driven HTML endpoint returns suggestion markup."""
     monkeypatch.setenv("HOME", str(sample_tree))
-    r = await client.get("/fs/suggest", params={"q": "~/", "target": "cwd-input"})
+    r = await client.get("/fs/suggest", params={"q": "~/", "target": "source-path-input"})
     assert r.status_code == 200
     body = r.text
     assert "data-suggest-value=\"~/alpha/\"" in body

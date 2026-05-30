@@ -48,14 +48,14 @@ curl -s "${AUTH[@]}" "$BASE/api/v1/profiles" | jq '.[] | {id, name}'
 
 | mode | when to use |
 |---|---|
-| `git_worktree` | **Default for any ticket involving code changes.** Gives the agent an isolated git worktree branched from `cwd`. |
+| `git_worktree` | **Default for any ticket involving code changes.** Gives the agent an isolated git worktree branched from the primary source path. |
 | `directory` | Tickets that only read files, run queries, or operate on non-git directories. |
 
 If unsure, ask the user. When using `git_worktree`, suggest a `worktree_name` derived from the ticket title (e.g. a ticket titled "Fix login bug" → `fix/login-bug`). Show the derived name to the user before creating the ticket.
 
-### 3. Working directory (`cwd`)
+### 3. Primary workspace source path
 
-`cwd` should be the repo root the agent operates in. Confirm it with the user or infer it from the current working directory. Never assume a path.
+`source_path` should be the repo root the agent operates in. Confirm it with the user or infer it from the current working directory. Never assume a path.
 
 ### 4. Quick checklist
 
@@ -63,20 +63,20 @@ Before sending the POST, confirm:
 
 - [ ] `profile_id` resolved (asked user if multiple profiles)
 - [ ] `workspace_mode` chosen (`git_worktree` for code changes, `directory` otherwise)
-- [ ] `cwd` confirmed with user or inferred from `$PWD`
+- [ ] `source_path` confirmed with user or inferred from `$PWD`
 - [ ] `worktree_name` derived from title and shown to user (when using `git_worktree`)
 
 ## Create a ticket
 
-Required: `title`, `profile_id`, `cwd`. `cwd` is validated as a non-empty string and normalized to an absolute path. New tickets default to `status="draft"`.
+Required: `title`, `profile_id`, `source_path`. `source_path` is validated as a non-empty string and normalized to an absolute path. New tickets default to `status="draft"`.
 
 `workspace_mode` controls how the agent's working directory is set up (see "Before creating a ticket" for selection guidance):
 
 | mode | behavior |
 |---|---|
-| `directory` | agent runs in `cwd` as a plain directory |
-| `in_place` | agent runs directly in `cwd` (legacy alias for directory) |
-| `git_worktree` | agent gets an isolated git worktree branched from `cwd` |
+| `directory` | agent runs in `source_path` as a plain directory |
+| `in_place` | agent runs directly in `source_path` (legacy alias for directory) |
+| `git_worktree` | agent gets an isolated git worktree branched from `source_path` |
 | `worktree` | reserved; not yet fully implemented |
 
 When using `git_worktree`, pair with `worktree_name` (e.g. `fix/my-feature`) — the server generates one if omitted, but an explicit name is clearer.
@@ -90,7 +90,7 @@ curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
     "title": "...",
     "prompt": "...",
     "profile_id": "<uuid>",
-    "cwd": "/home/thor/fun/nightdesk",
+    "source_path": "/home/thor/fun/nightdesk",
     "workspace_mode": "directory"
   }' | jq '{id, title, status}'
 ```
@@ -107,7 +107,7 @@ cat > /tmp/ticket.json <<'JSON'
 }
 JSON
 
-# 2. Inject profile_id, cwd, and any other fields with Python.
+# 2. Inject profile_id, source_path, and any other fields with Python.
 #    Do NOT use `jq --arg` or `jq '. + {...}'` for this merge — jq chokes on
 #    prompts containing backticks, em-dashes, or other non-ASCII characters
 #    and returns "Invalid numeric literal" without a useful error. Python is
@@ -117,7 +117,7 @@ import json
 with open('/tmp/ticket.json') as f:
     t = json.load(f)
 t['profile_id'] = '<uuid>'
-t['cwd'] = '/home/thor/fun/nightdesk'
+t['source_path'] = '/home/thor/fun/nightdesk'
 t['workspace_mode'] = 'git_worktree'
 t['worktree_name'] = 'fix/my-feature'
 with open('/tmp/ticket.full.json', 'w') as f:
@@ -134,7 +134,7 @@ JSON requires real `\n` escapes inside string values — literal newlines in the
 
 ## Workspaces (multi-workspace tickets)
 
-Tickets support an optional `workspaces` list for exposing additional directories or worktrees to the agent alongside the primary `cwd`. Each entry is a `TicketWorkspaceIn` object:
+Tickets support an optional `workspaces` list for exposing additional directories or worktrees to the agent alongside the primary source path. Each entry is a `TicketWorkspaceIn` object:
 
 | field | type | description |
 |---|---|---|
@@ -166,7 +166,7 @@ cat > /tmp/ticket.json <<'JSON'
   ]
 }
 JSON
-jq '. + {profile_id: "<uuid>", cwd: "/home/thor/fun/nightdesk"}' \
+jq '. + {profile_id: "<uuid>", source_path: "/home/thor/fun/nightdesk"}' \
   /tmp/ticket.json > /tmp/ticket.full.json
 curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
   -X POST "$BASE/api/v1/tickets" --data @/tmp/ticket.full.json | jq '{id, title, status}'

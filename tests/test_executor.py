@@ -11,7 +11,7 @@ async def test_dummy_executor_writes_transcript_and_returns_success(tmp_path):
     req = ExecutionRequest(
         ticket_id="t1",
         prompt="say hi",
-        cwd=tmp_path,
+        working_dir=tmp_path,
         transcript_path=transcript,
         bwrap_argv=["bwrap", "echo", "hi"],
         env={},
@@ -27,7 +27,7 @@ async def test_shell_executor_runs_real_command(tmp_path):
     req = ExecutionRequest(
         ticket_id="t1",
         prompt="ignored",
-        cwd=tmp_path,
+        working_dir=tmp_path,
         transcript_path=transcript,
         bwrap_argv=["sh", "-c", "echo hello"],
         env={},

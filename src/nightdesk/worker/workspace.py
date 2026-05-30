@@ -17,8 +17,8 @@ class WorkspaceError(Exception):
 
     The worker catches this in run_one, transitions the ticket to 'review',
     and (when a run row already exists) appends a ``worker_error`` event to
-    the run's transcript so the user can see what's wrong (missing cwd,
-    cwd doesn't exist, unsupported mode, etc.).
+    the run's transcript so the user can see what's wrong (missing source path,
+    invalid source path, unsupported mode, etc.).
     """
 
 
@@ -71,9 +71,9 @@ class WorkspaceBundle:
         return [w for w in self.workspaces if w.access == "read_only"]
 
 
-def _run_git(cwd: Path, *args: str) -> str:
-    cmd_args = ["git", "-C", str(cwd), *args]
-    log.debug("git %s (cwd=%s)", " ".join(args), cwd)
+def _run_git(source_dir: Path, *args: str) -> str:
+    cmd_args = ["git", "-C", str(source_dir), *args]
+    log.debug("git %s (source_dir=%s)", " ".join(args), source_dir)
     try:
         result = subprocess.run(
             cmd_args,
@@ -84,25 +84,23 @@ def _run_git(cwd: Path, *args: str) -> str:
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
         detail = f": {stderr}" if stderr else ""
-        log.error("git %s failed for %s%s", " ".join(args), cwd, detail)
-        raise WorkspaceError(f"git {' '.join(args)} failed for {cwd}{detail}") from exc
+        log.error("git %s failed for %s%s", " ".join(args), source_dir, detail)
+        raise WorkspaceError(f"git {' '.join(args)} failed for {source_dir}{detail}") from exc
     return result.stdout.strip()
 
-
-def _git_ref_exists(cwd: Path, ref: str) -> bool:
+def _git_ref_exists(source_dir: Path, ref: str) -> bool:
     result = subprocess.run(
-        ["git", "-C", str(cwd), "show-ref", "--verify", "--quiet", ref],
+        ["git", "-C", str(source_dir), "show-ref", "--verify", "--quiet", ref],
         check=False,
         capture_output=True,
         text=True,
     )
     return result.returncode == 0
 
-
-def _resolve_git_path(cwd: Path, raw: str) -> Path:
+def _resolve_git_path(source_dir: Path, raw: str) -> Path:
     path = Path(raw)
     if not path.is_absolute():
-        path = cwd / path
+        path = source_dir / path
     return path.resolve()
 
 
@@ -135,9 +133,9 @@ class GitSource:
     bare_container: bool = False
 
 
-def _bare_container_source(cwd: Path) -> Optional[GitSource]:
-    bare = cwd / ".bare"
-    git_file = cwd / ".git"
+def _bare_container_source(source_dir: Path) -> Optional[GitSource]:
+    bare = source_dir / ".bare"
+    git_file = source_dir / ".git"
     if not bare.is_dir() or not git_file.is_file():
         return None
     try:
@@ -153,7 +151,7 @@ def _bare_container_source(cwd: Path) -> Optional[GitSource]:
     except WorkspaceError:
         return None
     return GitSource(
-        repo_root=cwd,
+        repo_root=source_dir,
         git_common_dir=bare.resolve(),
         command_dir=bare.resolve(),
         relative_path=Path("."),
@@ -161,18 +159,17 @@ def _bare_container_source(cwd: Path) -> Optional[GitSource]:
         bare_container=True,
     )
 
-
-def _git_source(cwd: Path) -> GitSource:
-    bare_source = _bare_container_source(cwd)
+def _git_source(source_dir: Path) -> GitSource:
+    bare_source = _bare_container_source(source_dir)
     if bare_source is not None:
         return bare_source
-    repo_root = Path(_run_git(cwd, "rev-parse", "--show-toplevel")).resolve()
-    git_common = _resolve_git_path(cwd, _run_git(cwd, "rev-parse", "--git-common-dir"))
-    base_sha = _run_git(cwd, "rev-parse", "HEAD")
+    repo_root = Path(_run_git(source_dir, "rev-parse", "--show-toplevel")).resolve()
+    git_common = _resolve_git_path(source_dir, _run_git(source_dir, "rev-parse", "--git-common-dir"))
+    base_sha = _run_git(source_dir, "rev-parse", "HEAD")
     try:
-        relative = cwd.resolve().relative_to(repo_root)
+        relative = source_dir.resolve().relative_to(repo_root)
     except ValueError as exc:
-        raise WorkspaceError(f"ticket cwd is not inside git repo root: {cwd}") from exc
+        raise WorkspaceError(f"workspace source path is not inside git repo root: {source_dir}") from exc
     return GitSource(
         repo_root=repo_root,
         git_common_dir=git_common,
@@ -228,19 +225,19 @@ def _allocate_fresh_worktree_slot(*, root: Path, source: GitSource, base_name: s
         return candidate_name, candidate_target, branch_name
     raise WorkspaceError("could not allocate a fresh worktree path")
 
-def _create_git_worktree(*, ticket_id: str, root: Path, cwd: Path,
+def _create_git_worktree(*, ticket_id: str, root: Path, source_dir: Path,
                          worktree_name: Optional[str],
                          explicit_path: Optional[str],
                          branch: Optional[str], base_ref: Optional[str],
                          reuse_existing: bool = False,
                          fresh_if_exists: bool = False) -> Workspace:
-    source = _git_source(cwd)
+    source = _git_source(source_dir)
     repo_root = source.repo_root
     git_common_dir = source.git_common_dir
     relative = source.relative_path
 
-    log.info("creating git worktree for ticket %s: cwd=%s repo=%s",
-             ticket_id, cwd, repo_root)
+    log.info("creating git worktree for ticket %s: source_dir=%s repo=%s",
+             ticket_id, source_dir, repo_root)
 
     # Slash-style names (e.g. "fix/tui-status") are valid git branch names but
     # not valid filesystem directory names. Treat them as the intended branch
@@ -269,12 +266,12 @@ def _create_git_worktree(*, ticket_id: str, root: Path, cwd: Path,
             log.info("reusing existing worktree at %s for ticket %s", target, ticket_id)
             run_path = target / relative
             if not run_path.exists() or not run_path.is_dir():
-                raise WorkspaceError(f"resolved worktree cwd does not exist: {run_path}")
+                raise WorkspaceError(f"resolved worktree path does not exist: {run_path}")
             branch_name = branch or _run_git(target, "rev-parse", "--abbrev-ref", "HEAD")
             return Workspace(
                 path=run_path,
                 kind="git_worktree",
-                source_path=cwd,
+                source_path=source_dir,
                 repo_path=source.command_dir,
                 git_common_dir=git_common_dir,
                 relative_path=relative,
@@ -305,7 +302,7 @@ def _create_git_worktree(*, ticket_id: str, root: Path, cwd: Path,
 
     run_path = target / relative
     if not run_path.exists() or not run_path.is_dir():
-        log.error("resolved worktree cwd does not exist after checkout: %s (ticket %s)",
+        log.error("resolved worktree path does not exist after checkout: %s (ticket %s)",
                   run_path, ticket_id)
         subprocess.run(
             ["git", "-C", str(source.command_dir), "worktree", "remove", "--force", str(target)],
@@ -314,13 +311,13 @@ def _create_git_worktree(*, ticket_id: str, root: Path, cwd: Path,
         )
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
-        raise WorkspaceError(f"resolved worktree cwd does not exist: {run_path}")
+        raise WorkspaceError(f"resolved worktree path does not exist: {run_path}")
     log.info("git worktree created successfully for ticket %s: path=%s branch=%s",
              ticket_id, run_path, branch_name)
     return Workspace(
         path=run_path,
         kind="git_worktree",
-        source_path=cwd,
+        source_path=source_dir,
         repo_path=source.command_dir,
         git_common_dir=git_common_dir,
         relative_path=relative,
@@ -343,7 +340,7 @@ def prepare_workspace(
     *,
     ticket_id: str,
     root: Path,
-    cwd: Optional[Path],
+    source_path: Optional[Path],
     mode: str = "directory",
     worktree_name: Optional[str] = None,
     worktree_path: Optional[str] = None,
@@ -358,40 +355,40 @@ def prepare_workspace(
 ) -> Workspace:
     """Resolve the working directory the agent will run in.
 
-    directory: agent's cwd is ``cwd`` directly.
-    git_worktree: create a visible git worktree from ``cwd`` and run in the
-                  equivalent relative path inside the worktree.
+    directory: agent's working directory is ``source_path`` directly.
+    git_worktree: create a visible git worktree from ``source_path`` and run in
+                  the equivalent relative path inside the worktree.
     scratch: not supported yet.
     """
     kind = _normalize_kind(mode)
-    log.debug("prepare_workspace: ticket=%s cwd=%s mode=%s kind=%s",
-              ticket_id, cwd, mode, kind)
+    log.debug("prepare_workspace: ticket=%s source_path=%s mode=%s kind=%s",
+              ticket_id, source_path, mode, kind)
     if access not in {"read_write", "read_only"}:
         raise WorkspaceError(f"unknown workspace access: {access!r}")
 
     if kind == "scratch":
         raise WorkspaceError("workspace kind 'scratch' is not supported yet")
 
-    if cwd is None:
+    if source_path is None:
         raise WorkspaceError(
-            "ticket has no cwd. Set ticket.cwd to the directory the "
-            "agent should run in (the sidebar's Working dir input)."
+            "ticket has no primary workspace source_path. Set the primary "
+            "workspace source path to the directory the agent should run in."
         )
-    cwd = Path(str(cwd).strip()).expanduser().resolve()
-    if not cwd.exists():
-        raise WorkspaceError(f"ticket cwd does not exist: {cwd}")
-    if not cwd.is_dir():
-        raise WorkspaceError(f"ticket cwd is not a directory: {cwd}")
+    source_dir = Path(str(source_path).strip()).expanduser().resolve()
+    if not source_dir.exists():
+        raise WorkspaceError(f"workspace source path does not exist: {source_dir}")
+    if not source_dir.is_dir():
+        raise WorkspaceError(f"workspace source path is not a directory: {source_dir}")
 
     if kind == "directory":
-        return Workspace(path=cwd, kind="directory", role=role, label=label,
-                         access=access, source_path=cwd, retention=retention)
+        return Workspace(path=source_dir, kind="directory", role=role, label=label,
+                         access=access, source_path=source_dir, retention=retention)
 
     if kind == "git_worktree":
         ws = _create_git_worktree(
             ticket_id=ticket_id,
             root=root,
-            cwd=cwd,
+            source_dir=source_dir,
             worktree_name=worktree_name,
             explicit_path=worktree_path,
             branch=branch,
@@ -428,7 +425,7 @@ def prepare_workspace_bundle(*, ticket_id: str, root: Path,
             ws = prepare_workspace(
                 ticket_id=ticket_id,
                 root=root,
-                cwd=source,
+                source_path=source,
                 mode=spec.kind,
                 worktree_name=spec.worktree_name,
                 worktree_path=spec.worktree_path,

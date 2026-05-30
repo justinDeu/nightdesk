@@ -96,7 +96,7 @@ async def test_claude_executor_writes_transcript_and_final_summary(tmp_path):
         spec = PermissionSpec(allowed_tools=["Read", "Write"], denied_tools=["Bash"],
                               default_model="claude-sonnet-4-6")
         req = ExecutionRequest(
-            ticket_id="t1", prompt="hi", cwd=tmp_path,
+            ticket_id="t1", prompt="hi", working_dir=tmp_path,
             transcript_path=transcript,
             bwrap_argv=["bwrap", "--", "python", "-m", "nightdesk.worker._sdk_runner"],
             env={}, permission_spec=spec,
@@ -141,7 +141,7 @@ async def test_usage_model_taken_from_assistant_stream(tmp_path):
         # default_model unset (the common Claude case that produced "unknown").
         spec = PermissionSpec(allowed_tools=[], denied_tools=[], default_model=None)
         req = ExecutionRequest(
-            ticket_id="t1", prompt="hi", cwd=tmp_path,
+            ticket_id="t1", prompt="hi", working_dir=tmp_path,
             transcript_path=transcript,
             bwrap_argv=["bwrap", "--", "python", "-m", "nightdesk.worker._sdk_runner"],
             env={}, permission_spec=spec,
@@ -171,7 +171,7 @@ async def test_claude_executor_handles_oversized_json_line(tmp_path):
         from nightdesk.worker.claude_executor import ClaudeExecutor
         spec = PermissionSpec(allowed_tools=[], denied_tools=[], default_model=None)
         req = ExecutionRequest(
-            ticket_id="t1", prompt="hi", cwd=tmp_path,
+            ticket_id="t1", prompt="hi", working_dir=tmp_path,
             transcript_path=transcript,
             bwrap_argv=["bwrap", "--", "python", "-m", "nightdesk.worker._sdk_runner"],
             env={}, permission_spec=spec,
@@ -194,7 +194,7 @@ async def test_claude_executor_failed_when_runner_exits_nonzero(tmp_path):
     with patch("nightdesk.worker.claude_executor._spawn_sdk_subprocess", new=fake_spawn):
         from nightdesk.worker.claude_executor import ClaudeExecutor
         req = ExecutionRequest(
-            ticket_id="t1", prompt="hi", cwd=tmp_path, transcript_path=transcript,
+            ticket_id="t1", prompt="hi", working_dir=tmp_path, transcript_path=transcript,
             bwrap_argv=["bwrap"], env={},
             permission_spec=PermissionSpec(),
         )
@@ -216,7 +216,7 @@ async def test_claude_executor_cancelled_when_event_fires(tmp_path):
     with patch("nightdesk.worker.claude_executor._spawn_sdk_subprocess", new=fake_spawn):
         from nightdesk.worker.claude_executor import ClaudeExecutor
         req = ExecutionRequest(
-            ticket_id="t1", prompt="hi", cwd=tmp_path, transcript_path=transcript,
+            ticket_id="t1", prompt="hi", working_dir=tmp_path, transcript_path=transcript,
             bwrap_argv=["bwrap"], env={},
             permission_spec=PermissionSpec(),
         )
@@ -265,7 +265,7 @@ async def test_cancelled_run_captures_session_id_from_init(tmp_path):
     with patch("nightdesk.worker.claude_executor._spawn_sdk_subprocess", new=fake_spawn):
         from nightdesk.worker.claude_executor import ClaudeExecutor
         req = ExecutionRequest(
-            ticket_id="t1", prompt="hi", cwd=tmp_path, transcript_path=transcript,
+            ticket_id="t1", prompt="hi", working_dir=tmp_path, transcript_path=transcript,
             bwrap_argv=["bwrap"], env={},
             permission_spec=PermissionSpec(),
         )
@@ -407,9 +407,9 @@ def test_event_to_dict_converts_typed_sdk_objects():
         "content": "output", "is_error": True,
     }
 
-    sys_msg = SystemMessage(subtype="init", data={"cwd": "/x"})
+    sys_msg = SystemMessage(subtype="init", data={"source_path": "/x"})
     assert _event_to_dict(sys_msg) == {"type": "system", "subtype": "init",
-                                         "data": {"cwd": "/x"}}
+                                         "data": {"source_path": "/x"}}
 
     res = ResultMessage(subtype="success", result="all good")
     d = _event_to_dict(res)
@@ -592,7 +592,7 @@ async def test_sdk_runner_typed_objects_translate_end_to_end(tmp_path):
         stderr=asyncio.subprocess.PIPE,
         env=env,
     )
-    spec = json.dumps({"prompt": "hi", "cwd": str(tmp_path),
+    spec = json.dumps({"prompt": "hi", "source_path": str(tmp_path),
                         "allowed_tools": [], "disallowed_tools": [],
                         "model": None}).encode()
     out, err = await proc.communicate(input=spec)
@@ -628,7 +628,7 @@ async def test_sdk_runner_subprocess_emits_events(tmp_path):
         stderr=asyncio.subprocess.PIPE,
         env=env,
     )
-    spec = json.dumps({"prompt": "hi", "cwd": str(tmp_path),
+    spec = json.dumps({"prompt": "hi", "source_path": str(tmp_path),
                         "allowed_tools": ["Read"], "disallowed_tools": ["Bash"],
                         "model": "claude-sonnet-4-6"}).encode()
     out, err = await proc.communicate(input=spec)

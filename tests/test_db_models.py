@@ -36,7 +36,6 @@ def test_can_create_profile_and_ticket():
             status="queued",
             priority=0,
             profile_id=p.id,
-            cwd="/tmp",
             run_now=False,
         )
         s.add(t)
@@ -52,7 +51,7 @@ def test_ticket_can_track_multiple_workspaces():
                     network_mode="off", network_allowlist=[], secret_keys=[])
         s.add(p); s.flush()
         t = Ticket(title="x", prompt="", status="queued", priority=0,
-                   profile_id=p.id, cwd="/tmp")
+                   profile_id=p.id)
         s.add(t); s.flush()
         primary = TicketWorkspace(
             ticket_id=t.id,
@@ -94,7 +93,7 @@ def test_run_links_to_ticket():
         p = Profile(name="p", fs_read=[], fs_write=[], allowed_tools=[], denied_tools=[],
                     network_mode="off", network_allowlist=[], secret_keys=[])
         s.add(p); s.flush()
-        t = Ticket(title="x", prompt="", status="running", priority=0, profile_id=p.id, cwd="/tmp")
+        t = Ticket(title="x", prompt="", status="running", priority=0, profile_id=p.id)
         s.add(t); s.flush()
         r = Run(ticket_id=t.id, started_at=datetime.now(timezone.utc),
                 worktree_path="/tmp/x", transcript_path="/tmp/x.log", host="h")
@@ -115,7 +114,6 @@ def test_ticket_persists_next_run_context():
             status="review",
             priority=0,
             profile_id=p.id,
-            cwd="/tmp/project",
             next_run_context="answer the open question with polling",
             next_run_context_updated_at=datetime.now(timezone.utc),
         )
@@ -132,7 +130,7 @@ def test_run_persists_intent_failure_kind_and_parent():
         p = Profile(name="p", fs_read=[], fs_write=[], allowed_tools=[], denied_tools=[],
                     network_mode="off", network_allowlist=[], secret_keys=[])
         s.add(p); s.flush()
-        t = Ticket(title="x", prompt="", status="running", priority=0, profile_id=p.id, cwd="/tmp")
+        t = Ticket(title="x", prompt="", status="running", priority=0, profile_id=p.id)
         s.add(t); s.flush()
         r1 = Run(ticket_id=t.id, started_at=datetime.now(timezone.utc),
                  worktree_path="/tmp/x", transcript_path="/tmp/x.log", host="h")

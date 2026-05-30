@@ -149,7 +149,7 @@ def create_cron_job(
     title: str,
     prompt: str = "",
     profile_id: str,
-    cwd: str,
+    source_path: str,
     schedule: str,
     timezone: str = "UTC",
     priority: int = 0,
@@ -164,8 +164,8 @@ def create_cron_job(
 ) -> CronJob:
     if not isinstance(title, str) or not title.strip():
         raise InvalidCronJob("title is required")
-    if not isinstance(cwd, str) or not cwd.strip():
-        raise InvalidCronJob("cwd is required")
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise InvalidCronJob("source_path is required")
     schedule = validate_schedule(schedule)
     tz = validate_timezone(timezone)
     workspace_mode = validate_workspace_mode(workspace_mode)
@@ -180,7 +180,7 @@ def create_cron_job(
         title=title,
         prompt=prompt or "",
         profile_id=profile_id,
-        cwd=cwd,
+        source_path=source_path,
         priority=priority,
         workspace_mode=workspace_mode,
         additional_dirs=additional_dirs,
@@ -222,9 +222,9 @@ def update_cron_job(
     if "title" in fields:
         if not isinstance(fields["title"], str) or not fields["title"].strip():
             raise InvalidCronJob("title cannot be empty")
-    if "cwd" in fields:
-        if not isinstance(fields["cwd"], str) or not fields["cwd"].strip():
-            raise InvalidCronJob("cwd cannot be empty")
+    if "source_path" in fields:
+        if not isinstance(fields["source_path"], str) or not fields["source_path"].strip():
+            raise InvalidCronJob("source_path cannot be empty")
     if "schedule" in fields:
         fields["schedule"] = validate_schedule(fields["schedule"])
         schedule_changed = fields["schedule"] != job.schedule
@@ -304,8 +304,14 @@ def _ticket_from_template(session: Session, job: CronJob) -> Ticket:
         run_now=bool(job.force_run),
         priority=job.priority,
         profile_id=job.profile_id,
-        cwd=job.cwd,
-        workspace_mode=job.workspace_mode,
+        workspaces=[{
+            "role": "primary",
+            "label": "primary",
+            "kind": job.workspace_mode,
+            "access": "read_write",
+            "source_path": job.source_path,
+            "retention": "preserve",
+        }],
         additional_dirs=list(job.additional_dirs or []),
         permission_overrides=(dict(job.permission_overrides)
                               if job.permission_overrides else None),

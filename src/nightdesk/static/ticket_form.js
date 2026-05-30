@@ -26,6 +26,46 @@
   // but that same event would otherwise reopen the suggestion list. We consume
   // one suppression so the list stays closed after a pick.
   const suppressOpen = new Set();
+  function _isCreateForm(root) {
+    return !!(root && root.getAttribute('data-ticket-mode') === 'create');
+  }
+
+  function _workspaceDirty(root) {
+    return !!(root && root.__ndWorkspaceDirty);
+  }
+
+  function _setWorkspaceDirty(root) {
+    if (!root || root.__ndApplyingProjectDefaults) return;
+    root.__ndWorkspaceDirty = true;
+  }
+
+  function _projectDefaults(root) {
+    if (!root) return {};
+    if (root.__ndProjectDefaultsCache) return root.__ndProjectDefaultsCache;
+    const node = root.querySelector('[data-project-workspace-defaults]');
+    if (!node) return {};
+    try {
+      root.__ndProjectDefaultsCache = JSON.parse(node.textContent || '{}') || {};
+    } catch (_) {
+      root.__ndProjectDefaultsCache = {};
+    }
+    return root.__ndProjectDefaultsCache;
+  }
+
+  function _slugify(value) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'ticket';
+  }
+
+  function _derivedWorktreeName(root, project) {
+    if (!project || !project.default_worktree_name_template) return '';
+    const titleInput = root.querySelector('[data-title-input]');
+    const title = titleInput ? titleInput.value : '';
+    return project.default_worktree_name_template.replaceAll('{slug}', _slugify(title));
+  }
 
   // Place a fixed-position dropdown host directly under its input. Width
   // matches the input; coordinates are viewport-relative (position: fixed).
@@ -103,6 +143,143 @@
     const toggle = (scope || document).querySelector('input[name="use_worktree"]');
     return !!(toggle && toggle.checked);
   }
+  function _appendLinkedWorkspaceRow(host, data = {}) {
+    if (!host) return null;
+    const scope = host.closest('[data-ticket-form]') || document;
+    const baseId = host.id || 'linked-workspaces';
+    const cur = linkedSeqByHost.get(baseId) || host.querySelectorAll('[data-linked-workspace-row]').length;
+    const idx = cur;
+    linkedSeqByHost.set(baseId, cur + 1);
+    const id = baseId + '-row-' + idx;
+    const row = document.createElement('div');
+    row.className = 'rounded-md border border-border bg-bg-elev-2 p-2 space-y-2';
+    row.setAttribute('data-linked-workspace-row', '');
+    const kind = data.kind || 'directory';
+    const access = kind === 'git_worktree' ? 'read_write' : (data.access || 'read_only');
+    row.innerHTML = `
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-xs font-medium text-fg" data-linked-workspace-title>Workspace ${idx + 1}</span>
+        <button
+          type="button"
+          onclick="window.ndRemoveLinkedWorkspaceRow(this);"
+          class="rounded px-2 py-0.5 text-xs text-fg-muted hover:bg-bg hover:text-danger"
+          title="Remove linked workspace">&times;</button>
+      </div>
+      <div class="relative">
+        <input
+          id="${id}"
+          name="linked_workspace_path"
+          autocomplete="off"
+          spellcheck="false"
+          value="${data.source_path || ''}"
+          placeholder="/home/you/other-repo"
+          oninput="window.ndPathSuggest(this, '${id}-suggest'); window.ndScheduleLinkedWorkspacePreview(this.closest('[data-linked-workspace-row]'));"
+          onfocus="window.ndPathSuggest(this, '${id}-suggest')"
+          onblur="window.ndPathSuggestClose('${id}-suggest')"
+          onkeydown="window.ndPathSuggestKey(event, this, '${id}-suggest')"
+          class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+        />
+        <div id="${id}-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Kind</span>
+          <select name="linked_workspace_kind" onchange="window.ndSyncLinkedWorkspaceRow(this.closest('[data-linked-workspace-row]'));" class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+            <option value="directory"${kind === 'directory' ? ' selected' : ''}>Directory</option>
+            <option value="git_worktree"${kind === 'git_worktree' ? ' selected' : ''}>Git worktree</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-1" data-linked-access-field>
+          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Access</span>
+          <select name="linked_workspace_access" class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+            <option value="read_only"${access === 'read_only' ? ' selected' : ''}>Read-only</option>
+            <option value="read_write"${access === 'read_write' ? ' selected' : ''}>Read/write</option>
+          </select>
+        </label>
+        <div class="hidden flex-col gap-1" data-linked-git-fields data-linked-git-inline>
+          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Git worktree</span>
+          <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg-muted">
+            Linked git worktrees use the primary worktree name.
+          </div>
+        </div>
+      </div>
+      <div class="hidden space-y-2" data-linked-git-fields>
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Custom worktree path</span>
+          <div class="relative">
+            <input
+              id="${id}-path-override"
+              name="linked_workspace_path_override"
+              autocomplete="off"
+              spellcheck="false"
+              value="${data.worktree_path || ''}"
+              placeholder="optional exact absolute path"
+              oninput="window.ndPathSuggest(this, '${id}-path-override-suggest'); window.ndScheduleLinkedWorkspacePreview(this.closest('[data-linked-workspace-row]'));"
+              onfocus="window.ndPathSuggest(this, '${id}-path-override-suggest')"
+              onblur="window.ndPathSuggestClose('${id}-path-override-suggest')"
+              onkeydown="window.ndPathSuggestKey(event, this, '${id}-path-override-suggest')"
+              class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+            />
+            <div id="${id}-path-override-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
+          </div>
+        </label>
+        <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs" data-linked-worktree-preview>
+          <div class="mb-0.5 text-[11px] uppercase tracking-wide text-fg-muted">Worktree Path Preview <span data-worktree-preview-source></span></div>
+          <code class="block break-all font-mono text-accent" data-worktree-preview-path>Switch kind to git worktree to preview.</code>
+        </div>
+      </div>`;
+    host.appendChild(row);
+    window.ndRenumberLinkedWorkspaceRows(scope);
+    window.ndSyncLinkedWorkspaceRow(row);
+    return row;
+  }
+
+  function _setLinkedWorkspaceRows(root, workspaces) {
+    const host = root && root.querySelector('[id$="-linked"]');
+    if (!host) return;
+    host.innerHTML = '';
+    linkedSeqByHost.set(host.id || 'linked-workspaces', 0);
+    (workspaces || []).forEach((ws) => _appendLinkedWorkspaceRow(host, ws));
+    window.ndRenumberLinkedWorkspaceRows(root);
+  }
+
+  function _applyProjectWorkspaceDefaults(root, projectId, force = false) {
+    if (!root || !_isCreateForm(root) || (_workspaceDirty(root) && !force)) return;
+    const defaults = _projectDefaults(root);
+    const project = projectId ? defaults[projectId] : null;
+    root.__ndApplyingProjectDefaults = true;
+    const sourcePathInput = root.querySelector('[data-source-path-input]');
+    if (sourcePathInput) sourcePathInput.value = project && project.source_path ? project.source_path : '';
+    const primaryKindSelect = root.querySelector('select[name="primary_kind"]');
+    if (primaryKindSelect) {
+      primaryKindSelect.value = (project && project.default_workspace_mode) ? project.default_workspace_mode : 'directory';
+      window.ndSyncPrimaryWorkspaceKind(primaryKindSelect);
+    }
+    const worktreeNameInput = root.querySelector('input[name="worktree_name"]');
+    if (worktreeNameInput) worktreeNameInput.value = _derivedWorktreeName(root, project);
+    const baseRefInput = root.querySelector('[data-base-ref-input]');
+    if (baseRefInput) baseRefInput.value = project && project.default_base_ref ? project.default_base_ref : '';
+    _setLinkedWorkspaceRows(root, project && project.default_linked_workspaces ? project.default_linked_workspaces : []);
+    root.__ndApplyingProjectDefaults = false;
+    window.ndSyncWorktreeFields(root);
+    window.ndScheduleWorktreePreview(0, root);
+  }
+
+  window.ndProjectChanged = function (selectEl) {
+    if (!selectEl) return;
+    const root = selectEl.closest('[data-ticket-form]');
+    if (!root) return;
+    _applyProjectWorkspaceDefaults(root, selectEl.value || '');
+  };
+
+  window.ndResetProjectWorkspaceDefaults = function (button) {
+    if (!button) return;
+    const root = button.closest('[data-ticket-form]');
+    if (!root) return;
+    const projectSelect = root.querySelector('[data-project-select]');
+    root.__ndWorkspaceDirty = false;
+    _applyProjectWorkspaceDefaults(root, projectSelect ? (projectSelect.value || '') : '', true);
+  };
 
   // Primary workspace kind select → hidden use_worktree checkbox + git
   // field visibility. Keeps the unified-list UI in sync with the legacy
@@ -186,18 +363,18 @@
       window.ndSetBaseRefNote(root, '', null);
       return;
     }
-    const cwd = (root.querySelector('[data-cwd-input]') || {}).value || '';
+    const sourcePath = (root.querySelector('[data-source-path-input]') || {}).value || '';
     const name = (root.querySelector('input[name="worktree_name"]') || {}).value || '';
     const path = (root.querySelector('[data-worktree-path-input]') || {}).value || '';
     const baseRef = (root.querySelector('[data-base-ref-input]') || {}).value || '';
-    if (!cwd && !path) {
-      window.ndSetWorktreePreview('Choose a working dir or custom path to preview the target.', '', root);
+    if (!sourcePath && !path) {
+      window.ndSetWorktreePreview('Choose a source path or custom path to preview the target.', '', root);
       window.ndSetBaseRefNote(root, '', null);
       return;
     }
     const mySeq = ++previewSeq;
     try {
-      const r = await fetch('/board/worktree-preview?' + new URLSearchParams({ cwd, name, path, base_ref: baseRef, format: 'json' }));
+      const r = await fetch('/board/worktree-preview?' + new URLSearchParams({ source_path: sourcePath, name, path, base_ref: baseRef, format: 'json' }));
       if (!r.ok || mySeq !== previewSeq) return;
       const data = await r.json();
       window.ndSetWorktreePreview(data.path, data.source, root);
@@ -306,6 +483,7 @@
     if (!row) return;
     const scope = row.closest('[data-ticket-form]') || document;
     row.remove();
+    _setWorkspaceDirty(scope);
     window.ndRenumberLinkedWorkspaceRows(scope);
   };
 
@@ -350,7 +528,7 @@
       return;
     }
     try {
-      const r = await fetch('/board/worktree-preview?' + new URLSearchParams({ cwd: source, name, path: override, format: 'json' }));
+      const r = await fetch('/board/worktree-preview?' + new URLSearchParams({ source_path: source, name, path: override, format: 'json' }));
       if (!r.ok) return;
       const data = await r.json();
       window.ndSetLinkedWorkspacePreview(row, data.path, data.source);
@@ -378,89 +556,30 @@
     const host = document.getElementById(hostId || 'linked-workspaces');
     if (!host) return;
     const scope = host.closest('[data-ticket-form]') || document;
-    const baseId = host.id || 'linked-workspaces';
-    const cur = linkedSeqByHost.get(baseId) || host.querySelectorAll('[data-linked-workspace-row]').length;
-    const idx = cur;
-    linkedSeqByHost.set(baseId, cur + 1);
-    const id = baseId + '-row-' + idx;
-    const row = document.createElement('div');
-    row.className = 'rounded-md border border-border bg-bg-elev-2 p-2 space-y-2';
-    row.setAttribute('data-linked-workspace-row', '');
-    row.innerHTML = `
-      <div class="flex items-center justify-between gap-2">
-        <span class="text-xs font-medium text-fg" data-linked-workspace-title>Workspace ${idx + 1}</span>
-        <button
-          type="button"
-          onclick="window.ndRemoveLinkedWorkspaceRow(this);"
-          class="rounded px-2 py-0.5 text-xs text-fg-muted hover:bg-bg hover:text-danger"
-          title="Remove linked workspace">&times;</button>
-      </div>
-      <div class="relative">
-        <input
-          id="${id}"
-          name="linked_workspace_path"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="/home/you/other-repo"
-          oninput="window.ndPathSuggest(this, '${id}-suggest'); window.ndScheduleLinkedWorkspacePreview(this.closest('[data-linked-workspace-row]'));"
-          onfocus="window.ndPathSuggest(this, '${id}-suggest')"
-          onblur="window.ndPathSuggestClose('${id}-suggest')"
-          onkeydown="window.ndPathSuggestKey(event, this, '${id}-suggest')"
-          class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-        />
-        <div id="${id}-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
-      </div>
-      <div class="grid grid-cols-2 gap-2">
-        <label class="flex flex-col gap-1">
-          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Kind</span>
-          <select name="linked_workspace_kind" onchange="window.ndSyncLinkedWorkspaceRow(this.closest('[data-linked-workspace-row]'));" class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
-            <option value="directory">Directory</option>
-            <option value="git_worktree">Git worktree</option>
-          </select>
-        </label>
-        <label class="flex flex-col gap-1" data-linked-access-field>
-          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Access</span>
-          <select name="linked_workspace_access" class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
-            <option value="read_only" selected>Read-only</option>
-            <option value="read_write">Read/write</option>
-          </select>
-        </label>
-        <div class="hidden flex-col gap-1" data-linked-git-fields data-linked-git-inline>
-          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Git worktree</span>
-          <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg-muted">
-            Linked git worktrees use the primary worktree name.
-          </div>
-        </div>
-      </div>
-      <div class="hidden space-y-2" data-linked-git-fields>
-        <label class="flex flex-col gap-1">
-          <span class="text-fg-muted text-[11px] uppercase tracking-wide">Custom worktree path</span>
-          <div class="relative">
-            <input
-              id="${id}-path-override"
-              name="linked_workspace_path_override"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="optional exact absolute path"
-              oninput="window.ndPathSuggest(this, '${id}-path-override-suggest'); window.ndScheduleLinkedWorkspacePreview(this.closest('[data-linked-workspace-row]'));"
-              onfocus="window.ndPathSuggest(this, '${id}-path-override-suggest')"
-              onblur="window.ndPathSuggestClose('${id}-path-override-suggest')"
-              onkeydown="window.ndPathSuggestKey(event, this, '${id}-path-override-suggest')"
-              class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-            />
-            <div id="${id}-path-override-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
-          </div>
-        </label>
-        <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs" data-linked-worktree-preview>
-          <div class="mb-0.5 text-[11px] uppercase tracking-wide text-fg-muted">Worktree Path Preview <span data-worktree-preview-source></span></div>
-          <code class="block break-all font-mono text-accent" data-worktree-preview-path>Switch kind to git worktree to preview.</code>
-        </div>
-      </div>`;
-    host.appendChild(row);
-    window.ndRenumberLinkedWorkspaceRows(scope);
-    window.ndSyncLinkedWorkspaceRow(row);
-    row.querySelector('input').focus();
+    _appendLinkedWorkspaceRow(host);
+    _setWorkspaceDirty(scope);
   };
+  function _bindWorkspaceDirtyTracking(root) {
+    if (!root || root.__ndWorkspaceDirtyBound) return;
+    root.__ndWorkspaceDirtyBound = true;
+    const matchesWorkspaceField = (target) => (
+      target.matches('[data-source-path-input], input[name="worktree_name"], [data-base-ref-input], [data-worktree-path-input], input[name="linked_workspace_path"], input[name="linked_workspace_path_override"]')
+      || target.matches('select[name="primary_kind"], select[name="linked_workspace_kind"], select[name="linked_workspace_access"]')
+    );
+    root.addEventListener('input', (event) => {
+      const target = event.target;
+      if (target instanceof Element && _isCreateForm(root) && matchesWorkspaceField(target)) {
+        _setWorkspaceDirty(root);
+      }
+    });
+    root.addEventListener('change', (event) => {
+      const target = event.target;
+      if (target instanceof Element && _isCreateForm(root) && matchesWorkspaceField(target)) {
+        _setWorkspaceDirty(root);
+      }
+    });
+  }
+
 
   // --- Dependency picker -------------------------------------------------
   //
@@ -598,10 +717,10 @@
 
   function _initForm(scope) {
     const root = scope || document;
-    const cwdInput = root.querySelector('[data-cwd-input]');
-    if (cwdInput && !cwdInput.__ndCwdBound) {
-      cwdInput.__ndCwdBound = true;
-      cwdInput.addEventListener('input', () => window.ndScheduleWorktreePreview(250, root));
+    const sourcePathInput = root.querySelector('[data-source-path-input]');
+    if (sourcePathInput && !sourcePathInput.__ndSourcePathBound) {
+      sourcePathInput.__ndSourcePathBound = true;
+      sourcePathInput.addEventListener('input', () => window.ndScheduleWorktreePreview(250, root));
     }
     const primaryNameInput = root.querySelector('input[name="worktree_name"]');
     if (primaryNameInput && !primaryNameInput.__ndNameBound) {
@@ -612,6 +731,16 @@
         });
       });
     }
+    const titleInput = root.querySelector('[data-title-input]');
+    const projectSelect = root.querySelector('[data-project-select]');
+    if (titleInput && !titleInput.__ndProjectTitleBound) {
+      titleInput.__ndProjectTitleBound = true;
+      titleInput.addEventListener('input', () => {
+        if (projectSelect && !_workspaceDirty(root)) {
+          _applyProjectWorkspaceDefaults(root, projectSelect.value || '');
+        }
+      });
+    }
     // Make sure the primary kind select's initial value drives the git
     // fields visibility + hidden use_worktree checkbox. Server templates
     // the select's `selected` option but DOM toggling is on us.
@@ -619,9 +748,14 @@
     if (primaryKindSelect) {
       window.ndSyncPrimaryWorkspaceKind(primaryKindSelect);
     }
+    _bindWorkspaceDirtyTracking(root);
     root.querySelectorAll('[data-linked-workspace-row]').forEach(window.ndSyncLinkedWorkspaceRow);
-    window.ndSyncWorktreeFields(root);
-    window.ndScheduleWorktreePreview(0, root);
+    if (projectSelect && !_workspaceDirty(root)) {
+      _applyProjectWorkspaceDefaults(root, projectSelect.value || '');
+    } else {
+      window.ndSyncWorktreeFields(root);
+      window.ndScheduleWorktreePreview(0, root);
+    }
   }
 
   window.ndInitTicketForm = _initForm;

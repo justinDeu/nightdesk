@@ -24,7 +24,7 @@ from nightdesk.worker.scheduler import pick_eligible
 def _qt(session, profile, **kw):
     fields = dict(
         title="t", prompt="", priority=0,
-        profile_id=profile.id, cwd="/tmp",
+        profile_id=profile.id, source_path="/tmp",
         run_now=False, status="draft",
     )
     fields.update(kw)

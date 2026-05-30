@@ -15,7 +15,7 @@ async def test_loop_runs_a_ticket_to_review(session, tmp_path):
                         denied_tools=[], network_mode="off", network_allowlist=[],
                         secret_keys=[], default_model=None)
     t = create_ticket(session, title="t", prompt="hello",
-                       priority=0, profile_id=p.id, run_now=True, status="queued", cwd=str(tmp_path))
+                       priority=0, profile_id=p.id, run_now=True, status="queued", source_path=str(tmp_path))
     tid = t.id
 
     settings = WorkerSettings(
@@ -63,7 +63,7 @@ async def test_loop_writes_worker_error_event_on_executor_crash(session, tmp_pat
                         denied_tools=[], network_mode="off", network_allowlist=[],
                         secret_keys=[], default_model=None)
     t = create_ticket(session, title="t", prompt="hello",
-                       priority=0, profile_id=p.id, run_now=True, status="queued", cwd=str(tmp_path))
+                       priority=0, profile_id=p.id, run_now=True, status="queued", source_path=str(tmp_path))
     tid = t.id
     settings = WorkerSettings(
         max_parallel=1,
@@ -105,9 +105,9 @@ async def test_tick_once_returns_immediately_with_rolling_horizon(engine, tmp_pa
                             denied_tools=[], network_mode="off", network_allowlist=[],
                             secret_keys=[], default_model=None)
         t1 = create_ticket(session, title="t1", prompt="hello",
-                            priority=0, profile_id=p.id, run_now=True, status="queued", cwd=str(tmp_path))
+                            priority=0, profile_id=p.id, run_now=True, status="queued", source_path=str(tmp_path))
         t2 = create_ticket(session, title="t2", prompt="hello",
-                            priority=0, profile_id=p.id, run_now=True, status="queued", cwd=str(tmp_path))
+                            priority=0, profile_id=p.id, run_now=True, status="queued", source_path=str(tmp_path))
         t1_id, t2_id = t1.id, t2.id
     settings = WorkerSettings(
         max_parallel=2,
@@ -155,7 +155,7 @@ async def test_cancellation_terminates_executor_cleanly(engine, tmp_path):
                             denied_tools=[], network_mode="off", network_allowlist=[],
                             secret_keys=[], default_model=None)
         t = create_ticket(session, title="t", prompt="hi",
-                            priority=0, profile_id=p.id, run_now=True, status="queued", cwd=str(tmp_path))
+                            priority=0, profile_id=p.id, run_now=True, status="queued", source_path=str(tmp_path))
         t_id = t.id
 
     executor = SlowExecutor()
@@ -204,7 +204,7 @@ async def test_two_runs_of_same_ticket_produce_distinct_transcripts(engine, tmp_
                             denied_tools=[], network_mode="off", network_allowlist=[],
                             secret_keys=[], default_model=None)
         t = create_ticket(session, title="t", prompt="hi",
-                            priority=0, profile_id=p.id, run_now=True, status="queued", cwd=str(tmp_path))
+                            priority=0, profile_id=p.id, run_now=True, status="queued", source_path=str(tmp_path))
         t_id = t.id
 
     settings = WorkerSettings(
@@ -259,11 +259,11 @@ async def test_tick_re_reads_max_parallel_from_config(engine, tmp_path):
                             secret_keys=[], default_model=None)
         # Normal (non run-now) tickets so capacity governs picks.
         t1 = create_ticket(session, title="t1", prompt="hi",
-                            priority=0, profile_id=p.id, run_now=False, status="queued", cwd=str(tmp_path))
+                            priority=0, profile_id=p.id, run_now=False, status="queued", source_path=str(tmp_path))
         t2 = create_ticket(session, title="t2", prompt="hi",
-                            priority=0, profile_id=p.id, run_now=False, status="queued", cwd=str(tmp_path))
+                            priority=0, profile_id=p.id, run_now=False, status="queued", source_path=str(tmp_path))
         t3 = create_ticket(session, title="t3", prompt="hi",
-                            priority=0, profile_id=p.id, run_now=False, status="queued", cwd=str(tmp_path))
+                            priority=0, profile_id=p.id, run_now=False, status="queued", source_path=str(tmp_path))
 
     class BlockingExecutor:
         def __init__(self):
@@ -325,7 +325,7 @@ async def test_always_on_window_allows_picks_at_any_time(engine, tmp_path):
                             secret_keys=[], default_model=None)
         t = create_ticket(session, title="t", prompt="hi", priority=0,
                             profile_id=p.id, run_now=False, status="queued",
-                            cwd=str(tmp_path))
+                            source_path=str(tmp_path))
         tid = t.id
 
     settings = WorkerSettings(
@@ -395,16 +395,16 @@ async def test_additional_dirs_merge_into_fs_write(session, sample_profile, tmp_
             {"path": "/srv/extra", "mode": "rw"},
             {"path": "/srv/readonly", "mode": "ro"},  # warned + dropped
         ],
-        cwd="/tmp",
+        source_path="/tmp",
     )
     settings = WorkerSettings(
         max_parallel=1, window_start=_time(0, 0), window_end=_time(23, 59),
         worktree_root=tmp_path / "w", transcript_root=tmp_path / "t",
         secrets={}, host="th", executor=DummyExecutor(),
     )
-    from nightdesk.worker.run_one import _profile_to_spec
-    spec = _profile_to_spec(session.get(Ticket, t.id))
-    assert "/srv/extra" in spec.fs_write
-    assert "/srv/readonly" not in spec.fs_write
+    from nightdesk.worker.run_one import _workspace_specs_for_ticket
+    specs = _workspace_specs_for_ticket(session.get(Ticket, t.id))
+    assert any(ws.source_path == "/srv/extra" and ws.access == "read_write" for ws in specs)
+    assert any(ws.source_path == "/srv/readonly" and ws.access == "read_only" for ws in specs)
     # Profile fs_write is preserved.
-    assert "/tmp" in spec.fs_write
+    assert "/tmp" in sample_profile.fs_write

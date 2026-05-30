@@ -76,7 +76,6 @@ def _seed(session, **cfg_overrides):
         prompt="do something",
         status="running",
         profile_id=p.id,
-        cwd="/tmp",
     )
     session.add(t)
     session.flush()

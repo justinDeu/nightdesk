@@ -97,7 +97,7 @@
 {% endif %}
 
 {# Resume command: only when the SDK reported a session id. cd into the run's
-   working dir (worktree for git-worktree runs, else the ticket cwd) so the
+   working dir (worktree for git-worktree runs, else the ticket source path) so the
    resume runs in the right place, then resume the actual Claude conversation.
    The `&&` renders HTML-escaped but copies back as literal `&&` via
    textContent. #}

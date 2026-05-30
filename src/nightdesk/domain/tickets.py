@@ -107,6 +107,8 @@ def create_ticket(session: Session, **fields) -> Ticket:
     """Create a ticket. Defaults to status='draft' (v2)."""
     fields = apply_project_defaults(session, fields)
     workspace_specs = fields.pop("workspaces", None)
+    source_path = fields.pop("source_path", None)
+    workspace_mode = fields.pop("workspace_mode", "directory")
     worktree_name = fields.pop("worktree_name", None)
     worktree_path = fields.pop("worktree_path", None)
     fields.setdefault("status", "draft")
@@ -115,40 +117,32 @@ def create_ticket(session: Session, **fields) -> Ticket:
     if status not in _ALL_STATUSES:
         raise InvalidTransition(f"unknown status {status!r}")
 
-    if workspace_specs:
-        normalized = [_workspace_dict(w) for w in workspace_specs]
-        normalized = _validate_workspace_specs(normalized)
-        primary = next(w for w in normalized if w.get("role") == "primary")
-        if not fields.get("cwd") and primary.get("source_path"):
-            fields["cwd"] = primary["source_path"]
-        fields["workspace_mode"] = primary["kind"]
-        workspace_specs = normalized
-    elif worktree_name or worktree_path:
+    if not workspace_specs and source_path:
         workspace_specs = [{
             "role": "primary",
             "label": "primary",
-            "kind": _normalize_workspace_kind(fields.get("workspace_mode", "directory")),
+            "kind": _normalize_workspace_kind(workspace_mode),
             "access": "read_write",
-            "source_path": fields.get("cwd"),
+            "source_path": source_path,
             "worktree_name": worktree_name,
             "worktree_path": worktree_path,
             "retention": "preserve",
         }]
+    if not workspace_specs:
+        raise ValueError("workspaces must include exactly one primary workspace")
+    normalized = [_workspace_dict(w) for w in workspace_specs]
+    normalized = _validate_workspace_specs(normalized)
+    primary = next(w for w in normalized if w.get("role") == "primary")
+    if not primary.get("source_path"):
+        raise ValueError("primary workspace source_path is required")
 
-    cwd = fields.get("cwd")
-    if not isinstance(cwd, str) or not cwd.strip():
-        raise ValueError("cwd is required")
-    fields["workspace_mode"] = _normalize_workspace_kind(
-        fields.get("workspace_mode", "directory")
-    )
     # Position defaults to end of the chosen column.
     if "position" not in fields:
         fields["position"] = _next_position(session, status)
     t = Ticket(**fields)
     session.add(t)
     session.flush()
-    if workspace_specs:
-        _apply_workspaces(session, t, workspace_specs)
+    _apply_workspaces(session, t, normalized)
     session.commit()
     session.refresh(t)
     return t
@@ -187,42 +181,46 @@ def list_tickets(
 
 def update_ticket(session: Session, ticket_id: str, **fields) -> Ticket:
     workspace_specs = fields.pop("workspaces", None)
+    source_path = fields.pop("source_path", None)
+    workspace_mode = fields.pop("workspace_mode", None)
     worktree_name = fields.pop("worktree_name", None)
     worktree_path = fields.pop("worktree_path", None)
     t = get_ticket(session, ticket_id)
-    if "cwd" in fields:
-        cwd = fields["cwd"]
-        if not isinstance(cwd, str) or not cwd.strip():
-            raise ValueError("cwd cannot be empty")
-    if "workspace_mode" in fields:
-        fields["workspace_mode"] = _normalize_workspace_kind(fields["workspace_mode"])
     if fields.get("project_id") is not None:
         get_project(session, fields["project_id"])
     for k, v in fields.items():
         setattr(t, k, v)
-    if workspace_specs is not None:
-        _apply_workspaces(session, t, workspace_specs)
-    elif t.workspaces:
+    if workspace_specs is None and any(v is not None for v in (source_path, workspace_mode, worktree_name, worktree_path)):
         primary = next((w for w in t.workspaces if w.role == "primary"), None)
-        if primary is not None:
-            if any(k in fields for k in ("cwd", "workspace_mode")):
-                primary.source_path = t.cwd
-                primary.kind = _normalize_workspace_kind(t.workspace_mode)
+        if primary is None:
+            if not source_path:
+                raise ValueError("primary workspace source_path is required")
+            workspace_specs = [{
+                "role": "primary",
+                "label": "primary",
+                "kind": _normalize_workspace_kind(workspace_mode or "directory"),
+                "access": "read_write",
+                "source_path": source_path,
+                "worktree_name": worktree_name,
+                "worktree_path": worktree_path,
+                "retention": "preserve",
+            }]
+        else:
+            if source_path is not None:
+                primary.source_path = source_path
+            if workspace_mode is not None:
+                primary.kind = _normalize_workspace_kind(workspace_mode)
             if worktree_name is not None:
                 primary.worktree_name = worktree_name
             if worktree_path is not None:
                 primary.worktree_path = worktree_path
-    elif worktree_name or worktree_path:
-        _apply_workspaces(session, t, [{
-            "role": "primary",
-            "label": "primary",
-            "kind": _normalize_workspace_kind(t.workspace_mode),
-            "access": "read_write",
-            "source_path": t.cwd,
-            "worktree_name": worktree_name,
-            "worktree_path": worktree_path,
-            "retention": "preserve",
-        }])
+    if workspace_specs is not None:
+        normalized = [_workspace_dict(w) for w in workspace_specs]
+        normalized = _validate_workspace_specs(normalized)
+        primary = next(w for w in normalized if w.get("role") == "primary")
+        if not primary.get("source_path"):
+            raise ValueError("primary workspace source_path is required")
+        _apply_workspaces(session, t, normalized)
     session.commit()
     session.refresh(t)
     return t
@@ -460,8 +458,6 @@ def clone_ticket(session: Session, ticket_id: str, *, title: Optional[str],
         profile_id=t.profile_id,
         permission_overrides=t.permission_overrides,
         additional_dirs=list(t.additional_dirs or []),
-        cwd=t.cwd,
-        workspace_mode=t.workspace_mode,
         project_id=t.project_id,
         workspaces=workspace_specs,
     )

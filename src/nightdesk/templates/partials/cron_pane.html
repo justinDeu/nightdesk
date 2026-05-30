@@ -70,14 +70,14 @@
     <div class="px-4 py-3 divide-y divide-border/60">
       {{ _kv('Profile', profile_names.get(job.profile_id, job.profile_id)) }}
 
-      {# Workspaces: primary (cwd) + any linked dirs, in the same lingo the
+      {# Workspaces: primary (source path) + any linked dirs, in the same lingo the
          edit form and ticket modal use. Cron is directory-only. #}
       <div class="grid grid-cols-[140px_1fr] gap-3 py-1.5 text-sm">
         <dt class="text-fg-muted text-xs uppercase tracking-wide pt-0.5">Workspaces</dt>
         <dd class="text-fg text-xs space-y-1">
           <div class="flex items-center gap-2">
             <span class="rounded-full border border-accent/40 bg-accent/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-accent">primary</span>
-            <code class="break-all font-mono">{{ job.cwd }}</code>
+            <code class="break-all font-mono">{{ job.source_path }}</code>
             <span class="text-fg-muted/70">· rw</span>
           </div>
           {% for d in (job.additional_dirs or []) %}

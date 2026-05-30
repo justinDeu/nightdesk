@@ -1,5 +1,7 @@
 import pytest
 
+from tests.conftest import workspace_payload
+
 from nightdesk.domain.tickets import (
     clone_ticket, create_ticket, get_ticket, list_tickets, merge_next_run_context_into_prompt,
     request_run_now, requeue, resume_ticket, restart_ticket, retry_ticket, set_next_run_context,
@@ -10,7 +12,7 @@ from nightdesk.domain.tickets import (
 
 def make_ticket(session, sample_profile, **kw):
     fields = dict(title="t", prompt="p", priority=0,
-                   profile_id=sample_profile.id, cwd="/tmp", run_now=False)
+                   profile_id=sample_profile.id, workspaces=workspace_payload(), run_now=False)
     fields.update(kw)
     return create_ticket(session, **fields)
 
@@ -277,20 +279,25 @@ def test_additional_dirs_persisted(session, sample_profile):
     assert refreshed.additional_dirs == [{"path": "/srv/x", "mode": "rw"}]
 
 
-def test_create_ticket_requires_cwd(session, sample_profile):
-    with pytest.raises(ValueError, match="cwd is required"):
+def test_create_ticket_requires_primary_workspace(session, sample_profile):
+    with pytest.raises(ValueError, match="workspaces must include exactly one primary workspace"):
         create_ticket(session, title="t", prompt="p",
                        priority=0, profile_id=sample_profile.id, run_now=False)
 
 
-def test_create_ticket_rejects_blank_cwd(session, sample_profile):
-    with pytest.raises(ValueError, match="cwd is required"):
-        create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=sample_profile.id,
-                       cwd="   ", run_now=False)
-
-
-def test_update_ticket_rejects_blank_cwd(session, sample_profile):
-    t = make_ticket(session, sample_profile)
-    with pytest.raises(ValueError, match="cwd cannot be empty"):
-        update_ticket(session, t.id, cwd="")
+def test_create_ticket_rejects_missing_primary_source_path(session, sample_profile):
+    with pytest.raises(ValueError, match="primary workspace source_path is required"):
+        create_ticket(
+            session,
+            title="t",
+            prompt="p",
+            priority=0,
+            profile_id=sample_profile.id,
+            run_now=False,
+            workspaces=[{
+                "role": "primary",
+                "label": "primary",
+                "kind": "directory",
+                "access": "read_write",
+            }],
+        )

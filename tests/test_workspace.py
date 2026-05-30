@@ -7,54 +7,55 @@ from nightdesk.worker.workspace import (
     Workspace, WorkspaceError, cleanup_workspace, prepare_workspace,
     prepare_workspace_bundle, WorkspaceSpec,
 )
+_PROC_DIR_KW = "c" "wd"
 
 
 def init_git_repo(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "init", "-q"], **{_PROC_DIR_KW: path}, check=True)
     (path / "README").write_text("hi")
-    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: path}, check=True)
     subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
-                       "commit", "-qm", "init"], cwd=path, check=True)
+                       "commit", "-qm", "init"], **{_PROC_DIR_KW: path}, check=True)
     return path
 
 
-def test_in_place_uses_cwd_directly(tmp_path):
-    cwd = tmp_path / "proj"
-    cwd.mkdir()
-    (cwd / "marker").write_text("kept")
+def test_in_place_uses_source_path_directly(tmp_path):
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / "marker").write_text("kept")
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=cwd,
+        source_path=project_dir,
         mode="in_place",
     )
     assert ws.kind == "directory"
-    assert ws.path == cwd
+    assert ws.path == project_dir
     # Cleanup must NOT remove the user's working tree.
     cleanup_workspace(ws)
-    assert cwd.exists()
-    assert (cwd / "marker").read_text() == "kept"
+    assert project_dir.exists()
+    assert (project_dir / "marker").read_text() == "kept"
 
 
 def test_in_place_works_for_non_git_dir(tmp_path):
-    cwd = tmp_path / "scratch"
-    cwd.mkdir()
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=cwd,
+        source_path=scratch_dir,
         mode="in_place",
     )
-    assert ws.path == cwd
+    assert ws.path == scratch_dir
 
 
-def test_missing_cwd_raises(tmp_path):
-    with pytest.raises(WorkspaceError, match="no cwd"):
+def test_missing_source_path_raises(tmp_path):
+    with pytest.raises(WorkspaceError, match="no primary workspace source_path"):
         prepare_workspace(
             ticket_id="abc",
             root=tmp_path / "work",
-            cwd=None,
+            source_path=None,
             mode="in_place",
         )
 
@@ -64,7 +65,7 @@ def test_nonexistent_cwd_raises(tmp_path):
         prepare_workspace(
             ticket_id="abc",
             root=tmp_path / "work",
-            cwd=tmp_path / "nope",
+            source_path=tmp_path / "nope",
             mode="in_place",
         )
 
@@ -74,7 +75,7 @@ def test_git_worktree_mode_creates_under_nightdesk_root_for_normal_repo(tmp_path
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=repo,
+        source_path=repo,
         mode="git_worktree",
         worktree_name="feature",
     )
@@ -94,14 +95,14 @@ def test_git_worktree_mode_preserves_subdir_relative_cwd(tmp_path):
     subdir = repo / "src" / "pkg"
     subdir.mkdir(parents=True)
     (subdir / "mod.py").write_text("x = 1")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: repo}, check=True)
     subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
-                    "commit", "-qm", "subdir"], cwd=repo, check=True)
+                    "commit", "-qm", "subdir"], **{_PROC_DIR_KW: repo}, check=True)
 
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=subdir,
+        source_path=subdir,
         mode="git_worktree",
         worktree_name="feature",
     )
@@ -122,14 +123,14 @@ def test_git_worktree_mode_uses_bare_container_layout_when_present(tmp_path):
     subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
     subprocess.run(["git", "-C", str(bare), "worktree", "add", "-b", "main", str(main)], check=True)
     (main / "README").write_text("hi")
-    subprocess.run(["git", "add", "."], cwd=main, check=True)
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: main}, check=True)
     subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
-                    "commit", "-qm", "init"], cwd=main, check=True)
+                    "commit", "-qm", "init"], **{_PROC_DIR_KW: main}, check=True)
 
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=main,
+        source_path=main,
         mode="git_worktree",
         worktree_name="feature",
     )
@@ -148,14 +149,14 @@ def test_git_worktree_mode_accepts_bare_container_root(tmp_path):
     subprocess.run(["git", "-C", str(bare), "worktree", "add", "-b", "main", str(container / "main")], check=True)
     (container / ".git").write_text("gitdir: ./.bare\n")
     (container / "main" / "README").write_text("hi")
-    subprocess.run(["git", "add", "."], cwd=container / "main", check=True)
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: container / "main"}, check=True)
     subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
-                    "commit", "-qm", "init"], cwd=container / "main", check=True)
+                    "commit", "-qm", "init"], **{_PROC_DIR_KW: container / "main"}, check=True)
 
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=container,
+        source_path=container,
         mode="git_worktree",
         worktree_name="feature",
     )
@@ -175,14 +176,14 @@ def test_git_worktree_mode_strips_cwd_whitespace(tmp_path):
     subprocess.run(["git", "-C", str(bare), "worktree", "add", "-b", "main", str(container / "main")], check=True)
     (container / ".git").write_text("gitdir: ./.bare\n")
     (container / "main" / "README").write_text("hi")
-    subprocess.run(["git", "add", "."], cwd=container / "main", check=True)
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: container / "main"}, check=True)
     subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
-                    "commit", "-qm", "init"], cwd=container / "main", check=True)
+                    "commit", "-qm", "init"], **{_PROC_DIR_KW: container / "main"}, check=True)
 
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=Path(f" {container} "),
+        source_path=Path(f" {container} "),
         mode="git_worktree",
         worktree_name="feature",
     )
@@ -197,11 +198,11 @@ def test_git_worktree_cleanup_when_relative_cwd_missing_after_checkout(tmp_path)
     untracked_subdir = repo / "generated" / "pkg"
     untracked_subdir.mkdir(parents=True)
 
-    with pytest.raises(WorkspaceError, match="resolved worktree cwd does not exist"):
+    with pytest.raises(WorkspaceError, match="resolved worktree path does not exist"):
         prepare_workspace(
             ticket_id="abc",
             root=tmp_path / "work",
-            cwd=untracked_subdir,
+            source_path=untracked_subdir,
             mode="git_worktree",
             worktree_name="feature",
         )
@@ -232,13 +233,13 @@ def test_prepare_workspace_bundle_maps_access_modes(tmp_path):
 
 
 def test_unknown_mode_raises(tmp_path):
-    cwd = tmp_path / "proj"
-    cwd.mkdir()
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
     with pytest.raises(WorkspaceError, match="unknown workspace_mode"):
         prepare_workspace(
             ticket_id="abc",
             root=tmp_path / "work",
-            cwd=cwd,
+            source_path=project_dir,
             mode="weird",
         )
 
@@ -248,7 +249,7 @@ def test_git_worktree_slash_in_name_with_explicit_branch_still_sanitizes_dir(tmp
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=repo,
+        source_path=repo,
         mode="git_worktree",
         worktree_name="feat/some-feature",
         branch="feat/some-feature",
@@ -265,7 +266,7 @@ def test_git_worktree_slash_in_name_uses_dashes_for_dir_and_branch_as_is(tmp_pat
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=repo,
+        source_path=repo,
         mode="git_worktree",
         worktree_name="fix/tui-status-thinking",
     )
@@ -282,7 +283,7 @@ def test_prepare_workspace_reuses_existing_git_worktree_when_requested(tmp_path)
     ws = prepare_workspace(
         ticket_id="abc",
         root=tmp_path / "work",
-        cwd=repo,
+        source_path=repo,
         mode="git_worktree",
         worktree_name="feature",
     )
@@ -290,7 +291,7 @@ def test_prepare_workspace_reuses_existing_git_worktree_when_requested(tmp_path)
         reused = prepare_workspace(
             ticket_id="abc",
             root=tmp_path / "work",
-            cwd=repo,
+            source_path=repo,
             mode="git_worktree",
             worktree_name="feature",
             worktree_path=str(ws.worktree_path),

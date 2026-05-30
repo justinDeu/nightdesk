@@ -14,7 +14,7 @@ async def test_full_ticket_lifecycle(client):
 
     r = await client.post("/api/v1/tickets", json={
         "title": "do thing", "prompt": "p",
-        "priority": 1, "profile_id": pid, "cwd": "/tmp", "run_now": False,
+        "priority": 1, "profile_id": pid, "source_path": "/tmp", "run_now": False,
     })
     assert r.status_code == 201, r.text
     body = r.json()
@@ -49,7 +49,7 @@ async def test_run_now_transitions_draft_to_queued(client):
     pid = await _create_profile(client)
     r = await client.post("/api/v1/tickets", json={
         "title": "draft-then-run-now", "prompt": "p",
-        "priority": 1, "profile_id": pid, "cwd": "/tmp",
+        "priority": 1, "profile_id": pid, "source_path": "/tmp",
     })
     assert r.status_code == 201
     tid = r.json()["id"]
@@ -68,7 +68,7 @@ async def test_run_now_on_queued_is_idempotent(client):
     pid = await _create_profile(client)
     r = await client.post("/api/v1/tickets", json={
         "title": "already-queued", "prompt": "p",
-        "profile_id": pid, "cwd": "/tmp", "status": "queued",
+        "profile_id": pid, "source_path": "/tmp", "status": "queued",
     })
     assert r.status_code == 201
     tid = r.json()["id"]
@@ -85,7 +85,7 @@ async def test_run_now_on_running_returns_409(client):
     pid = await _create_profile(client)
     r = await client.post("/api/v1/tickets", json={
         "title": "live", "prompt": "p",
-        "profile_id": pid, "cwd": "/tmp", "status": "running",
+        "profile_id": pid, "source_path": "/tmp", "status": "running",
     })
     assert r.status_code == 201
     tid = r.json()["id"]
@@ -99,7 +99,7 @@ async def test_run_now_transitions_review_to_queued(client):
     the one-click way to do it."""
     pid = await _create_profile(client)
     r = await client.post("/api/v1/tickets", json={
-        "title": "rev", "profile_id": pid, "cwd": "/tmp", "status": "queued",
+        "title": "rev", "profile_id": pid, "source_path": "/tmp", "status": "queued",
     })
     tid = r.json()["id"]
     # queued -> running -> review via the transition endpoint.

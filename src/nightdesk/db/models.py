@@ -60,7 +60,7 @@ class Project(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     slug: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    cwd: Mapped[str] = mapped_column(String, nullable=False)
+    source_path: Mapped[str] = mapped_column(String, nullable=False)
     default_workspace_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     default_worktree_name_template: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     default_base_ref: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -89,10 +89,6 @@ class Ticket(Base):
     profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"))
     permission_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
-    cwd: Mapped[str] = mapped_column(String, nullable=False)
-    # 'in_place'  -> agent runs in ticket.cwd directly (changes land in your tree)
-    # 'worktree'  -> git worktree of cwd under worktree_root (reserved; not yet implemented)
-    workspace_mode: Mapped[str] = mapped_column(String, default="in_place", nullable=False)
     run_now: Mapped[bool] = mapped_column(Boolean, default=False)
     scheduled_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     current_run_id: Mapped[Optional[str]] = mapped_column(ForeignKey("runs.id"), nullable=True)
@@ -322,7 +318,7 @@ class CronJob(Base):
     backend produces tickets that run on that backend with zero cron changes.
 
     Workspace is directory-only in v1: ``workspace_mode`` is constrained to
-    ``directory``/``in_place`` and generated tickets run in ``cwd`` with no
+    ``directory``/``in_place`` and generated tickets run directly in the primary
     worktree.
     """
 
@@ -334,7 +330,7 @@ class CronJob(Base):
     prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
     profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"), nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    cwd: Mapped[str] = mapped_column(String, nullable=False)
+    source_path: Mapped[str] = mapped_column(String, nullable=False)
     # Constrained to 'directory' | 'in_place' on the API surface (no worktrees).
     workspace_mode: Mapped[str] = mapped_column(String, default="directory", nullable=False)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)

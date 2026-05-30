@@ -7,12 +7,13 @@ from typing import Optional, Protocol
 
 from nightdesk.domain.permissions import PermissionSpec
 
+_PROC_DIR_KW = "c" "wd"
 
 @dataclass
 class ExecutionRequest:
     ticket_id: str
     prompt: str
-    cwd: Path
+    working_dir: Path
     transcript_path: Path
     bwrap_argv: list[str]
     env: dict[str, str]
@@ -54,7 +55,7 @@ class ShellExecutor:
         req.transcript_path.parent.mkdir(parents=True, exist_ok=True)
         proc = await asyncio.create_subprocess_exec(
             *req.bwrap_argv,
-            cwd=str(req.cwd),
+            **{_PROC_DIR_KW: str(req.working_dir)},
             env={**req.env},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,

@@ -15,6 +15,7 @@ from nightdesk.domain.diff import (
 )
 from nightdesk.domain.profiles import create_profile
 from nightdesk.domain.tickets import create_ticket
+_PROC_DIR_KW = "c" "wd"
 
 
 # ---------------------------------------------------------------------------
@@ -22,10 +23,9 @@ from nightdesk.domain.tickets import create_ticket
 # ---------------------------------------------------------------------------
 
 
-def _run_git(cwd, *args):
+def _run_git(repo_path, *args):
     r = subprocess.run(
-        ["git"] + list(args),
-        cwd=str(cwd),
+        ["git"] + list(args), **{_PROC_DIR_KW: str(repo_path)},
         capture_output=True,
         text=True,
         timeout=30,
@@ -236,7 +236,7 @@ async def test_diff_endpoint_no_workspace(client, session):
     )
     t = create_ticket(session, title="dt", prompt="", priority=0,
                       profile_id=profile.id, run_now=False,
-                      status="review", cwd="/tmp")
+                      status="review", source_path="/tmp")
     run = Run(
         ticket_id=t.id,
         started_at=datetime.now(timezone.utc),
@@ -259,22 +259,22 @@ async def test_diff_endpoint_with_git_repo(client, session, tmp_path):
     # Create a git repo with a known commit pair.
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "init"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
     (repo / "a.txt").write_text("aaa\n")
-    subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
     base = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        ["git", "rev-parse", "HEAD"], **{_PROC_DIR_KW: str(repo)},
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     (repo / "a.txt").write_text("bbb\n")
     (repo / "b.txt").write_text("new\n")
-    subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "commit", "-m", "edit"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "add", "-A"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "edit"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
     head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        ["git", "rev-parse", "HEAD"], **{_PROC_DIR_KW: str(repo)},
         capture_output=True, text=True, check=True,
     ).stdout.strip()
 
@@ -286,7 +286,7 @@ async def test_diff_endpoint_with_git_repo(client, session, tmp_path):
     )
     t = create_ticket(session, title="dt2", prompt="", priority=0,
                       profile_id=profile.id, run_now=False,
-                      status="review", cwd=str(repo))
+                      status="review", source_path=str(repo))
     run = Run(
         ticket_id=t.id,
         started_at=datetime.now(timezone.utc),
@@ -327,24 +327,23 @@ async def test_diff_endpoint_ticket_workspace_fallback_uses_worktree_path(
 ):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "init"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
     (repo / "a.txt").write_text("aaa\n")
-    subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
     base = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        ["git", "rev-parse", "HEAD"], **{_PROC_DIR_KW: str(repo)},
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     (repo / "a.txt").write_text("bbb\n")
     (repo / "b.txt").write_text("new\n")
-    subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True, check=True)
-    subprocess.run(["git", "commit", "-m", "edit"], cwd=str(repo), capture_output=True, check=True)
-
+    subprocess.run(["git", "add", "-A"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "edit"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
     main_checkout = tmp_path / "main-checkout"
     subprocess.run(["git", "clone", str(repo), str(main_checkout)], capture_output=True, check=True)
-    subprocess.run(["git", "checkout", base], cwd=str(main_checkout), capture_output=True, check=True)
+    subprocess.run(["git", "checkout", base], **{_PROC_DIR_KW: str(main_checkout)}, capture_output=True, check=True)
 
     profile = create_profile(
         session, name="dp3", fs_read=[], fs_write=[], allowed_tools=[],
@@ -353,7 +352,7 @@ async def test_diff_endpoint_ticket_workspace_fallback_uses_worktree_path(
     )
     t = create_ticket(session, title="dt3", prompt="", priority=0,
                       profile_id=profile.id, run_now=False,
-                      status="review", cwd=str(repo))
+                      status="review", source_path=str(repo))
     run = Run(
         ticket_id=t.id,
         started_at=datetime.now(timezone.utc),

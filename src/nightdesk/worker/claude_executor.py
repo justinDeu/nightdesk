@@ -50,7 +50,7 @@ class ClaudeExecutor:
         permission_mode = getattr(spec, "permission_mode", None)  # None -> SDK default
         return {
             "prompt": req.prompt,
-            "cwd": str(req.cwd),
+            "working_dir": str(req.working_dir),
             "allowed_tools": allowed,
             "disallowed_tools": disallowed,
             "model": model,

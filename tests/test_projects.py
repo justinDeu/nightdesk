@@ -10,7 +10,7 @@ def test_project_table_is_registered_with_ticket_association():
     projects = Base.metadata.tables["projects"]
     assert "id" in projects.c
     assert "slug" in projects.c
-    assert "cwd" in projects.c
+    assert "source_path" in projects.c
     assert "default_workspace_mode" in projects.c
     assert "default_worktree_name_template" in projects.c
     assert "default_base_ref" in projects.c
@@ -67,12 +67,12 @@ def _index_ticket(session, ticket):
 def test_create_project_normalizes_slug_and_lists_active_projects(session):
     from nightdesk.domain.projects import archive_project, create_project, list_projects
 
-    project = create_project(session, name="Night Desk", cwd="/tmp/nightdesk")
-    archived = create_project(session, name="Old Repo", cwd="/tmp/old")
+    project = create_project(session, name="Night Desk", source_path="/tmp/nightdesk")
+    archived = create_project(session, name="Old Repo", source_path="/tmp/old")
     archive_project(session, archived.id)
 
     assert project.slug == "night-desk"
-    assert project.cwd == "/tmp/nightdesk"
+    assert project.source_path == "/tmp/nightdesk"
     assert [p.id for p in list_projects(session)] == [project.id]
     assert {p.id for p in list_projects(session, include_archived=True)} == {
         project.id,
@@ -86,7 +86,7 @@ def test_ticket_creation_applies_project_workspace_defaults(session, sample_prof
     project = create_project(
         session,
         name="Nightdesk",
-        cwd="/tmp/nightdesk",
+        source_path="/tmp/nightdesk",
         default_workspace_mode="git_worktree",
         default_worktree_name_template="feat/{slug}",
         default_base_ref="main",
@@ -110,8 +110,7 @@ def test_ticket_creation_applies_project_workspace_defaults(session, sample_prof
     )
 
     assert ticket.project_id == project.id
-    assert ticket.cwd == "/tmp/nightdesk"
-    assert ticket.workspace_mode == "git_worktree"
+    assert ticket.workspaces[0].source_path == "/tmp/nightdesk"
     primary = next(w for w in ticket.workspaces if w.role == "primary")
     linked = next(w for w in ticket.workspaces if w.role == "linked")
     assert primary.source_path == "/tmp/nightdesk"
@@ -129,7 +128,7 @@ def test_explicit_worktree_name_overrides_project_template(session, sample_profi
     project = create_project(
         session,
         name="Nightdesk explicit",
-        cwd="/tmp/nightdesk",
+        source_path="/tmp/nightdesk",
         default_workspace_mode="git_worktree",
         default_worktree_name_template="feat/{slug}",
     )
@@ -150,13 +149,13 @@ def test_explicit_worktree_name_overrides_project_template(session, sample_profi
 def test_ticket_project_filters_and_update_clear_assignment(session, sample_profile):
     from nightdesk.domain.projects import create_project
 
-    project = create_project(session, name="Nightdesk", cwd="/tmp/nightdesk")
+    project = create_project(session, name="Nightdesk", source_path="/tmp/nightdesk")
     assigned = create_ticket(
         session,
         title="assigned",
         prompt="",
         profile_id=sample_profile.id,
-        cwd="/tmp/nightdesk",
+        source_path="/tmp/nightdesk",
         project_id=project.id,
     )
     unassigned = create_ticket(
@@ -164,7 +163,7 @@ def test_ticket_project_filters_and_update_clear_assignment(session, sample_prof
         title="unassigned",
         prompt="",
         profile_id=sample_profile.id,
-        cwd="/tmp/other",
+        source_path="/tmp/other",
     )
 
     assert [t.id for t in list_tickets(session, project_id=project.id)] == [assigned.id]
@@ -181,13 +180,13 @@ def test_ticket_project_filters_and_update_clear_assignment(session, sample_prof
 def test_clone_ticket_inherits_project_assignment(session, sample_profile):
     from nightdesk.domain.projects import create_project
 
-    project = create_project(session, name="Nightdesk", cwd="/tmp/nightdesk")
+    project = create_project(session, name="Nightdesk", source_path="/tmp/nightdesk")
     ticket = create_ticket(
         session,
         title="parent",
         prompt="",
         profile_id=sample_profile.id,
-        cwd="/tmp/nightdesk",
+        source_path="/tmp/nightdesk",
         project_id=project.id,
     )
 
@@ -201,7 +200,7 @@ async def test_project_json_crud_and_ticket_project_filter(client):
 
     create_response = await client.post("/api/v1/projects", json={
         "name": "Nightdesk",
-        "cwd": "/tmp/nightdesk",
+        "source_path": "/tmp/nightdesk",
         "default_workspace_mode": "git_worktree",
         "default_worktree_name_template": "feat/{slug}",
         "default_base_ref": "main",
@@ -228,9 +227,9 @@ async def test_project_json_crud_and_ticket_project_filter(client):
     assert ticket_response.status_code == 201, ticket_response.text
     ticket = ticket_response.json()
     assert ticket["project_id"] == project["id"]
-    assert ticket["cwd"] == "/tmp/nightdesk"
-    assert ticket["workspace_mode"] == "git_worktree"
-    assert ticket["worktree_name"] == "feat/add-project-api"
+    assert ticket["workspaces"][0]["source_path"] == "/tmp/nightdesk"
+    assert ticket["workspaces"][0]["kind"] == "git_worktree"
+    assert ticket["workspaces"][0]["worktree_name"] == "feat/add-project-api"
 
     filtered_response = await client.get(f"/api/v1/tickets?project_id={project['id']}")
     assert filtered_response.status_code == 200, filtered_response.text
@@ -259,7 +258,7 @@ async def test_ticket_api_rejects_unknown_project_id(app):
         create_response = await client.post("/api/v1/tickets", json={
             "title": "bad project",
             "profile_id": profile_id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
             "project_id": "missing",
         })
         assert create_response.status_code == 404
@@ -267,7 +266,7 @@ async def test_ticket_api_rejects_unknown_project_id(app):
         ticket_response = await client.post("/api/v1/tickets", json={
             "title": "good",
             "profile_id": profile_id,
-            "cwd": "/tmp",
+            "source_path": "/tmp",
         })
         assert ticket_response.status_code == 201, ticket_response.text
 
@@ -284,7 +283,7 @@ async def test_settings_projects_ui_creates_project(app, session):
         assert page.status_code == 200
         assert 'href="/settings/projects"' in page.text
         assert 'name="name"' in page.text
-        assert 'name="cwd"' in page.text
+        assert 'name="source_path"' in page.text
         assert 'name="slug"' not in page.text
         assert 'data-slug-preview' in page.text
         assert 'name="color"' not in page.text
@@ -293,7 +292,7 @@ async def test_settings_projects_ui_creates_project(app, session):
         assert 'data-worktree-template-fields' in page.text
         assert 'data-linked-workspaces' in page.text
         assert "{slug}" in page.text
-        assert "project-create-modal-cwd-suggest" in page.text
+        assert "project-create-modal-source-path-suggest" in page.text
         assert "ndPathSuggest" in page.text
         assert 'data-create-project-toggle' in page.text
         assert "Create project" in page.text
@@ -301,7 +300,7 @@ async def test_settings_projects_ui_creates_project(app, session):
 
         created = await client.post("/settings/projects", data={
             "name": "Night Desk",
-            "cwd": "/tmp/nightdesk",
+            "source_path": "/tmp/nightdesk",
             "default_workspace_mode": "git_worktree",
             "default_worktree_name_template": "feat/{slug}",
             "default_base_ref": "main",
@@ -315,7 +314,7 @@ async def test_settings_projects_ui_creates_project(app, session):
 
     from nightdesk.domain.projects import list_projects
     projects = list_projects(session)
-    assert [(p.name, p.slug, p.cwd, p.default_linked_workspaces) for p in projects] == [
+    assert [(p.name, p.slug, p.source_path, p.default_linked_workspaces) for p in projects] == [
         ("Night Desk", "night-desk", "/tmp/nightdesk", [{
             "role": "linked",
             "label": "docs",
@@ -332,7 +331,7 @@ async def test_settings_projects_ui_edits_existing_project(app, session):
     project = create_project(
         session,
         name="Night Desk",
-        cwd="/tmp/nightdesk",
+        source_path="/tmp/nightdesk",
         default_workspace_mode="directory",
     )
 
@@ -344,7 +343,7 @@ async def test_settings_projects_ui_edits_existing_project(app, session):
 
         updated = await client.post(f"/settings/projects/{project.id}", data={
             "name": "Night Desk Updated",
-            "cwd": "/tmp/nightdesk-updated",
+            "source_path": "/tmp/nightdesk-updated",
             "default_workspace_mode": "git_worktree",
             "default_worktree_name_template": "feat/{slug}",
             "default_base_ref": "main",
@@ -358,7 +357,7 @@ async def test_settings_projects_ui_edits_existing_project(app, session):
 
     session.expire_all()
     refreshed = list_projects(session)
-    assert [(p.name, p.cwd, p.default_workspace_mode, p.default_worktree_name_template, p.default_base_ref, p.default_linked_workspaces) for p in refreshed] == [
+    assert [(p.name, p.source_path, p.default_workspace_mode, p.default_worktree_name_template, p.default_base_ref, p.default_linked_workspaces) for p in refreshed] == [
         (
             "Night Desk Updated",
             "/tmp/nightdesk-updated",
@@ -379,13 +378,13 @@ async def test_settings_projects_ui_edits_existing_project(app, session):
 async def test_board_project_filter_and_ticket_form_assignment(app, session, sample_profile):
     from nightdesk.domain.projects import create_project
 
-    project = create_project(session, name="Nightdesk", cwd="/tmp/nightdesk")
+    project = create_project(session, name="Nightdesk", source_path="/tmp/nightdesk")
     create_ticket(
         session,
         title="project ticket",
         prompt="",
         profile_id=sample_profile.id,
-        cwd="/tmp/nightdesk",
+        source_path="/tmp/nightdesk",
         project_id=project.id,
     )
     create_ticket(
@@ -393,7 +392,7 @@ async def test_board_project_filter_and_ticket_form_assignment(app, session, sam
         title="other ticket",
         prompt="",
         profile_id=sample_profile.id,
-        cwd="/tmp/other",
+        source_path="/tmp/other",
     )
 
     async with await _cookie_client(app) as client:
@@ -409,7 +408,7 @@ async def test_board_project_filter_and_ticket_form_assignment(app, session, sam
             "prompt": "",
             "profile_id": sample_profile.id,
             "project_id": project.id,
-            "cwd": "/tmp/nightdesk",
+            "source_path": "/tmp/nightdesk",
         })
         assert created.status_code == 204
 
@@ -422,13 +421,13 @@ async def test_archive_and_header_search_project_filters(app, session, sample_pr
     from nightdesk.domain.projects import create_project
     from nightdesk.domain.tickets import transition_status, archive
 
-    project = create_project(session, name="Nightdesk", cwd="/tmp/nightdesk")
+    project = create_project(session, name="Nightdesk", source_path="/tmp/nightdesk")
     kept = create_ticket(
         session,
         title="dark mode project",
         prompt="",
         profile_id=sample_profile.id,
-        cwd="/tmp/nightdesk",
+        source_path="/tmp/nightdesk",
         status="queued",
         project_id=project.id,
     )
@@ -437,7 +436,7 @@ async def test_archive_and_header_search_project_filters(app, session, sample_pr
         title="dark mode other",
         prompt="",
         profile_id=sample_profile.id,
-        cwd="/tmp/other",
+        source_path="/tmp/other",
         status="queued",
     )
     for ticket in (kept, hidden):

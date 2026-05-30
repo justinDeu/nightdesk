@@ -23,7 +23,7 @@ async def test_sse_transcript_sends_existing_content(app, session, tmp_path):
                         denied_tools=[], network_mode="off", network_allowlist=[],
                         secret_keys=[], default_model=None)
     t = create_ticket(session, title="t", prompt="p",
-                       priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+                       priority=0, profile_id=p.id, source_path="/tmp", run_now=False)
     log = tmp_path / "transcripts" / "run-abc.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("hello world\n")
@@ -47,7 +47,7 @@ def _make_running_ticket(session, tmp_path):
                        denied_tools=[], network_mode="off", network_allowlist=[],
                        secret_keys=[], default_model=None)
     t = create_ticket(session, title="t", prompt="p",
-                      priority=0, profile_id=p.id, cwd="/tmp", run_now=False)
+                      priority=0, profile_id=p.id, source_path="/tmp", run_now=False)
     return p, t
 
 

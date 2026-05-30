@@ -53,7 +53,6 @@ def _ticket_to_out(t) -> TicketOut:
     workspaces = []
     for ws in (t.workspaces or []):
         workspaces.append(TicketWorkspaceOut.model_validate(ws))
-    primary_ws = next((w for w in workspaces if w.role == "primary"), None)
     data = {
         "id": t.id,
         "title": t.title,
@@ -65,10 +64,6 @@ def _ticket_to_out(t) -> TicketOut:
         "profile_id": t.profile_id,
         "permission_overrides": t.permission_overrides,
         "additional_dirs": t.additional_dirs or [],
-        "cwd": t.cwd,
-        "workspace_mode": t.workspace_mode,
-        "worktree_name": primary_ws.worktree_name if primary_ws else None,
-        "worktree_path": primary_ws.worktree_path if primary_ws else None,
         "workspaces": workspaces,
         "run_now": t.run_now,
         "scheduled_after": t.scheduled_after,

@@ -56,7 +56,7 @@ def _seed_searchable_ticket(session, *, tid, title, prompt=""):
         session.commit()
     t = Ticket(id=tid, title=title, prompt=prompt,
                 status="draft", priority=0, position=0, profile_id=p.id,
-                additional_dirs=[], cwd="/tmp", run_now=False)
+                additional_dirs=[], run_now=False)
     session.add(t)
     session.commit()
     session.execute(text(
@@ -134,7 +134,7 @@ async def test_worker_pill_shows_host_and_counts_when_alive(cookie_client, sessi
     session.commit()
     t = Ticket(id="rt", title="running", prompt="",
                 status="running", priority=0, position=0, profile_id=p.id,
-                additional_dirs=[], cwd="/tmp", run_now=False)
+                additional_dirs=[], run_now=False)
     session.add(t)
     session.commit()
     # v2: the pill counts unfinished Run rows, not Ticket.status='running'.
@@ -166,7 +166,7 @@ async def test_worker_pill_run_now_overflow_indicator(cookie_client, session):
     session.commit()
     t = Ticket(id="rt2", title="run-now ticket", prompt="",
                 status="running", priority=0, position=0, profile_id=p.id,
-                additional_dirs=[], cwd="/tmp", run_now=True)
+                additional_dirs=[], run_now=True)
     session.add(t)
     session.commit()
     run = Run(id="r-now", ticket_id="rt2",
@@ -198,7 +198,7 @@ async def _seed_today_spend(session):
                 secret_keys=[])
     session.add(p); session.commit()
     t = Ticket(id="bt", title="t", prompt="", status="review", priority=0,
-               position=0, profile_id=p.id, additional_dirs=[], cwd="/tmp",
+               position=0, profile_id=p.id, additional_dirs=[],
                run_now=False)
     session.add(t); session.commit()
     session.add(Run(id="br", ticket_id="bt", started_at=datetime.now(timezone.utc),

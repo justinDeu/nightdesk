@@ -88,7 +88,13 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         # on top of nightdesk's own setting_sources=["project"] pass. The
         # user should know in case behavior is unexpected.
         project_settings_paths: list[str] = []
-        for wpath in {t.cwd} | {w.resolved_path for w in (t.workspaces or []) if w.resolved_path}:
+        workspace_paths = {
+            path
+            for ws in (t.workspaces or [])
+            for path in (ws.resolved_path, ws.worktree_path, ws.source_path)
+            if path
+        }
+        for wpath in workspace_paths:
             if not wpath:
                 continue
             for name in (".claude/settings.json", ".claude/settings.local.json"):
@@ -403,9 +409,9 @@ def _find_workspace(session: Session, run_id: str, ticket_id: str):
     ).scalar_one_or_none()
     if ws is not None:
         return ws
-    return session.execute(
+    candidates = list(session.execute(
         select(TicketWorkspace)
         .where(TicketWorkspace.ticket_id == ticket_id)
         .order_by(TicketWorkspace.position)
-        .limit(1)
-    ).scalar_one_or_none()
+    ).scalars())
+    return next((item for item in candidates if diff_repo_path(item)), None)

@@ -78,9 +78,9 @@ def publish_cc_session(store_dir: str, session_id: str) -> Optional[str]:
     interactive `claude --resume <id>` finds it.
 
     ``store_dir`` was bound in as CLAUDE_CONFIG_DIR/projects, so its layout
-    mirrors ~/.claude/projects exactly (``<encoded-cwd>/<session-id>.jsonl``).
+    mirrors ~/.claude/projects exactly (``<encoded-workdir>/<session-id>.jsonl``).
     We mirror the file's path-relative-to-store into the host store — no
-    fragile cwd-encoding logic. Best-effort: never raises (a publish failure
+    fragile workdir-encoding logic. Best-effort: never raises (a publish failure
     must not fail the run).
     """
     import glob
@@ -219,7 +219,7 @@ def _credential_mount(spec: PermissionSpec) -> Optional[_Mount]:
 def build_bwrap_argv(
     spec: PermissionSpec,
     *,
-    cwd: str,
+    working_dir: str,
     cmd: list[str],
     env: dict[str, str],
     cc_sessions_dir: Optional[str] = None,
@@ -232,12 +232,12 @@ def build_bwrap_argv(
     (``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN``).
     """
     # Validate before assembling so the error message points at the cause.
-    candidates = list(spec.fs_read) + list(spec.fs_write) + [cwd]
+    candidates = list(spec.fs_read) + list(spec.fs_write) + [working_dir]
     assert_no_excluded_paths(candidates)
 
     cc_bin = spec.claude_binary_path or shutil.which("claude") or "/usr/local/bin/claude"
-    log.info("build_bwrap_argv: cwd=%s claude_binary=%s fs_write=%d fs_read=%d",
-             cwd, cc_bin, len(spec.fs_write), len(spec.fs_read))
+    log.info("build_bwrap_argv: working_dir=%s claude_binary=%s fs_write=%d fs_read=%d",
+             working_dir, cc_bin, len(spec.fs_write), len(spec.fs_read))
 
     argv: list[str] = ["bwrap"]
     argv += ["--die-with-parent"]
@@ -345,7 +345,7 @@ def build_bwrap_argv(
             continue
         argv += ["--setenv", k, str(v)]
 
-    argv += ["--chdir", cwd]
+    argv += ["--chdir", working_dir]
     argv += ["--"]
     argv += cmd
     return argv

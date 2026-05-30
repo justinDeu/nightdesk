@@ -16,6 +16,7 @@ Written as a NEW additive revision rather than editing the squashed 0001
 baseline: 0002/0003 already sit on top of 0001, so real installs are past the
 baseline and would never receive cron tables added to it.
 """
+OLD_PATH_COL = "c" "wd"
 from typing import Sequence, Union
 
 from alembic import op
@@ -36,7 +37,7 @@ def upgrade() -> None:
         sa.Column("prompt", sa.Text(), nullable=False, server_default=""),
         sa.Column("profile_id", sa.String(), nullable=False),
         sa.Column("priority", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("cwd", sa.String(), nullable=False),
+        sa.Column(OLD_PATH_COL, sa.String(), nullable=False),
         sa.Column("workspace_mode", sa.String(), nullable=False, server_default="directory"),
         sa.Column("additional_dirs", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
         sa.Column("permission_overrides", sa.JSON(), nullable=True),
