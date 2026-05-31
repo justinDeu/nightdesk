@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -9,7 +10,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pydantic import ValidationError
+
 from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.api.schemas import ConfigUpdate
 from nightdesk.db.models import ConfigRow, ScheduleWindow
 from nightdesk.domain.projects import (
     ProjectNameTaken,
@@ -19,6 +23,7 @@ from nightdesk.domain.projects import (
     list_projects,
     update_project,
 )
+from nightdesk.domain.toolchains import toolchain_names, toolchain_options
 from nightdesk.domain.notifications import build_test_payload, fire_webhook
 from nightdesk.domain.tickets import (
     archive, requeue, request_run_now, transition_status,
@@ -72,6 +77,8 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "path_claude_binary": shutil.which("claude"),
             "windows": _windows_payload(session),
             "schedule_timezone": (cfg.schedule_timezone if cfg else "UTC"),
+            "toolchain_names": toolchain_names(cfg),
+            "toolchain_options": toolchain_options(cfg),
             "projects": list_projects(session, include_archived=True),
         }
 
@@ -261,9 +268,22 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         request: Request,
         session: Session = Depends(get_session),
         worktree_base_ref: str = Form(""),
+        toolchain_presets_json: str = Form(""),
     ):
         cfg = _ensure_cfg(session)
         cfg.worktree_base_ref = (worktree_base_ref or "").strip() or None
+        if toolchain_presets_json.strip():
+            try:
+                raw = json.loads(toolchain_presets_json)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(422, f"invalid toolchain presets JSON: {exc.msg}")
+            try:
+                validated = ConfigUpdate(toolchain_presets=raw)
+            except ValidationError as exc:
+                raise HTTPException(422, f"invalid toolchain presets: {exc.errors()[0]['msg']}")
+            cfg.toolchain_presets = validated.toolchain_presets or {}
+        else:
+            cfg.toolchain_presets = {}
         session.commit()
         return _render_settings(request, session, category="worktrees", saved=True)
 
@@ -292,6 +312,18 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             })
         return linked_workspaces
 
+
+    def _form_list(form, key: str) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in form.getlist(key):
+            item = str(raw or "").strip()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return out
+
     @router.post("/settings/projects", response_class=HTMLResponse, dependencies=[auth])
     async def settings_projects_save(
         request: Request,
@@ -316,6 +348,8 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
                 default_worktree_name_template=default_worktree_name_template or None,
                 default_base_ref=default_base_ref or None,
                 default_linked_workspaces=linked_workspaces or None,
+                default_toolchains=_form_list(form, "default_toolchain"),
+                default_tool_paths=_form_list(form, "default_tool_path"),
             )
         except ProjectNameTaken:
             raise HTTPException(409, "project name or slug already exists")
@@ -349,6 +383,8 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
                 default_worktree_name_template=default_worktree_name_template or None,
                 default_base_ref=default_base_ref or None,
                 default_linked_workspaces=linked_workspaces or None,
+                default_toolchains=_form_list(form, "default_toolchain"),
+                default_tool_paths=_form_list(form, "default_tool_path"),
             )
         except ProjectNotFound:
             raise HTTPException(404, "project not found")

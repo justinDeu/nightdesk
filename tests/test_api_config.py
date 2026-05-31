@@ -262,3 +262,63 @@ async def test_patch_config_sets_and_clears_worktree_base_ref(client):
     r = await client.patch("/api/v1/config", json={"worktree_base_ref": ""})
     assert r.status_code == 200
     assert (r.json()["worktree_base_ref"] or "") == ""
+
+async def test_config_api_persists_global_toolchain_presets(client):
+    response = await client.patch("/api/v1/config", json={
+        "toolchain_presets": {
+            "user-python-tools": ["~/.local/bin"],
+            "project-python": ["./.venv/bin"],
+        },
+    })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["toolchain_presets"] == {
+        "user-python-tools": ["~/.local/bin"],
+        "project-python": ["./.venv/bin"],
+    }
+
+
+async def test_project_api_accepts_toolchain_defaults_and_ticket_overrides(client):
+    profile = await client.post("/api/v1/profiles", json={
+        "name": "toolchain-api",
+        "claude_credentials": {"source": "inherit"},
+    })
+    assert profile.status_code == 201, profile.text
+
+    project_response = await client.post("/api/v1/projects", json={
+        "name": "Toolchain API",
+        "source_path": "/tmp/toolchain-api",
+        "default_toolchains": ["user-python-tools"],
+        "default_tool_paths": ["./.venv/bin"],
+    })
+    assert project_response.status_code == 201, project_response.text
+    project = project_response.json()
+    assert project["default_toolchains"] == ["user-python-tools"]
+    assert project["default_tool_paths"] == ["./.venv/bin"]
+
+    ticket_response = await client.post("/api/v1/tickets", json={
+        "title": "Use tools",
+        "profile_id": profile.json()["id"],
+        "project_id": project["id"],
+        "toolchain_overrides": {
+            "enable": ["rust-user-tools"],
+            "disable": ["user-python-tools"],
+            "extra_paths": ["./scripts/bin"],
+        },
+    })
+    assert ticket_response.status_code == 201, ticket_response.text
+    assert ticket_response.json()["toolchain_overrides"] == {
+        "enable": ["rust-user-tools"],
+        "disable": ["user-python-tools"],
+        "extra_paths": ["./scripts/bin"],
+    }
+
+async def test_project_api_rejects_unknown_toolchain_name(client):
+    response = await client.post("/api/v1/projects", json={
+        "name": "Bad Toolchain",
+        "source_path": "/tmp/bad-toolchain",
+        "default_toolchains": ["pyhton-project"],
+    })
+
+    assert response.status_code == 400
+    assert "unknown toolchain" in response.text

@@ -8,6 +8,12 @@ from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Ticket, TicketDependency, TicketWorkspace
 from nightdesk.domain.projects import apply_project_defaults, get_project
+from nightdesk.domain.toolchains import (
+    assert_known_toolchains,
+    assert_paths_not_excluded,
+    clean_string_list,
+    current_config,
+)
 
 
 # v2 lifecycle. Run-level outcomes (success/failed/cancelled) now live on Run.exit_status.
@@ -47,6 +53,20 @@ def _workspace_dict(raw: object) -> dict:
     return data
 
 
+
+
+def _clean_toolchain_overrides(value: object) -> Optional[dict]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("toolchain_overrides must be an object")
+    cleaned = {
+        "enable": clean_string_list(value.get("enable"), field="toolchain_overrides.enable"),
+        "disable": clean_string_list(value.get("disable"), field="toolchain_overrides.disable"),
+        "extra_paths": clean_string_list(value.get("extra_paths"), field="toolchain_overrides.extra_paths"),
+    }
+    assert_paths_not_excluded(cleaned["extra_paths"], field="toolchain_overrides.extra_paths")
+    return cleaned if any(cleaned.values()) else None
 
 
 def _stage_next_run(ticket: Ticket, *, intent: str,
@@ -112,6 +132,12 @@ def create_ticket(session: Session, **fields) -> Ticket:
     worktree_name = fields.pop("worktree_name", None)
     worktree_path = fields.pop("worktree_path", None)
     fields.setdefault("status", "draft")
+    if "toolchain_overrides" in fields:
+        fields["toolchain_overrides"] = _clean_toolchain_overrides(
+            fields["toolchain_overrides"],
+        )
+        toolchains = fields["toolchain_overrides"] or {}
+        assert_known_toolchains(toolchains.get("enable", []), config=current_config(session))
     fields.setdefault("additional_dirs", [])
     status = fields.get("status")
     if status not in _ALL_STATUSES:
@@ -186,6 +212,12 @@ def update_ticket(session: Session, ticket_id: str, **fields) -> Ticket:
     worktree_name = fields.pop("worktree_name", None)
     worktree_path = fields.pop("worktree_path", None)
     t = get_ticket(session, ticket_id)
+    if "toolchain_overrides" in fields:
+        fields["toolchain_overrides"] = _clean_toolchain_overrides(
+            fields["toolchain_overrides"],
+        )
+        toolchains = fields["toolchain_overrides"] or {}
+        assert_known_toolchains(toolchains.get("enable", []), config=current_config(session))
     if fields.get("project_id") is not None:
         get_project(session, fields["project_id"])
     for k, v in fields.items():
@@ -457,6 +489,7 @@ def clone_ticket(session: Session, ticket_id: str, *, title: Optional[str],
         priority=t.priority,
         profile_id=t.profile_id,
         permission_overrides=t.permission_overrides,
+        toolchain_overrides=t.toolchain_overrides,
         additional_dirs=list(t.additional_dirs or []),
         project_id=t.project_id,
         workspaces=workspace_specs,

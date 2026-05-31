@@ -211,3 +211,70 @@ def test_credentials_api_key_does_not_mount_file(tmp_path):
     argv = build_bwrap_argv(spec, working_dir="/tmp", cmd=["true"], env={})
     # No /sandbox-home/.claude/.credentials.json mount target should appear.
     assert not any("/.credentials.json" in a for a in argv)
+
+def test_excluded_path_ancestor_is_rejected():
+    home = os.path.expanduser("~")
+
+    with pytest.raises(ValueError, match="protected directory"):
+        assert_no_excluded_paths([home])
+
+
+def test_tool_paths_are_added_to_path_and_mounted_read_only(tmp_path):
+    from nightdesk.worker.run_one import _build_env
+
+    tool_dir = tmp_path / "tools" / "bin"
+    tool_dir.mkdir(parents=True)
+    spec = _spec(tool_paths=[str(tool_dir)])
+
+    env = _build_env(spec, {})
+    argv = build_bwrap_argv(spec, working_dir="/tmp", cmd=["true"], env=env)
+    triples = [(argv[i], argv[i + 1], argv[i + 2]) for i in range(len(argv) - 2)]
+
+    assert env["PATH"].split(os.pathsep)[0] == str(tool_dir)
+    assert ("--ro-bind-try", str(tool_dir), str(tool_dir)) in triples
+
+
+def test_tool_path_symlink_runtime_root_is_mounted(tmp_path):
+    user_bin = tmp_path / "home" / ".local" / "bin"
+    venv_root = tmp_path / "home" / ".local" / "share" / "pipx" / "venvs" / "ruff"
+    target_bin = venv_root / "bin"
+    user_bin.mkdir(parents=True)
+    target_bin.mkdir(parents=True)
+    target = target_bin / "ruff"
+    target.write_text("#!/bin/sh\n")
+    (user_bin / "ruff").symlink_to(target)
+    spec = _spec(tool_paths=[str(user_bin)])
+
+    argv = build_bwrap_argv(spec, working_dir="/tmp", cmd=["true"], env={})
+    triples = [(argv[i], argv[i + 1], argv[i + 2]) for i in range(len(argv) - 2)]
+
+    assert ("--ro-bind-try", str(user_bin), str(user_bin)) in triples
+    assert ("--ro-bind-try", str(venv_root), str(venv_root)) in triples
+
+def test_tool_path_symlink_with_target_inside_tool_dir_does_not_mount_parent(tmp_path):
+    tool_dir = tmp_path / "bin"
+    tool_dir.mkdir()
+    target = tool_dir / "tmux-sessionizer"
+    target.write_text("#!/bin/sh\n")
+    (tool_dir / "tm").symlink_to(target)
+    spec = _spec(tool_paths=[str(tool_dir)])
+
+    argv = build_bwrap_argv(spec, working_dir="/tmp", cmd=["true"], env={})
+    triples = [(argv[i], argv[i + 1], argv[i + 2]) for i in range(len(argv) - 2)]
+
+    assert ("--ro-bind-try", str(tool_dir), str(tool_dir)) in triples
+    assert ("--ro-bind-try", str(tmp_path), str(tmp_path)) not in triples
+
+
+def test_tool_runtime_root_only_skips_exact_system_bins():
+    from pathlib import Path
+
+    from nightdesk.worker.sandbox import _tool_runtime_root
+
+    # Real system bin path: should not return parent.parent ("/").
+    assert _tool_runtime_root(Path("/usr/bin/cat")) == Path("/usr/bin")
+    assert _tool_runtime_root(Path("/usr/local/bin/foo")) == Path("/usr/local/bin")
+
+    # Decoy path whose string starts with "/usr/bin" but is a separate dir.
+    # The old prefix-string check would falsely return the bin subdir here.
+    assert _tool_runtime_root(Path("/usr/binary/pkg/bin/tool")) == Path("/usr/binary/pkg")

@@ -165,6 +165,50 @@ def _dedup_under(paths: Iterable[str]) -> list[str]:
     return kept
 
 
+def _is_under(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+_SYSTEM_BIN_DIRS = (Path("/usr/bin"), Path("/usr/local/bin"))
+
+
+def _tool_runtime_root(target: Path) -> Path:
+    parent = target.parent
+    if parent.name == "bin" and parent not in _SYSTEM_BIN_DIRS:
+        return parent.parent
+    return parent
+
+
+def _tool_mount_paths(tool_paths: Iterable[str]) -> list[str]:
+    mounts: list[str] = []
+    for raw in tool_paths:
+        if not raw:
+            continue
+        path = Path(raw).resolve(strict=False)
+        mounts.append(str(path))
+        if not path.is_dir():
+            continue
+        try:
+            entries = list(path.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_symlink():
+                continue
+            try:
+                target = entry.resolve(strict=True)
+            except OSError:
+                continue
+            if _is_under(target, path):
+                continue
+            mounts.append(str(_tool_runtime_root(target)))
+    return _dedup_under(mounts)
+
+
 def _exclusion_paths() -> list[str]:
     """Host paths that must NEVER be visible inside the sandbox.
 
@@ -185,14 +229,11 @@ def assert_no_excluded_paths(paths: Iterable[str]) -> None:
     for p in paths:
         rp = Path(p).resolve()
         for ex in excluded:
-            try:
-                rp.relative_to(ex)
-            except ValueError:
-                continue
-            raise ValueError(
-                f"path {p!r} is inside protected directory {str(ex)!r}; "
-                "refusing to bind-mount into sandbox"
-            )
+            if _is_under(rp, ex) or _is_under(ex, rp):
+                raise ValueError(
+                    f"path {p!r} overlaps protected directory {str(ex)!r}; "
+                    "refusing to bind-mount into sandbox"
+                )
 
 
 @dataclass
@@ -232,12 +273,15 @@ def build_bwrap_argv(
     (``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN``).
     """
     # Validate before assembling so the error message points at the cause.
-    candidates = list(spec.fs_read) + list(spec.fs_write) + [working_dir]
+    tool_mounts = _tool_mount_paths(getattr(spec, "tool_paths", None) or [])
+    candidates = list(spec.fs_read) + list(spec.fs_write) + tool_mounts + [working_dir]
     assert_no_excluded_paths(candidates)
 
     cc_bin = spec.claude_binary_path or shutil.which("claude") or "/usr/local/bin/claude"
-    log.info("build_bwrap_argv: working_dir=%s claude_binary=%s fs_write=%d fs_read=%d",
-             working_dir, cc_bin, len(spec.fs_write), len(spec.fs_read))
+    log.info(
+        "build_bwrap_argv: working_dir=%s claude_binary=%s fs_write=%d fs_read=%d tool_paths=%d",
+        working_dir, cc_bin, len(spec.fs_write), len(spec.fs_read), len(tool_mounts),
+    )
 
     argv: list[str] = ["bwrap"]
     argv += ["--die-with-parent"]
@@ -332,6 +376,12 @@ def build_bwrap_argv(
         os.makedirs(cc_sessions_dir, exist_ok=True)
         argv += ["--bind", cc_sessions_dir, f"{SANDBOX_HOME}/.claude/projects"]
 
+
+    # Tool directories are PATH/executable access, not data access. Mount them
+    # read-only, including resolved runtime roots for symlinked tool shims such
+    # as ~/.local/bin/ruff -> ~/.local/share/pipx/venvs/ruff/bin/ruff.
+    for p in tool_mounts:
+        argv += ["--ro-bind-try", p, p]
     # User-declared filesystem allowances.
     for p in spec.fs_read:
         argv += ["--ro-bind-try", p, p]

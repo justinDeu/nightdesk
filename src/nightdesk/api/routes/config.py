@@ -55,6 +55,7 @@ def _config_out(session: Session, row: ConfigRow) -> ConfigOut:
         notify_webhook_url=row.notify_webhook_url,
         schedule_timezone=row.schedule_timezone,
         windows=windows,
+        toolchain_presets=row.toolchain_presets or {},
     )
 
 

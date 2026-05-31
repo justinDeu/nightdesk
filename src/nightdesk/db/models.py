@@ -65,6 +65,8 @@ class Project(Base):
     default_worktree_name_template: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     default_base_ref: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     default_linked_workspaces: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    default_toolchains: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    default_tool_paths: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     color: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -88,6 +90,7 @@ class Ticket(Base):
     project_id: Mapped[Optional[str]] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"))
     permission_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    toolchain_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     run_now: Mapped[bool] = mapped_column(Boolean, default=False)
     scheduled_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -178,6 +181,7 @@ class Run(Base):
     # Claude session id reported by the SDK at run completion. Enables resuming
     # the conversation (`claude --resume <session_id>` / SDK resume=).
     session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    sandbox_tool_paths: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     ticket: Mapped["Ticket"] = relationship(back_populates="runs", foreign_keys=[ticket_id])
 
@@ -240,6 +244,7 @@ class ConfigRow(Base):
     # the scheduler converts ``now`` into this zone before matching. Default
     # "UTC" reproduces the pre-timezone-fix behavior.
     schedule_timezone: Mapped[str] = mapped_column(String, default="UTC", nullable=False)
+    toolchain_presets: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class ScheduleWindow(Base):

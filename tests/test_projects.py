@@ -146,6 +146,74 @@ def test_explicit_worktree_name_overrides_project_template(session, sample_profi
     assert primary.worktree_name == "custom-branch"
 
 
+def test_project_rejects_unknown_toolchain_name(session):
+    from nightdesk.domain.projects import create_project
+
+    try:
+        create_project(
+            session,
+            name="Bad tools",
+            source_path="/tmp/bad-tools",
+            default_toolchains=["pyhton-project"],
+        )
+    except ValueError as exc:
+        assert "unknown toolchain" in str(exc)
+    else:
+        raise AssertionError("unknown toolchain was accepted")
+
+
+def test_project_accepts_configured_toolchain_preset(session):
+    from nightdesk.db.models import ConfigRow
+    from nightdesk.domain.projects import create_project
+
+    session.add(ConfigRow(
+        id=1,
+        worktree_root="/tmp/work",
+        transcript_root="/tmp/transcripts",
+        toolchain_presets={"custom-tools": ["/opt/custom/bin"]},
+    ))
+    session.commit()
+
+    project = create_project(
+        session,
+        name="Configured tools",
+        source_path="/tmp/configured-tools",
+        default_toolchains=["custom-tools"],
+    )
+
+    assert project.default_toolchains == ["custom-tools"]
+
+
+
+def test_ticket_rejects_unknown_toolchain_override(session, sample_profile):
+    try:
+        create_ticket(
+            session,
+            title="bad override",
+            prompt="",
+            profile_id=sample_profile.id,
+            source_path="/tmp/bad-override",
+            toolchain_overrides={"enable": ["missing-tools"]},
+        )
+    except ValueError as exc:
+        assert "unknown toolchain" in str(exc)
+    else:
+        raise AssertionError("unknown toolchain override was accepted")
+
+
+def test_toolchain_metadata_includes_labels_paths_and_descriptions():
+    from nightdesk.domain.toolchains import toolchain_options
+
+    options = {item["name"]: item for item in toolchain_options(None)}
+
+    assert "python-project" not in options
+    assert "node-project" not in options
+    assert options["rust-user-tools"]["label"] == "Cargo-installed tools"
+    assert options["rust-user-tools"]["paths"] == ["~/.cargo/bin"]
+    assert "cargo install" in options["rust-user-tools"]["description"]
+    assert options["user-python-tools"]["label"] == "User local tools"
+    assert options["user-python-tools"]["paths"] == ["~/.local/bin"]
+    assert "Any user-installed executables" in options["user-python-tools"]["description"]
 def test_ticket_project_filters_and_update_clear_assignment(session, sample_profile):
     from nightdesk.domain.projects import create_project
 
@@ -292,8 +360,19 @@ async def test_settings_projects_ui_creates_project(app, session):
         assert 'data-worktree-template-fields' in page.text
         assert 'data-linked-workspaces' in page.text
         assert "{slug}" in page.text
+        assert "User local tools" in page.text
+        assert "~/.local/bin" in page.text
+        assert "Any user-installed executables" in page.text
+        assert "Cargo-installed tools" in page.text
+        assert "Tools installed by cargo install" in page.text
+        assert "External tools" in page.text
+        assert "Project Python venv" not in page.text
+        assert "Project Node tools" not in page.text
         assert "project-create-modal-source-path-suggest" in page.text
         assert "ndPathSuggest" in page.text
+        assert 'data-toolchain-rows' in page.text
+        assert 'name="default_toolchain"' in page.text
+        assert 'name="default_tool_path"' in page.text
         assert 'data-create-project-toggle' in page.text
         assert "Create project" in page.text
         assert "showModal()" in page.text
@@ -307,6 +386,8 @@ async def test_settings_projects_ui_creates_project(app, session):
             "linked_workspace_path": "/tmp/docs",
             "linked_workspace_kind": "directory",
             "linked_workspace_access": "read_only",
+            "default_toolchain": ["user-python-tools"],
+            "default_tool_path": ["./.venv/bin"],
         })
         assert created.status_code == 200, created.text
         assert "Night Desk" in created.text
@@ -314,14 +395,17 @@ async def test_settings_projects_ui_creates_project(app, session):
 
     from nightdesk.domain.projects import list_projects
     projects = list_projects(session)
-    assert [(p.name, p.slug, p.source_path, p.default_linked_workspaces) for p in projects] == [
+    assert [
+        (p.name, p.slug, p.source_path, p.default_linked_workspaces, p.default_toolchains, p.default_tool_paths)
+        for p in projects
+    ] == [
         ("Night Desk", "night-desk", "/tmp/nightdesk", [{
             "role": "linked",
             "label": "docs",
             "kind": "directory",
             "access": "read_only",
             "source_path": "/tmp/docs",
-        }])
+        }], ["user-python-tools"], ["./.venv/bin"])
     ]
 
 
@@ -469,3 +553,148 @@ async def test_settings_projects_empty_state_uses_simple_help_text(app):
         assert "No projects yet." in page.text
         assert "Use Create project to add one." in page.text
         assert "Create your first project" not in page.text
+
+def test_toolchain_columns_are_registered():
+    projects = Base.metadata.tables["projects"]
+    tickets = Base.metadata.tables["tickets"]
+    runs = Base.metadata.tables["runs"]
+    config = Base.metadata.tables["config"]
+
+    assert "default_toolchains" in projects.c
+    assert "default_tool_paths" in projects.c
+    assert "toolchain_overrides" in tickets.c
+    assert "sandbox_tool_paths" in runs.c
+    assert "toolchain_presets" in config.c
+
+
+def test_project_stores_toolchain_defaults_and_ticket_stores_overrides(session, sample_profile):
+    from nightdesk.domain.projects import create_project
+
+    project = create_project(
+        session,
+        name="Tool Project",
+        source_path="/tmp/tool-project",
+        default_toolchains=["user-python-tools"],
+        default_tool_paths=["./.venv/bin", "/opt/tooling/bin"],
+    )
+
+    ticket = create_ticket(
+        session,
+        title="Use extra tools",
+        prompt="",
+        profile_id=sample_profile.id,
+        project_id=project.id,
+        toolchain_overrides={
+            "enable": ["rust-user-tools"],
+            "disable": ["user-python-tools"],
+            "extra_paths": ["./scripts/bin"],
+        },
+    )
+
+    assert project.default_toolchains == ["user-python-tools"]
+    assert project.default_tool_paths == ["./.venv/bin", "/opt/tooling/bin"]
+    assert ticket.toolchain_overrides == {
+        "enable": ["rust-user-tools"],
+        "disable": ["user-python-tools"],
+        "extra_paths": ["./scripts/bin"],
+    }
+
+
+def test_clone_ticket_preserves_toolchain_overrides(session, sample_profile):
+    original = create_ticket(
+        session,
+        title="With tools",
+        prompt="",
+        profile_id=sample_profile.id,
+        source_path="/tmp/with-tools",
+        toolchain_overrides={
+            "enable": ["rust-user-tools"],
+            "extra_paths": ["./bin"],
+        },
+    )
+
+    clone = clone_ticket(session, original.id, title=None, carry_context=False)
+
+    assert clone.toolchain_overrides == {
+        "enable": ["rust-user-tools"],
+        "disable": [],
+        "extra_paths": ["./bin"],
+    }
+
+
+def test_ticket_accepts_disable_of_unknown_toolchain(session, sample_profile):
+    ticket = create_ticket(
+        session,
+        title="disable removed",
+        prompt="",
+        profile_id=sample_profile.id,
+        source_path="/tmp/disable-removed",
+        toolchain_overrides={"disable": ["preset-since-deleted"]},
+    )
+
+    assert ticket.toolchain_overrides == {
+        "enable": [],
+        "disable": ["preset-since-deleted"],
+        "extra_paths": [],
+    }
+
+
+def test_project_rejects_default_tool_path_overlapping_protected_dir(session):
+    import os
+    from nightdesk.domain.projects import create_project
+
+    bad = os.path.expanduser("~/.local/share/nightdesk/leak")
+    try:
+        create_project(
+            session,
+            name="Leaky",
+            source_path="/tmp/leaky",
+            default_tool_paths=[bad],
+        )
+    except ValueError as exc:
+        assert "protected directory" in str(exc)
+    else:
+        raise AssertionError("protected-path tool dir was accepted")
+
+
+def test_resolve_tool_paths_expands_env_vars(session, sample_profile, monkeypatch):
+    import os
+    from nightdesk.domain.projects import create_project
+    from nightdesk.domain.toolchains import resolve_tool_paths
+
+    monkeypatch.setenv("FAKE_TOOL_HOME", "/opt/fakehome")
+    project = create_project(
+        session,
+        name="Env Tools",
+        source_path="/tmp/env-tools",
+        default_tool_paths=["$FAKE_TOOL_HOME/bin"],
+    )
+    ticket = create_ticket(
+        session,
+        title="env",
+        prompt="",
+        profile_id=sample_profile.id,
+        project_id=project.id,
+    )
+
+    resolved = resolve_tool_paths(ticket=ticket, config=None, base_path="/tmp/env-tools")
+    assert os.path.join("/opt/fakehome", "bin") in resolved
+
+
+def test_ticket_rejects_extra_path_overlapping_protected_dir(session, sample_profile):
+    import os
+
+    bad = os.path.expanduser("~/.claude/peek")
+    try:
+        create_ticket(
+            session,
+            title="leak",
+            prompt="",
+            profile_id=sample_profile.id,
+            source_path="/tmp/leak",
+            toolchain_overrides={"extra_paths": [bad]},
+        )
+    except ValueError as exc:
+        assert "protected directory" in str(exc)
+    else:
+        raise AssertionError("protected extra_path was accepted")

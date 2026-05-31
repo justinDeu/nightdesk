@@ -20,7 +20,7 @@ import subprocess
 import sys
 import traceback
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -37,6 +37,7 @@ from nightdesk.domain.notifications import (
 )
 from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import transition_status
+from nightdesk.domain.toolchains import resolve_tool_paths
 from nightdesk.transcript import append_worker_error
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult, Executor
 from nightdesk.worker.headless_prompt import (
@@ -259,8 +260,10 @@ def _build_env(
     # into a stale read-only mount. The claude binary is passed to the SDK by
     # explicit `cli_path` (see claude_executor._build_runner_spec), so PATH
     # does not need to find it.
+    tool_path = os.pathsep.join(getattr(spec, "tool_paths", None) or [])
+    path = f"{tool_path}{os.pathsep}{_DEFAULT_PATH}" if tool_path else _DEFAULT_PATH
     env: dict[str, str] = {
-        "PATH": _DEFAULT_PATH,
+        "PATH": path,
         "HOME": SANDBOX_HOME,
         "USER": "sandboxed",
         "LOGNAME": "sandboxed",
@@ -394,6 +397,7 @@ async def run_one(
     run_log_handler: Optional[logging.Handler] = None
     secret_box = ProfileSecretBox(cfg.bearer_token) if cfg.bearer_token else None
     default_claude_binary = _resolve_default_claude_binary(session)
+    run: Optional[Run] = None
 
     # Install a SIGTERM handler so the daemon (or the user via kill) can
     # gracefully stop the run. The handler sets cancel_event, which the
@@ -458,6 +462,13 @@ async def run_one(
                 ),
                 bundle,
             )
+            schedule_cfg = session.get(ConfigRow, 1)
+            tool_paths = resolve_tool_paths(
+                ticket=ticket,
+                config=schedule_cfg,
+                base_path=str(ws.path),
+            )
+            spec = replace(spec, tool_paths=tool_paths)
             cfg.transcript_root.mkdir(parents=True, exist_ok=True)
 
             started_as_run_now = bool(ticket.run_now)
@@ -485,12 +496,12 @@ async def run_one(
                 headless_policy_version=HEADLESS_POLICY_VERSION,
                 restart_workspace_policy=restart_workspace_policy,
                 prompt=ticket.prompt,
+                sandbox_tool_paths=tool_paths,
             )
             log.info("run %s started for ticket %s: transcript=%s intent=%s",
                      run.id, ticket.id, run.transcript_path, run_intent)
 
             # Resolve scheduling knobs from the config table (live values).
-            schedule_cfg = session.get(ConfigRow, 1)
             max_duration = getattr(schedule_cfg, "max_run_duration_seconds", 7200) or 7200
             token_grace = getattr(schedule_cfg, "run_token_grace_seconds", 300) or 300
             extra_scopes = list(ticket.profile.run_token_scopes or [])
@@ -683,6 +694,26 @@ async def run_one(
                 session.rollback()
             except Exception:
                 pass
+
+            setup_run_id = None
+            if run is not None:
+                setup_run_id = run.id
+            else:
+                cur_ticket = session.get(Ticket, ticket_id)
+                if cur_ticket is not None:
+                    setup_run_id = cur_ticket.current_run_id
+            if setup_run_id is not None:
+                try:
+                    setup_run = session.get(Run, setup_run_id)
+                    if setup_run is not None and setup_run.finished_at is None:
+                        finish_run(
+                            session,
+                            setup_run_id,
+                            exit_status="failed",
+                            error_summary=f"setup error: {exc}",
+                        )
+                except Exception:
+                    log.exception("could not finish setup-failed run %s", setup_run_id)
             try:
                 cur = session.get(Ticket, ticket_id)
                 if cur is not None and cur.status == "running":

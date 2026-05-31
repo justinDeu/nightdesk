@@ -63,6 +63,7 @@ def _ticket_to_out(t) -> TicketOut:
         "project_id": t.project_id,
         "profile_id": t.profile_id,
         "permission_overrides": t.permission_overrides,
+        "toolchain_overrides": t.toolchain_overrides,
         "additional_dirs": t.additional_dirs or [],
         "workspaces": workspaces,
         "run_now": t.run_now,

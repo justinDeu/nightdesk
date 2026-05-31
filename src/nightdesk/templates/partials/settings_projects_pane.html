@@ -50,6 +50,50 @@
       </label>
     </div>
 
+    <section class="rounded border border-border bg-bg-elev-2/40 p-2 space-y-3" data-toolchains>
+      <div class="flex items-center justify-between gap-2">
+        <div>
+          <h4 class="text-sm font-medium text-fg">External tools</h4>
+          <p class="text-[11px] text-fg-muted">Allow selected host-installed tools to be invoked by name. Project-local tools stay explicit, e.g. <code>./.venv/bin/pytest</code>.</p>
+        </div>
+      </div>
+      <div class="rounded border border-border bg-bg p-2">
+        <div class="mb-1 text-fg-muted text-xs uppercase tracking-wide">External tool presets</div>
+        <div class="grid gap-1 sm:grid-cols-2" data-toolchain-rows>
+          {% set selected_toolchains = project.default_toolchains if project and project.default_toolchains else [] %}
+          {% for option in toolchain_options %}
+            <label class="flex items-start gap-2 rounded border border-border bg-bg-elev-2 px-2 py-2 text-sm">
+              <input type="checkbox" name="default_toolchain" value="{{ option.name }}" class="mt-0.5" {% if option.name in selected_toolchains %}checked{% endif %} />
+              <span class="min-w-0">
+                <span class="block text-fg">{{ option.label }}</span>
+                <code class="mt-0.5 block text-[11px] text-fg-muted">{{ option.paths | join(', ') }}</code>
+                <span class="mt-0.5 block text-[11px] text-fg-muted">{{ option.description }}</span>
+                <code class="mt-0.5 block text-[10px] text-fg-muted">key: {{ option.name }}</code>
+              </span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="rounded border border-border bg-bg p-2" data-tool-paths>
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <div class="text-fg-muted text-xs uppercase tracking-wide">Custom external tool paths</div>
+            <p class="text-[11px] text-fg-muted">Use this for host-installed bin directories outside the project workspace.</p>
+          </div>
+          <button type="button" onclick="window.ndProjectAddToolPathRow && window.ndProjectAddToolPathRow(this.form)" class="rounded border border-border px-2 py-1 text-xs text-accent hover:border-accent">+ Add</button>
+        </div>
+        <div class="mt-2 space-y-2" data-tool-path-rows>
+          {% set tool_paths = project.default_tool_paths if project and project.default_tool_paths else [''] %}
+          {% for path in tool_paths %}
+            <div class="flex items-center gap-2" data-tool-path-row>
+              <input name="default_tool_path" class="{{ mono_input_class }} flex-1" placeholder="./.venv/bin" value="{{ path }}" />
+              <button type="button" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" onclick="this.closest('[data-tool-path-row]').remove()">&times;</button>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
     <section class="rounded border border-border bg-bg-elev-2/40 p-2" data-linked-workspaces>
       <div class="flex items-center justify-between gap-2">
         <div>
@@ -144,6 +188,8 @@
                 {% if project.default_base_ref %}<span>base: {{ project.default_base_ref }}</span>{% endif %}
                 {% if project.default_worktree_name_template %}<span>worktree: {{ project.default_worktree_name_template }}</span>{% endif %}
                 {% if project.default_linked_workspaces %}<span>{{ project.default_linked_workspaces | length }} linked workspace{% if project.default_linked_workspaces | length != 1 %}s{% endif %}</span>{% endif %}
+                {% if project.default_toolchains %}<span>toolchains: {{ project.default_toolchains | join(', ') }}</span>{% endif %}
+                {% if project.default_tool_paths %}<span>{{ project.default_tool_paths | length }} tool path{% if project.default_tool_paths | length != 1 %}s{% endif %}</span>{% endif %}
               </div>
             </div>
             <div class="flex items-center gap-2">
@@ -259,6 +305,20 @@
       '<select name="linked_workspace_access" class="{{ input_class }}"><option value="read_only">Read-only</option><option value="read_write">Read/write</option></select>' +
       '</div>' +
       '</div>';
+    host.appendChild(row);
+  };
+  var toolPathSeq = 0;
+  window.ndProjectAddToolPathRow = function (form) {
+    if (!form) return;
+    var host = form.querySelector('[data-tool-path-rows]');
+    if (!host) return;
+    toolPathSeq += 1;
+    var row = document.createElement('div');
+    row.className = 'flex items-center gap-2';
+    row.setAttribute('data-tool-path-row', 'true');
+    row.innerHTML = '' +
+      '<input name="default_tool_path" class="{{ mono_input_class }} flex-1" placeholder="./.venv/bin" />' +
+      '<button type="button" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" onclick="this.closest(&quot;[data-tool-path-row]&quot;).remove()">&times;</button>';
     host.appendChild(row);
   };
   document.querySelectorAll('[data-project-form]').forEach(function (form) {

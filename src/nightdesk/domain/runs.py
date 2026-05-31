@@ -22,7 +22,8 @@ def start_run(session: Session, *, ticket_id: str, worktree_path: str,
                headless_policy_version: Optional[str] = None,
                restart_workspace_policy: Optional[str] = None,
                failure_kind: Optional[str] = None,
-               prompt: Optional[str] = None) -> Run:
+               prompt: Optional[str] = None,
+               sandbox_tool_paths: Optional[list[str]] = None) -> Run:
     kwargs = dict(
         ticket_id=ticket_id,
         started_at=datetime.now(timezone.utc),
@@ -37,6 +38,7 @@ def start_run(session: Session, *, ticket_id: str, worktree_path: str,
         restart_workspace_policy=restart_workspace_policy,
         failure_kind=failure_kind,
         prompt=prompt,
+        sandbox_tool_paths=sandbox_tool_paths,
     )
     if id is not None:
         kwargs["id"] = id

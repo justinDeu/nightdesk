@@ -417,3 +417,58 @@ async def test_run_one_allocates_fresh_worktree_for_restart_new_path(session, sa
     assert second_result.exit_status == "success"
     assert second.request is not None
     assert Path(old_worktree_path) != second.request.working_dir
+
+@pytest.mark.anyio
+async def test_run_one_finishes_run_when_setup_fails_after_start(session, tmp_path):
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    from nightdesk.db.models import Profile, Run
+
+    profile = Profile(
+        name="setup-failure",
+        fs_read=["/home"],
+        fs_write=[],
+        allowed_tools=[],
+        denied_tools=[],
+        network_mode="off",
+        network_allowlist=[],
+        secret_keys=[],
+    )
+    session.add(profile)
+    session.commit()
+
+    ticket = create_ticket(
+        session,
+        title="broken setup",
+        prompt="p",
+        status="running",
+        priority=0,
+        profile_id=profile.id,
+        source_path=str(primary),
+    )
+    ticket_id = ticket.id
+
+    executor = CapturingExecutor()
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(
+            worktree_root=tmp_path / "work",
+            transcript_root=tmp_path / "transcripts",
+            secrets={},
+            host="testhost",
+            executor=executor,
+        ),
+        ticket_id,
+    )
+
+    assert result.exit_status == "failed"
+    assert "setup error" in (result.error_summary or "")
+    session.expire_all()
+    refreshed_ticket = session.get(Ticket, ticket_id)
+    assert refreshed_ticket is not None
+    assert refreshed_ticket.status == "review"
+    run = session.get(Run, refreshed_ticket.current_run_id)
+    assert run is not None
+    assert run.finished_at is not None
+    assert run.exit_status == "failed"
+    assert "setup error" in (run.error_summary or "")

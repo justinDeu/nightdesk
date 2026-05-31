@@ -15,6 +15,7 @@ class PermissionSpec:
     network_mode: str = "off"
     network_allowlist: list[str] = field(default_factory=list)
     secret_keys: list[str] = field(default_factory=list)
+    tool_paths: list[str] = field(default_factory=list)
     default_model: Optional[str] = None
     backend: str = "claude_sdk"
     # Resolved at preflight from Profile.claude_credentials (decrypted).
@@ -29,7 +30,7 @@ class PermissionSpec:
     system_prompt: Optional[str] = None
 
 
-_ADDITIVE = ("fs_read", "fs_write", "allowed_tools", "network_allowlist", "secret_keys")
+_ADDITIVE = ("fs_read", "fs_write", "allowed_tools", "network_allowlist", "secret_keys", "tool_paths")
 _RESTRICTIVE = ("denied_tools",)
 _REPLACE = ("network_mode", "default_model", "backend", "permission_mode")
 

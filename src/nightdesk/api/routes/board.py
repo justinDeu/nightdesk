@@ -158,6 +158,27 @@ def _workspace_payload_from_form(form) -> tuple[str, Optional[str], Optional[str
         })
     return mode, worktree_name, worktree_path, workspaces
 
+
+def _split_lines(raw: object) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in str(raw or "").splitlines():
+        item = line.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _toolchain_overrides_from_form(form) -> Optional[dict]:
+    overrides = {
+        "enable": _split_lines(form.get("toolchain_enable")),
+        "disable": _split_lines(form.get("toolchain_disable")),
+        "extra_paths": _split_lines(form.get("toolchain_extra_paths")),
+    }
+    return overrides if any(overrides.values()) else None
+
 def _safe_preview_name(name: Optional[str]) -> str:
     raw = (name or "").strip().strip("/")
     if not raw:
@@ -527,10 +548,11 @@ def build_router(
                 project_id=project_id,
                 workspaces=workspaces,
                 additional_dirs=_parse_additional_dirs(form.getlist("additional_dirs")),
+                toolchain_overrides=_toolchain_overrides_from_form(form),
             )
         except ProjectNotFound:
             raise HTTPException(404, "project not found")
-        except InvalidTransition as e:
+        except (InvalidTransition, ValueError) as e:
             raise HTTPException(422, str(e))
         # Optional dependencies from the modal's "Depends on" picker. A brand
         # new ticket can't form a cycle, but guard anyway and skip bad ids.
@@ -583,12 +605,16 @@ def build_router(
                     fields["additional_dirs"] = _parse_additional_dirs(form.getlist("additional_dirs"))
             else:
                 fields["source_path"] = _normalize_source_path(form.get("source_path"))
+        if "toolchain_form" in form:
+            fields["toolchain_overrides"] = _toolchain_overrides_from_form(form)
         try:
             update_ticket(session, tid, **fields)
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except ProjectNotFound:
             raise HTTPException(404, "project not found")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
         # Reconcile dependencies from the modal's "Depends on" picker. Only
         # touched when the deps section was part of the submission (the modal
         # sends deps_form=1); an empty selection then means "remove all".

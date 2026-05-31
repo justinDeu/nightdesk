@@ -28,6 +28,7 @@
 {% set _create_use_worktree = _create_mode in ['git_worktree', 'worktree'] %}
 {% set _use_worktree = ((_primary_ws.kind in ['git_worktree', 'worktree']) if _primary_ws else _create_use_worktree) %}
 {% set _form_action = ('/board/tickets/' ~ ticket.id) if _is_edit else '/board/tickets' %}
+{% set _toolchains = ticket.toolchain_overrides if _is_edit and ticket.toolchain_overrides else {} %}
 
 <dialog id="{{ _mid }}"
         class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[820px] max-w-[calc(100vw-2rem)]"
@@ -120,6 +121,28 @@
           {% endfor %}
         }</script>
       </label>
+
+      <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm">
+        <div class="mb-2">
+          <h3 class="text-sm font-medium text-fg">External tool overrides</h3>
+          <p class="mt-0.5 text-xs leading-snug text-fg-muted">Project external tools apply by default. Use this only for one-off host tool access.</p>
+        </div>
+        <input type="hidden" name="toolchain_form" value="1" />
+        <div class="grid gap-2 md:grid-cols-3">
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-fg-muted text-xs uppercase tracking-wide">Enable names</span>
+            <textarea name="toolchain_enable" rows="2" class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none" placeholder="rust-user-tools">{{ (_toolchains.get('enable') or []) | join('\n') }}</textarea>
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-fg-muted text-xs uppercase tracking-wide">Disable names</span>
+            <textarea name="toolchain_disable" rows="2" class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none" placeholder="user-python-tools">{{ (_toolchains.get('disable') or []) | join('\n') }}</textarea>
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-fg-muted text-xs uppercase tracking-wide">Extra paths</span>
+            <textarea name="toolchain_extra_paths" rows="2" class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none" placeholder="./scripts/bin">{{ (_toolchains.get('extra_paths') or []) | join('\n') }}</textarea>
+          </label>
+        </div>
+      </section>
 
       {# --- Dependencies -------------------------------------------------- #
        # Search-and-add picker (mirrors the workspaces UX): type to find a

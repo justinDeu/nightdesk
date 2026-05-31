@@ -155,7 +155,7 @@
     {% if fs_read_lines or fs_write_lines %}
       <div class="border-t border-border px-4 py-3 grid gap-4 md:grid-cols-2">
         <div>
-          <div class="text-fg-muted text-xs uppercase tracking-wide mb-1">fs_read</div>
+          <div class="text-fg-muted text-xs uppercase tracking-wide mb-1">Legacy read mounts</div>
           {% if fs_read_lines %}
             <ul class="text-sm font-mono space-y-0.5">
               {% for p in fs_read_lines %}<li>{{ p }}</li>{% endfor %}
@@ -165,7 +165,7 @@
           {% endif %}
         </div>
         <div>
-          <div class="text-fg-muted text-xs uppercase tracking-wide mb-1">fs_write</div>
+          <div class="text-fg-muted text-xs uppercase tracking-wide mb-1">Legacy write mounts</div>
           {% if fs_write_lines %}
             <ul class="text-sm font-mono space-y-0.5">
               {% for p in fs_write_lines %}<li>{{ p }}</li>{% endfor %}
@@ -409,12 +409,12 @@
       </div>
       <div class="space-y-3">
         <label class="flex flex-col gap-1">
-          <span class="text-fg-muted text-xs uppercase tracking-wide">fs_read (one per line)</span>
+          <span class="text-fg-muted text-xs uppercase tracking-wide">Legacy read mounts (avoid for new work)</span>
           <textarea name="fs_read" rows="2"
                     class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ fs_read_text }}</textarea>
         </label>
         <label class="flex flex-col gap-1">
-          <span class="text-fg-muted text-xs uppercase tracking-wide">fs_write (one per line)</span>
+          <span class="text-fg-muted text-xs uppercase tracking-wide">Legacy write mounts (avoid for new work)</span>
           <textarea name="fs_write" rows="2"
                     class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ fs_write_text }}</textarea>
         </label>

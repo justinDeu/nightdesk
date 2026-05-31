@@ -10,6 +10,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Project
+from nightdesk.domain.toolchains import (
+    assert_known_toolchains,
+    assert_paths_not_excluded,
+    clean_string_list,
+    current_config,
+)
 
 
 class ProjectNotFound(Exception):
@@ -65,6 +71,14 @@ def create_project(session: Session, **fields: Any) -> Project:
         fields["color"] = _default_color(fields["slug"])
     fields["source_path"] = normalize_source_path(fields.get("source_path"))
     _validate_workspace_mode(fields.get("default_workspace_mode"))
+    fields["default_toolchains"] = clean_string_list(
+        fields.get("default_toolchains"), field="default_toolchains",
+    )
+    assert_known_toolchains(fields["default_toolchains"], config=current_config(session))
+    fields["default_tool_paths"] = clean_string_list(
+        fields.get("default_tool_paths"), field="default_tool_paths",
+    )
+    assert_paths_not_excluded(fields["default_tool_paths"], field="default_tool_paths")
     project = Project(**fields)
     session.add(project)
     try:
@@ -110,6 +124,16 @@ def update_project(session: Session, project_id: str, **fields: Any) -> Project:
         fields["source_path"] = normalize_source_path(fields["source_path"])
     if "default_workspace_mode" in fields:
         _validate_workspace_mode(fields["default_workspace_mode"])
+    if "default_toolchains" in fields:
+        fields["default_toolchains"] = clean_string_list(
+            fields["default_toolchains"], field="default_toolchains",
+        )
+        assert_known_toolchains(fields["default_toolchains"], config=current_config(session))
+    if "default_tool_paths" in fields:
+        fields["default_tool_paths"] = clean_string_list(
+            fields["default_tool_paths"], field="default_tool_paths",
+        )
+        assert_paths_not_excluded(fields["default_tool_paths"], field="default_tool_paths")
     for key, value in fields.items():
         setattr(project, key, value)
     try:

@@ -163,6 +163,20 @@ def _normalize_source_path_optional(v: object) -> Optional[str]:
 
 
 
+
+from nightdesk.domain.toolchains import clean_string_list as _clean_string_list
+
+
+class ToolchainOverrides(BaseModel):
+    enable: list[str] = Field(default_factory=list)
+    disable: list[str] = Field(default_factory=list)
+    extra_paths: list[str] = Field(default_factory=list)
+
+    @field_validator("enable", "disable", "extra_paths", mode="before")
+    @classmethod
+    def _clean_list(cls, v: object, info):
+        return _clean_string_list(v, field=info.field_name)
+
 class TicketWorkspaceOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -198,6 +212,8 @@ class ProjectCreate(BaseModel):
     default_worktree_name_template: Optional[str] = None
     default_base_ref: Optional[str] = None
     default_linked_workspaces: Optional[list[TicketWorkspaceIn]] = None
+    default_toolchains: list[str] = Field(default_factory=list)
+    default_tool_paths: list[str] = Field(default_factory=list)
     color: Optional[str] = None
     position: int = 0
 
@@ -205,6 +221,11 @@ class ProjectCreate(BaseModel):
     @classmethod
     def _source_path_abs(cls, v):
         return _normalize_source_path(v)
+
+    @field_validator("default_toolchains", "default_tool_paths", mode="before")
+    @classmethod
+    def _tool_defaults(cls, v: object, info):
+        return _clean_string_list(v, field=info.field_name)
 
 
 class ProjectUpdate(BaseModel):
@@ -215,6 +236,8 @@ class ProjectUpdate(BaseModel):
     default_worktree_name_template: Optional[str] = None
     default_base_ref: Optional[str] = None
     default_linked_workspaces: Optional[list[TicketWorkspaceIn]] = None
+    default_toolchains: Optional[list[str]] = None
+    default_tool_paths: Optional[list[str]] = None
     color: Optional[str] = None
     position: Optional[int] = None
 
@@ -222,6 +245,13 @@ class ProjectUpdate(BaseModel):
     @classmethod
     def _source_path_abs(cls, v):
         return _normalize_source_path_optional(v)
+
+    @field_validator("default_toolchains", "default_tool_paths", mode="before")
+    @classmethod
+    def _tool_defaults(cls, v: object, info):
+        if v is None:
+            return None
+        return _clean_string_list(v, field=info.field_name)
 
 
 class ProjectOut(BaseModel):
@@ -235,6 +265,8 @@ class ProjectOut(BaseModel):
     default_worktree_name_template: Optional[str] = None
     default_base_ref: Optional[str] = None
     default_linked_workspaces: Optional[list[dict]] = None
+    default_toolchains: list[str] = Field(default_factory=list)
+    default_tool_paths: list[str] = Field(default_factory=list)
     color: Optional[str] = None
     position: int
     archived_at: Optional[datetime] = None
@@ -249,6 +281,7 @@ class TicketCreate(BaseModel):
     profile_id: str
     project_id: Optional[str] = None
     permission_overrides: Optional[dict] = None
+    toolchain_overrides: Optional[ToolchainOverrides] = None
     additional_dirs: list[AdditionalDir] = []
     source_path: Optional[str] = None
     workspace_mode: Literal["directory", "git_worktree", "in_place", "worktree"] = "directory"
@@ -272,6 +305,7 @@ class TicketUpdate(BaseModel):
     profile_id: Optional[str] = None
     project_id: Optional[str] = None
     permission_overrides: Optional[dict] = None
+    toolchain_overrides: Optional[ToolchainOverrides] = None
     additional_dirs: Optional[list[AdditionalDir]] = None
     source_path: Optional[str] = None
     workspace_mode: Optional[Literal["directory", "git_worktree", "in_place", "worktree"]] = None
@@ -298,6 +332,7 @@ class TicketOut(BaseModel):
     project_id: Optional[str] = None
     profile_id: str
     permission_overrides: Optional[dict] = None
+    toolchain_overrides: Optional[dict] = None
     additional_dirs: list[AdditionalDir] = []
     workspaces: list[TicketWorkspaceOut] = []
     run_now: bool
@@ -364,6 +399,7 @@ class RunOut(BaseModel):
     cache_read_tokens: Optional[int] = None
     cache_write_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
+    sandbox_tool_paths: Optional[list[str]] = None
 
 
 _HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -478,6 +514,7 @@ class ConfigOut(BaseModel):
     notify_webhook_url: Optional[str] = None
     schedule_timezone: str = "UTC"
     windows: list[ScheduleWindowOut] = Field(default_factory=list)
+    toolchain_presets: dict[str, list[str]] = Field(default_factory=dict)
 
     model_config = {"from_attributes": True}
 
@@ -500,6 +537,7 @@ class ConfigUpdate(BaseModel):
     # Webhook URL for run-completion notifications. Empty string clears it.
     notify_webhook_url: Optional[str] = None
     schedule_timezone: Optional[str] = None
+    toolchain_presets: Optional[dict[str, list[str]]] = None
 
     @field_validator("window_start", "window_end", mode="before")
     @classmethod
@@ -528,6 +566,19 @@ class ConfigUpdate(BaseModel):
             raise ValueError("notify_webhook_url must be a string")
         return v.strip()
 
+
+    @field_validator("toolchain_presets", mode="before")
+    @classmethod
+    def _clean_toolchain_presets(cls, v: object) -> object:
+        if v is None:
+            return v
+        if not isinstance(v, dict):
+            raise ValueError("toolchain_presets must be an object")
+        return {
+            str(name).strip(): _clean_string_list(paths, field=f"toolchain_presets.{name}")
+            for name, paths in v.items()
+            if str(name).strip()
+        }
     @field_validator("schedule_timezone")
     @classmethod
     def _validate_schedule_tz(cls, v: Optional[str]) -> Optional[str]:
