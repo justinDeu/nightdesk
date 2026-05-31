@@ -244,7 +244,12 @@
   }
 
   function _applyProjectWorkspaceDefaults(root, projectId, force = false) {
-    if (!root || !_isCreateForm(root) || (_workspaceDirty(root) && !force)) return;
+    if (!root) return;
+    // Auto-apply (force=false) is create-only and respects the dirty guard so
+    // user-edited rows aren't clobbered as the project select / title change.
+    // The explicit "reset to defaults" button passes force=true and bypasses
+    // both gates so it works on edit too.
+    if (!force && (!_isCreateForm(root) || _workspaceDirty(root))) return;
     const defaults = _projectDefaults(root);
     const project = projectId ? defaults[projectId] : null;
     root.__ndApplyingProjectDefaults = true;
