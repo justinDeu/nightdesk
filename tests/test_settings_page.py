@@ -308,3 +308,112 @@ async def test_settings_post_persists_worktree_base_ref(cookie_client, session):
     cfg = session.get(ConfigRow, 1)
     assert cfg.worktree_base_ref is None
 
+
+async def test_worktrees_pane_renders_preset_cards_not_json_textarea(cookie_client, session):
+    session.add(ConfigRow(
+        id=1,
+        worktree_root="/tmp/w",
+        transcript_root="/tmp/t",
+        toolchain_presets={"go-user-tools": ["~/go/bin", "/opt/go/bin"]},
+    ))
+    session.commit()
+
+    r = await cookie_client.get("/settings/worktrees")
+    assert r.status_code == 200
+    body = r.text
+    assert 'name="toolchain_presets_json"' not in body
+    assert 'data-preset-card' in body
+    assert 'name="preset_name"' in body
+    assert 'name="preset_paths_json"' in body
+    assert 'go-user-tools' in body
+    assert '~/go/bin' in body
+    assert '/opt/go/bin' in body
+
+
+async def test_worktrees_post_persists_presets_from_card_form(cookie_client, session):
+    import json
+
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings/worktrees",
+        data={
+            "worktree_base_ref": "",
+            "preset_name": ["go-user-tools", "node-user-tools"],
+            "preset_paths_json": [
+                json.dumps(["~/go/bin", "/opt/go/bin"]),
+                json.dumps(["~/.npm-global/bin"]),
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.toolchain_presets == {
+        "go-user-tools": ["~/go/bin", "/opt/go/bin"],
+        "node-user-tools": ["~/.npm-global/bin"],
+    }
+
+    # Submitting with no preset cards clears the dict.
+    r = await cookie_client.post("/settings/worktrees", data={"worktree_base_ref": ""})
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.toolchain_presets == {}
+
+
+async def test_worktrees_post_rejects_invalid_preset_paths_json(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings/worktrees",
+        data={
+            "worktree_base_ref": "",
+            "preset_name": ["broken"],
+            "preset_paths_json": ["{not json"],
+        },
+    )
+    assert r.status_code == 422
+    assert "broken" in r.text
+
+    # Non-list payload is also rejected.
+    r = await cookie_client.post(
+        "/settings/worktrees",
+        data={
+            "worktree_base_ref": "",
+            "preset_name": ["shape"],
+            "preset_paths_json": ['"a string"'],
+        },
+    )
+    assert r.status_code == 422
+
+
+async def test_worktrees_post_skips_unnamed_preset_cards(cookie_client, session):
+    import json
+
+    session.add(ConfigRow(
+        id=1,
+        worktree_root="/tmp/w",
+        transcript_root="/tmp/t",
+        toolchain_presets={"stale": ["~/old"]},
+    ))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings/worktrees",
+        data={
+            "worktree_base_ref": "",
+            "preset_name": ["", "kept"],
+            "preset_paths_json": [
+                json.dumps(["~/orphan/bin"]),
+                json.dumps(["~/kept/bin"]),
+            ],
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.toolchain_presets == {"kept": ["~/kept/bin"]}
+

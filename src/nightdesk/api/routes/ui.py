@@ -31,6 +31,38 @@ from nightdesk.domain.tickets import (
 )
 
 
+def _parse_toolchain_presets(form) -> dict[str, list[str]]:
+    """Reconstruct {preset_name: [paths]} from the worktrees-pane form.
+
+    Path inputs aren't submitted directly — each preset card carries a hidden
+    ``preset_paths_json`` field that JS keeps in sync with the visible rows.
+    Card order is preserved by DOM submission order, so the two getlist() calls
+    pair up positionally. Validation goes through the ConfigUpdate validator so
+    the form path and the JSON API path enforce the same rules.
+    """
+    names = list(form.getlist("preset_name"))
+    paths_jsons = list(form.getlist("preset_paths_json"))
+    raw: dict[str, list[str]] = {}
+    for raw_name, raw_paths in zip(names, paths_jsons):
+        name = str(raw_name or "").strip()
+        if not name:
+            continue
+        try:
+            paths = json.loads(raw_paths or "[]")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, f"invalid preset {name!r} paths JSON: {exc.msg}")
+        if not isinstance(paths, list):
+            raise HTTPException(422, f"preset {name!r} paths must be a list")
+        raw[name] = paths
+    if not raw:
+        return {}
+    try:
+        validated = ConfigUpdate(toolchain_presets=raw)
+    except ValidationError as exc:
+        raise HTTPException(422, f"invalid toolchain presets: {exc.errors()[0]['msg']}")
+    return validated.toolchain_presets or {}
+
+
 def _windows_payload(session: Session) -> list[dict[str, str | int]]:
     """Serialize ScheduleWindow rows for the settings editor / JSON island."""
     rows = session.scalars(
@@ -268,22 +300,11 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         request: Request,
         session: Session = Depends(get_session),
         worktree_base_ref: str = Form(""),
-        toolchain_presets_json: str = Form(""),
     ):
+        form = await request.form()
         cfg = _ensure_cfg(session)
         cfg.worktree_base_ref = (worktree_base_ref or "").strip() or None
-        if toolchain_presets_json.strip():
-            try:
-                raw = json.loads(toolchain_presets_json)
-            except json.JSONDecodeError as exc:
-                raise HTTPException(422, f"invalid toolchain presets JSON: {exc.msg}")
-            try:
-                validated = ConfigUpdate(toolchain_presets=raw)
-            except ValidationError as exc:
-                raise HTTPException(422, f"invalid toolchain presets: {exc.errors()[0]['msg']}")
-            cfg.toolchain_presets = validated.toolchain_presets or {}
-        else:
-            cfg.toolchain_presets = {}
+        cfg.toolchain_presets = _parse_toolchain_presets(form)
         session.commit()
         return _render_settings(request, session, category="worktrees", saved=True)
 
