@@ -1,6 +1,3 @@
-{% set input_class = "rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg placeholder:text-fg-muted caret-accent focus:border-accent focus:bg-bg-elev-2 focus:text-fg focus:outline-none focus:ring-2 focus:ring-accent/30" %}
-{% set mono_input_class = input_class ~ " font-mono text-xs" %}
-
 <div class="rounded border border-border bg-bg-elev p-5">
   <header class="mb-5 flex items-center gap-3">
     <div class="min-w-0 flex-1">
@@ -10,7 +7,7 @@
     {% if saved %}<span class="px-2 py-0.5 text-xs bg-green-900/40 text-green-200 rounded">saved</span>{% endif %}
   </header>
 
-  <form method="post" action="/settings/worktrees" class="flex flex-col gap-5" data-settings-form data-toolchain-presets-form>
+  <form method="post" action="/settings/worktrees" class="flex flex-col gap-5" data-settings-form>
     <section class="border border-border rounded p-4 bg-bg">
       <div class="grid grid-cols-[1fr,16rem] gap-x-3 gap-y-3 text-sm items-center">
         <label for="worktree_base_ref" class="text-fg">
@@ -20,114 +17,11 @@
         <input id="worktree_base_ref" name="worktree_base_ref" type="text"
                value="{{ (cfg.worktree_base_ref if cfg else '') or '' }}"
                placeholder="HEAD"
-               class="{{ mono_input_class }}" />
+               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
       </div>
     </section>
-
-    <section class="border border-border rounded p-4 bg-bg space-y-3">
-      <div class="flex items-start justify-between gap-2">
-        <div>
-          <h3 class="text-sm font-medium text-fg">Global external tool presets</h3>
-          <p class="text-[11px] text-fg-muted">Name a preset and list the host bin directories it should expose. Projects opt in to enabled presets.</p>
-        </div>
-        <button type="button"
-                onclick="window.ndPresetAddCard && window.ndPresetAddCard(this.form)"
-                class="rounded border border-border px-2 py-1 text-xs text-accent hover:border-accent">+ Add preset</button>
-      </div>
-      <div class="space-y-3" data-preset-cards>
-        {% for preset_name, preset_paths in (cfg.toolchain_presets or {}).items() %}
-          <div class="rounded border border-border bg-bg-elev-2 p-3 space-y-2" data-preset-card>
-            <div class="flex items-center gap-2">
-              <input name="preset_name"
-                     class="{{ input_class }} flex-1"
-                     placeholder="go-user-tools"
-                     value="{{ preset_name }}" />
-              <button type="button"
-                      onclick="this.closest('[data-preset-card]').remove()"
-                      class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger"
-                      aria-label="Remove preset">&times;</button>
-            </div>
-            <div class="space-y-2" data-preset-path-rows>
-              {% for path in (preset_paths or ['']) %}
-                <div class="flex items-center gap-2" data-preset-path-row>
-                  <input data-preset-path
-                         class="{{ mono_input_class }} flex-1"
-                         placeholder="~/go/bin"
-                         value="{{ path }}" />
-                  <button type="button"
-                          onclick="this.closest('[data-preset-path-row]').remove()"
-                          class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger"
-                          aria-label="Remove path">&times;</button>
-                </div>
-              {% endfor %}
-            </div>
-            <div>
-              <button type="button"
-                      onclick="window.ndPresetAddPathRow && window.ndPresetAddPathRow(this)"
-                      class="rounded border border-border px-2 py-0.5 text-xs text-accent hover:border-accent">+ Add path</button>
-            </div>
-            <input type="hidden" name="preset_paths_json" value="" data-preset-paths-json />
-          </div>
-        {% endfor %}
-      </div>
-    </section>
-
     <div class="flex justify-end gap-2">
       <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save worktree settings</button>
     </div>
   </form>
 </div>
-
-<script>
-(function () {
-  function syncCard(card) {
-    var inputs = card.querySelectorAll('[data-preset-path]');
-    var paths = Array.prototype.map.call(inputs, function (i) { return i.value; });
-    var hidden = card.querySelector('[data-preset-paths-json]');
-    if (hidden) hidden.value = JSON.stringify(paths);
-  }
-  function syncForm(form) {
-    form.querySelectorAll('[data-preset-card]').forEach(syncCard);
-  }
-  window.ndPresetAddPathRow = function (button) {
-    var card = button.closest('[data-preset-card]');
-    var host = card && card.querySelector('[data-preset-path-rows]');
-    if (!host) return;
-    var row = document.createElement('div');
-    row.className = 'flex items-center gap-2';
-    row.setAttribute('data-preset-path-row', 'true');
-    row.innerHTML = '' +
-      '<input data-preset-path class="{{ mono_input_class }} flex-1" placeholder="~/go/bin" />' +
-      '<button type="button" onclick="this.closest(&quot;[data-preset-path-row]&quot;).remove()" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" aria-label="Remove path">&times;</button>';
-    host.appendChild(row);
-  };
-  window.ndPresetAddCard = function (form) {
-    if (!form) return;
-    var host = form.querySelector('[data-preset-cards]');
-    if (!host) return;
-    var card = document.createElement('div');
-    card.className = 'rounded border border-border bg-bg-elev-2 p-3 space-y-2';
-    card.setAttribute('data-preset-card', 'true');
-    card.innerHTML = '' +
-      '<div class="flex items-center gap-2">' +
-      '<input name="preset_name" class="{{ input_class }} flex-1" placeholder="go-user-tools" />' +
-      '<button type="button" onclick="this.closest(&quot;[data-preset-card]&quot;).remove()" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" aria-label="Remove preset">&times;</button>' +
-      '</div>' +
-      '<div class="space-y-2" data-preset-path-rows>' +
-      '<div class="flex items-center gap-2" data-preset-path-row>' +
-      '<input data-preset-path class="{{ mono_input_class }} flex-1" placeholder="~/go/bin" />' +
-      '<button type="button" onclick="this.closest(&quot;[data-preset-path-row]&quot;).remove()" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" aria-label="Remove path">&times;</button>' +
-      '</div>' +
-      '</div>' +
-      '<div>' +
-      '<button type="button" onclick="window.ndPresetAddPathRow && window.ndPresetAddPathRow(this)" class="rounded border border-border px-2 py-0.5 text-xs text-accent hover:border-accent">+ Add path</button>' +
-      '</div>' +
-      '<input type="hidden" name="preset_paths_json" value="" data-preset-paths-json />';
-    host.appendChild(card);
-  };
-  document.querySelectorAll('[data-toolchain-presets-form]').forEach(function (form) {
-    syncForm(form);
-    form.addEventListener('submit', function () { syncForm(form); });
-  });
-})();
-</script>

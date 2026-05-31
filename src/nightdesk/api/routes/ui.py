@@ -96,6 +96,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "scheduling": "partials/settings_scheduling_pane.html",
             "claude": "partials/settings_claude_pane.html",
             "worktrees": "partials/settings_worktrees_pane.html",
+            "external_tools": "partials/settings_external_tools_pane.html",
             "notifications": "partials/settings_notifications_pane.html",
             "projects": "partials/settings_projects_pane.html",
         }[category]
@@ -301,12 +302,25 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         session: Session = Depends(get_session),
         worktree_base_ref: str = Form(""),
     ):
-        form = await request.form()
         cfg = _ensure_cfg(session)
         cfg.worktree_base_ref = (worktree_base_ref or "").strip() or None
-        cfg.toolchain_presets = _parse_toolchain_presets(form)
         session.commit()
         return _render_settings(request, session, category="worktrees", saved=True)
+
+    @router.get("/settings/external-tools", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_external_tools_page(request: Request, session: Session = Depends(get_session)):
+        return _render_settings(request, session, category="external_tools", saved=False)
+
+    @router.post("/settings/external-tools", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_external_tools_save(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        form = await request.form()
+        cfg = _ensure_cfg(session)
+        cfg.toolchain_presets = _parse_toolchain_presets(form)
+        session.commit()
+        return _render_settings(request, session, category="external_tools", saved=True)
 
     @router.get("/settings/projects", response_class=HTMLResponse, dependencies=[auth])
     async def settings_projects_page(request: Request, session: Session = Depends(get_session)):
