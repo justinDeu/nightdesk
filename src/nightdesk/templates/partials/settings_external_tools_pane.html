@@ -10,12 +10,34 @@
     {% if saved %}<span class="px-2 py-0.5 text-xs bg-green-900/40 text-green-200 rounded">saved</span>{% endif %}
   </header>
 
+  {% set _builtin_options = toolchain_options | selectattr('builtin') | list %}
+  {% if _builtin_options %}
+    <section class="mb-5 border border-border rounded p-4 bg-bg space-y-2">
+      <div>
+        <h3 class="text-sm font-medium text-fg">Built-in presets</h3>
+        <p class="text-[11px] text-fg-muted">Always available. Projects opt in to these alongside any custom presets you define below.</p>
+      </div>
+      <ul class="divide-y divide-border rounded border border-border bg-bg-elev-2/40">
+        {% for opt in _builtin_options %}
+          <li class="px-3 py-2">
+            <div class="flex items-baseline justify-between gap-3">
+              <span class="text-sm font-medium text-fg">{{ opt.label }}</span>
+              <code class="text-[11px] text-fg-muted">{{ opt.name }}</code>
+            </div>
+            <code class="mt-0.5 block text-[11px] text-fg-muted">{{ opt.paths | join(', ') }}</code>
+            <p class="mt-0.5 text-[11px] text-fg-muted">{{ opt.description }}</p>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
   <form method="post" action="/settings/external-tools" class="flex flex-col gap-5" data-settings-form data-toolchain-presets-form>
     <section class="border border-border rounded p-4 bg-bg space-y-3">
       <div class="flex items-start justify-between gap-2">
         <div>
-          <h3 class="text-sm font-medium text-fg">Tool path presets</h3>
-          <p class="text-[11px] text-fg-muted">Each preset is a name plus the host bin directories it exposes. Two presets are built in: <code>user-python-tools</code> (<code>~/.local/bin</code>) and <code>rust-user-tools</code> (<code>~/.cargo/bin</code>).</p>
+          <h3 class="text-sm font-medium text-fg">Custom presets</h3>
+          <p class="text-[11px] text-fg-muted">Add your own named groups of host bin directories. They appear alongside the built-ins for projects to opt into.</p>
         </div>
         <button type="button"
                 onclick="window.ndPresetAddCard && window.ndPresetAddCard(this.form)"

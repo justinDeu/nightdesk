@@ -365,6 +365,20 @@ async def test_external_tools_pane_renders_preset_cards(cookie_client, session):
     assert '/opt/go/bin' in body
 
 
+async def test_external_tools_pane_lists_builtin_presets(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.get("/settings/external-tools")
+    assert r.status_code == 200
+    body = r.text
+    assert "Built-in presets" in body
+    assert "user-python-tools" in body
+    assert "~/.local/bin" in body
+    assert "rust-user-tools" in body
+    assert "~/.cargo/bin" in body
+
+
 async def test_external_tools_post_persists_presets_from_card_form(cookie_client, session):
     import json
 
