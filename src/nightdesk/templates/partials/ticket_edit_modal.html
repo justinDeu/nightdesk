@@ -100,15 +100,21 @@
             <option value="{{ p.id }}" {% if _project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
           {% endfor %}
         </select>
-        {% if not _is_edit %}
         <div class="mt-1 flex justify-end">
-          <button type="button"
-                  onclick="window.ndResetProjectWorkspaceDefaults(this)"
-                  class="rounded border border-border px-2 py-1 text-[11px] text-fg-muted hover:border-accent hover:text-fg">
-            Copy project workspaces again
-          </button>
+          {% if _is_edit %}
+            <button type="button"
+                    onclick="if (confirm('Replace this ticket&#39;s workspaces with the project&#39;s defaults? Customized workspace rows will be overwritten.')) window.ndResetProjectWorkspaceDefaults(this);"
+                    class="rounded border border-border px-2 py-1 text-[11px] text-fg-muted hover:border-accent hover:text-fg">
+              Reset workspaces to project defaults
+            </button>
+          {% else %}
+            <button type="button"
+                    onclick="window.ndResetProjectWorkspaceDefaults(this)"
+                    class="rounded border border-border px-2 py-1 text-[11px] text-fg-muted hover:border-accent hover:text-fg">
+              Copy project workspaces again
+            </button>
+          {% endif %}
         </div>
-        {% endif %}
         <script type="application/json" data-project-workspace-defaults>{
           {% for p in _projects %}
           {{ p.id | tojson }}: {
