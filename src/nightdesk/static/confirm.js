@@ -11,19 +11,21 @@
 (function () {
   var style = document.createElement("style");
   style.textContent = [
+    // Native <dialog> renders in the browser's top layer, which sits above
+    // any z-index. That's the only stacking primitive that reliably appears
+    // above an already-open showModal() dialog (e.g. the ticket edit modal).
     "#nd-confirm-overlay {",
-    "  position: fixed; inset: 0; z-index: 100;",
+    "  position: fixed; inset: 0; margin: 0; padding: 0; border: 0;",
+    "  background: transparent;",
+    "  width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh;",
     "  display: flex; align-items: center; justify-content: center;",
+    "  overflow: hidden;",
     "}",
-    "#nd-confirm-overlay[hidden] { display: none; }",
-    "",
-    ".nd-confirm-backdrop {",
-    "  position: absolute; inset: 0;",
-    "  background: rgba(0,0,0,.55);",
-    "}",
+    "#nd-confirm-overlay:not([open]) { display: none; }",
+    "#nd-confirm-overlay::backdrop { background: rgba(0,0,0,.55); }",
     "",
     ".nd-confirm-dialog {",
-    "  position: relative; z-index: 1;",
+    "  position: relative;",
     "  background: var(--color-bg-elev);",
     "  border: 1px solid var(--color-border);",
     "  border-radius: .5rem;",
@@ -86,12 +88,10 @@
   ].join("\n");
   document.head.appendChild(style);
 
-  var overlay = document.createElement("div");
+  var overlay = document.createElement("dialog");
   overlay.id = "nd-confirm-overlay";
-  overlay.setAttribute("hidden", "");
   overlay.innerHTML =
-    '<div class="nd-confirm-backdrop"></div>' +
-    '<div class="nd-confirm-dialog" role="dialog" aria-modal="true">' +
+    '<div class="nd-confirm-dialog" role="document">' +
     '  <h3 class="nd-confirm-title"></h3>' +
     '  <p class="nd-confirm-message"></p>' +
     '  <div class="nd-confirm-actions">' +
@@ -105,7 +105,6 @@
   var msgEl = overlay.querySelector(".nd-confirm-message");
   var cancelBtn = overlay.querySelector(".nd-confirm-cancel");
   var okBtn = overlay.querySelector(".nd-confirm-ok");
-  var backdrop = overlay.querySelector(".nd-confirm-backdrop");
 
   // Only one prompt at a time. Resolver fires with true/false.
   var pendingResolve = null;
@@ -116,7 +115,10 @@
     okBtn.textContent = opts.okLabel || "OK";
     cancelBtn.textContent = opts.cancelLabel || "Cancel";
     okBtn.classList.toggle("is-danger", !!opts.danger);
-    overlay.removeAttribute("hidden");
+    // showModal() puts the dialog in the top layer so it stacks above any
+    // other open <dialog> (the ticket edit modal, project create modal, etc.).
+    if (typeof overlay.showModal === "function") overlay.showModal();
+    else overlay.setAttribute("open", "");
     okBtn.focus();
     return new Promise(function (resolve) {
       pendingResolve = resolve;
@@ -124,7 +126,8 @@
   }
 
   function close(result) {
-    overlay.setAttribute("hidden", "");
+    if (overlay.open && typeof overlay.close === "function") overlay.close();
+    else overlay.removeAttribute("open");
     var resolve = pendingResolve;
     pendingResolve = null;
     if (resolve) resolve(result);
@@ -132,10 +135,17 @@
 
   cancelBtn.addEventListener("click", function () { close(false); });
   okBtn.addEventListener("click", function () { close(true); });
-  backdrop.addEventListener("click", function () { close(false); });
-
-  document.addEventListener("keydown", function (e) {
-    if (!overlay.hasAttribute("hidden") && e.key === "Escape") close(false);
+  // Backdrop click closes the dialog. The <dialog>'s ::backdrop is part of
+  // the dialog's box, so a click whose target IS the dialog (not a child)
+  // landed on the backdrop area outside .nd-confirm-dialog.
+  overlay.addEventListener("click", function (e) {
+    if (e.target === overlay) close(false);
+  });
+  // Native <dialog> dispatches "cancel" on Esc; suppress its default close
+  // (we want our close() to also resolve the promise) then run our handler.
+  overlay.addEventListener("cancel", function (e) {
+    e.preventDefault();
+    close(false);
   });
 
   window.ndConfirm = function (opts) {
