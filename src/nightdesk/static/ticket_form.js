@@ -286,6 +286,27 @@
     _applyProjectWorkspaceDefaults(root, projectSelect ? (projectSelect.value || '') : '', true);
   };
 
+  // Edit-mode entry point: pop the styled ndConfirm before resetting so the
+  // user can back out without losing custom workspace rows. Create mode skips
+  // the prompt and uses ndResetProjectWorkspaceDefaults directly.
+  window.ndConfirmResetProjectWorkspaceDefaults = function (button) {
+    if (!button) return;
+    const apply = function () { window.ndResetProjectWorkspaceDefaults(button); };
+    if (typeof window.ndConfirm !== 'function') {
+      apply();
+      return;
+    }
+    window.ndConfirm({
+      title: 'Reset workspaces to project defaults',
+      message: 'Replace the workspaces on this ticket with the project defaults? Customized workspace rows will be overwritten.',
+      okLabel: 'Reset',
+      cancelLabel: 'Keep current',
+      danger: true,
+    }).then(function (ok) {
+      if (ok) apply();
+    });
+  };
+
   // Primary workspace kind select → hidden use_worktree checkbox + git
   // field visibility. Keeps the unified-list UI in sync with the legacy
   // form-field names the backend still expects.
