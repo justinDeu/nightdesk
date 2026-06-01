@@ -942,7 +942,7 @@ dialog button[aria-label="Close"]:focus-visible {
     outline: none;
   }
   .nd-searchbar-input::placeholder {
-    color: var(--color-fg-muted);
+    color: color-mix(in oklab, var(--color-fg-muted) 50%, transparent);
     font-family: ui-sans-serif, system-ui, sans-serif;
   }
   .nd-searchbar-clear {

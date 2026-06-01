@@ -102,6 +102,7 @@
     var clearBtn = bar.querySelector("[data-sb-clear]");
     var enterHint = bar.querySelector("[data-sb-enter]");
     var lastEmitted = "";       // the query currently applied to results
+    var basePlaceholder = input.getAttribute("placeholder") || "";
     var facetBtns = Array.prototype.slice.call(bar.querySelectorAll("[data-sb-facet]"));
     var viewBtns = Array.prototype.slice.call(bar.querySelectorAll("[data-sb-view]"));
 
@@ -137,6 +138,12 @@
 
     function syncClear() {
       if (clearBtn) clearBtn.hidden = !(filters.length || input.value);
+    }
+
+    // Once there's a filter chip, drop the placeholder so the ghost "Search…"
+    // doesn't reappear after the pills. It returns only when the bar is empty.
+    function updatePlaceholder() {
+      input.placeholder = filters.length ? "" : basePlaceholder;
     }
 
     // Show the "↵ enter" hint when there is free text that hasn't been applied
@@ -177,6 +184,7 @@
         chip.appendChild(x);
         box.insertBefore(chip, input);
       });
+      updatePlaceholder();
     }
 
     function addFilter(field, value, op, neg) {
@@ -524,6 +532,15 @@
           input.selectionStart === 0 && input.selectionEnd === 0 && filters.length) {
         e.preventDefault();
         removeFilter(filters.length - 1);
+        return;
+      }
+      // Left arrow at the very start edits the previous chip: it becomes text
+      // again so you can retype its value.
+      if (e.key === "ArrowLeft" &&
+          input.selectionStart === 0 && input.selectionEnd === 0 && filters.length) {
+        e.preventDefault();
+        closeMenu();
+        editFilter(filters.length - 1);
         return;
       }
       if (e.key === "Enter") {
