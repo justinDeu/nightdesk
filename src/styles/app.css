@@ -957,6 +957,22 @@ dialog button[aria-label="Close"]:focus-visible {
     color: var(--color-fg);
     background: var(--color-bg-elev-3);
   }
+  /* "↵ enter" affordance shown while free text is typed but not yet applied. */
+  .nd-searchbar-enter {
+    flex: 0 0 auto;
+    font-size: 0.62rem;
+    letter-spacing: 0.02em;
+    color: var(--color-fg-muted);
+    background: var(--color-bg-elev-3);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 0.05rem 0.35rem;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .nd-searchbar-enter[hidden] {
+    display: none;
+  }
   .nd-searchbar-facets {
     display: flex;
     flex-wrap: wrap;

@@ -93,6 +93,8 @@
     var input = bar.querySelector("[data-sb-input]");
     var menu = bar.querySelector("[data-sb-menu]");
     var clearBtn = bar.querySelector("[data-sb-clear]");
+    var enterHint = bar.querySelector("[data-sb-enter]");
+    var lastEmitted = "";       // the query currently applied to results
     var facetBtns = Array.prototype.slice.call(bar.querySelectorAll("[data-sb-facet]"));
     var viewBtns = Array.prototype.slice.call(bar.querySelectorAll("[data-sb-view]"));
 
@@ -117,7 +119,9 @@
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
       var fire = function () {
         var q = buildQuery();
+        lastEmitted = q;
         bar.dataset.query = q;
+        updateEnterHint();
         bar.dispatchEvent(new CustomEvent("nd:search", { detail: { query: q }, bubbles: true }));
       };
       if (immediate) fire();
@@ -126,6 +130,14 @@
 
     function syncClear() {
       if (clearBtn) clearBtn.hidden = !(filters.length || input.value);
+    }
+
+    // Show the "↵ enter" hint when there is free text that hasn't been applied
+    // to the board yet (free text is applied on Enter, not per keystroke).
+    function updateEnterHint() {
+      if (!enterHint) return;
+      var pending = input.value.trim() !== "" && buildQuery() !== lastEmitted;
+      enterHint.hidden = !pending;
     }
 
     // ---- chips ----------------------------------------------------------- //
@@ -197,6 +209,7 @@
       // Query is unchanged (chip text moved into the input), so no re-search.
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
+      updateEnterHint();
     }
 
     // ---- facet multi-select (build comma value lists) -------------------- //
@@ -445,7 +458,11 @@
     input.addEventListener("input", function () {
       if (maybeChipifyOnSpace()) return;
       syncClear();
-      emit(false);
+      // Don't re-filter on every keystroke while composing free text or a token
+      // ("sta" on the way to "status:" shouldn't empty the board). Free text is
+      // applied on Enter. Emptying the input is reflected live so it resets.
+      if (input.value.trim() === "") emit(true);
+      else updateEnterHint();
       maybeAutocomplete();
     });
 
@@ -578,6 +595,11 @@
       renderChips();
       syncClear();
     })();
+
+    // The server already rendered results for this query, so treat it as the
+    // applied baseline (no pending hint until the user changes the free text).
+    lastEmitted = buildQuery();
+    updateEnterHint();
   }
 
   function initAll(root) {
