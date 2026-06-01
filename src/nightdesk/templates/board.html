@@ -55,7 +55,10 @@
 #}
 <div
   id="board-columns-poll"
-  hx-get="/board/columns?q={{ query | urlencode }}"
+  {# Static path on purpose: htmx captures a polling element's URL at process
+     time, so the live query is injected per-request via htmx:configRequest in
+     the search-bar wiring below. #}
+  hx-get="/board/columns"
   hx-trigger="every 3s, poll"
   hx-swap="none"
   hx-include="unset"
@@ -247,9 +250,22 @@
     var runs = document.getElementById('board-runs');
     var poll = document.getElementById('board-columns-poll');
     var view = {{ ('runs' if _view == 'runs' else 'tickets') | tojson }};
+    var currentQuery = {{ (query or '') | tojson }};
     var runsTimer = null;
 
     function enc(q) { return encodeURIComponent(q || ''); }
+
+    // htmx captures a polling element's request config at process time, so
+    // updating the poll's hx-get at runtime is ignored. Inject the live query
+    // into every board-columns request instead. Covers the periodic 3s poll,
+    // the immediate post-filter trigger, and the drag-drop refresh.
+    document.body.addEventListener('htmx:configRequest', function (evt) {
+      var elt = evt.detail && evt.detail.elt;
+      if (!elt || elt.id !== 'board-columns-poll') return;
+      var params = evt.detail.parameters;
+      if (params && typeof params.set === 'function') params.set('q', currentQuery);
+      else if (params) params.q = currentQuery;
+    });
 
     function syncUrl(q) {
       var params = new URLSearchParams();
@@ -260,8 +276,8 @@
     }
 
     function refreshTickets(q) {
+      currentQuery = q || '';
       if (!poll || typeof htmx === 'undefined') return;
-      poll.setAttribute('hx-get', '/board/columns?q=' + enc(q));
       htmx.trigger(poll, 'poll');
     }
 
