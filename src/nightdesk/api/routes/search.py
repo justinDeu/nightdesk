@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_bearer
 from nightdesk.api.schemas import SearchHit as SearchHitSchema
-from nightdesk.domain.search import FTS5SearchBackend
+from nightdesk.db.models import Project
+from nightdesk.domain.query import parse_query, search_tickets
+from nightdesk.domain.search import hit_from_ticket
 
 
 def build_router(get_session, bearer_token: str) -> APIRouter:
@@ -22,8 +24,23 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         project_id: str | None = Query(default=None),
         session: Session = Depends(get_session),
     ):
-        backend = FTS5SearchBackend(session)
-        hits = backend.search(q, limit=limit, project_id=project_id)
-        return [SearchHitSchema(**h.__dict__) for h in hits]
+        """Ticket search with the full query language.
+
+        ``q`` accepts ``field=value`` terms, OR/NOT, parens and quoted phrases,
+        with bare words falling through to full-text search. The legacy
+        ``project_id`` param is still honoured and ANDed onto the query.
+        """
+        query = (q or "").strip()
+        if not query:
+            # Preserve the original contract: a blank query matches nothing.
+            return []
+        if project_id == "null":
+            query = "project=none " + query
+        elif project_id:
+            proj = session.get(Project, project_id)
+            slug = proj.slug if proj else "__missing__"
+            query = f"project={slug} " + query
+        tickets = search_tickets(session, parse_query(query), limit=limit)
+        return [SearchHitSchema(**hit_from_ticket(t).__dict__) for t in tickets]
 
     return router

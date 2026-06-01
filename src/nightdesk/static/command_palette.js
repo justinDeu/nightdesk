@@ -314,15 +314,56 @@
     var idx = typeof i === "number" ? i : state.active;
     var it = state.items[idx];
     if (!it) return;
+    if (it.keepOpen) {
+      // Filter-completion items stay in the palette and re-run the search.
+      it.run();
+      return;
+    }
     closePalette();
     // Defer so the dialog has closed before navigation/fetch side effects.
     setTimeout(function () { it.run(); }, 0);
   }
 
+  // ---- query language autocomplete --------------------------------------
+  // Mirrors the suggestable fields in static/search_bar.js / query.py.
+  var SUGGESTABLE = {
+    project: 1, status: 1, latest_status: 1, latest: 1, outcome: 1,
+    profile: 1, backend: 1, model: 1, intent: 1,
+  };
+
+  // Trailing `field=partial` (or `field:partial`) at the end of the query.
+  function fieldTokenAtEnd(q) {
+    var m = /(^|\s)([A-Za-z_]+)(?:=|:)([^\s]*)$/.exec(q);
+    if (!m) return null;
+    var field = m[2].toLowerCase();
+    if (!SUGGESTABLE[field]) return null;
+    var lead = /^\s/.test(m[0]) ? 1 : 0;
+    return { field: field, prefix: m[3] || "", start: m.index + lead };
+  }
+
+  function fetchSuggest(field, prefix) {
+    var url = "/search/suggest?resource=ticket&field=" + encodeURIComponent(field) +
+      "&q=" + encodeURIComponent(prefix || "");
+    return fetch(url, { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : { values: [] }; })
+      .then(function (d) { return (d && d.values) || []; })
+      .catch(function () { return []; });
+  }
+
+  function applyCompletion(tok, value) {
+    var inp = input();
+    var v = /\s/.test(value) ? '"' + value.replace(/"/g, "") + '"' : value;
+    inp.value = inp.value.slice(0, tok.start) + tok.field + "=" + v + " ";
+    state.active = 0;
+    refresh();
+    inp.focus();
+  }
+
   // ---- query handling ----------------------------------------------------
 
   function refresh() {
-    var q = (input().value || "").trim();
+    var raw = input().value || "";
+    var q = raw.trim();
     var cmds = baseCommands();
     var matched;
     if (!q) {
@@ -339,20 +380,30 @@
       return { label: m.cmd.label, hint: m.cmd.hint, run: m.cmd.run };
     });
 
-    // Kick off ticket search; merge results when they arrive. Guard against
-    // out-of-order responses with a sequence token.
+    // Merge async value-suggestions (when typing a field) + ticket results.
+    // Guard against out-of-order responses with a sequence token.
     var mySeq = ++state.seq;
     render(items);
-    searchTickets(q).then(function (tickets) {
+    var tok = fieldTokenAtEnd(raw);
+    var suggestP = tok ? fetchSuggest(tok.field, tok.prefix) : Promise.resolve([]);
+    Promise.all([suggestP, searchTickets(q)]).then(function (res) {
       if (mySeq !== state.seq) return; // stale
-      var ticketItems = tickets.map(function (t) {
+      var suggItems = res[0].map(function (v) {
+        return {
+          label: tok.field + "=" + v.value,
+          hint: "filter",
+          keepOpen: true,
+          run: function () { applyCompletion(tok, v.value); },
+        };
+      });
+      var ticketItems = res[1].map(function (t) {
         return {
           label: t.title,
           hint: t.status ? "ticket · " + t.status : "ticket",
           run: function () { location.href = "/tickets/" + encodeURIComponent(t.id); },
         };
       });
-      render(items.concat(ticketItems));
+      render(items.concat(suggItems, ticketItems));
     });
   }
 

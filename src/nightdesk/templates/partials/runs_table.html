@@ -1,0 +1,69 @@
+{#
+  Flat, query-filtered runs list for the board's Runs view. Swapped in where the
+  kanban grid sits. Context: rows = [{run, ticket, project, profile}], query.
+#}
+<div id="board-runs-table" class="h-full overflow-y-auto border border-border rounded-md">
+  {% if rows %}
+    <table class="w-full text-sm">
+      <thead class="sticky top-0 bg-bg-elev text-fg-muted text-xs uppercase tracking-wide">
+        <tr class="text-left">
+          <th class="px-3 py-2">Ticket</th>
+          <th class="px-3 py-2">Project</th>
+          <th class="px-3 py-2">Profile</th>
+          <th class="px-3 py-2">Model</th>
+          <th class="px-3 py-2">Outcome</th>
+          <th class="px-3 py-2 text-right">Cost</th>
+          <th class="px-3 py-2">Started</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          {% set run = row.run %}
+          <tr class="border-t border-border hover:bg-bg-elev">
+            <td class="px-3 py-2">
+              {% if row.ticket %}
+                <a href="/tickets/{{ row.ticket.id }}{% if run.id %}?run={{ run.id }}{% endif %}"
+                   class="text-accent hover:underline">{{ row.ticket.title }}</a>
+              {% else %}
+                <span class="text-fg-muted">(deleted ticket)</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-fg-muted">
+              {% if row.project %}
+                {% if row.project.color %}<span style="color: {{ row.project.color }}">●</span>{% endif %}
+                {{ row.project.name }}
+              {% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-2 text-fg-muted">{{ row.profile.name if row.profile else "—" }}</td>
+            <td class="px-3 py-2 font-mono text-xs text-fg-muted">{{ run.model_used or "—" }}</td>
+            <td class="px-3 py-2">
+              {% set o = run.exit_status %}
+              {% if o == 'success' %}
+                <span class="inline-block px-2 py-0.5 rounded text-xs font-mono bg-bg-elev-2 text-accent border border-border">success</span>
+              {% elif o == 'failed' %}
+                <span class="inline-block px-2 py-0.5 rounded text-xs font-mono bg-bg-elev-2 text-danger border border-border">failed</span>
+              {% elif o in ('cancelled', 'worker_crash') %}
+                <span class="inline-block px-2 py-0.5 rounded text-xs font-mono bg-bg-elev-2 text-warn border border-border">{{ o }}</span>
+              {% elif run.finished_at is none %}
+                <span class="inline-block px-2 py-0.5 rounded text-xs font-mono bg-bg-elev-2 text-info border border-border">running</span>
+              {% else %}
+                <span class="inline-block px-2 py-0.5 rounded text-xs font-mono bg-bg-elev-2 text-fg-muted border border-border">none</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-right font-mono text-xs text-fg-muted">
+              {{ "$%.2f"|format(run.cost_usd) if run.cost_usd is not none else "—" }}
+            </td>
+            <td class="px-3 py-2 text-fg-muted font-mono text-xs">
+              <span data-ts="{{ iso_utc(run.started_at) }}">{{ run.started_at }}</span>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="px-3 py-10 text-center text-fg-muted text-sm">
+      {% if query %}No runs match <span class="font-mono text-fg">{{ query }}</span>.
+      {% else %}No runs yet.{% endif %}
+    </div>
+  {% endif %}
+</div>

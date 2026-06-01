@@ -16,6 +16,7 @@ from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow
 from nightdesk.domain.projects import ProjectNotFound, get_project_by_slug, list_projects
 from nightdesk.domain.profiles import list_profiles
+from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.tickets import (
     CyclicDependency,
@@ -273,15 +274,35 @@ def _project_filter(session: Session, project: str) -> tuple[Optional[str], obje
     return selected.id, selected
 
 
-def _gather_board(session: Session, *, project: str = ""):
-    project_id, selected_project = _project_filter(session, project)
+def _sole_project(session: Session, ast) -> object | None:
+    """If the query is exactly ``project=<slug>``, return that project.
+
+    Lets the board's create modal keep prefilling workspace defaults from the
+    project the user filtered to. Any richer query yields None.
+    """
+    if not isinstance(ast, Cmp) or ast.field != "project" or ast.op not in ("=", ":"):
+        return None
+    value = ast.value.strip()
+    if "," in value or value in ("none", "null", ""):
+        return None
+    try:
+        return get_project_by_slug(session, value)
+    except ProjectNotFound:
+        return None
+
+
+def _gather_board(session: Session, *, q: str = ""):
+    ast = parse_query(q)
+    selected_project = _sole_project(session, ast)
     projects = list_projects(session)
     projects_by_id = {p.id: p for p in projects}
     profiles = list_profiles(session)
     profiles_by_id = {p.id: p for p in profiles}
 
-    # Pull every ticket per real status, then bucket for the visual columns.
-    raw = {status: list_tickets(session, status=status, project_id=project_id, limit=500)
+    # Pull every ticket per real status (filtered by the query), then bucket for
+    # the visual columns. A ``status=`` term in the query simply empties the
+    # columns it excludes, so the kanban layout always survives.
+    raw = {status: search_tickets(session, ast, status=status, limit=500)
            for status, _ in _COLUMNS}
 
     queued_all = raw["queued"]
@@ -329,11 +350,33 @@ def _gather_board(session: Session, *, project: str = ""):
         "projects": projects,
         "projects_by_id": projects_by_id,
         "selected_project": selected_project,
-        "project_filter": project,
-        "project_id_filter": project_id,
-        # Every ticket, for the modal's "Depends on" picker (all statuses).
-        "dep_all": list_tickets(session, project_id=project_id, limit=500),
+        "query": q,
+        # Every ticket, for the modal's "Depends on" picker (all statuses). When
+        # the query is a single project, scope the picker to it (as the old
+        # project filter did); richer queries leave the picker unscoped.
+        "dep_all": list_tickets(
+            session,
+            project_id=selected_project.id if selected_project else None,
+            limit=500,
+        ),
     }
+
+
+def _runs_rows(session: Session, q: str) -> list[dict]:
+    """Assemble runs-view rows (run + ticket + project + profile) for a query."""
+    runs = search_runs(session, parse_query((q or "").strip()), limit=300)
+    projects = {p.id: p for p in list_projects(session)}
+    profiles = {p.id: p for p in list_profiles(session)}
+    rows = []
+    for r in runs:
+        t = r.ticket
+        rows.append({
+            "run": r,
+            "ticket": t,
+            "project": projects.get(t.project_id) if t and t.project_id else None,
+            "profile": profiles.get(t.profile_id) if t else None,
+        })
+    return rows
 
 
 def build_router(
@@ -402,13 +445,24 @@ def build_router(
             f'<code class="block break-all text-accent">{html.escape(str(preview_path))}</code>'
             f'{ref_line}'
         )
+    def _board_query(q: str, project: str) -> str:
+        """Resolve the active query, honouring legacy ``?project=`` bookmarks."""
+        q = (q or "").strip()
+        if not q and project:
+            return f"project={project}"
+        return q
+
     @router.get("/", response_class=HTMLResponse, dependencies=[auth])
     async def board(
         request: Request,
+        q: str = Query(default=""),
         project: str = Query(default=""),
+        view: str = Query(default="tickets"),
         session: Session = Depends(get_session),
     ):
-        ctx = _gather_board(session, project=project)
+        query = _board_query(q, project)
+        view = "runs" if view == "runs" else "tickets"
+        ctx = _gather_board(session, q=query)
         return templates.TemplateResponse(
             request,
             "board.html",
@@ -423,8 +477,10 @@ def build_router(
                 "projects": ctx["projects"],
                 "projects_by_id": ctx["projects_by_id"],
                 "selected_project": ctx["selected_project"],
-                "project_filter": ctx["project_filter"],
-                "project_id_filter": ctx["project_id_filter"],
+                "query": ctx["query"],
+                "view": view,
+                # Only assembled when the runs view is the initial render.
+                "runs_rows": _runs_rows(session, query) if view == "runs" else [],
                 "mode": "create",
                 "ticket": None,
             },
@@ -433,6 +489,7 @@ def build_router(
     @router.get("/board/columns", response_class=HTMLResponse, dependencies=[auth])
     async def columns(
         request: Request,
+        q: str = Query(default=""),
         project: str = Query(default=""),
         session: Session = Depends(get_session),
     ):
@@ -444,7 +501,7 @@ def build_router(
         The sidebar is outside those ids and is never touched, so unsaved
         edits in the editor survive every poll cycle.
         """
-        ctx = _gather_board(session, project=project)
+        ctx = _gather_board(session, q=_board_query(q, project))
         return templates.TemplateResponse(
             request,
             "partials/board_columns_oob.html",
@@ -455,6 +512,23 @@ def build_router(
                 "run_outcomes": ctx["run_outcomes"],
                 "dep_titles": ctx["dep_titles"],
             },
+        )
+
+    @router.get("/board/runs", response_class=HTMLResponse, dependencies=[auth])
+    async def board_runs(
+        request: Request,
+        q: str = Query(default=""),
+        session: Session = Depends(get_session),
+    ):
+        """Runs view for the board's Tickets/Runs toggle.
+
+        Returns a flat, query-filtered runs table that swaps in where the
+        kanban grid normally sits. Same search bar, run-resource fields.
+        """
+        return templates.TemplateResponse(
+            request,
+            "partials/runs_table.html",
+            {"rows": _runs_rows(session, q), "query": (q or "").strip()},
         )
 
     @router.get("/board/sidebar", response_class=HTMLResponse, dependencies=[auth])

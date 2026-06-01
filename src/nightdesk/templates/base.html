@@ -20,6 +20,9 @@
     {# localize_time.js: render UTC timestamps (data-ts / data-ts-title) in the
        viewer's locale + timezone, on load and after HTMX swaps. #}
     <script src="{{ static_v('localize_time.js') }}" defer></script>
+    {# search_bar.js: unified query/filter bar (board + Ctrl-K). Owns the query
+       string, facet dropdowns, autocomplete, and chips. #}
+    <script src="{{ static_v('search_bar.js') }}" defer></script>
     {# command_palette.js: Ctrl/Cmd+K palette + global keyboard shortcuts.
        Progressive enhancement — every action stays reachable by mouse. #}
     <script src="{{ static_v('command_palette.js') }}" defer></script>
@@ -32,7 +35,7 @@
       <div id="header-search" class="relative w-64 shrink-0">
         <input type="text"
                name="q"
-               placeholder="Search tickets..."
+               placeholder="Search… project=nd status=review"
                autocomplete="off"
                hx-get="/header/search"
                hx-trigger="keyup changed delay:200ms, focus"

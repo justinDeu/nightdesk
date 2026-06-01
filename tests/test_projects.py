@@ -484,7 +484,9 @@ async def test_board_project_filter_and_ticket_form_assignment(app, session, sam
         assert board.status_code == 200
         assert "project ticket" in board.text
         assert "other ticket" not in board.text
-        assert '<option value="nightdesk" selected' in board.text
+        # The project filter is now the unified search bar; a legacy
+        # ?project=nightdesk is reflected as a project= term in its input.
+        assert 'value="project=nightdesk"' in board.text
         assert f'<option value="{project.id}" selected' in board.text
 
         created = await client.post("/board/tickets", data={

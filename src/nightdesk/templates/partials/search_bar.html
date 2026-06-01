@@ -1,0 +1,78 @@
+{#
+  Reusable unified search/filter bar.
+
+  Context variables (all optional except where noted):
+    sb_id          DOM id for the bar (default 'nd-searchbar')
+    sb_resource    'ticket' (default) | 'run' — drives facet set + suggest API
+    sb_query       current query string to prefill
+    sb_placeholder input placeholder text
+    sb_view        when set ('tickets'|'runs'), renders the Tickets/Runs toggle
+
+  Behaviour is attached by static/search_bar.js, which reads the data-* attrs
+  and emits `nd:search` (detail.query) and `nd:view` (detail.view) events the
+  host page listens for. The bar owns the query string + chips + dropdowns; the
+  host owns the effect (poll the board, fetch runs, run the palette).
+#}
+{% set _resource = sb_resource | default('ticket') %}
+{% set _facets = (
+     [
+       {'field': 'project', 'label': 'Project'},
+       {'field': 'status', 'label': 'Status'},
+       {'field': 'latest_status', 'label': 'Latest'},
+       {'field': 'profile', 'label': 'Profile'},
+       {'field': 'backend', 'label': 'Backend'},
+       {'field': 'model', 'label': 'Model'},
+     ] if _resource == 'ticket' else [
+       {'field': 'outcome', 'label': 'Outcome'},
+       {'field': 'model', 'label': 'Model'},
+       {'field': 'project', 'label': 'Project'},
+       {'field': 'profile', 'label': 'Profile'},
+       {'field': 'backend', 'label': 'Backend'},
+       {'field': 'intent', 'label': 'Intent'},
+     ]
+   ) %}
+<div class="nd-searchbar rounded border border-border bg-bg-elev px-3 py-2"
+     id="{{ sb_id | default('nd-searchbar') }}"
+     data-nd-searchbar
+     data-resource="{{ _resource }}"
+     data-query="{{ sb_query | default('') }}">
+  <div class="nd-searchbar-main">
+    <div class="nd-searchbar-input-wrap">
+      <span class="nd-searchbar-icon" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+      </span>
+      <input type="text" class="nd-searchbar-input" name="q"
+             value="{{ sb_query | default('') }}"
+             placeholder="{{ sb_placeholder | default('Search… e.g. project=nightdesk latest_status=failed') }}"
+             autocomplete="off" spellcheck="false"
+             data-tooltip="Filter language: field=value, OR, NOT, (groups), &quot;phrases&quot;, ranges like cost&gt;0.5"
+             data-sb-input />
+      <button type="button" class="nd-searchbar-clear" data-sb-clear hidden
+              aria-label="Clear search">✕</button>
+    </div>
+    {% if sb_view is defined and sb_view %}
+    <div class="nd-view-toggle" role="tablist" aria-label="Board view">
+      <button type="button" class="nd-view-btn" data-sb-view="tickets"
+              aria-pressed="{{ 'true' if sb_view == 'tickets' else 'false' }}">Tickets</button>
+      <button type="button" class="nd-view-btn" data-sb-view="runs"
+              aria-pressed="{{ 'true' if sb_view == 'runs' else 'false' }}">Runs</button>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="nd-searchbar-facets">
+    {% for f in _facets %}
+      <button type="button" class="nd-facet-btn" data-sb-facet="{{ f.field }}"
+              aria-expanded="false">
+        {{ f.label }}<span class="nd-facet-caret" aria-hidden="true">▾</span>
+      </button>
+    {% endfor %}
+  </div>
+
+  <div class="nd-searchbar-chips" data-sb-chips></div>
+  <div class="nd-searchbar-menu" data-sb-menu hidden role="listbox"></div>
+</div>

@@ -1,20 +1,16 @@
 {% extends "base.html" %}
 {% set active_page = 'board' %}
 {% block body %}
+{% set _view = view | default('tickets') %}
 <div class="flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
-  <form method="get" action="/" class="flex flex-wrap items-center gap-2 rounded border border-border bg-bg-elev px-3 py-2 text-sm">
-    <label class="flex items-center gap-2">
-      <span class="text-xs uppercase tracking-wide text-fg-muted">Project</span>
-      <select name="project" onchange="this.form.submit()" class="rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg">
-        <option value="" {% if not project_filter %}selected{% endif %}>All projects</option>
-        <option value="none" {% if project_filter == 'none' %}selected{% endif %}>No project</option>
-        {% for p in projects %}
-          <option value="{{ p.slug }}" {% if project_filter == p.slug %}selected{% endif %}>{{ p.name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-  </form>
+  {% with sb_id='board-search',
+          sb_resource=('run' if _view == 'runs' else 'ticket'),
+          sb_query=query,
+          sb_view=_view %}
+    {% include "partials/search_bar.html" %}
+  {% endwith %}
   <div
+    {% if _view == 'runs' %}hidden{% endif %}
     id="board-grid"
     {# grid-rows-1 (minmax(0,1fr)) pins the single row to the container height.
        Without an explicit row track the implicit `auto` row grows to fit the
@@ -32,6 +28,14 @@
 
   {% include "partials/sidebar.html" %}
 </div>
+
+  {# Runs view: swaps in where the kanban grid sits when the bar's
+     Tickets/Runs toggle is set to Runs. Loaded via /board/runs. #}
+  <div id="board-runs" class="flex flex-1 min-h-0 overflow-hidden"{% if _view != 'runs' %} hidden{% endif %}>
+    {% if _view == 'runs' %}
+      {% with rows=runs_rows %}{% include "partials/runs_table.html" %}{% endwith %}
+    {% endif %}
+  </div>
 </div>
 
 {# Create-mode modal always present on the board so the "+ New ticket"
@@ -51,7 +55,7 @@
 #}
 <div
   id="board-columns-poll"
-  hx-get="/board/columns{% if project_filter %}?project={{ project_filter }}{% endif %}"
+  hx-get="/board/columns?q={{ query | urlencode }}"
   hx-trigger="every 3s, poll"
   hx-swap="none"
   hx-include="unset"
@@ -228,6 +232,79 @@
         evt.preventDefault();
       }
     });
+  })();
+</script>
+
+{# Search-bar wiring: connect the unified bar to the board's ticket poll and
+   the runs view. The bar (partials/search_bar.html + static/search_bar.js)
+   owns the query string and emits nd:search / nd:view; this glue applies the
+   effect. #}
+<script>
+  (function () {
+    var bar = document.getElementById('board-search');
+    if (!bar) return;
+    var grid = document.getElementById('board-grid');
+    var runs = document.getElementById('board-runs');
+    var poll = document.getElementById('board-columns-poll');
+    var view = {{ ('runs' if _view == 'runs' else 'tickets') | tojson }};
+    var runsTimer = null;
+
+    function enc(q) { return encodeURIComponent(q || ''); }
+
+    function syncUrl(q) {
+      var params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (view === 'runs') params.set('view', 'runs');
+      var qs = params.toString();
+      history.replaceState(null, '', qs ? ('/?' + qs) : '/');
+    }
+
+    function refreshTickets(q) {
+      if (!poll || typeof htmx === 'undefined') return;
+      poll.setAttribute('hx-get', '/board/columns?q=' + enc(q));
+      htmx.trigger(poll, 'poll');
+    }
+
+    function loadRuns(q) {
+      if (typeof htmx === 'undefined') return;
+      htmx.ajax('GET', '/board/runs?q=' + enc(q), { target: '#board-runs', swap: 'innerHTML' });
+    }
+
+    function startRunsTimer() {
+      stopRunsTimer();
+      runsTimer = setInterval(function () {
+        if (view === 'runs') loadRuns(bar.dataset.query || '');
+      }, 5000);
+    }
+    function stopRunsTimer() {
+      if (runsTimer) { clearInterval(runsTimer); runsTimer = null; }
+    }
+
+    bar.addEventListener('nd:search', function (e) {
+      var q = e.detail.query || '';
+      syncUrl(q);
+      if (view === 'runs') loadRuns(q);
+      else refreshTickets(q);
+    });
+
+    bar.addEventListener('nd:view', function (e) {
+      view = e.detail.view === 'runs' ? 'runs' : 'tickets';
+      var q = e.detail.query || '';
+      if (view === 'runs') {
+        grid.hidden = true;
+        runs.hidden = false;
+        loadRuns(q);
+        startRunsTimer();
+      } else {
+        stopRunsTimer();
+        runs.hidden = true;
+        grid.hidden = false;
+        refreshTickets(q);
+      }
+      syncUrl(q);
+    });
+
+    if (view === 'runs') startRunsTimer();
   })();
 </script>
 {% endblock %}

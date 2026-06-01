@@ -6,6 +6,7 @@ changes.
 """
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -22,6 +23,21 @@ class SearchHit:
     project_id: str | None = None
     project_name: str | None = None
     project_color: str | None = None
+
+
+def hit_from_ticket(ticket) -> SearchHit:
+    """Render a Ticket as a SearchHit for the header/palette/API result lists."""
+    proj = ticket.project
+    snippet = html.escape((ticket.prompt or "").strip().replace("\n", " ")[:120])
+    return SearchHit(
+        id=ticket.id,
+        title=ticket.title,
+        snippet=snippet,
+        status=ticket.status,
+        project_id=ticket.project_id,
+        project_name=proj.name if proj else None,
+        project_color=proj.color if proj else None,
+    )
 
 
 class SearchBackend(Protocol):
