@@ -10,8 +10,8 @@
 
   Behaviour is attached by static/search_bar.js, which reads the data-* attrs
   and emits `nd:search` (detail.query) and `nd:view` (detail.view) events the
-  host page listens for. The bar owns the query string + chips + dropdowns; the
-  host owns the effect (poll the board, fetch runs, run the palette).
+  host page listens for. The bar owns the query string, the inline filter chips,
+  and the dropdowns; the host owns the effect.
 #}
 {% set _resource = sb_resource | default('ticket') %}
 {% set _facets = (
@@ -31,22 +31,22 @@
        {'field': 'intent', 'label': 'Intent'},
      ]
    ) %}
-<div class="nd-searchbar rounded border border-border bg-bg-elev px-3 py-2"
+<div class="nd-searchbar"
      id="{{ sb_id | default('nd-searchbar') }}"
      data-nd-searchbar
      data-resource="{{ _resource }}"
      data-query="{{ sb_query | default('') }}">
   <div class="nd-searchbar-main">
-    <div class="nd-searchbar-input-wrap">
+    <div class="nd-searchbar-box" data-sb-box>
       <span class="nd-searchbar-icon" aria-hidden="true">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="11" cy="11" r="7"></circle>
           <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
         </svg>
       </span>
+      {# Chips are inserted here (before the input) by search_bar.js. #}
       <input type="text" class="nd-searchbar-input" name="q"
-             value="{{ sb_query | default('') }}"
              placeholder="{{ sb_placeholder | default('Search… e.g. project=nightdesk latest_status=failed') }}"
              autocomplete="off" spellcheck="false"
              data-tooltip="Filter language: field=value, OR, NOT, (groups), &quot;phrases&quot;, ranges like cost&gt;0.5"
@@ -73,6 +73,5 @@
     {% endfor %}
   </div>
 
-  <div class="nd-searchbar-chips" data-sb-chips></div>
   <div class="nd-searchbar-menu" data-sb-menu hidden role="listbox"></div>
 </div>

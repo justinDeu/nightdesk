@@ -1,10 +1,13 @@
 /*
  * Unified search/filter bar behaviour.
  *
- * Enhances every [data-nd-searchbar]: the text input owns the query string,
- * facet buttons + autocomplete pull existing values from /search/suggest, and
- * field=value comparisons render as removable chips below. The bar emits:
- *   - `nd:search` { query }  (debounced as you type, immediate on pick/remove)
+ * The bar looks like one input box: a magnifying glass, then inline filter
+ * chips, then the text you type. Simple `field=value` filters (from facet
+ * picks, autocomplete, or typing a token + space) become inline chips. Free
+ * text and advanced boolean (OR / NOT / parens / "phrases") stay as typed text.
+ * The full query sent to the backend is the chips serialized plus the free
+ * text. The bar emits:
+ *   - `nd:search` { query }  (debounced while typing, immediate on chip change)
  *   - `nd:view`   { view }   (Tickets/Runs toggle, when present)
  * The host page owns the effect (poll the board, fetch runs, run the palette).
  */
@@ -77,80 +80,104 @@
     return /\s/.test(v) ? '"' + v.replace(/"/g, "") + '"' : v;
   }
 
+  function serializeFilter(f) {
+    return (f.neg ? "-" : "") + f.field + (f.op || "=") + quoteIfNeeded(f.value);
+  }
+
   // ---- per-bar controller ------------------------------------------------ //
   function init(bar) {
     if (bar.__ndSearchInit) return;
     bar.__ndSearchInit = true;
 
+    var box = bar.querySelector("[data-sb-box]");
     var input = bar.querySelector("[data-sb-input]");
-    var chipsEl = bar.querySelector("[data-sb-chips]");
     var menu = bar.querySelector("[data-sb-menu]");
     var clearBtn = bar.querySelector("[data-sb-clear]");
     var facetBtns = Array.prototype.slice.call(bar.querySelectorAll("[data-sb-facet]"));
     var viewBtns = Array.prototype.slice.call(bar.querySelectorAll("[data-sb-view]"));
+
+    var filters = [];           // [{field, op, value, neg}]
     var debounceTimer = null;
     var menuItems = [];
     var menuActive = -1;
-    var menuMode = null; // 'facet' | 'auto'
+    var menuMode = null;        // 'facet' | 'auto'
     var menuCtx = null;
 
     function resource() { return bar.dataset.resource || "ticket"; }
 
+    function buildQuery() {
+      var parts = filters.map(serializeFilter);
+      var free = input.value.trim();
+      if (free) parts.push(free);
+      return parts.join(" ").trim();
+    }
+
     function emit(immediate) {
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
       var fire = function () {
-        bar.dataset.query = input.value;
-        bar.dispatchEvent(new CustomEvent("nd:search", {
-          detail: { query: input.value }, bubbles: true,
-        }));
+        var q = buildQuery();
+        bar.dataset.query = q;
+        bar.dispatchEvent(new CustomEvent("nd:search", { detail: { query: q }, bubbles: true }));
       };
       if (immediate) fire();
       else debounceTimer = setTimeout(fire, 250);
     }
 
     function syncClear() {
-      if (clearBtn) clearBtn.hidden = !input.value;
+      if (clearBtn) clearBtn.hidden = !(filters.length || input.value);
     }
 
     // ---- chips ----------------------------------------------------------- //
-    function chipLabel(t) {
-      if (t.op === "=" || t.op === ":") return t.field + ": " + t.value;
-      return t.field + " " + t.op + " " + t.value;
+    function chipLabel(f) {
+      var op = f.op || "=";
+      if (op === "=" || op === ":") return f.field + ": " + f.value;
+      return f.field + " " + op + " " + f.value;
     }
 
     function renderChips() {
-      var cmps = tokenize(input.value).filter(function (t) { return t.kind === "cmp"; });
-      chipsEl.innerHTML = "";
-      cmps.forEach(function (t, ordinal) {
+      Array.prototype.slice.call(box.querySelectorAll(".nd-chip")).forEach(function (c) {
+        c.remove();
+      });
+      filters.forEach(function (f, idx) {
         var chip = document.createElement("span");
-        chip.className = "nd-chip" + (t.neg ? " is-neg" : "");
+        chip.className = "nd-chip" + (f.neg ? " is-neg" : "");
         var label = document.createElement("span");
-        label.textContent = (t.neg ? "not " : "") + chipLabel(t);
+        label.className = "nd-chip-label";
+        label.textContent = (f.neg ? "not " : "") + chipLabel(f);
         var x = document.createElement("button");
         x.type = "button";
         x.className = "nd-chip-x";
-        x.setAttribute("aria-label", "Remove " + t.field + " filter");
+        x.setAttribute("aria-label", "Remove " + f.field + " filter");
         x.textContent = "✕";
-        x.addEventListener("click", function () { removeCmp(ordinal); });
+        x.addEventListener("click", function () { removeFilter(idx); });
         chip.appendChild(label);
         chip.appendChild(x);
-        chipsEl.appendChild(chip);
+        box.insertBefore(chip, input);
       });
     }
 
-    function removeCmp(ordinal) {
-      var cmps = tokenize(input.value).filter(function (t) { return t.kind === "cmp"; });
-      var target = cmps[ordinal];
-      if (!target) return;
-      var next = input.value.slice(0, target.start) + input.value.slice(target.end);
-      input.value = next.replace(/\s{2,}/g, " ").trim();
-      afterChange(true);
-    }
-
-    function afterChange(immediate) {
+    function addFilter(field, value, op, neg) {
+      op = op || "=";
+      neg = !!neg;
+      var replaced = false;
+      for (var i = 0; i < filters.length; i++) {
+        if (filters[i].field === field && !!filters[i].neg === neg) {
+          filters[i] = { field: field, op: op, value: value, neg: neg };
+          replaced = true;
+          break;
+        }
+      }
+      if (!replaced) filters.push({ field: field, op: op, value: value, neg: neg });
       renderChips();
       syncClear();
-      emit(immediate);
+      emit(true);
+    }
+
+    function removeFilter(idx) {
+      filters.splice(idx, 1);
+      renderChips();
+      syncClear();
+      emit(true);
     }
 
     // ---- dropdown menu --------------------------------------------------- //
@@ -242,33 +269,13 @@
         fetchSuggest(field, "").then(function (values) {
           if (menu.hidden) return;
           fillMenu(field, values, function (val) {
-            setField(field, val);
+            addFilter(field, val);
             closeMenu();
             input.focus();
           });
         });
       });
     });
-
-    // Insert or replace `field=value` in the query (first match of that field).
-    function setField(field, value) {
-      var toks = tokenize(input.value);
-      var existing = null;
-      for (var i = 0; i < toks.length; i++) {
-        if (toks[i].kind === "cmp" && toks[i].field === field && !toks[i].neg) {
-          existing = toks[i];
-          break;
-        }
-      }
-      var frag = field + "=" + quoteIfNeeded(value);
-      if (existing) {
-        input.value = input.value.slice(0, existing.start) + frag +
-          input.value.slice(existing.end);
-      } else {
-        input.value = (input.value.trim() + " " + frag).trim();
-      }
-      afterChange(true);
-    }
 
     // ---- autocomplete as you type --------------------------------------- //
     function caretToken() {
@@ -287,34 +294,49 @@
       if (!m) { closeMenu(); return; }
       var field = m[1].toLowerCase();
       if (!SUGGESTABLE[field]) { closeMenu(); return; }
+      var op = m[2];
       var prefix = m[3] || "";
       menuMode = "auto";
       menuCtx = tok;
-      positionMenu(input.getBoundingClientRect());
+      positionMenu(box.getBoundingClientRect());
       menu.hidden = false;
       fetchSuggest(field, prefix).then(function (values) {
         if (menu.hidden || menuMode !== "auto") return;
         if (!values.length) { closeMenu(); return; }
         fillMenu(field, values, function (val) {
-          completeToken(tok, field, val);
+          completeToken(tok, field, val, op);
         });
       });
     }
 
-    function completeToken(tok, field, value) {
-      var frag = field + "=" + quoteIfNeeded(value);
-      input.value = input.value.slice(0, tok.start) + frag + " " +
-        input.value.slice(tok.end);
-      var caret = tok.start + frag.length + 1;
-      afterChange(true);
-      input.focus();
-      input.setSelectionRange(caret, caret);
+    function completeToken(tok, field, value, op) {
+      // Drop the partial token from the free text and add a chip instead.
+      input.value = (input.value.slice(0, tok.start) + input.value.slice(tok.end))
+        .replace(/\s{2,}/g, " ").trim();
       closeMenu();
+      addFilter(field, value, op === ":" ? ":" : "=");
+      input.focus();
+    }
+
+    // Type `field=value` + space -> inline chip (unless it's part of a boolean
+    // expression, which stays as free text).
+    function maybeChipifyOnSpace() {
+      if (!/\s$/.test(input.value)) return false;
+      var trimmed = input.value.trim();
+      if (!trimmed) return false;
+      var toks = tokenize(trimmed);
+      if (toks.length === 1 && toks[0].kind === "cmp") {
+        var t = toks[0];
+        input.value = "";
+        addFilter(t.field, t.value, t.op, t.neg);
+        return true;
+      }
+      return false;
     }
 
     // ---- input events ---------------------------------------------------- //
     input.addEventListener("input", function () {
-      renderChips();
+      if (maybeChipifyOnSpace()) return;
       syncClear();
       emit(false);
       maybeAutocomplete();
@@ -324,23 +346,37 @@
       if (!menu.hidden && menuItems.length) {
         if (e.key === "ArrowDown") { e.preventDefault(); highlight((menuActive + 1) % menuItems.length); return; }
         if (e.key === "ArrowUp") { e.preventDefault(); highlight((menuActive - 1 + menuItems.length) % menuItems.length); return; }
-        if (e.key === "Enter") {
-          if (menuActive >= 0) { e.preventDefault(); menuItems[menuActive].dispatchEvent(new MouseEvent("mousedown")); return; }
-        }
+        if (e.key === "Enter" && menuActive >= 0) { e.preventDefault(); menuItems[menuActive].dispatchEvent(new MouseEvent("mousedown")); return; }
         if (e.key === "Escape") { e.preventDefault(); closeMenu(); return; }
+      }
+      // Backspace at the very start with no text removes the last chip.
+      if (e.key === "Backspace" && !input.value &&
+          input.selectionStart === 0 && input.selectionEnd === 0 && filters.length) {
+        e.preventDefault();
+        removeFilter(filters.length - 1);
+        return;
       }
       if (e.key === "Enter") { e.preventDefault(); emit(true); closeMenu(); }
     });
 
     input.addEventListener("blur", function () {
-      // Delay so a menu mousedown can fire first.
       setTimeout(function () { closeMenu(); }, 150);
+    });
+
+    // Clicking empty space in the box focuses the input.
+    box.addEventListener("mousedown", function (e) {
+      if (e.target === box || e.target === input.previousElementSibling) {
+        input.focus();
+      }
     });
 
     if (clearBtn) {
       clearBtn.addEventListener("click", function () {
+        filters = [];
         input.value = "";
-        afterChange(true);
+        renderChips();
+        syncClear();
+        emit(true);
         input.focus();
       });
     }
@@ -354,18 +390,48 @@
         });
         bar.dataset.resource = view === "runs" ? "run" : "ticket";
         bar.dispatchEvent(new CustomEvent("nd:view", {
-          detail: { view: view, query: input.value }, bubbles: true,
+          detail: { view: view, query: buildQuery() }, bubbles: true,
         }));
       });
     });
 
-    // Reposition / dismiss the floating menu on scroll + resize.
     window.addEventListener("resize", closeMenu);
     document.addEventListener("scroll", function () { if (!menu.hidden) closeMenu(); }, true);
 
-    // Initial paint.
-    renderChips();
-    syncClear();
+    // ---- initial state from the prefilled query -------------------------- //
+    (function initFilters() {
+      var q = bar.dataset.query || "";
+      if (!q.trim()) { input.value = ""; renderChips(); syncClear(); return; }
+      var toks = tokenize(q);
+      var hasBoolean = toks.some(function (t) {
+        return t.kind === "or" || t.kind === "lparen" || t.kind === "rparen";
+      });
+      if (hasBoolean) {
+        // Keep advanced boolean intact as raw text rather than flatten it.
+        input.value = q;
+        renderChips();
+        syncClear();
+        return;
+      }
+      var freeParts = [];
+      var pendingNeg = false;
+      toks.forEach(function (t) {
+        if (t.kind === "not") { pendingNeg = true; return; }
+        if (t.kind === "cmp") {
+          filters.push({ field: t.field, op: t.op, value: t.value, neg: !!t.neg || pendingNeg });
+          pendingNeg = false;
+        } else if (t.kind === "word") {
+          freeParts.push(t.text);
+          pendingNeg = false;
+        } else if (t.kind === "phrase") {
+          freeParts.push('"' + t.text.replace(/"/g, "") + '"');
+          pendingNeg = false;
+        }
+      });
+      input.value = freeParts.join(" ");
+      renderChips();
+      syncClear();
+    })();
   }
 
   function initAll(root) {

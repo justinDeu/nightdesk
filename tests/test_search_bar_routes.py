@@ -101,7 +101,8 @@ async def test_board_filters_by_status_query(cookie_client, session, profile):
 
 async def test_board_search_bar_prefilled_with_query(cookie_client):
     r = await cookie_client.get("/?q=status%3Dreview")
-    assert 'value="status=review"' in r.text
+    # The query is carried on the bar; search_bar.js renders it as inline chips.
+    assert 'data-query="status=review"' in r.text
     assert 'data-nd-searchbar' in r.text
 
 
@@ -110,7 +111,7 @@ async def test_legacy_project_param_becomes_query(cookie_client, session, profil
     create_ticket(session, title="nd-ticket", prompt="x", profile_id=profile.id,
                   status="draft", source_path="/tmp/nd", project_id=project.id)
     r = await cookie_client.get("/?project=nightdesk")
-    assert 'value="project=nightdesk"' in r.text
+    assert 'data-query="project=nightdesk"' in r.text
     assert "nd-ticket" in r.text
 
 
