@@ -436,6 +436,11 @@ def _fts_match_string(value: str, phrase: bool) -> str:
 
 
 def _fts_select(ctx: _Ctx, node: Text):
+    """Ticket ids matching a free-text term via the FTS5 index.
+
+    The index is kept complete and in-sync by ``ensure_fts_index`` at startup,
+    so this stays a fast, ranked, word-prefix search.
+    """
     match = _fts_match_string(node.value, node.phrase)
     if not match:
         return None

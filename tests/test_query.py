@@ -196,7 +196,7 @@ def seeded(session):
                  status="review", project=proj_nd, prompt="rich filter")
     t2 = _ticket(session, tid="t2", title="fix the poller", profile=pdef,
                  status="running", project=proj_nd, prompt="board polling")
-    t3 = _ticket(session, tid="t3", title="research spike", profile=palt,
+    t3 = _ticket(session, tid="t3", title="Spike on indexing", profile=palt,
                  status="draft", project=proj_omc, prompt="explore options")
     t4 = _ticket(session, tid="t4", title="orphan task", profile=pdef,
                  status="draft", project=None, prompt="no project here")
@@ -276,6 +276,34 @@ def test_cost_range(seeded):
 def test_free_text_matches_title_and_prompt(seeded):
     assert _ids(search_tickets(seeded, parse_query("search"))) == ["t1"]
     assert _ids(search_tickets(seeded, parse_query("poller"))) == ["t2"]
+
+
+def test_free_text_prefix_and_case_insensitive(seeded):
+    # FTS does word-prefix, case-insensitive matching: "ind" finds the token
+    # "indexing", "POLL" finds "poller".
+    assert _ids(search_tickets(seeded, parse_query("ind"))) == ["t3"]
+    assert _ids(search_tickets(seeded, parse_query("POLL"))) == ["t2"]
+
+
+def test_ensure_fts_index_recreates_triggers_and_reindexes(engine, session):
+    # A ticket created while the FTS triggers were missing is invisible to text
+    # search until ensure_fts_index rebuilds the index.
+    from sqlalchemy import text as _text
+    from nightdesk.domain.search import ensure_fts_index
+    _setup_fts(session)
+    p = _profile(session)
+    _ticket(session, tid="z1", title="Update the widget", profile=p, prompt="")
+    # No trigger and no manual insert, so it is absent from the index.
+    assert _ids(search_tickets(session, parse_query("widget"))) == []
+
+    ensure_fts_index(engine)
+    session.expire_all()
+    assert _ids(search_tickets(session, parse_query("widget"))) == ["z1"]
+    # Triggers are restored, so a later edit stays indexed.
+    triggers = {r[0] for r in session.execute(_text(
+        "SELECT name FROM sqlite_master WHERE type='trigger'"
+    ))}
+    assert {"tickets_ai", "tickets_ad", "tickets_au"} <= triggers
 
 
 def test_and_combination(seeded):

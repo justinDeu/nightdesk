@@ -908,6 +908,11 @@ def run_api() -> None:
         return
 
     engine = make_engine(cfg.db_path)
+    # Keep the FTS search index complete and self-maintaining: recreate the
+    # triggers a batch migration may have dropped and reindex on drift, so
+    # tickets never silently fall out of text search.
+    from nightdesk.domain.search import ensure_fts_index
+    ensure_fts_index(engine)
     static_root = Path(__file__).parent / "static"
     app = create_app(
         engine=engine,

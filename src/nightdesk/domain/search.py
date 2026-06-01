@@ -40,6 +40,49 @@ def hit_from_ticket(ticket) -> SearchHit:
     )
 
 
+_FTS_CREATE_TRIGGERS = (
+    "CREATE TRIGGER tickets_ai AFTER INSERT ON tickets BEGIN "
+    "INSERT INTO tickets_fts(rowid, title, prompt, id) "
+    "VALUES (new.rowid, new.title, new.prompt, new.id); END;",
+    "CREATE TRIGGER tickets_ad AFTER DELETE ON tickets BEGIN "
+    "DELETE FROM tickets_fts WHERE rowid = old.rowid; END;",
+    "CREATE TRIGGER tickets_au AFTER UPDATE ON tickets BEGIN "
+    "DELETE FROM tickets_fts WHERE rowid = old.rowid; "
+    "INSERT INTO tickets_fts(rowid, title, prompt, id) "
+    "VALUES (new.rowid, new.title, new.prompt, new.id); END;",
+)
+
+
+def ensure_fts_index(engine) -> None:
+    """Make ``tickets_fts`` consistent and self-maintaining.
+
+    SQLite ``batch_alter_table`` rebuilds the tickets table, which silently
+    drops its triggers (this happened in migration 0013, leaving every ticket
+    created since unindexed and therefore invisible to text search). Run this
+    after migrations on startup: it recreates the FTS triggers and rebuilds the
+    index whenever it has drifted out of sync with the tickets table, so a
+    forgotten trigger can never again leave tickets unsearchable.
+    """
+    with engine.begin() as conn:
+        has_fts = conn.execute(text(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tickets_fts'"
+        )).first()
+        if not has_fts:
+            return
+        for name in ("tickets_ai", "tickets_ad", "tickets_au"):
+            conn.execute(text(f"DROP TRIGGER IF EXISTS {name}"))
+        for ddl in _FTS_CREATE_TRIGGERS:
+            conn.execute(text(ddl))
+        n_tickets = conn.execute(text("SELECT COUNT(*) FROM tickets")).scalar() or 0
+        n_fts = conn.execute(text("SELECT COUNT(*) FROM tickets_fts")).scalar() or 0
+        if n_tickets != n_fts:
+            conn.execute(text("DELETE FROM tickets_fts"))
+            conn.execute(text(
+                "INSERT INTO tickets_fts(rowid, title, prompt, id) "
+                "SELECT rowid, title, prompt, id FROM tickets"
+            ))
+
+
 class SearchBackend(Protocol):
     def search(
         self, query: str, limit: int = 20, project_id: str | None = None,
