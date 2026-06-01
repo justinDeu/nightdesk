@@ -25,6 +25,13 @@
     project: 1, status: 1, latest_status: 1, latest: 1, outcome: 1, profile: 1,
     backend: 1, model: 1, intent: 1,
   };
+  // Field names offered when typing a bare word (e.g. "sta" -> "status").
+  var FIELD_NAMES = {
+    ticket: ["project", "status", "latest_status", "profile", "backend",
+             "model", "cost", "priority", "created"],
+    run: ["outcome", "status", "model", "project", "profile", "backend",
+          "intent", "cost", "started", "finished", "failure_kind"],
+  };
   var FIELD_RE = /^-?([A-Za-z_]+)(!=|>=|<=|=|:|>|<)(.*)$/;
 
   // ---- tokenizer (mirror of the Python scanner, with positions) ---------- //
@@ -312,7 +319,9 @@
         menu.appendChild(item);
         menuItems.push(item);
       });
-      highlight(0);
+      // No auto-highlight: Enter commits the typed text (chip/search) unless the
+      // user arrows down to pick a suggestion first.
+      menuActive = -1;
     }
 
     function fetchSuggest(field, prefix) {
@@ -406,36 +415,73 @@
       return null;
     }
 
-    function maybeAutocomplete() {
-      var tok = caretToken();
-      if (!tok || (tok.kind !== "cmp" && tok.kind !== "word")) { closeMenu(); return; }
-      var m = FIELD_RE.exec(tok.text);
-      if (!m) { closeMenu(); return; }
-      var field = m[1].toLowerCase();
-      if (!SUGGESTABLE[field]) { closeMenu(); return; }
-      var op = m[2];
-      var prefix = m[3] || "";
+    function openMenu(ctx) {
       menuMode = "auto";
-      menuCtx = tok;
+      menuCtx = ctx;
       menuAnchor = box;
       positionMenu(box.getBoundingClientRect());
       menu.hidden = false;
-      fetchSuggest(field, prefix).then(function (values) {
-        if (menu.hidden || menuMode !== "auto") return;
-        if (!values.length) { closeMenu(); return; }
-        fillMenu(field, values, function (val) {
-          completeToken(tok, field, val, op);
-        });
-      });
     }
 
-    function completeToken(tok, field, value, op) {
-      // Drop the partial token from the free text and add a chip instead.
-      input.value = (input.value.slice(0, tok.start) + input.value.slice(tok.end))
-        .replace(/\s{2,}/g, " ").trim();
-      closeMenu();
-      addFilter(field, value, op === ":" ? ":" : "=");
+    // Replace the caret token's text in place (no chip), leaving the caret after
+    // the inserted text so the user can keep typing (e.g. add ,another value).
+    function replaceToken(tok, newText) {
+      input.value = input.value.slice(0, tok.start) + newText + input.value.slice(tok.end);
+      var caret = tok.start + newText.length;
+      syncClear();
+      updateEnterHint();
       input.focus();
+      input.setSelectionRange(caret, caret);
+    }
+
+    function maybeAutocomplete() {
+      var tok = caretToken();
+      if (!tok) { closeMenu(); return; }
+      var m = FIELD_RE.exec(tok.text);
+
+      // `field op value` -> suggest values for the current comma segment.
+      if (m && FIELDS[m[1].toLowerCase()]) {
+        var field = m[1].toLowerCase();
+        if (!SUGGESTABLE[field]) { closeMenu(); return; }
+        var op = m[2];
+        var valuelist = m[3] || "";
+        var segs = valuelist.split(",");
+        var prefix = segs[segs.length - 1];
+        var chosen = segs.slice(0, -1).map(function (s) { return s.trim(); });
+        openMenu(tok);
+        fetchSuggest(field, prefix).then(function (values) {
+          if (menu.hidden || menuMode !== "auto") return;
+          values = values.filter(function (v) { return chosen.indexOf(v.value) === -1; });
+          if (!values.length) { closeMenu(); return; }
+          fillMenu(field, values, function (val) {
+            // Complete the current segment as text; keep it editable so the
+            // user can type a comma and pick another value.
+            segs[segs.length - 1] = val;
+            closeMenu();
+            replaceToken(tok, field + op + segs.join(","));
+          });
+        });
+        return;
+      }
+
+      // Bare word -> suggest matching field names ("sta" -> "status").
+      if (tok.kind === "word" && /^[A-Za-z_]+$/.test(tok.text)) {
+        var pfx = tok.text.toLowerCase();
+        var names = (FIELD_NAMES[resource()] || []).filter(function (n) {
+          return n.indexOf(pfx) === 0;
+        });
+        if (!names.length) { closeMenu(); return; }
+        openMenu(tok);
+        fillMenu("field", names.map(function (n) { return { value: n, label: n }; }),
+          function (name) {
+            closeMenu();
+            replaceToken(tok, name + "=");
+            maybeAutocomplete(); // immediately offer the chosen field's values
+          });
+        return;
+      }
+
+      closeMenu();
     }
 
     // Type `field=value` + space -> inline chip (unless it's part of a boolean
