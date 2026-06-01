@@ -102,6 +102,7 @@
     var menuActive = -1;
     var menuMode = null;        // 'facet' | 'auto'
     var menuCtx = null;
+    var menuAnchor = null;      // element the floating menu is positioned under
 
     function resource() { return bar.dataset.resource || "ticket"; }
 
@@ -141,9 +142,12 @@
       filters.forEach(function (f, idx) {
         var chip = document.createElement("span");
         chip.className = "nd-chip" + (f.neg ? " is-neg" : "");
-        var label = document.createElement("span");
+        var label = document.createElement("button");
+        label.type = "button";
         label.className = "nd-chip-label";
+        label.title = "Click to edit";
         label.textContent = (f.neg ? "not " : "") + chipLabel(f);
+        label.addEventListener("click", function () { editFilter(idx); });
         var x = document.createElement("button");
         x.type = "button";
         x.className = "nd-chip-x";
@@ -180,6 +184,56 @@
       emit(true);
     }
 
+    // Click a chip to edit it: drop it back into the input as text, so you can
+    // tweak the value (e.g. add ,running) and re-chip with space or Enter.
+    function editFilter(idx) {
+      var f = filters[idx];
+      filters.splice(idx, 1);
+      renderChips();
+      var frag = serializeFilter(f);
+      var cur = input.value.trim();
+      input.value = cur ? cur + " " + frag : frag;
+      syncClear();
+      // Query is unchanged (chip text moved into the input), so no re-search.
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+
+    // ---- facet multi-select (build comma value lists) -------------------- //
+    function fieldChipIndex(field) {
+      for (var i = 0; i < filters.length; i++) {
+        if (filters[i].field === field && !filters[i].neg &&
+            (filters[i].op === "=" || filters[i].op === ":")) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    function facetSelectedValues(field) {
+      var i = fieldChipIndex(field);
+      if (i < 0) return [];
+      return filters[i].value.split(",").map(function (s) { return s.trim(); })
+        .filter(Boolean);
+    }
+
+    function toggleFacetValue(field, value) {
+      var i = fieldChipIndex(field);
+      if (i < 0) {
+        filters.push({ field: field, op: "=", value: value, neg: false });
+      } else {
+        var vals = facetSelectedValues(field);
+        var at = vals.indexOf(value);
+        if (at >= 0) vals.splice(at, 1);
+        else vals.push(value);
+        if (vals.length === 0) filters.splice(i, 1);
+        else filters[i].value = vals.join(",");
+      }
+      renderChips();
+      syncClear();
+      emit(true);
+    }
+
     // ---- dropdown menu --------------------------------------------------- //
     function closeMenu() {
       menu.hidden = true;
@@ -188,12 +242,18 @@
       menuActive = -1;
       menuMode = null;
       menuCtx = null;
+      menuAnchor = null;
       facetBtns.forEach(function (b) { b.setAttribute("aria-expanded", "false"); });
     }
 
     function positionMenu(rect) {
       menu.style.top = (rect.bottom + 4) + "px";
       menu.style.left = rect.left + "px";
+    }
+
+    function repositionMenu() {
+      if (menu.hidden || !menuAnchor || !document.contains(menuAnchor)) return;
+      positionMenu(menuAnchor.getBoundingClientRect());
     }
 
     function highlight(idx) {
@@ -264,18 +324,64 @@
         menuMode = "facet";
         menuCtx = field;
         btn.setAttribute("aria-expanded", "true");
+        menuAnchor = btn;
         positionMenu(btn.getBoundingClientRect());
         menu.hidden = false;
         fetchSuggest(field, "").then(function (values) {
           if (menu.hidden) return;
-          fillMenu(field, values, function (val) {
-            addFilter(field, val);
-            closeMenu();
-            input.focus();
-          });
+          fillFacetMenu(field, values);
         });
       });
     });
+
+    // Facet menu: multi-select toggles that build a comma value list. Stays
+    // open across picks so you can choose several (status=review,running).
+    function fillFacetMenu(field, values) {
+      var selected = facetSelectedValues(field);
+      menu.innerHTML = "";
+      menuItems = [];
+      var head = document.createElement("div");
+      head.className = "nd-sb-menu-head";
+      head.textContent = field + " — pick one or more";
+      menu.appendChild(head);
+      if (!values.length) {
+        var empty = document.createElement("div");
+        empty.className = "nd-sb-menu-empty";
+        empty.textContent = "No values";
+        menu.appendChild(empty);
+        return;
+      }
+      values.forEach(function (v) {
+        var isSel = selected.indexOf(v.value) >= 0;
+        var item = document.createElement("button");
+        item.type = "button";
+        item.className = "nd-sb-menu-item" + (isSel ? " is-selected" : "");
+        item.setAttribute("role", "option");
+        item.setAttribute("aria-selected", isSel ? "true" : "false");
+        var check = document.createElement("span");
+        check.className = "nd-sb-check";
+        check.textContent = isSel ? "✓" : "";
+        item.appendChild(check);
+        var label = document.createElement("span");
+        label.textContent = v.label;
+        item.appendChild(label);
+        if (v.label !== v.value) {
+          var sub = document.createElement("span");
+          sub.className = "nd-sb-menu-head";
+          sub.style.marginLeft = "auto";
+          sub.style.padding = "0";
+          sub.textContent = v.value;
+          item.appendChild(sub);
+        }
+        item.addEventListener("mousedown", function (e) {
+          e.preventDefault();
+          toggleFacetValue(field, v.value);
+          fillFacetMenu(field, values); // re-render with updated ticks, keep open
+        });
+        menu.appendChild(item);
+        menuItems.push(item);
+      });
+    }
 
     // ---- autocomplete as you type --------------------------------------- //
     function caretToken() {
@@ -298,6 +404,7 @@
       var prefix = m[3] || "";
       menuMode = "auto";
       menuCtx = tok;
+      menuAnchor = box;
       positionMenu(box.getBoundingClientRect());
       menu.hidden = false;
       fetchSuggest(field, prefix).then(function (values) {
@@ -356,11 +463,29 @@
         removeFilter(filters.length - 1);
         return;
       }
-      if (e.key === "Enter") { e.preventDefault(); emit(true); closeMenu(); }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        var trimmed = input.value.trim();
+        var toks = trimmed ? tokenize(trimmed) : [];
+        if (toks.length === 1 && toks[0].kind === "cmp") {
+          input.value = "";
+          addFilter(toks[0].field, toks[0].value, toks[0].op, toks[0].neg);
+        } else {
+          emit(true);
+        }
+        closeMenu();
+      }
+    });
+
+    input.addEventListener("focus", function () {
+      // Switching from facet-picking to typing dismisses the facet menu.
+      if (menuMode === "facet") closeMenu();
     });
 
     input.addEventListener("blur", function () {
-      setTimeout(function () { closeMenu(); }, 150);
+      // Only auto-dismiss the autocomplete menu on blur; a facet menu opened by
+      // a button click must not be torn down by the input losing focus.
+      setTimeout(function () { if (menuMode === "auto") closeMenu(); }, 150);
     });
 
     // Clicking empty space in the box focuses the input.
@@ -395,8 +520,29 @@
       });
     });
 
-    window.addEventListener("resize", closeMenu);
-    document.addEventListener("scroll", function () { if (!menu.hidden) closeMenu(); }, true);
+    // Reposition (don't close) on scroll/resize: a board refresh re-mounts the
+    // columns and fires spurious scroll events, which must not dismiss an open
+    // facet menu mid-multi-select. The anchor stays put, so this is a no-op
+    // unless the bar itself actually moves.
+    window.addEventListener("resize", repositionMenu);
+    document.addEventListener("scroll", repositionMenu, true);
+    // Dismiss on any mousedown that is not inside the menu itself or on a facet
+    // button. Clicking the input, a chip, elsewhere in the bar, or off the bar
+    // all close it. composedPath is captured at dispatch, so it still reflects
+    // the menu even though picking a value re-renders (and detaches) the node.
+    function pathHas(e, el) {
+      var path = typeof e.composedPath === "function" ? e.composedPath() : [];
+      return path.indexOf(el) !== -1 || (el && el.contains && el.contains(e.target));
+    }
+    document.addEventListener("mousedown", function (e) {
+      if (menu.hidden) return;
+      var onFacet = facetBtns.some(function (b) { return pathHas(e, b); });
+      if (!pathHas(e, menu) && !onFacet) closeMenu();
+    });
+    // Escape closes it even when the input isn't focused (facet menu).
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !menu.hidden) closeMenu();
+    });
 
     // ---- initial state from the prefilled query -------------------------- //
     (function initFilters() {
