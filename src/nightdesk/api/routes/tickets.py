@@ -6,16 +6,23 @@ from sqlalchemy.orm import Session
 from nightdesk.api.auth import require_bearer
 from nightdesk.domain.projects import ProjectNotFound
 from nightdesk.api.schemas import (
+    BulkPriorityUpdate, BulkProfileUpdate, BulkProjectUpdate, BulkStatusUpdate,
+    BulkUpdateResult,
     DependencyCreate, DependencyOut,
-    TicketCreate, TicketOut, TicketReorder, TicketTransition, TicketUpdate,
+    TicketCreate, TicketOut, TicketPriorityUpdate, TicketProfileUpdate,
+    TicketProjectUpdate, TicketReorder, TicketStatusUpdate, TicketTransition,
+    TicketUpdate,
 )
 from nightdesk.domain.tickets import (
-    add_dependency, archive, create_ticket, delete_ticket, get_ticket,
-    list_tickets, remove_dependency, requeue,
+    add_dependency, archive, bulk_update_priority, bulk_update_profile,
+    bulk_update_project, bulk_update_status, create_ticket, delete_ticket,
+    get_ticket, list_tickets, remove_dependency, requeue,
     reorder_in_column, request_run_now, transition_status,
     transition_with_position, unarchive, update_ticket,
+    update_ticket_priority, update_ticket_profile, update_ticket_project,
     TicketNotFound, InvalidTransition, CyclicDependency, DependencyNotFound,
 )
+from nightdesk.domain.profiles import ProfileNotFound
 
 
 def _coerce_dirs(payload_dirs):
@@ -113,6 +120,83 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         tickets = list_tickets(session, status=status, profile_id=profile_id, project_id=project_id)
         return [_ticket_to_out(t) for t in tickets]
 
+    # --- Bulk metadata update endpoints -----------------------------------------
+    # Registered BEFORE /{tid} routes so FastAPI does not match "bulk" as a tid.
+
+    @router.patch("/bulk/priority", response_model=BulkUpdateResult)
+    async def bulk_priority(
+        payload: BulkPriorityUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            updated, skipped = bulk_update_priority(
+                session, payload.ticket_ids, payload.priority,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return BulkUpdateResult(
+            updated=[_ticket_to_out(t) for t in updated],
+            skipped=skipped,
+        )
+
+    @router.patch("/bulk/status", response_model=BulkUpdateResult)
+    async def bulk_status(
+        payload: BulkStatusUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            updated, skipped = bulk_update_status(
+                session, payload.ticket_ids, payload.status,
+            )
+        except InvalidTransition as e:
+            raise HTTPException(422, str(e))
+        return BulkUpdateResult(
+            updated=[_ticket_to_out(t) for t in updated],
+            skipped=skipped,
+        )
+
+    @router.patch("/bulk/project", response_model=BulkUpdateResult)
+    async def bulk_project(
+        payload: BulkProjectUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            updated, skipped = bulk_update_project(
+                session, payload.ticket_ids, payload.project_id,
+            )
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        return BulkUpdateResult(
+            updated=[_ticket_to_out(t) for t in updated],
+            skipped=skipped,
+        )
+
+    @router.patch("/bulk/profile", response_model=BulkUpdateResult)
+    async def bulk_profile(
+        payload: BulkProfileUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            updated, skipped = bulk_update_profile(
+                session, payload.ticket_ids, payload.profile_id,
+            )
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
+        return BulkUpdateResult(
+            updated=[_ticket_to_out(t) for t in updated],
+            skipped=skipped,
+        )
+
+    @router.post("/reorder", response_model=list[TicketOut])
+    async def reorder(payload: TicketReorder, session: Session = Depends(get_session)):
+        try:
+            tickets = reorder_in_column(session, payload.status, payload.ticket_ids)
+            return [_ticket_to_out(t) for t in tickets]
+        except InvalidTransition as e:
+            raise HTTPException(422, str(e))
+
+    # --- Per-ticket routes (path parameter {tid}) --------------------------------
+
     @router.get("/{tid}", response_model=TicketOut)
     async def show(tid: str, session: Session = Depends(get_session)):
         try:
@@ -186,14 +270,6 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.post("/reorder", response_model=list[TicketOut])
-    async def reorder(payload: TicketReorder, session: Session = Depends(get_session)):
-        try:
-            tickets = reorder_in_column(session, payload.status, payload.ticket_ids)
-            return [_ticket_to_out(t) for t in tickets]
-        except InvalidTransition as e:
-            raise HTTPException(422, str(e))
-
     @router.post("/{tid}/archive", response_model=TicketOut)
     async def archive_route(tid: str, session: Session = Depends(get_session)):
         try:
@@ -222,6 +298,64 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
+
+    # --- Focused metadata update endpoints --------------------------------------
+    # Lightweight property-edit routes for the property picker, list inline
+    # edits, keyboard actions, and bulk operations.  Each touches exactly one
+    # field so callers don't need to construct a full TicketUpdate just to
+    # change the priority.  The existing full PATCH endpoint is preserved.
+
+    @router.patch("/{tid}/priority", response_model=TicketOut)
+    async def update_priority(
+        tid: str, payload: TicketPriorityUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            t = update_ticket_priority(session, tid, payload.priority)
+            return _ticket_to_out(t)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+    @router.patch("/{tid}/status", response_model=TicketOut)
+    async def update_status(
+        tid: str, payload: TicketStatusUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            t = transition_status(session, tid, payload.status)
+            return _ticket_to_out(t)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+
+    @router.patch("/{tid}/project", response_model=TicketOut)
+    async def update_project(
+        tid: str, payload: TicketProjectUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            t = update_ticket_project(session, tid, payload.project_id)
+            return _ticket_to_out(t)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+
+    @router.patch("/{tid}/profile", response_model=TicketOut)
+    async def update_profile(
+        tid: str, payload: TicketProfileUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            t = update_ticket_profile(session, tid, payload.profile_id)
+            return _ticket_to_out(t)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
 
     # --- Dependency endpoints ---------------------------------------------------
 

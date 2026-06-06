@@ -28,17 +28,28 @@
       <h1 class="text-xl font-bold text-fg break-words">{{ ticket.title }}</h1>
 
       <div class="flex flex-wrap items-center gap-2 text-xs">
-        <span class="inline-block border rounded px-2 py-0.5 {{ status_class }}">{{ ticket.status }}</span>
+        {# Shared property pickers: status, priority, project. Each commits via
+           a focused metadata route and swaps its chip in place — no full-page
+           reload, no edit-modal round trip. #}
+        {% with tid=ticket.id, prop='status', chip=property_chip('status', ticket) %}
+          {% include "partials/property_picker.html" %}
+        {% endwith %}
         {% if ticket.profile %}
           <span class="inline-block border border-border rounded px-2 py-0.5 bg-bg-elev-2 text-fg-muted">
             {{ ticket.profile.name }}
           </span>
         {% endif %}
-        {% if ticket.priority %}
-          <span class="inline-block border border-border rounded px-2 py-0.5 bg-bg-elev-2 text-fg-muted">
-            prio {{ ticket.priority }}
-          </span>
-        {% endif %}
+        {# Interactive single-value pickers (shared property-picker primitive). #}
+        {% with tid=ticket.id, prop='priority', chip=property_chip('priority', ticket) %}
+          {% include "partials/property_picker.html" %}
+        {% endwith %}
+        {% with tid=ticket.id, prop='project', chip=property_chip('project', ticket) %}
+          {% include "partials/property_picker.html" %}
+        {% endwith %}
+        {# Label chips (read-only display here; editing happens in the modal). #}
+        {% with labels=ticket.labels %}
+          {% include "partials/label_chips.html" %}
+        {% endwith %}
       </div>
 
       <div class="flex flex-wrap gap-2">

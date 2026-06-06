@@ -19,6 +19,7 @@ from nightdesk.api.routes import diagnostics as diagnostics_routes
 from nightdesk.api.routes import fs as fs_routes
 from nightdesk.api.routes import header as header_routes
 from nightdesk.api.routes import health
+from nightdesk.api.routes import labels as labels_routes
 from nightdesk.api.routes import profiles as profiles_routes
 from nightdesk.api.routes import projects as projects_routes
 from nightdesk.api.routes import runs as runs_routes
@@ -58,6 +59,7 @@ def create_app(
         worktree_root=str(worktree_root), transcript_root=str(transcript_root),
     ))
     app.include_router(search_routes.build_router(get_session, bearer_token))
+    app.include_router(labels_routes.build_router(get_session, bearer_token))
     app.include_router(transcript_routes.build_router(get_session, bearer_token))
     app.include_router(cron_jobs_routes.build_router(get_session, bearer_token))
 
@@ -80,6 +82,19 @@ def create_app(
         return f"/static/{path}?v={mtime}"
 
     templates.env.globals["static_v"] = _static_v
+
+    # Priority scale helpers for templates (label, css class, name lookup).
+    from nightdesk.domain.priority import priority_label, priority_css, priority_name, PRIORITY_SCALE
+    templates.env.globals["priority_label"] = priority_label
+    templates.env.globals["priority_css"] = priority_css
+    templates.env.globals["priority_name"] = priority_name
+    templates.env.globals["PRIORITY_SCALE"] = PRIORITY_SCALE
+
+    # Shared property-picker chip helper: property_chip(prop, ticket, project=None)
+    # returns the current-value chip dict for any registered metadata property
+    # (priority, status, project, …) so every template renders chips the same way.
+    from nightdesk.domain.properties import property_chip as _property_chip
+    templates.env.globals["property_chip"] = _property_chip
 
     # UTC ISO string for client-side localization (localize_time.js). Run/
     # ticket datetimes are UTC but come back from SQLite naive; emitting a bare
