@@ -127,66 +127,92 @@
   </div>
 {% endmacro %}
 
-{# rate_limit: the agent SDK reported a rate-limit status change. Render an
-   amber card with a "RATE LIMITED" badge and, when the SDK gave the fields, a
-   short summary + a live countdown to the next allowed request. ``resets_at``
-   is Unix seconds; the inline script ticks the countdown client-side. The full
-   payload is always available under a "raw response" dropdown so nothing is
-   lost when an SDK version names its fields differently. The JS live-tail in
-   transcript_panel.html mirrors this shape. #}
+{# rate_limit: the agent SDK reports usage-window state. status == "allowed"
+   is benign telemetry (the request was NOT limited) and renders as a neutral
+   "usage" card with no alarm wording. Only an actually-limited report (status
+   not "allowed", or the overage buffer exhausted) renders the amber "rate
+   limited" warning with a live countdown to ``resets_at`` (Unix seconds; the
+   inline script ticks it client-side). The classification lives in
+   tv.rate_limit_is_limited so the server and the JS live-tail in
+   transcript_panel.html agree. The full payload is always available under a
+   "raw response" dropdown. #}
 {% macro evt_rate_limit(evt) %}
   {% set status = evt.get('status') %}
   {% set limit_type = evt.get('rate_limit_type') or '' %}
   {% set resets_at = evt.get('resets_at') %}
   {% set util = evt.get('utilization') %}
   {% set raw = evt.get('raw') %}
-  <div class="rate-limit rounded p-3 border-2 border-warn bg-warn/10">
-    <div class="flex items-center gap-2">
-      <span class="font-bold text-warn uppercase tracking-wide text-xs">rate limited</span>
-      {% if status %}<code class="text-xs text-warn">{{ status }}</code>{% endif %}
-      {% if limit_type %}<code class="text-xs text-fg-muted">{{ limit_type }}</code>{% endif %}
-    </div>
-    <div class="whitespace-pre-wrap text-sm mt-2 text-fg">
-      Agent hit a rate limit{% if status %} ({{ status }}{% if util is not none %}, {{ (util * 100) | round(1) }}% used{% endif %}){% endif %}.
-    </div>
-    {% if raw %}
-      <details class="mt-2 text-xs">
-        <summary class="cursor-pointer text-fg-muted hover:text-fg">raw response</summary>
-        <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-fg-muted bg-bg-elev-2 border border-border rounded p-2">{{ raw }}</pre>
-      </details>
-    {% endif %}
-    {% if resets_at %}
-      <div class="text-xs text-fg-muted mt-1">
-        next request in
-        <span class="rate-limit-countdown font-mono text-warn" data-resets-at="{{ resets_at }}">…</span>
+  {% set using_overage = evt.get('is_using_overage') %}
+  {% set window = tv.rate_limit_window_label(limit_type) %}
+  {% if tv.rate_limit_is_limited(evt) %}
+    <div class="rate-limit rounded p-3 border-2 border-warn bg-warn/10">
+      <div class="flex items-center gap-2">
+        <span class="font-bold text-warn uppercase tracking-wide text-xs">rate limited</span>
+        {% if status %}<code class="text-xs text-warn">{{ status }}</code>{% endif %}
+        {% if limit_type %}<code class="text-xs text-fg-muted">{{ limit_type }}</code>{% endif %}
       </div>
-      <script>
-      (function () {
-        var els = document.querySelectorAll('.rate-limit-countdown[data-resets-at]:not([data-rl-bound])');
-        els.forEach(function (el) {
-          el.setAttribute('data-rl-bound', '1');
-          var resetsAt = parseInt(el.getAttribute('data-resets-at'), 10);
-          function fmt(sec) {
-            if (!isFinite(sec) || sec <= 0) return 'now';
-            var m = Math.floor(sec / 60), s = sec % 60;
-            if (m > 0) return m + 'm ' + s + 's';
-            return s + 's';
+      <div class="whitespace-pre-wrap text-sm mt-2 text-fg">
+        Agent hit a rate limit{% if status %} ({{ status }}{% if util is not none %}, {{ (util * 100) | round(1) }}% used{% endif %}){% endif %}.
+      </div>
+      {% if raw %}
+        <details class="mt-2 text-xs">
+          <summary class="cursor-pointer text-fg-muted hover:text-fg">raw response</summary>
+          <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-fg-muted bg-bg-elev-2 border border-border rounded p-2">{{ raw }}</pre>
+        </details>
+      {% endif %}
+      {% if resets_at %}
+        <div class="text-xs text-fg-muted mt-1">
+          next request in
+          <span class="rate-limit-countdown font-mono text-warn" data-resets-at="{{ resets_at }}">…</span>
+        </div>
+      {% endif %}
+    </div>
+  {% else %}
+    {# status == "allowed": benign usage telemetry, neutral styling, no alarm. #}
+    <div class="rate-limit rate-limit-ok rounded p-3 border border-border bg-bg-elev-2">
+      <div class="flex items-center gap-2">
+        <span class="font-semibold text-fg-muted uppercase tracking-wide text-xs">usage</span>
+        {% if limit_type %}<code class="text-xs text-fg-muted">{{ limit_type }}</code>{% endif %}
+        {% if using_overage %}<code class="text-xs text-fg-muted">overage</code>{% endif %}
+      </div>
+      <div class="whitespace-pre-wrap text-sm mt-2 text-fg-muted">
+        {% if window %}{{ window }} window{% else %}Usage window{% endif %}{% if util is not none %}: {{ (util * 100) | round(1) }}% used{% endif %}{% if using_overage %} (using overage){% endif %}{% if resets_at %}, resets in <span class="rate-limit-countdown font-mono text-fg-muted" data-resets-at="{{ resets_at }}">…</span>{% endif %}.
+      </div>
+      {% if raw %}
+        <details class="mt-2 text-xs">
+          <summary class="cursor-pointer text-fg-muted hover:text-fg">raw response</summary>
+          <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-fg-muted bg-bg-elev-2 border border-border rounded p-2">{{ raw }}</pre>
+        </details>
+      {% endif %}
+    </div>
+  {% endif %}
+  {% if resets_at %}
+    <script>
+    (function () {
+      var els = document.querySelectorAll('.rate-limit-countdown[data-resets-at]:not([data-rl-bound])');
+      els.forEach(function (el) {
+        el.setAttribute('data-rl-bound', '1');
+        var resetsAt = parseInt(el.getAttribute('data-resets-at'), 10);
+        function fmt(sec) {
+          if (!isFinite(sec) || sec <= 0) return 'now';
+          var m = Math.floor(sec / 60), s = sec % 60;
+          if (m > 0) return m + 'm ' + s + 's';
+          return s + 's';
+        }
+        function tick() {
+          var remaining = Math.round(resetsAt - Date.now() / 1000);
+          el.textContent = fmt(remaining);
+          if (remaining <= 0 && el.__rlTimer) {
+            clearInterval(el.__rlTimer);
+            el.__rlTimer = null;
           }
-          function tick() {
-            var remaining = Math.round(resetsAt - Date.now() / 1000);
-            el.textContent = fmt(remaining);
-            if (remaining <= 0 && el.__rlTimer) {
-              clearInterval(el.__rlTimer);
-              el.__rlTimer = null;
-            }
-          }
-          tick();
-          el.__rlTimer = setInterval(tick, 1000);
-        });
-      })();
-      </script>
-    {% endif %}
-  </div>
+        }
+        tick();
+        el.__rlTimer = setInterval(tick, 1000);
+      });
+    })();
+    </script>
+  {% endif %}
 {% endmacro %}
 
 {# cancelled: terminal marker written when the user cancels a running ticket.

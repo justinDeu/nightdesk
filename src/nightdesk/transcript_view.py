@@ -16,8 +16,70 @@ from __future__ import annotations
 import difflib
 import html as _html
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Any, NamedTuple
+
+
+# ---------------------------------------------------------------------------
+# rate_limit: classify a usage-window report as benign telemetry vs an actual
+# limit. The agent SDK emits a rate_limit report on *normal* responses to
+# describe the usage window (how much is left, when it resets). status ==
+# "allowed" means the request was NOT limited — benign telemetry, not an error.
+# Only the actually-limited case (status not "allowed", or the overage buffer
+# exhausted/disabled) warrants the alarming "hit a rate limit" warning card.
+#
+# The JS live-tail in ``templates/partials/transcript_panel.html`` mirrors this
+# classification (rateLimitIsLimited / rateLimitWindowLabel) so server-rendered
+# and client-streamed transcripts agree. Keep the two in sync.
+# ---------------------------------------------------------------------------
+
+# Human labels for the SDK's window identifiers. Unknown types fall back to the
+# raw identifier with underscores turned into spaces.
+_RATE_LIMIT_WINDOW_LABELS = {
+    "five_hour": "5-hour",
+    "seven_day": "7-day",
+    "seven_day_oauth": "7-day",
+}
+
+
+def _rl_norm(value: Any) -> str | None:
+    """Lower-cased string form of a status field, or None when absent."""
+    if value is None:
+        return None
+    return str(value).strip().lower()
+
+
+def rate_limit_is_limited(evt: Mapping[str, Any]) -> bool:
+    """True when a rate_limit event means the request was actually limited.
+
+    Benign (returns False) only when the primary status is "allowed" AND the
+    overage buffer is not exhausted/disabled — i.e. the SDK is just reporting
+    window state on a request that went through (including the "allowed but
+    using overage" case). Everything else — a non-"allowed" status, an
+    exhausted overage, or an ambiguous report with no status at all — is treated
+    as limited so a genuine limit is never silently hidden.
+    """
+    status = _rl_norm(evt.get("status"))
+
+    # The overage buffer is exhausted when its own status is present and not
+    # "allowed" — the buffer that would absorb the next request is gone. (A bare
+    # ``overage_disabled_reason`` is a persistent account setting, not a limit
+    # condition, so it does not flip an otherwise-allowed report to limited.)
+    overage_status = _rl_norm(evt.get("overage_status"))
+    overage_exhausted = overage_status is not None and overage_status != "allowed"
+
+    if status == "allowed" and not overage_exhausted:
+        return False
+    return True
+
+
+def rate_limit_window_label(limit_type: Any) -> str:
+    """Human label for a rate-limit window type (e.g. five_hour -> 5-hour)."""
+    if not limit_type:
+        return ""
+    key = str(limit_type).strip()
+    return _RATE_LIMIT_WINDOW_LABELS.get(key, key.replace("_", " "))
 
 
 # ---------------------------------------------------------------------------

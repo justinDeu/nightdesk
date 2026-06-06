@@ -330,24 +330,31 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
         # Surface rate limits as first-class transcript events. SDK versions
         # differ on the exact shape, so stay generic: opportunistically pull the
         # well-known fields (status, resets_at, rate_limit_type, utilization)
-        # when present for the badge + countdown, but ALWAYS attach a ``raw``
-        # dump of the whole payload so the renderer can show the latest raw
-        # response in a dropdown regardless of which fields this SDK provides.
+        # when present for the badge + countdown, plus the overage fields the
+        # renderer's classifier needs to tell "allowed but using overage" from
+        # "blocked" — but ALWAYS attach a ``raw`` dump of the whole payload so
+        # the renderer can show the latest raw response in a dropdown regardless
+        # of which fields this SDK provides.
         info = getattr(evt, "rate_limit_info", None)
         out_rl: dict[str, Any] = {"type": "rate_limit"}
         if info is not None:
-            status = getattr(info, "status", None)
-            if status is not None:
-                out_rl["status"] = status
-            resets_at = getattr(info, "resets_at", None)
-            if resets_at is not None:
-                out_rl["resets_at"] = resets_at
-            limit_type = getattr(info, "rate_limit_type", None)
-            if limit_type is not None:
-                out_rl["rate_limit_type"] = limit_type
-            utilization = getattr(info, "utilization", None)
-            if utilization is not None:
-                out_rl["utilization"] = utilization
+            # status == "allowed" is benign usage telemetry: the request was NOT
+            # limited. The renderer (transcript_view.rate_limit_is_limited)
+            # classifies on these fields, so capture the overage fields too —
+            # without them an "allowed" report can't be told apart from a block.
+            for src, dst in (
+                ("status", "status"),
+                ("resets_at", "resets_at"),
+                ("rate_limit_type", "rate_limit_type"),
+                ("utilization", "utilization"),
+                ("overage_status", "overage_status"),
+                ("is_using_overage", "is_using_overage"),
+                ("overage_disabled_reason", "overage_disabled_reason"),
+                ("overage_resets_at", "overage_resets_at"),
+            ):
+                val = getattr(info, src, None)
+                if val is not None:
+                    out_rl[dst] = val
         out_rl["raw"] = _raw_payload(info if info is not None else evt)
         return out_rl
     # Unknown message: surface as a worker_error (system styling) rather than
