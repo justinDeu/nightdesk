@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% set active_page = 'list' %}
+{% block body %}
+<div class="flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
+  {% with sb_id='list-search', sb_resource='ticket', sb_query=query, sb_view='list' %}
+    {% include "partials/search_bar.html" %}
+  {% endwith %}
+
+  {# Display controls: grouping + ordering. These map straight onto the
+     ?group= / ?order= query params and re-fetch the rows fragment, so the
+     view is shareable/bookmarkable. #}
+  <div class="flex items-center gap-4 text-xs text-fg-muted">
+    <label class="flex items-center gap-1.5">
+      <span>Group</span>
+      <select id="list-group" class="bg-bg-elev-2 border border-border rounded px-1.5 py-0.5 text-fg focus:outline-none focus:border-accent">
+        {% for val, label in group_options %}
+          <option value="{{ val }}" {% if val == group %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="flex items-center gap-1.5">
+      <span>Order</span>
+      <select id="list-order" class="bg-bg-elev-2 border border-border rounded px-1.5 py-0.5 text-fg focus:outline-none focus:border-accent">
+        {% for val, label in order_options %}
+          <option value="{{ val }}" {% if val == order %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <span class="ml-auto" data-list-count>{{ list_count }} ticket{{ '' if list_count == 1 else 's' }}</span>
+  </div>
+
+  {# #board-grid is the gate command_palette.js checks for the keyboard cursor;
+     reusing the id (and section[data-column] rows inside #list-body) means the
+     list inherits J/K navigation + sidebar-on-focus with no view-specific JS.
+     The sidebar rail sits alongside, exactly like the board, so selecting a
+     row opens the same editor. #}
+  <div
+    id="board-grid"
+    class="grid flex-1 min-h-0 overflow-hidden gap-3 grid-cols-[1fr_480px] grid-rows-1"
+  >
+    <div id="list-body" class="overflow-y-auto border border-border rounded-md bg-bg-elev-2/30">
+      {% include "partials/list_groups.html" %}
+    </div>
+    {% include "partials/sidebar.html" %}
+  </div>
+</div>
+
+{# Create-mode modal so "+ New ticket" works inline on this page too. #}
+{% with ticket=None, modal_id='ticket-create-modal' %}
+  {% include "partials/ticket_edit_modal.html" %}
+{% endwith %}
+
+<script>
+  (function () {
+    var bar = document.getElementById('list-search');
+    var body = document.getElementById('list-body');
+    var groupSel = document.getElementById('list-group');
+    var orderSel = document.getElementById('list-order');
+    if (!body) return;
+
+    var currentQuery = {{ (query or '') | tojson }};
+    var currentGroup = {{ (group or 'status') | tojson }};
+    var currentOrder = {{ (order or 'manual') | tojson }};
+
+    function enc(s) { return encodeURIComponent(s || ''); }
+
+    function listParams() {
+      var p = new URLSearchParams();
+      if (currentQuery) p.set('q', currentQuery);
+      if (currentGroup && currentGroup !== 'status') p.set('group', currentGroup);
+      if (currentOrder && currentOrder !== 'manual') p.set('order', currentOrder);
+      return p;
+    }
+
+    function syncUrl() {
+      var qs = listParams().toString();
+      history.replaceState(null, '', qs ? ('/list?' + qs) : '/list');
+    }
+
+    function refreshList() {
+      if (typeof htmx === 'undefined') return;
+      var p = listParams();
+      p.set('group', currentGroup);
+      p.set('order', currentOrder);
+      htmx.ajax('GET', '/board/list-rows?' + p.toString(), {
+        target: '#list-body', swap: 'innerHTML',
+      });
+    }
+
+    // Don't yank the rows out from under an open property-picker popover or a
+    // text selection mid-edit.
+    function pickerOpen() {
+      return !!document.querySelector('[data-property-menu]:not(.hidden)');
+    }
+
+    if (groupSel) {
+      groupSel.addEventListener('change', function () {
+        currentGroup = groupSel.value || 'status';
+        syncUrl();
+        refreshList();
+      });
+    }
+    if (orderSel) {
+      orderSel.addEventListener('change', function () {
+        currentOrder = orderSel.value || 'manual';
+        syncUrl();
+        refreshList();
+      });
+    }
+
+    if (bar) {
+      // The unified search bar owns the query string; apply its effect here.
+      bar.addEventListener('nd:search', function (e) {
+        currentQuery = (e.detail && e.detail.query) || '';
+        syncUrl();
+        refreshList();
+      });
+      // View toggle. 'list' stays here; 'tickets'/'runs' navigate to the board.
+      bar.addEventListener('nd:view', function (e) {
+        var view = e.detail && e.detail.view;
+        var q = (e.detail && e.detail.query) || '';
+        if (view === 'list') { refreshList(); return; }
+        if (view === 'runs') { window.location = '/?view=runs' + (q ? '&q=' + enc(q) : ''); return; }
+        window.location = q ? ('/?q=' + enc(q)) : '/';
+      });
+    }
+
+    // Light live refresh so worker-driven status changes show up, mirroring the
+    // board's column poll. Skipped while a picker is open so an in-flight edit
+    // isn't interrupted.
+    setInterval(function () {
+      if (!document.hidden && !pickerOpen()) refreshList();
+    }, 4000);
+  })();
+</script>
+{% endblock %}
