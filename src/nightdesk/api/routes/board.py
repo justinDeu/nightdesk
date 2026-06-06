@@ -20,6 +20,11 @@ from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.toolchains import current_config, toolchain_options
 from nightdesk.domain.priority import resolve_priority, PRIORITY_MIN, PRIORITY_MAX
+from nightdesk.domain.properties import (
+    PROPERTY_REGISTRY,
+    get_property,
+    property_chip,
+)
 from nightdesk.domain.tickets import (
     CyclicDependency,
     DependencyNotFound,
@@ -194,18 +199,6 @@ def _safe_preview_name(name: Optional[str]) -> str:
         return "ticket-worktree"
     safe = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in raw)
     return safe.strip(".-_") or "ticket-worktree"
-
-
-def _priority_chip_html(ticket_id: str, priority: int, label: str) -> str:
-    """Render an inline priority chip for HTMX swap responses."""
-    from nightdesk.domain.priority import priority_css
-    css = priority_css(priority)
-    return (
-        f'<span data-priority-chip="{ticket_id}" '
-        f'class="rounded-full border px-2 py-0.5 text-[11px] {css}" '
-        f'title="Priority: {label} ({priority})">'
-        f'{html.escape(label)}</span>'
-    )
 
 
 def _git_value(source_dir: Path, *args: str) -> Optional[str]:
@@ -890,7 +883,116 @@ def build_router(
             raise HTTPException(422, str(e))
         return Response(status_code=204)
 
-    # --- Priority update (HTMX inline picker) --------------------------------
+    # --- Shared property picker (priority / status / project / …) ------------
+    #
+    # ONE menu route + ONE commit route back the reusable property-picker
+    # primitive for every editable ticket metadata field. The per-property
+    # behaviour lives in domain.properties; nothing here is property-specific
+    # beyond looking the descriptor up by name. This is the "focused metadata
+    # update route" the picker calls instead of submitting the full ticket
+    # modal.
+
+    def _render_chip(request: Request, prop: str, ticket) -> HTMLResponse:
+        """Render the single property chip partial for an HTMX swap."""
+        return templates.TemplateResponse(
+            request,
+            "partials/property_chip.html",
+            {"tid": ticket.id, "prop": prop, "chip": property_chip(prop, ticket)},
+        )
+
+    @router.get(
+        "/board/tickets/{tid}/picker/{prop}",
+        response_class=HTMLResponse,
+        dependencies=[auth],
+    )
+    async def property_picker_menu(
+        tid: str,
+        prop: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Lazy-loaded popover body for a property picker.
+
+        Returns the option list (searchable for properties that opt in) the
+        picker JS injects under the chip. Options are computed fresh per open
+        so e.g. the project list and the valid status transitions are always
+        current.
+        """
+        try:
+            descriptor = get_property(prop)
+        except KeyError:
+            raise HTTPException(404, f"unknown property {prop!r}")
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        options = [o.as_dict() for o in descriptor.options(session, ticket)]
+        return templates.TemplateResponse(
+            request,
+            "partials/property_picker_menu.html",
+            {
+                "tid": tid,
+                "prop": prop,
+                "label": descriptor.label,
+                "searchable": descriptor.searchable,
+                "options": options,
+            },
+        )
+
+    async def _read_property_value(request: Request, *keys: str) -> str:
+        """Pull the submitted value from a form field or JSON body.
+
+        Accepts the canonical ``value`` key (picker) plus any property-specific
+        aliases (e.g. the legacy ``priority`` field) so HTMX forms and JSON API
+        clients share one parser.
+        """
+        content_type = request.headers.get("content-type") or ""
+        if "application/json" in content_type:
+            body = await request.json()
+            for k in keys:
+                if k in body:
+                    return str(body.get(k, ""))
+            return ""
+        form = await request.form()
+        for k in keys:
+            if k in form:
+                return str(form.get(k, ""))
+        return ""
+
+    @router.post("/board/tickets/{tid}/property/{prop}", dependencies=[auth])
+    async def update_property(
+        tid: str,
+        prop: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Focused metadata update for the shared property picker.
+
+        HTMX callers get the re-rendered chip to swap in place; JSON API
+        callers get ``{property, value, label}``.
+        """
+        try:
+            descriptor = get_property(prop)
+        except KeyError:
+            raise HTTPException(404, f"unknown property {prop!r}")
+        raw = (await _read_property_value(request, "value", prop)).strip()
+        try:
+            ticket = descriptor.apply(session, tid, raw)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+        if request.headers.get("HX-Request") == "true":
+            return _render_chip(request, prop, ticket)
+        chip = property_chip(prop, ticket)
+        return JSONResponse(
+            {"property": prop, "value": raw, "label": chip["label"]}
+        )
 
     @router.post("/board/tickets/{tid}/priority", dependencies=[auth])
     async def update_priority(
@@ -898,41 +1000,27 @@ def build_router(
         request: Request,
         session: Session = Depends(get_session),
     ):
-        """Focused priority update for the inline priority picker.
+        """Back-compatible priority update.
 
-        Accepts ``priority`` as either a form field (HTMX picker) or a JSON
-        body key (API clients). The value can be a named priority
-        (``"urgent"``) or an integer string (``"3"``).
+        Delegates to the shared property registry so there is exactly one
+        priority code path. Kept as a stable alias for the JSON API and any
+        existing clients posting a ``priority`` field; the response shape
+        (``{priority, label}``) is preserved.
         """
-        # Accept both form-encoded and JSON payloads.
-        content_type = (request.headers.get("content-type") or "")
-        if "application/json" in content_type:
-            body = await request.json()
-            raw = str(body.get("priority", ""))
-        else:
-            form = await request.form()
-            raw = str(form.get("priority", ""))
-
-        resolved = resolve_priority(raw.strip())
-        if resolved is None:
-            raise HTTPException(422, f"invalid priority value: {raw!r}")
-
+        raw = (await _read_property_value(request, "priority", "value")).strip()
         try:
-            update_ticket(session, tid, priority=resolved)
+            ticket = get_property("priority").apply(session, tid, raw)
         except TicketNotFound:
             raise HTTPException(404, "not found")
+        except ValueError:
+            raise HTTPException(422, f"invalid priority value: {raw!r}")
 
-        ticket = get_ticket(session, tid)
-        from nightdesk.domain.priority import priority_label
-        label = priority_label(ticket.priority)
-
-        # HTMX callers get a rendered priority chip to swap inline.
         if request.headers.get("HX-Request") == "true":
-            return HTMLResponse(
-                _priority_chip_html(ticket.id, ticket.priority, label),
-            )
-        # JSON API callers get a simple ack.
-        return JSONResponse({"priority": ticket.priority, "label": label})
+            return _render_chip(request, "priority", ticket)
+        from nightdesk.domain.priority import priority_label
+        return JSONResponse(
+            {"priority": ticket.priority, "label": priority_label(ticket.priority)}
+        )
 
     # --- Dependency management (cookie-auth) ---------------------------------
 

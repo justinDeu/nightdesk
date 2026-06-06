@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from nightdesk.db.models import Ticket, WorkerHeartbeat
 from nightdesk.db.session import make_engine, session_factory
 from nightdesk.domain.profiles import seed_default_profiles
+from nightdesk.domain.projects import ProjectNameTaken, create_project
 from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import create_ticket
 from nightdesk.transcript import now_iso, write_event
@@ -454,12 +455,34 @@ def seed(
             print("No profiles found after seeding.", file=sys.stderr)
             return
 
+        # Demo projects so the shared property picker's project option has real
+        # data to pick from. Idempotent: tolerate re-seeding onto an existing DB.
+        project_ids: list[str] = []
+        for name, color, src in (
+            ("Nightdesk", "#34d399", source_path),
+            ("Docs site", "#60a5fa", source_path),
+        ):
+            try:
+                proj = create_project(session, name=name, color=color, source_path=src)
+                project_ids.append(proj.id)
+            except ProjectNameTaken:
+                existing = session.execute(
+                    text("SELECT id FROM projects WHERE name = :n"), {"n": name}
+                ).fetchone()
+                if existing:
+                    project_ids.append(existing[0])
+
         tickets_by_status: dict[str, list[Ticket]] = {}
 
         for idx, raw_spec in enumerate(_TICKET_SPECS):
             spec = dict(raw_spec)  # copy to avoid mutating the module-level list
             run_spec = spec.pop("run", None)
             profile_id = profile_ids[idx % len(profile_ids)]
+            # Spread tickets across the demo projects (leaving every third one
+            # unassigned so "No project" is represented too).
+            project_id = None
+            if project_ids and idx % 3 != 2:
+                project_id = project_ids[idx % len(project_ids)]
 
             ticket = create_ticket(
                 session,
@@ -467,6 +490,7 @@ def seed(
                 prompt=spec["prompt"],
                 status=spec["status"],
                 profile_id=profile_id,
+                project_id=project_id,
                 source_path=source_path,
                 priority=spec.get("priority", idx % 3),
             )
