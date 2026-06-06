@@ -358,61 +358,178 @@
   }
 
   // ---- command model -----------------------------------------------------
-  // Each command: { label, hint, run }. Built fresh per open so the current
-  // ticket context is accurate.
+  // Each command: { label, shortcut, hint, section, run }.
+  //   shortcut  — the direct keyboard key(s), shown as a kbd badge so users
+  //               discover shortcuts from the palette and learn to bypass it.
+  //   hint      — secondary context (e.g. "draft"), shown as muted text.
+  //   section   — groups commands visually (header row in the list).
+  // Built fresh per open so the current ticket context and status are accurate.
+
+  function focusedTicketStatus(ctx) {
+    if (!ctx) return "";
+    var card = document.querySelector('li[data-ticket-id="' + cssEscape(ctx.id) + '"]');
+    if (card) {
+      var col = card.closest("section[data-column]");
+      if (col) return (col.getAttribute("data-column") || "").toLowerCase();
+    }
+    var chip = document.querySelector('[data-property-chip="' + ctx.id + ':status"]');
+    if (chip) return (chip.textContent || "").trim().toLowerCase();
+    return "";
+  }
+
+  // Status-aware sort order for ticket actions. When a ticket is focused we
+  // promote the most relevant actions and demote invalid ones. Returns an
+  // array of action keys in display order.
+  function statusActionOrder(status) {
+    // Default order: run → detail → edit → peek → priority → status →
+    // labels → archive → requeue
+    var order = [
+      "run-now", "open-detail", "edit", "peek",
+      "priority", "status", "labels", "archive", "requeue",
+    ];
+    switch (status) {
+      case "running":
+        // Can't run/requeue/archive while running; show peek & edit first.
+        order = ["peek", "edit", "open-detail", "priority", "status", "labels"];
+        break;
+      case "review":
+        // Requeue & archive are the primary actions from review.
+        order = ["requeue", "archive", "open-detail", "edit", "peek", "priority", "status", "labels", "run-now"];
+        break;
+      case "archived":
+        // Requeue is the primary action from archived.
+        order = ["requeue", "open-detail", "edit", "peek", "priority", "status", "labels", "archive", "run-now"];
+        break;
+      case "draft":
+      case "queued":
+        // Run-now is the primary action.
+        order = ["run-now", "edit", "open-detail", "peek", "priority", "status", "labels", "archive", "requeue"];
+        break;
+    }
+    return order;
+  }
 
   function baseCommands() {
     var cmds = [];
     var ctx = currentTicket();
+    var status = focusedTicketStatus(ctx);
+
     if (ctx) {
       var short = ctx.title.length > 40 ? ctx.title.slice(0, 39) + "…" : ctx.title;
-      cmds.push({
-        label: "Run now: " + short, hint: "R",
-        run: function () { runTicketAction("run-now", ctx.id, ctx.title); },
-      });
-      cmds.push({
-        label: "Open detail: " + short, hint: "selected ticket",
-        run: function () { location.href = "/tickets/" + encodeURIComponent(ctx.id); },
-      });
-      cmds.push({
-        label: "Archive: " + short, hint: "A",
-        run: function () { runTicketAction("archive", ctx.id, ctx.title); },
-      });
-      cmds.push({
-        label: "Requeue: " + short, hint: "R",
-        run: function () { runTicketAction("requeue", ctx.id, ctx.title); },
-      });
-      cmds.push({
-        label: "Edit: " + short, hint: "E",
-        run: function () { openEditForTicket(ctx); },
-      });
-      cmds.push({
-        label: "Peek: " + short, hint: "Space",
-        run: function () { openPeek(ctx); },
-      });
-      // Metadata edits reuse the ONE shared property-picker primitive: the
-      // command just opens the relevant chip's popover (on the sidebar or the
-      // detail header) rather than shipping its own metadata UI.
-      [
-        { prop: "labels", key: "L", nice: "Label" },
-        { prop: "priority", key: "P", nice: "Priority" },
-        { prop: "status", key: "S", nice: "Status" },
-      ].forEach(function (p) {
-        cmds.push({
-          label: "Set " + p.nice + ": " + short,
-          hint: p.key,
+
+      // Build ticket-action commands with status-aware ordering.
+      var ticketActions = {
+        "run-now": {
+          label: "Run now: " + short, shortcut: "R", hint: status || "ticket",
+          section: "Ticket actions",
+          run: function () { runTicketAction("run-now", ctx.id, ctx.title); },
+        },
+        "open-detail": {
+          label: "Open detail: " + short, shortcut: "", hint: "Enter",
+          section: "Ticket actions",
+          run: function () { location.href = "/tickets/" + encodeURIComponent(ctx.id); },
+        },
+        "archive": {
+          label: "Archive: " + short, shortcut: "A", hint: status || "ticket",
+          section: "Ticket actions",
+          run: function () { runTicketAction("archive", ctx.id, ctx.title); },
+        },
+        "requeue": {
+          label: "Requeue: " + short, shortcut: "R", hint: status || "ticket",
+          section: "Ticket actions",
+          run: function () { runTicketAction("requeue", ctx.id, ctx.title); },
+        },
+        "edit": {
+          label: "Edit: " + short, shortcut: "E", hint: "",
+          section: "Ticket actions",
+          run: function () { openEditForTicket(ctx); },
+        },
+        "peek": {
+          label: "Peek: " + short, shortcut: "Space", hint: "",
+          section: "Ticket actions",
+          run: function () { openPeek(ctx); },
+        },
+        "priority": {
+          label: "Set priority: " + short, shortcut: "P", hint: "",
+          section: "Properties",
           run: function () {
             var ok = window.ndOpenPropertyPicker &&
-              window.ndOpenPropertyPicker(ctx.id, p.prop);
-            if (!ok) flashStatus("Open the ticket to change its " + p.nice.toLowerCase());
+              window.ndOpenPropertyPicker(ctx.id, "priority");
+            if (!ok) flashStatus("Open the ticket to change its priority");
           },
-        });
+        },
+        "status": {
+          label: "Set status: " + short, shortcut: "S", hint: "",
+          section: "Properties",
+          run: function () {
+            var ok = window.ndOpenPropertyPicker &&
+              window.ndOpenPropertyPicker(ctx.id, "status");
+            if (!ok) flashStatus("Open the ticket to change its status");
+          },
+        },
+        "labels": {
+          label: "Set labels: " + short, shortcut: "L", hint: "",
+          section: "Properties",
+          run: function () { openLabelPicker(ctx); },
+        },
+      };
+
+      var actionOrder = statusActionOrder(status);
+      actionOrder.forEach(function (key) {
+        var cmd = ticketActions[key];
+        if (!cmd) return;
+        // For running tickets, skip run-now/requeue/archive (they'd fail).
+        if (status === "running" && (key === "run-now" || key === "requeue" || key === "archive")) return;
+        cmds.push(cmd);
       });
     }
-    cmds.push({ label: "New ticket", hint: "c", run: openCreateTicket });
-    cmds.push({ label: "Go to board", hint: "g b", run: function () { location.href = "/"; } });
-    cmds.push({ label: "Go to archive", hint: "g a", run: function () { location.href = "/archive"; } });
-    cmds.push({ label: "Show keyboard shortcuts", hint: "?", run: openCheatSheet });
+
+    // --- View / display commands ---
+    // Toggle board/list view, focus search, future saved-views hook.
+    var isBoard = !!document.getElementById("board-grid");
+    var isRuns = !!document.querySelector("[data-board-view='runs']");
+    if (isBoard || isRuns) {
+      cmds.push({
+        label: isRuns ? "Switch to tickets view" : "Switch to runs view",
+        shortcut: "", hint: "view toggle",
+        section: "View",
+        run: function () {
+          var btn = document.querySelector(
+            isRuns ? '[data-sb-view="tickets"]' : '[data-sb-view="runs"]'
+          );
+          if (btn) { btn.click(); return; }
+          // Fallback: navigate with query param.
+          location.href = isRuns ? "/" : "/?view=runs";
+        },
+      });
+    }
+    cmds.push({
+      label: "Focus search", shortcut: "/", hint: "",
+      section: "View",
+      run: function () {
+        var search = document.querySelector('#header-search input[name="q"]');
+        if (search) { search.focus(); search.select(); }
+      },
+    });
+    // Saved views placeholder — active once the saved-views surface exists.
+    if (typeof window.ndSavedViews === "function") {
+      cmds.push({
+        label: "Jump to saved view…", shortcut: "g v", hint: "",
+        section: "View",
+        run: function () { window.ndSavedViews(); },
+      });
+    }
+
+    // --- Navigation & general commands ---
+    cmds.push({ label: "New ticket", shortcut: "c", hint: "", section: "Navigation",
+      run: openCreateTicket });
+    cmds.push({ label: "Go to board", shortcut: "g b", hint: "", section: "Navigation",
+      run: function () { location.href = "/"; } });
+    cmds.push({ label: "Go to archive", shortcut: "g a", hint: "", section: "Navigation",
+      run: function () { location.href = "/archive"; } });
+    cmds.push({ label: "Show keyboard shortcuts", shortcut: "?", hint: "", section: "Navigation",
+      run: openCheatSheet });
+
     return cmds;
   }
 
@@ -450,6 +567,7 @@
 
   function render(items) {
     state.items = items;
+    // Compute active index excluding section headers (only command items).
     if (state.active >= items.length) state.active = Math.max(0, items.length - 1);
     var ul = list();
     ul.innerHTML = "";
@@ -461,6 +579,15 @@
       return;
     }
     items.forEach(function (it, i) {
+      // Section header — not selectable, not an option.
+      if (it.section && !it.run) {
+        var hdr = document.createElement("li");
+        hdr.className = "px-3 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-muted";
+        hdr.setAttribute("role", "presentation");
+        hdr.textContent = it.section;
+        ul.appendChild(hdr);
+        return;
+      }
       var li = document.createElement("li");
       li.id = "nd-cmdk-opt-" + i;
       li.setAttribute("role", "option");
@@ -469,12 +596,22 @@
         "flex items-center gap-3 px-3 py-2 text-sm cursor-pointer " +
         (i === state.active ? "bg-bg-elev-2 text-fg" : "text-fg-muted");
       var label = document.createElement("span");
-      label.className = "flex-1 min-w-0 truncate " + (i === state.active ? "text-fg" : "text-fg");
+      label.className = "flex-1 min-w-0 truncate text-fg";
       label.textContent = it.label;
       li.appendChild(label);
+      // Show shortcut as a kbd badge (teaches direct shortcuts).
+      if (it.shortcut) {
+        var kbd = document.createElement("kbd");
+        kbd.className =
+          "shrink-0 rounded border border-border bg-bg-elev-2 " +
+          "px-1.5 py-0.5 font-mono text-[11px] text-fg";
+        kbd.textContent = it.shortcut;
+        li.appendChild(kbd);
+      }
+      // Show context hint as muted text (e.g. "draft", "view toggle").
       if (it.hint) {
         var hint = document.createElement("span");
-        hint.className = "shrink-0 text-[11px] text-fg-muted uppercase tracking-wide";
+        hint.className = "shrink-0 text-[11px] text-fg-muted";
         hint.textContent = it.hint;
         li.appendChild(hint);
       }
@@ -489,6 +626,8 @@
     var ul = list();
     var children = ul.children;
     for (var i = 0; i < children.length; i++) {
+      // Skip section headers — they aren't selectable.
+      if (children[i].getAttribute("role") === "presentation") continue;
       var on = i === state.active;
       children[i].setAttribute("aria-selected", on ? "true" : "false");
       children[i].className =
@@ -504,6 +643,8 @@
 
   function setActive(i) {
     if (i < 0 || i >= state.items.length) return;
+    // Skip over section headers.
+    if (state.items[i] && state.items[i].section && !state.items[i].run) return;
     state.active = i;
     syncActiveAttr();
   }
@@ -511,20 +652,47 @@
   function move(delta) {
     if (!state.items.length) return;
     var n = state.items.length;
-    state.active = (state.active + delta + n) % n;
+    var next = state.active;
+    // Skip over section headers when navigating.
+    for (var steps = 0; steps < n; steps++) {
+      next = (next + delta + n) % n;
+      if (state.items[next] && state.items[next].run) break;
+    }
+    state.active = next;
     syncActiveAttr();
   }
 
   function execute(i) {
     var idx = typeof i === "number" ? i : state.active;
     var it = state.items[idx];
-    if (!it) return;
+    if (!it || !it.run) return;
     closePalette();
     // Defer so the dialog has closed before navigation/fetch side effects.
     setTimeout(function () { it.run(); }, 0);
   }
 
   // ---- query handling ----------------------------------------------------
+
+  // Build display items from matched commands, inserting section headers.
+  // Each item is either { section: "Name" } (a header) or a regular command.
+  function buildItems(matched) {
+    var items = [];
+    var lastSection = "";
+    matched.forEach(function (m) {
+      if (m.cmd.section && m.cmd.section !== lastSection) {
+        lastSection = m.cmd.section;
+        items.push({ section: lastSection });
+      }
+      items.push({
+        label: m.cmd.label,
+        shortcut: m.cmd.shortcut || "",
+        hint: m.cmd.hint || "",
+        section: m.cmd.section || "",
+        run: m.cmd.run,
+      });
+    });
+    return items;
+  }
 
   function refresh() {
     var q = (input().value || "").trim();
@@ -540,9 +708,7 @@
       });
       matched.sort(function (a, b) { return b.score - a.score; });
     }
-    var items = matched.map(function (m) {
-      return { label: m.cmd.label, hint: m.cmd.hint, run: m.cmd.run };
-    });
+    var items = buildItems(matched);
 
     // The query language filters the ticket results: status=review, project=x,
     // cost>0.5, free text, etc. all go through /header/search. Guard against
@@ -554,7 +720,9 @@
       var ticketItems = tickets.map(function (t) {
         return {
           label: t.title,
+          shortcut: "",
           hint: t.status ? "ticket · " + t.status : "ticket",
+          section: "Search results",
           run: function () { location.href = "/tickets/" + encodeURIComponent(t.id); },
         };
       });
