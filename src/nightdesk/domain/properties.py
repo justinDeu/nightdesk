@@ -51,6 +51,7 @@ from nightdesk.domain.tickets import (
 # classes already present in the compiled stylesheet (see the status chips in
 # sidebar.html) so no Tailwind rebuild is required.
 STATUS_META: dict[str, dict[str, str]] = {
+    "inbox": {"label": "Inbox", "css": "border-accent/40 text-accent"},
     "draft": {"label": "Draft", "css": "border-border text-fg-muted"},
     "queued": {"label": "Queued", "css": "border-info/40 text-info"},
     "running": {"label": "Running", "css": "border-accent text-accent"},

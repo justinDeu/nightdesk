@@ -17,15 +17,28 @@ from nightdesk.domain.toolchains import (
 
 
 # v2 lifecycle. Run-level outcomes (success/failed/cancelled) now live on Run.exit_status.
+#
+# ``inbox`` is the entry point for under-specified work captured for triage. It
+# sits OUTSIDE the runnable board (the board only renders draft/queued/running/
+# review) and the scheduler never picks it (it picks ``status='queued'`` only).
+# An inbox item is promoted onto the board (``draft``/``queued``) once it is
+# complete enough to run, or declined (``archived``). Promotion crosses the
+# incomplete-ticket validation boundary enforced in ``transition_with_position``.
 _VALID_TRANSITIONS: dict[str, set[str]] = {
-    "draft":    {"queued", "running"},   # running implies run-now
+    "inbox":    {"draft", "queued", "archived"},  # promote / promote+queue / decline
+    "draft":    {"queued", "running", "inbox"},   # running implies run-now
     "queued":   {"draft", "running"},
     "running":  {"review"},
     "review":   {"queued", "archived"},
     "archived": {"queued"},
 }
 
-_ALL_STATUSES = ("draft", "queued", "running", "review", "archived")
+_ALL_STATUSES = ("inbox", "draft", "queued", "running", "review", "archived")
+
+# Statuses on (or destined for) the runnable board. Promoting an inbox item to
+# any of these requires the ticket to be complete; declining (inbox -> archived)
+# does not.
+_RUNNABLE_TARGETS = {"draft", "queued", "running"}
 
 
 class TicketNotFound(Exception):
@@ -34,6 +47,16 @@ class TicketNotFound(Exception):
 
 class InvalidTransition(Exception):
     pass
+
+
+class IncompleteTicket(InvalidTransition):
+    """Raised when an under-specified inbox ticket is promoted to the runnable
+    board before it has the fields a run needs. A subclass of
+    ``InvalidTransition`` so existing route handlers map it to HTTP 409."""
+
+    def __init__(self, reasons: list[str]):
+        self.reasons = reasons
+        super().__init__("; ".join(reasons) or "ticket is incomplete")
 
 
 _WORKSPACE_KINDS = {"directory", "git_worktree"}
@@ -123,8 +146,41 @@ def _apply_workspaces(session: Session, ticket: Ticket,
 
 
 
+def ticket_completeness(ticket: Ticket) -> list[str]:
+    """Return human-readable reasons an inbox ticket is not yet runnable.
+
+    A ticket is "complete" (promotable onto the runnable board) when it has a
+    title, a profile, and a primary workspace with a source path — exactly the
+    fields ``create_ticket`` hard-requires for non-inbox tickets. Under-specified
+    inbox items may be missing the workspace (and that is the whole point of the
+    inbox), so this is the single boundary that decides whether such an item can
+    leave triage.
+    """
+    reasons: list[str] = []
+    if not (ticket.title or "").strip():
+        reasons.append("a title is required")
+    if not ticket.profile_id:
+        reasons.append("a profile is required")
+    primary = next((w for w in ticket.workspaces if w.role == "primary"), None)
+    if primary is None or not (primary.source_path or "").strip():
+        reasons.append("a workspace with a source path is required")
+    return reasons
+
+
+def is_ticket_complete(ticket: Ticket) -> bool:
+    """True when a ticket has everything a run needs (see ``ticket_completeness``)."""
+    return not ticket_completeness(ticket)
+
+
 def create_ticket(session: Session, **fields) -> Ticket:
-    """Create a ticket. Defaults to status='draft' (v2)."""
+    """Create a ticket. Defaults to status='draft' (v2).
+
+    Inbox tickets are the one exception to the "exactly one primary workspace"
+    rule: captured triage items may be under-specified (no workspace yet), so a
+    ``status='inbox'`` ticket can be created with no workspace at all. It must
+    be fleshed out and promoted (crossing the completeness boundary) before it
+    can run.
+    """
     fields = apply_project_defaults(session, fields)
     workspace_specs = fields.pop("workspaces", None)
     source_path = fields.pop("source_path", None)
@@ -154,13 +210,18 @@ def create_ticket(session: Session, **fields) -> Ticket:
             "worktree_path": worktree_path,
             "retention": "preserve",
         }]
+    # Inbox tickets may be captured before a workspace is known; everything else
+    # still requires exactly one primary workspace up front.
+    normalized: list[dict] = []
     if not workspace_specs:
-        raise ValueError("workspaces must include exactly one primary workspace")
-    normalized = [_workspace_dict(w) for w in workspace_specs]
-    normalized = _validate_workspace_specs(normalized)
-    primary = next(w for w in normalized if w.get("role") == "primary")
-    if not primary.get("source_path"):
-        raise ValueError("primary workspace source_path is required")
+        if status != "inbox":
+            raise ValueError("workspaces must include exactly one primary workspace")
+    else:
+        normalized = [_workspace_dict(w) for w in workspace_specs]
+        normalized = _validate_workspace_specs(normalized)
+        primary = next(w for w in normalized if w.get("role") == "primary")
+        if not primary.get("source_path"):
+            raise ValueError("primary workspace source_path is required")
 
     # Position defaults to end of the chosen column.
     if "position" not in fields:
@@ -168,7 +229,8 @@ def create_ticket(session: Session, **fields) -> Ticket:
     t = Ticket(**fields)
     session.add(t)
     session.flush()
-    _apply_workspaces(session, t, normalized)
+    if normalized:
+        _apply_workspaces(session, t, normalized)
     session.commit()
     session.refresh(t)
     return t
@@ -292,6 +354,14 @@ def transition_with_position(
     if new_status not in allowed:
         raise InvalidTransition(f"{t.status} -> {new_status}")
 
+    # Incomplete-ticket validation boundary: an under-specified inbox item
+    # cannot be promoted onto the runnable board until it has the fields a run
+    # needs. Declining it (inbox -> archived) is always allowed.
+    if t.status == "inbox" and new_status in _RUNNABLE_TARGETS:
+        reasons = ticket_completeness(t)
+        if reasons:
+            raise IncompleteTicket(reasons)
+
     _reorder_inserting(session, t, new_status, position)
     t.updated_at = datetime.now(timezone.utc)
     session.commit()
@@ -355,6 +425,61 @@ def unarchive(session: Session, ticket_id: str) -> Ticket:
     if t.status != "archived":
         raise InvalidTransition(f"cannot unarchive from {t.status}")
     return transition_status(session, ticket_id, "queued")
+
+
+# ---------------------------------------------------------------------------
+# Inbox
+# ---------------------------------------------------------------------------
+
+_PROMOTE_TARGETS = {"draft", "queued"}
+
+
+def list_inbox(
+    session: Session,
+    *,
+    project_id: Optional[str] = None,
+    limit: int = 200,
+) -> list[Ticket]:
+    """Inbox tickets for the triage surface, highest priority and newest first.
+
+    ``project_id='null'`` selects items with no project; a real id scopes to
+    that project; ``None`` returns every inbox item.
+    """
+    stmt = (
+        select(Ticket)
+        .where(Ticket.status == "inbox")
+        .order_by(Ticket.priority.desc(), Ticket.created_at.desc())
+        .limit(limit)
+    )
+    if project_id == "null":
+        stmt = stmt.where(Ticket.project_id.is_(None))
+    elif project_id is not None:
+        stmt = stmt.where(Ticket.project_id == project_id)
+    return list(session.scalars(stmt))
+
+
+def promote_ticket(session: Session, ticket_id: str, target_status: str = "draft") -> Ticket:
+    """Promote an inbox item onto the runnable board.
+
+    ``target_status`` is ``draft`` (accept for later) or ``queued`` (accept and
+    queue for the scheduler). Crosses the completeness boundary, so an
+    incomplete item raises ``IncompleteTicket`` (a ``InvalidTransition``).
+    """
+    if target_status not in _PROMOTE_TARGETS:
+        raise InvalidTransition(f"cannot promote to {target_status!r}")
+    t = get_ticket(session, ticket_id)
+    if t.status != "inbox":
+        raise InvalidTransition(f"cannot promote from {t.status}")
+    return transition_status(session, ticket_id, target_status)
+
+
+def decline_ticket(session: Session, ticket_id: str) -> Ticket:
+    """Decline an inbox item: inbox -> archived. Always allowed (no completeness
+    requirement) so junk and dead ideas can be cleared from triage."""
+    t = get_ticket(session, ticket_id)
+    if t.status != "inbox":
+        raise InvalidTransition(f"cannot decline from {t.status}")
+    return transition_status(session, ticket_id, "archived")
 
 
 def set_run_now(session: Session, ticket_id: str, run_now: bool) -> Ticket:

@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% set active_page = 'inbox' %}
+{#
+  Inbox — triage surface for under-specified work (status='inbox').
+
+  Deliberately separate from the runnable board: items here are captured but
+  not yet ready to run. Each row reuses the shared property pickers (priority /
+  project / status) and label display, and exposes promote / decline actions.
+  Project-filtered via ?project=<slug> (or ?project=none for unassigned).
+#}
+{% block body %}
+<section class="space-y-4 max-w-5xl">
+  <header class="flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-baseline gap-3">
+      <h1 class="text-xl font-bold">Inbox</h1>
+      <span class="text-sm text-fg-muted">
+        Triage under-specified work. Items here stay off the runnable board until promoted.
+      </span>
+    </div>
+  </header>
+
+  {# --- Project filter -------------------------------------------------- #}
+  <nav class="flex flex-wrap items-center gap-1 text-xs" aria-label="Filter by project">
+    {% set _pf = project_filter or '' %}
+    <a href="/inbox"
+       class="px-2.5 py-1 rounded-full border transition-colors
+              {% if not _pf %}border-accent text-accent{% else %}border-border text-fg-muted hover:text-fg{% endif %}">
+      All
+    </a>
+    <a href="/inbox?project=none"
+       class="px-2.5 py-1 rounded-full border transition-colors
+              {% if _pf == 'none' %}border-accent text-accent{% else %}border-border text-fg-muted hover:text-fg{% endif %}">
+      No project
+    </a>
+    {% for p in projects %}
+      <a href="/inbox?project={{ p.slug }}"
+         class="px-2.5 py-1 rounded-full border transition-colors inline-flex items-center gap-1
+                {% if _pf == p.slug %}border-accent text-accent{% else %}border-border text-fg-muted hover:text-fg{% endif %}">
+        {% if p.color %}<span class="inline-block w-2 h-2 rounded-full" style="background: {{ p.color }}"></span>{% endif %}
+        {{ p.name }}
+      </a>
+    {% endfor %}
+  </nav>
+
+  {# --- Capture: add a new, possibly under-specified item --------------- #}
+  <form
+    class="flex flex-wrap items-end gap-2 bg-bg-elev border border-border rounded-md p-3 text-sm"
+    hx-post="/inbox/capture"
+    hx-target="#inbox-list"
+    hx-swap="outerHTML"
+    hx-on::after-request="if(event.detail.successful){this.reset();}"
+  >
+    <input type="hidden" name="project" value="{{ project_filter or '' }}" />
+    <label class="flex flex-col gap-1 flex-1 min-w-[220px]">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Title</span>
+      <input type="text" name="title" required placeholder="Capture an idea or request…"
+             class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent" />
+    </label>
+    <label class="flex flex-col gap-1 flex-[2] min-w-[260px]">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Notes / prompt</span>
+      <input type="text" name="prompt" placeholder="Optional details to flesh out later…"
+             class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent" />
+    </label>
+    <label class="flex flex-col gap-1 min-w-[140px]">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Project</span>
+      <select name="project_id"
+              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg">
+        <option value="">No project</option>
+        {% for p in projects %}
+          <option value="{{ p.id }}"
+                  {% if selected_project and selected_project.id == p.id %}selected{% endif %}>
+            {{ p.name }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit"
+            class="px-3 py-1 rounded border border-accent text-accent hover:bg-accent hover:text-bg font-medium">
+      Capture
+    </button>
+  </form>
+
+  {% include "partials/inbox_list.html" %}
+</section>
+{% endblock %}

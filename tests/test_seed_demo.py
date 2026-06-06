@@ -50,7 +50,8 @@ def test_all_five_statuses_present(demo_engine, demo_session, demo_transcript_ro
             text("SELECT DISTINCT status FROM tickets")
         ).scalars()
     )
-    assert statuses == {"draft", "queued", "running", "review", "archived"}
+    # Inbox triage items are now seeded alongside the runnable lifecycle states.
+    assert statuses == {"inbox", "draft", "queued", "running", "review", "archived"}
 
 
 def test_profiles_seeded(demo_engine, demo_session, demo_transcript_root, tmp_path):
