@@ -182,6 +182,42 @@ def apply_project_defaults(session: Session, fields: dict[str, Any]) -> dict[str
     return out
 
 
+def preview_defaults(session: Session, project: Project) -> dict[str, Any]:
+    """Compute the effective creation defaults preview for a project.
+
+    Uses the effective-config resolver (``apply_project_defaults``) to show
+    exactly what a new ticket would receive.  The returned dict is for display
+    only — it is not used in ticket creation.
+
+    The *project* object is expected to be already loaded (e.g. from
+    ``list_projects``).  ``apply_project_defaults`` will look it up again via
+    its identity-map cache so no extra query is incurred.
+    """
+    resolved = apply_project_defaults(
+        session, {"project_id": project.id, "title": "example-ticket"},
+    )
+
+    workspaces = resolved.get("workspaces") or []
+    primary = next((w for w in workspaces if w.get("role") == "primary"), {})
+    linked = [w for w in workspaces if w.get("role") == "linked"]
+
+    return {
+        "source_path": project.source_path,
+        "workspace_mode": (
+            resolved.get("workspace_mode")
+            or project.default_workspace_mode
+            or "directory"
+        ),
+        "worktree_name_template": project.default_worktree_name_template,
+        "worktree_name_resolved": primary.get("worktree_name"),
+        "base_ref": project.default_base_ref,
+        "linked_workspaces": linked,
+        "toolchains": project.default_toolchains or [],
+        "tool_paths": project.default_tool_paths or [],
+        "toolchain_overrides": resolved.get("toolchain_overrides"),
+    }
+
+
 def _default_workspaces(project: Project, fields: dict[str, Any]) -> list[dict[str, Any]]:
     linked = list(project.default_linked_workspaces or [])
     worktree_name = fields.get("worktree_name")
