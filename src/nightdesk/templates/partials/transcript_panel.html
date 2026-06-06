@@ -234,6 +234,32 @@
           return t.content.firstChild;
         }
 
+        // rate_limit classification — mirror of
+        // transcript_view.rate_limit_is_limited / rate_limit_window_label so
+        // streamed and server-rendered transcripts agree. status == "allowed"
+        // is benign usage telemetry; only a non-"allowed" status or an
+        // exhausted overage buffer is an actual limit.
+        function rlNorm(v) {
+          if (v === null || v === undefined) return null;
+          return String(v).trim().toLowerCase();
+        }
+        function rateLimitIsLimited(evt) {
+          const status = rlNorm(evt.status);
+          const overageStatus = rlNorm(evt.overage_status);
+          const overageExhausted =
+            overageStatus !== null && overageStatus !== 'allowed';
+          if (status === 'allowed' && !overageExhausted) return false;
+          return true;
+        }
+        const RATE_LIMIT_WINDOW_LABELS = {
+          five_hour: '5-hour', seven_day: '7-day', seven_day_oauth: '7-day',
+        };
+        function rateLimitWindowLabel(limitType) {
+          if (!limitType) return '';
+          const key = String(limitType).trim();
+          return RATE_LIMIT_WINDOW_LABELS[key] || key.replace(/_/g, ' ');
+        }
+
         // --- shared helpers (mirror nightdesk.transcript_view) -----------
 
         // Unified single-column diff with +/- gutter and line numbers.
@@ -736,45 +762,72 @@
             return el(`<div class="rounded p-3 border-2 border-accent bg-accent/5"><div class="font-bold text-accent">done</div><div class="whitespace-pre-wrap text-sm mt-1">${escapeHtml(evt.summary || '')}</div></div>`);
           }
           if (t === 'rate_limit') {
-            // Mirror evt_rate_limit in transcript_event.html: amber card with a
-            // RATE LIMITED badge, an optional summary + live countdown when the
-            // SDK gave those fields, and a "raw response" dropdown that always
-            // carries the full payload. The countdown ticker is wired up after
-            // the node is appended (see append()).
+            // Mirror evt_rate_limit in transcript_event.html. status ==
+            // "allowed" is benign usage telemetry → neutral "usage" card, no
+            // alarm. Only an actually-limited report (status not "allowed", or
+            // overage exhausted — see rateLimitIsLimited) renders the amber
+            // RATE LIMITED warning with a live countdown. A "raw response"
+            // dropdown always carries the full payload. The countdown ticker is
+            // wired up after the node is appended (see bindCountdowns()).
             const status = evt.status || '';
             const limitType = evt.rate_limit_type || '';
             const resetsAt = evt.resets_at;
             const raw = evt.raw || '';
-            const util = (typeof evt.utilization === 'number')
-              ? `, ${(evt.utilization * 100).toFixed(1)}% used` : '';
-            const statusChip = status
-              ? `<code class="text-xs text-warn">${escapeHtml(status)}</code>` : '';
+            const usingOverage = !!evt.is_using_overage;
             const typeChip = limitType
               ? `<code class="text-xs text-fg-muted">${escapeHtml(limitType)}</code>` : '';
-            const summary = status
-              ? ` (${escapeHtml(status)}${escapeHtml(util)})` : '';
             let rawBlock = '';
             if (raw) {
               rawBlock =
                 `<details class="mt-2 text-xs"><summary class="cursor-pointer text-fg-muted hover:text-fg">raw response</summary>` +
                 `<pre class="mt-1 whitespace-pre-wrap break-all font-mono text-fg-muted bg-bg-elev-2 border border-border rounded p-2">${escapeHtml(raw)}</pre></details>`;
             }
-            let countdown = '';
-            if (resetsAt) {
-              countdown =
-                `<div class="text-xs text-fg-muted mt-1">next request in ` +
-                `<span class="rate-limit-countdown font-mono text-warn" data-resets-at="${escapeHtml(resetsAt)}">…</span></div>`;
+            if (rateLimitIsLimited(evt)) {
+              const util = (typeof evt.utilization === 'number')
+                ? `, ${(evt.utilization * 100).toFixed(1)}% used` : '';
+              const statusChip = status
+                ? `<code class="text-xs text-warn">${escapeHtml(status)}</code>` : '';
+              const summary = status
+                ? ` (${escapeHtml(status)}${escapeHtml(util)})` : '';
+              let countdown = '';
+              if (resetsAt) {
+                countdown =
+                  `<div class="text-xs text-fg-muted mt-1">next request in ` +
+                  `<span class="rate-limit-countdown font-mono text-warn" data-resets-at="${escapeHtml(resetsAt)}">…</span></div>`;
+              }
+              return el(
+                `<div class="rate-limit rounded p-3 border-2 border-warn bg-warn/10">` +
+                  `<div class="flex items-center gap-2">` +
+                    `<span class="font-bold text-warn uppercase tracking-wide text-xs">rate limited</span>` +
+                    statusChip +
+                    typeChip +
+                  `</div>` +
+                  `<div class="whitespace-pre-wrap text-sm mt-2 text-fg">Agent hit a rate limit${summary}.</div>` +
+                  rawBlock +
+                  countdown +
+                `</div>`
+              );
             }
+            // Benign usage telemetry (status == "allowed").
+            const window = rateLimitWindowLabel(limitType);
+            const overageChip = usingOverage
+              ? `<code class="text-xs text-fg-muted">overage</code>` : '';
+            const usedTxt = (typeof evt.utilization === 'number')
+              ? `: ${(evt.utilization * 100).toFixed(1)}% used` : '';
+            const overageTxt = usingOverage ? ' (using overage)' : '';
+            const resetsTxt = resetsAt
+              ? `, resets in <span class="rate-limit-countdown font-mono text-fg-muted" data-resets-at="${escapeHtml(resetsAt)}">…</span>`
+              : '';
+            const windowTxt = window ? `${escapeHtml(window)} window` : 'Usage window';
             return el(
-              `<div class="rate-limit rounded p-3 border-2 border-warn bg-warn/10">` +
+              `<div class="rate-limit rate-limit-ok rounded p-3 border border-border bg-bg-elev-2">` +
                 `<div class="flex items-center gap-2">` +
-                  `<span class="font-bold text-warn uppercase tracking-wide text-xs">rate limited</span>` +
-                  statusChip +
+                  `<span class="font-semibold text-fg-muted uppercase tracking-wide text-xs">usage</span>` +
                   typeChip +
+                  overageChip +
                 `</div>` +
-                `<div class="whitespace-pre-wrap text-sm mt-2 text-fg">Agent hit a rate limit${summary}.</div>` +
+                `<div class="whitespace-pre-wrap text-sm mt-2 text-fg-muted">${windowTxt}${escapeHtml(usedTxt)}${overageTxt}${resetsTxt}.</div>` +
                 rawBlock +
-                countdown +
               `</div>`
             );
           }

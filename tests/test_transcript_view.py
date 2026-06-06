@@ -435,14 +435,17 @@ def test_thinking_block_stays_collapsed():
 
 
 def test_rate_limit_event_renders_card_with_countdown():
-    # A rate_limit event must render a visible RATE LIMITED card with the
-    # status, limit type, and a countdown wired to resets_at — not be dropped.
+    # An actually-limited event (status != "allowed") must render a visible RATE
+    # LIMITED warning card with the status, limit type, and a countdown wired to
+    # resets_at — not be dropped.
     html = _render_event({
         "type": "rate_limit", "status": "rejected",
         "rate_limit_type": "five_hour", "resets_at": 1_900_000_000,
         "utilization": 1.0, "raw": "status: rejected\nresets_at: 1900000000",
     })
     assert "rate limited" in html.lower()
+    assert "Agent hit a rate limit" in html
+    assert "border-warn" in html
     assert "rejected" in html
     assert "five_hour" in html
     assert 'data-resets-at="1900000000"' in html
@@ -453,8 +456,9 @@ def test_rate_limit_event_renders_card_with_countdown():
 
 
 def test_rate_limit_event_renders_raw_only_when_fields_missing():
-    # Generic case: an SDK that doesn't expose the known fields still shows the
-    # RATE LIMITED badge and the raw payload dropdown (no countdown, no status).
+    # Generic case: an SDK that doesn't expose the known fields can't be
+    # confirmed benign, so it still shows the RATE LIMITED warning badge and the
+    # raw payload dropdown (no countdown, no status).
     html = _render_event({
         "type": "rate_limit",
         "raw": "some_field: some_value\nother: 123",
@@ -463,6 +467,106 @@ def test_rate_limit_event_renders_raw_only_when_fields_missing():
     assert "raw response" in html
     assert "some_field: some_value" in html
     assert "rate-limit-countdown" not in html
+
+
+def test_rate_limit_allowed_renders_neutral_usage_not_alarm():
+    # status == "allowed" is benign usage telemetry: it must NEVER render as an
+    # alarm and never say "Agent hit a rate limit". It shows neutral usage info.
+    html = _render_event({
+        "type": "rate_limit", "status": "allowed",
+        "overage_status": "allowed", "is_using_overage": False,
+        "rate_limit_type": "five_hour", "resets_at": 1_900_000_000,
+        "utilization": 0.42,
+        "raw": "status: allowed\noverage_status: allowed",
+    })
+    assert "Agent hit a rate limit" not in html
+    assert "rate limited" not in html.lower()
+    assert "border-warn" not in html
+    # Neutral usage info: window label + utilization + countdown to reset.
+    assert "rate-limit-ok" in html
+    assert "5-hour window" in html
+    assert "42.0% used" in html
+    assert 'data-resets-at="1900000000"' in html
+    assert "rate-limit-countdown" in html
+    # Raw payload still available.
+    assert "raw response" in html
+
+
+def test_rate_limit_allowed_but_using_overage_is_benign():
+    # "allowed but using overage" is still benign (the request went through),
+    # but the card notes the overage so it's distinguishable from a block.
+    html = _render_event({
+        "type": "rate_limit", "status": "allowed",
+        "overage_status": "allowed", "is_using_overage": True,
+        "rate_limit_type": "five_hour",
+        "raw": "status: allowed\nis_using_overage: true",
+    })
+    assert "Agent hit a rate limit" not in html
+    assert "rate limited" not in html.lower()
+    assert "border-warn" not in html
+    assert "using overage" in html
+
+
+def test_rate_limit_allowed_with_exhausted_overage_is_limited():
+    # status == "allowed" but the overage buffer is exhausted → actually
+    # limited: render the warning, not the neutral usage card.
+    html = _render_event({
+        "type": "rate_limit", "status": "allowed",
+        "overage_status": "rejected", "is_using_overage": True,
+        "rate_limit_type": "five_hour", "resets_at": 1_900_000_000,
+        "raw": "status: allowed\noverage_status: rejected",
+    })
+    assert "Agent hit a rate limit" in html
+    assert "border-warn" in html
+    assert "rate-limit-ok" not in html
+    assert "rate-limit-countdown" in html
+
+
+def test_rate_limit_is_limited_classification():
+    # allowed + no overage trouble → benign.
+    assert _tv.rate_limit_is_limited(
+        {"status": "allowed", "overage_status": "allowed"}) is False
+    # allowed, no overage fields at all → benign.
+    assert _tv.rate_limit_is_limited({"status": "allowed"}) is False
+    # allowed but using overage (overage still allowed) → benign.
+    assert _tv.rate_limit_is_limited(
+        {"status": "allowed", "is_using_overage": True,
+         "overage_status": "allowed"}) is False
+    # status not allowed → limited.
+    assert _tv.rate_limit_is_limited({"status": "rejected"}) is True
+    assert _tv.rate_limit_is_limited({"status": "allowed_warning"}) is True
+    # allowed but overage exhausted → limited.
+    assert _tv.rate_limit_is_limited(
+        {"status": "allowed", "overage_status": "rejected"}) is True
+    # No status at all → can't confirm benign, treat as limited.
+    assert _tv.rate_limit_is_limited({}) is True
+    # Case/whitespace insensitive.
+    assert _tv.rate_limit_is_limited({"status": "  ALLOWED  "}) is False
+
+
+def test_rate_limit_window_label():
+    assert _tv.rate_limit_window_label("five_hour") == "5-hour"
+    assert _tv.rate_limit_window_label("seven_day") == "7-day"
+    assert _tv.rate_limit_window_label("") == ""
+    assert _tv.rate_limit_window_label(None) == ""
+    # Unknown identifiers fall back to a readable form.
+    assert _tv.rate_limit_window_label("one_minute") == "one minute"
+
+
+def test_rate_limit_js_livetail_mirrors_classification():
+    # The client-side renderer must mirror the server classification so streamed
+    # and reloaded transcripts agree. Pin the mirrored helpers + both branches.
+    src = (_repo_root() / "src" / "nightdesk" / "templates"
+           / "partials" / "transcript_panel.html").read_text()
+    assert "function rateLimitIsLimited" in src
+    assert "function rateLimitWindowLabel" in src
+    # Both render branches present: the alarm and the neutral usage card.
+    assert "Agent hit a rate limit" in src
+    assert "rate-limit-ok" in src
+    # The benign branch is gated on the shared classifier.
+    assert "rateLimitIsLimited(evt)" in src
+    # Same window labels as the Python side.
+    assert "five_hour" in src and "5-hour" in src
 
 
 def test_cancelled_event_renders_marker_card():

@@ -491,6 +491,10 @@ def test_event_to_dict_translates_rate_limit_event():
         resets_at: Optional[int] = 1_900_000_000
         rate_limit_type: Optional[str] = "five_hour"
         utilization: Optional[float] = 0.95
+        overage_status: Optional[str] = "rejected"
+        is_using_overage: Optional[bool] = True
+        overage_disabled_reason: Optional[str] = "limit_reached"
+        overage_resets_at: Optional[int] = 1_900_000_500
 
     @dataclass
     class RateLimitEvent:
@@ -502,10 +506,44 @@ def test_event_to_dict_translates_rate_limit_event():
     assert d["resets_at"] == 1_900_000_000
     assert d["rate_limit_type"] == "five_hour"
     assert d["utilization"] == 0.95
+    # The overage fields the renderer's classifier needs are captured too, so
+    # "allowed but using overage" can be told apart from "blocked".
+    assert d["overage_status"] == "rejected"
+    assert d["is_using_overage"] is True
+    assert d["overage_disabled_reason"] == "limit_reached"
+    assert d["overage_resets_at"] == 1_900_000_500
     # The full payload is always attached for the raw-response dropdown.
     assert "status: rejected" in d["raw"]
     # The translator passes the canonical event straight through.
     assert translate(d) == [d]
+
+
+def test_event_to_dict_rate_limit_allowed_captures_overage_fields():
+    """An "allowed" report (benign telemetry) still carries the overage fields,
+    so the renderer can classify it as benign rather than an error."""
+    from dataclasses import dataclass, field
+    from typing import Optional
+
+    from nightdesk.worker._sdk_runner import _event_to_dict
+
+    @dataclass
+    class RateLimitInfo:
+        status: str = "allowed"
+        resets_at: Optional[int] = 1_900_000_000
+        rate_limit_type: Optional[str] = "five_hour"
+        utilization: Optional[float] = 0.42
+        overage_status: Optional[str] = "allowed"
+        is_using_overage: Optional[bool] = False
+
+    @dataclass
+    class RateLimitEvent:
+        rate_limit_info: object = field(default_factory=RateLimitInfo)
+
+    d = _event_to_dict(RateLimitEvent())
+    assert d["type"] == "rate_limit"
+    assert d["status"] == "allowed"
+    assert d["overage_status"] == "allowed"
+    assert d["is_using_overage"] is False
 
 
 def test_event_to_dict_result_carries_session_id():
