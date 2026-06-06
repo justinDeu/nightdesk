@@ -20,8 +20,10 @@
 
 {# assistant_text: first-class block (left accent border, elevated bg,
    author chip) so the model's prose stands out from surrounding tool
-   cards. Fenced-code blocks render as <pre class="code"> so newlines
-   survive untouched.
+   cards. Non-code segments are markdown, rendered to safe HTML by
+   tv.render_markdown (XSS-safe: all content is escaped before markup is
+   emitted — see nightdesk.transcript_view). Fenced-code blocks render as
+   <pre class="code"> so newlines survive untouched.
 
    Empty-text events (some SDK variants emit one when only tool_use
    blocks were produced) render nothing — otherwise we'd show a bare
@@ -41,7 +43,7 @@
         {% if seg.kind == 'code' %}
           <pre class="code">{{ seg.body }}</pre>
         {% elif seg.body %}
-          <p>{{ seg.body }}</p>
+          {{ tv.render_markdown(seg.body) | safe }}
         {% endif %}
       {% endfor %}
     </div>

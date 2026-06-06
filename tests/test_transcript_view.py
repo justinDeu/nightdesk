@@ -16,6 +16,7 @@ from nightdesk.transcript_view import (
     diff_counts,
     elide_output,
     pair_tool_events,
+    render_markdown,
     tool_summary,
     unified_diff_rows,
 )
@@ -146,6 +147,134 @@ def test_segments_unterminated_fence_flushes_as_code():
     segs = assistant_segments(text)
     assert segs[0].kind == "text" and segs[0].body == "intro"
     assert segs[1].kind == "code" and segs[1].body == "still code"
+
+
+# --- render_markdown ------------------------------------------------------
+#
+# Assistant prose is markdown; render_markdown turns one non-code segment into
+# XSS-safe formatted HTML. The JS live-tail (renderMarkdown in
+# transcript_panel.html) mirrors this — keep both sides in sync.
+
+
+def test_markdown_plain_text_is_a_paragraph():
+    assert render_markdown("just a line") == "<p>just a line</p>"
+
+
+def test_markdown_empty_and_blank_render_nothing():
+    assert render_markdown("") == ""
+    assert render_markdown("   \n\t ") == ""
+
+
+def test_markdown_headings():
+    assert render_markdown("# Title") == "<h1>Title</h1>"
+    assert render_markdown("### Sub") == "<h3>Sub</h3>"
+
+
+def test_markdown_bold_italic_inline_code():
+    html = render_markdown("a **bold**, an *italic*, and `code` here")
+    assert "<strong>bold</strong>" in html
+    assert "<em>italic</em>" in html
+    assert "<code>code</code>" in html
+
+
+def test_markdown_underscore_emphasis_but_not_intra_word():
+    # Leading/closing underscores emphasize; intra-identifier underscores do not.
+    assert "<strong>x</strong>" in render_markdown("__x__")
+    assert "<em>y</em>" in render_markdown("_y_")
+    # snake_case identifiers must survive untouched (no spurious <em>).
+    assert render_markdown("call foo_bar_baz now") == "<p>call foo_bar_baz now</p>"
+
+
+def test_markdown_unordered_list():
+    html = render_markdown("- one\n- two\n- three")
+    assert html == "<ul><li>one</li><li>two</li><li>three</li></ul>"
+
+
+def test_markdown_ordered_list():
+    html = render_markdown("1. first\n2. second")
+    assert html == "<ol><li>first</li><li>second</li></ol>"
+
+
+def test_markdown_switching_list_marker_closes_and_opens():
+    html = render_markdown("- a\n1. b")
+    assert html == "<ul><li>a</li></ul><ol><li>b</li></ol>"
+
+
+def test_markdown_blockquote():
+    html = render_markdown("> a quote\n> second line")
+    assert html == "<blockquote><p>a quote second line</p></blockquote>"
+
+
+def test_markdown_horizontal_rule():
+    assert render_markdown("---") == "<hr>"
+
+
+def test_markdown_table():
+    html = render_markdown("| a | b |\n|---|---|\n| 1 | 2 |")
+    assert html == (
+        "<table><thead><tr><th>a</th><th>b</th></tr></thead>"
+        "<tbody><tr><td>1</td><td>2</td></tr></tbody></table>"
+    )
+
+
+def test_markdown_paragraphs_split_on_blank_line():
+    html = render_markdown("line one\nstill one\n\nline two")
+    assert html == "<p>line one still one</p><p>line two</p>"
+
+
+def test_markdown_safe_link_renders_anchor():
+    html = render_markdown("see [docs](https://example.com/x?a=1&b=2)")
+    # The ampersand in the URL is escaped; rel hardening is present.
+    assert ('<a href="https://example.com/x?a=1&amp;b=2"'
+            ' rel="noopener noreferrer nofollow">docs</a>') in html
+
+
+def test_markdown_mailto_and_relative_links_allowed():
+    assert '<a href="mailto:a@b.com"' in render_markdown("[m](mailto:a@b.com)")
+    assert '<a href="/board"' in render_markdown("[b](/board)")
+    assert '<a href="#top"' in render_markdown("[t](#top)")
+
+
+# --- render_markdown: XSS safety ------------------------------------------
+#
+# Transcript content is hostile-by-assumption. render_markdown must never let
+# raw HTML or a dangerous URL scheme through.
+
+
+def test_markdown_escapes_raw_html():
+    html = render_markdown("Raw <script>alert(1)</script> & <b>x</b>")
+    assert "<script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "&amp;" in html
+    assert "<b>x</b>" not in html
+
+
+def test_markdown_escapes_html_inside_inline_code():
+    html = render_markdown("`<img src=x onerror=alert(1)>`")
+    assert "<img" not in html
+    assert "<code>&lt;img src=x onerror=alert(1)&gt;</code>" in html
+
+
+def test_markdown_rejects_javascript_url():
+    html = render_markdown("[click](javascript:alert(1))")
+    # No anchor and no href is emitted; the markdown falls back to inert
+    # literal text so the dangerous scheme can never execute.
+    assert "<a " not in html
+    assert "href=" not in html
+    assert html == "<p>[click](javascript:alert(1))</p>"
+
+
+def test_markdown_rejects_data_and_vbscript_urls():
+    for bad in ("data:text/html,<script>1</script>", "vbscript:msgbox(1)"):
+        html = render_markdown(f"[x]({bad})")
+        assert "<a " not in html
+        assert "href=" not in html
+
+
+def test_markdown_link_text_is_escaped():
+    html = render_markdown("[<b>hi</b>](https://example.com)")
+    assert "<b>hi</b>" not in html
+    assert "&lt;b&gt;hi&lt;/b&gt;" in html
 
 
 # --- tool_summary ---------------------------------------------------------
@@ -461,6 +590,52 @@ def test_assistant_text_empty_renders_nothing():
     # new chrome would show as a bare "claude" chip with no body.
     assert _render_event({"type": "assistant_text", "text": ""}).strip() == ""
     assert _render_event({"type": "assistant_text", "text": "   \n  "}).strip() == ""
+
+
+# --- assistant_text markdown rendering ------------------------------------
+#
+# Non-code segments are markdown, rendered to formatted HTML by
+# tv.render_markdown and marked | safe in the template. The render is escaped
+# at the source so the | safe is XSS-safe. Fenced code blocks still render as
+# <pre class="code">, untouched. The JS live-tail mirrors this.
+
+
+def test_assistant_text_renders_markdown_formatting():
+    html = _render_event({
+        "type": "assistant_text",
+        "text": "## Plan\n\nDo **this** and `that`.\n\n- step one\n- step two",
+    })
+    assert "<h2>Plan</h2>" in html
+    assert "<strong>this</strong>" in html
+    assert "<code>that</code>" in html
+    assert "<ul><li>step one</li><li>step two</li></ul>" in html
+    # The old flat "<p>{{ body }}</p>" with raw markdown must be gone.
+    assert "<p>## Plan" not in html
+
+
+def test_assistant_text_keeps_fenced_code_as_code_block():
+    # A fenced code block stays a <pre class="code"> and its contents are not
+    # markdown-reformatted (e.g. ``# comment`` is not turned into a heading).
+    text = "Here:\n```python\n# not a heading\nprint('x')\n```\ndone"
+    html = _render_event({"type": "assistant_text", "text": text})
+    assert '<pre class="code"># not a heading\nprint(&#39;x&#39;)</pre>' in html
+    assert "<h1>" not in html
+    # Surrounding prose still renders as markdown paragraphs.
+    assert "<p>Here:</p>" in html
+    assert "<p>done</p>" in html
+
+
+def test_assistant_text_markdown_is_xss_safe():
+    # Hostile transcript content must not inject raw HTML through | safe.
+    html = _render_event({
+        "type": "assistant_text",
+        "text": "Pwn <script>alert(1)</script> and [x](javascript:alert(2))",
+    })
+    assert "<script>alert(1)" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    # The javascript: link is inert (no anchor emitted).
+    assert "javascript:alert(2)" in html  # present only as literal text
+    assert 'href="javascript' not in html
 
 
 # --- pair_tool_events -----------------------------------------------------
