@@ -305,6 +305,12 @@ def _toolchain_options(session: Session) -> list[dict]:
     return toolchain_options(current_config(session))
 
 
+def _list_labels_sidebar(session: Session) -> list:
+    """Fetch all labels for template contexts (sidebar, modals)."""
+    from nightdesk.domain.labels import list_labels as _ll
+    return _ll(session)
+
+
 def _gather_board(session: Session, *, q: str = ""):
     ast = parse_query(q)
     selected_project = _sole_project(session, ast)
@@ -355,6 +361,10 @@ def _gather_board(session: Session, *, q: str = ""):
         for status, label in _COLUMNS
     ]
 
+    # All labels for the label picker on ticket cards.
+    from nightdesk.domain.labels import list_labels as _list_labels
+    all_labels = _list_labels(session)
+
     return {
         "columns": columns,
         "profiles": profiles,
@@ -374,6 +384,7 @@ def _gather_board(session: Session, *, q: str = ""):
             limit=500,
         ),
         "toolchain_options": _toolchain_options(session),
+        "all_labels": all_labels,
     }
 
 
@@ -493,6 +504,7 @@ def build_router(
                 "projects_by_id": ctx["projects_by_id"],
                 "selected_project": ctx["selected_project"],
                 "toolchain_options": ctx["toolchain_options"],
+                "all_labels": ctx["all_labels"],
                 "query": ctx["query"],
                 "view": view,
                 # Only assembled when the runs view is the initial render.
@@ -527,6 +539,7 @@ def build_router(
                 "projects_by_id": ctx["projects_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
                 "dep_titles": ctx["dep_titles"],
+                "all_labels": ctx["all_labels"],
             },
         )
 
@@ -581,6 +594,7 @@ def build_router(
                 "dep_all": list_tickets(session, limit=500),
                 "projects": list_projects(session),
                 "toolchain_options": _toolchain_options(session),
+                "all_labels": _list_labels_sidebar(session),
             },
         )
 
@@ -604,6 +618,7 @@ def build_router(
                 "projects": list_projects(session),
                 "selected_project": _project_filter(session, project)[1],
                 "toolchain_options": _toolchain_options(session),
+                "all_labels": _list_labels_sidebar(session),
             },
         )
 
@@ -656,6 +671,15 @@ def build_router(
                 try:
                     add_dependency(session, new_ticket.id, dep_id)
                 except (CyclicDependency, TicketNotFound):
+                    pass
+        # Optional labels from the label picker.
+        if form.get("labels_form") == "1":
+            from nightdesk.domain.labels import set_ticket_labels as _sl
+            label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+            if label_ids:
+                try:
+                    _sl(session, new_ticket.id, label_ids)
+                except Exception:
                     pass
         resp = Response(status_code=204)
         resp.headers["HX-Redirect"] = "/"
@@ -724,6 +748,15 @@ def build_router(
                     remove_dependency(session, tid, dep_id)
                 except DependencyNotFound:
                     pass
+        # Reconcile labels from the label picker. Only touched when the
+        # labels section was part of the submission (labels_form=1).
+        if form.get("labels_form") == "1":
+            from nightdesk.domain.labels import set_ticket_labels as _sl
+            label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+            try:
+                _sl(session, tid, label_ids)
+            except Exception:
+                pass
         # Return the sidebar partial re-rendered in edit mode for the same
         # ticket so HTMX swaps just the rail in place. Previously this
         # returned HX-Redirect to "/", which reloaded the board and dropped
@@ -739,7 +772,8 @@ def build_router(
              "deps_downstreams": list_dependents(session, tid),
              "dep_all": list_tickets(session, limit=500),
              "projects": list_projects(session),
-             "toolchain_options": _toolchain_options(session)},
+             "toolchain_options": _toolchain_options(session),
+             "all_labels": _list_labels_sidebar(session)},
         )
 
     @router.post("/board/tickets/{tid}/archive", dependencies=[auth])
@@ -772,7 +806,8 @@ def build_router(
              "deps_downstreams": list_dependents(session, tid),
              "dep_all": list_tickets(session, limit=500),
              "projects": list_projects(session),
-             "toolchain_options": _toolchain_options(session)},
+             "toolchain_options": _toolchain_options(session),
+             "all_labels": _list_labels_sidebar(session)},
         )
 
     @router.post("/board/tickets/{tid}/cancel", dependencies=[auth])
@@ -975,6 +1010,53 @@ def build_router(
         return [
             {"id": t.id, "title": t.title, "status": t.status}
             for t in results
+        ]
+
+    @router.put("/board/tickets/{tid}/labels", dependencies=[auth])
+    async def set_ticket_labels_hx(
+        request: Request,
+        tid: str,
+        session: Session = Depends(get_session),
+    ):
+        """HTMX: replace a ticket's labels.  Body is ``label_ids`` (repeated)."""
+        from nightdesk.domain.labels import set_ticket_labels as _set_labels
+        from nightdesk.domain.labels import LabelNotFound as _LNF
+        from nightdesk.db.models import Label
+        form = await request.form()
+        label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+        try:
+            ticket = _set_labels(session, tid, label_ids)
+        except TicketNotFound:
+            raise HTTPException(404, "ticket not found")
+        except _LNF as e:
+            raise HTTPException(404, str(e))
+        all_labels = list(session.scalars(select(Label).order_by(Label.name.asc())))
+        return templates.TemplateResponse(
+            request,
+            "partials/label_picker.html",
+            {
+                "ticket": ticket,
+                "all_labels": all_labels,
+                "picker_name": "label_ids",
+                "picker_target": f"label-picker-{tid}",
+            },
+        )
+
+    @router.get("/board/labels-search", dependencies=[auth])
+    async def labels_search(
+        q: str = Query(default=""),
+        limit: int = Query(default=20, ge=1, le=100),
+        session: Session = Depends(get_session),
+    ):
+        """Search labels for the label picker.  Returns JSON."""
+        from nightdesk.db.models import Label as LabelModel
+        stmt = select(LabelModel).order_by(LabelModel.name.asc()).limit(limit)
+        if q:
+            stmt = stmt.where(LabelModel.name.ilike(f"%{q}%"))
+        results = session.scalars(stmt)
+        return [
+            {"id": l.id, "name": l.name, "color": l.color}
+            for l in results
         ]
 
     return router
