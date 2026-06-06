@@ -44,6 +44,39 @@ DEFAULT_TRANSCRIPT_ROOT = DEFAULT_DEMO_DIR / "transcripts"
 # ---------------------------------------------------------------------------
 
 _TICKET_SPECS: list[dict] = [
+    # --- Inbox (under-specified triage items) ---
+    # "incomplete": True items are captured with NO workspace, so they cannot be
+    # promoted until fleshed out — they exercise the validation boundary in the
+    # Inbox surface. Items without the flag are complete and promotable.
+    {
+        "title": "Investigate flaky integration test",
+        "prompt": (
+            "Someone mentioned test_worker_picks_eligible flakes in CI. "
+            "Need to reproduce and narrow down before this becomes a ticket."
+        ),
+        "status": "inbox",
+        "priority": 3,
+        "labels": ["bug"],
+        "incomplete": True,
+    },
+    {
+        "title": "Idea: keyboard-only ticket triage mode",
+        "prompt": "",
+        "status": "inbox",
+        "priority": 0,
+        "labels": ["ui/ux"],
+        "incomplete": True,
+    },
+    {
+        "title": "Add OpenAPI examples to ticket endpoints",
+        "prompt": (
+            "Flesh out request/response examples in the generated openapi.json "
+            "so the docs surface is usable. Workspace is known; ready to promote."
+        ),
+        "status": "inbox",
+        "priority": 1,
+        "labels": ["docs"],
+    },
     # --- Draft ---
     {
         "title": "Add dark mode toggle",
@@ -518,23 +551,32 @@ def seed(
             spec = dict(raw_spec)  # copy to avoid mutating the module-level list
             run_spec = spec.pop("run", None)
             label_names = spec.pop("labels", [])
+            # Under-specified inbox items are captured without a workspace so the
+            # Inbox surface can demo the "flesh out before promoting" boundary.
+            incomplete = spec.pop("incomplete", False)
             profile_id = profile_ids[idx % len(profile_ids)]
             # Spread tickets across the demo projects (leaving every third one
             # unassigned so "No project" is represented too).
             project_id = None
             if project_ids and idx % 3 != 2:
                 project_id = project_ids[idx % len(project_ids)]
+            # Assigning a project injects that project's default workspace, which
+            # would make an "incomplete" inbox item complete. Keep these
+            # project-less so they stay genuinely under-specified for the demo.
+            if incomplete:
+                project_id = None
 
-            ticket = create_ticket(
-                session,
+            create_kwargs = dict(
                 title=spec["title"],
                 prompt=spec["prompt"],
                 status=spec["status"],
                 profile_id=profile_id,
                 project_id=project_id,
-                source_path=source_path,
                 priority=spec.get("priority", idx % 3),
             )
+            if not incomplete:
+                create_kwargs["source_path"] = source_path
+            ticket = create_ticket(session, **create_kwargs)
 
             # Assign labels to the ticket.
             if label_names and label_by_name:

@@ -574,6 +574,8 @@
       run: openCreateTicket });
     cmds.push({ label: "Go to board", shortcut: "g b", hint: "", section: "Navigation",
       run: function () { location.href = "/"; } });
+    cmds.push({ label: "Go to inbox", shortcut: "g i", hint: "", section: "Navigation",
+      run: function () { location.href = "/inbox"; } });
     cmds.push({ label: "Go to archive", shortcut: "g a", hint: "", section: "Navigation",
       run: function () { location.href = "/archive"; } });
     cmds.push({ label: "Show keyboard shortcuts", shortcut: "?", hint: "", section: "Navigation",
@@ -873,6 +875,9 @@
     }
     if (hadG && (key === "a" || key === "A")) {
       e.preventDefault(); lastG = 0; location.href = "/archive"; return;
+    }
+    if (hadG && (key === "i" || key === "I")) {
+      e.preventDefault(); lastG = 0; location.href = "/inbox"; return;
     }
     lastG = 0;
 
