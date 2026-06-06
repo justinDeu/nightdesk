@@ -5,6 +5,7 @@ from typing import Optional
 import uuid
 
 from sqlalchemy import (
+    Column,
     String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, Time,
     Table, UniqueConstraint,
 )
@@ -30,8 +31,8 @@ class Base(DeclarativeBase):
 ticket_labels = Table(
     "ticket_labels",
     Base.metadata,
-    mapped_column("ticket_id", ForeignKey("tickets.id", ondelete="CASCADE"), primary_key=True),
-    mapped_column("label_id", ForeignKey("labels.id", ondelete="CASCADE"), primary_key=True),
+    Column("ticket_id", ForeignKey("tickets.id", ondelete="CASCADE"), primary_key=True),
+    Column("label_id", ForeignKey("labels.id", ondelete="CASCADE"), primary_key=True),
 )
 
 

@@ -470,8 +470,15 @@ def seed(
             return
 
         # --- Seed labels ---
-        label_by_name: dict[str, object] = {}
+        # Idempotent: reuse any label already present (the demo seeder is
+        # designed to be safe to re-run), creating only the missing ones.
+        from nightdesk.domain.labels import list_labels as _list_labels
+        label_by_name: dict[str, object] = {
+            lbl.name: lbl for lbl in _list_labels(session)
+        }
         for spec in _LABEL_SPECS:
+            if spec["name"] in label_by_name:
+                continue
             lbl = create_label(session, name=spec["name"], color=spec["color"])
             label_by_name[lbl.name] = lbl
 
