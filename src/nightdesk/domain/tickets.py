@@ -271,8 +271,15 @@ def transition_with_position(
 ) -> Ticket:
     """Transition a ticket to ``new_status``, optionally placing it at ``position``.
 
-    Drop-to-running from draft/queued sets ``run_now=True`` BEFORE the scheduler
-    picks the ticket (so the next pick records ``started_as_run_now=true``).
+    This is a pure status/position move: it never mutates ``run_now``. The
+    ``run_now`` flag means exactly one thing — "the user explicitly bypassed the
+    queue" — and is set only by ``request_run_now``/``set_run_now`` (UI run-now,
+    JSON API, drag-to-running). The worker transitions a *picked* ticket from
+    ``queued`` to ``running`` through here on every scheduler tick; forcing
+    ``run_now=True`` on that move would mislabel every normal scheduled pick as
+    a run-now (which then taints ``started_as_run_now`` on the Run record). We
+    deliberately leave the existing flag untouched so it survives the move and
+    accurately reflects the user's real intent when ``run_one`` reads it.
     """
     t = get_ticket(session, ticket_id)
     if new_status == t.status:
@@ -284,11 +291,6 @@ def transition_with_position(
     allowed = _VALID_TRANSITIONS.get(t.status, set())
     if new_status not in allowed:
         raise InvalidTransition(f"{t.status} -> {new_status}")
-
-    # Drop-to-running from draft/queued flips run_now=true so the very next
-    # scheduler tick treats this as a forced pick.
-    if new_status == "running" and t.status in ("draft", "queued"):
-        t.run_now = True
 
     _reorder_inserting(session, t, new_status, position)
     t.updated_at = datetime.now(timezone.utc)

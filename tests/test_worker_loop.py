@@ -46,6 +46,57 @@ async def test_loop_runs_a_ticket_to_review(session, tmp_path):
 
 
 @pytest.mark.anyio
+async def test_loop_normal_schedule_pick_is_not_tagged_run_now(session, tmp_path):
+    """A ticket queued normally and picked up by the scheduler in normal order
+    must NOT be tagged run-now. Regression test: the worker's queued->running
+    transition used to force run_now=True on every pick, tainting the badge."""
+    from nightdesk.db.models import ScheduleWindow
+
+    # Always-on window (equal start/end) so the normal-schedule path dispatches
+    # regardless of the wall-clock time the test runs at.
+    session.add(ScheduleWindow(label="w", day_mask=127, start="00:00",
+                               end="00:00", max_parallel=5, position=0))
+    session.commit()
+
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text("#!/bin/sh\nexit 0\n")
+    fake_claude.chmod(0o755)
+    p = create_profile(session, name="p", fs_read=[], fs_write=[], allowed_tools=[],
+                        denied_tools=[], network_mode="off", network_allowlist=[],
+                        secret_keys=[], default_model=None,
+                        claude_binary_path=str(fake_claude))
+    t = create_ticket(session, title="t", prompt="hello",
+                       priority=0, profile_id=p.id, run_now=False, status="queued",
+                       source_path=str(tmp_path))
+    tid = t.id
+
+    settings = WorkerSettings(
+        max_parallel=5,
+        window_start=time(0, 0),
+        window_end=time(0, 0),
+        worktree_root=tmp_path / "work",
+        transcript_root=tmp_path / "transcripts",
+        secrets={},
+        host="testhost",
+        executor=DummyExecutor(),
+    )
+    loop = WorkerLoop(session_factory=lambda: session, settings=settings)
+    await loop.tick_once()
+    if loop._inproc:
+        await asyncio.gather(*loop._inproc.values())
+
+    refreshed = get_ticket(session, tid)
+    assert refreshed.status == "review"
+    assert refreshed.run_now is False
+    from nightdesk.domain.runs import list_runs
+    runs = list_runs(session, ticket_id=tid)
+    assert len(runs) == 1
+    # The crux: a normal scheduler pick is not a user run-now.
+    assert runs[0].started_as_run_now is False
+    assert runs[0].exit_status == "success"
+
+
+@pytest.mark.anyio
 async def test_loop_writes_worker_error_event_on_executor_crash(session, tmp_path):
     """A crashing executor must leave a ``worker_error`` event at the end of
     the run transcript so the failure is visible in the transcript view."""
