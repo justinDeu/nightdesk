@@ -88,6 +88,12 @@ def create_app(
     templates.env.globals["priority_name"] = priority_name
     templates.env.globals["PRIORITY_SCALE"] = PRIORITY_SCALE
 
+    # Shared property-picker chip helper: property_chip(prop, ticket, project=None)
+    # returns the current-value chip dict for any registered metadata property
+    # (priority, status, project, …) so every template renders chips the same way.
+    from nightdesk.domain.properties import property_chip as _property_chip
+    templates.env.globals["property_chip"] = _property_chip
+
     # UTC ISO string for client-side localization (localize_time.js). Run/
     # ticket datetimes are UTC but come back from SQLite naive; emitting a bare
     # isoformat() would make the browser parse them as local time. Force a UTC

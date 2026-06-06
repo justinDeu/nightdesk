@@ -203,6 +203,21 @@
         label: "Requeue: " + short, hint: "selected ticket",
         run: function () { runTicketAction("requeue", ctx.id, ctx.title); },
       });
+      // Metadata edits reuse the ONE shared property-picker primitive: the
+      // command just opens the relevant chip's popover (on the sidebar or the
+      // detail header) rather than shipping its own metadata UI.
+      ["priority", "status", "project"].forEach(function (prop) {
+        var nice = prop.charAt(0).toUpperCase() + prop.slice(1);
+        cmds.push({
+          label: "Set " + prop + ": " + short,
+          hint: "property",
+          run: function () {
+            var ok = window.ndOpenPropertyPicker &&
+              window.ndOpenPropertyPicker(ctx.id, prop);
+            if (!ok) flashStatus("Open the ticket to change its " + prop);
+          },
+        });
+      });
     }
     cmds.push({ label: "New ticket", hint: "c", run: openCreateTicket });
     cmds.push({ label: "Go to board", hint: "g b", run: function () { location.href = "/"; } });

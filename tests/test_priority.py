@@ -374,7 +374,8 @@ class TestPriorityRendering:
         assert r.status_code == 200
         body = r.text
         assert "Medium" in body
-        assert 'data-priority-picker' in body
+        # Priority is now rendered via the shared property-picker primitive.
+        assert f'data-property-picker="{t.id}:priority"' in body
 
     async def test_edit_modal_has_priority_select(self, prio_client, session, _profile):
         t = create_ticket(session, title="modal-prio", prompt="",
