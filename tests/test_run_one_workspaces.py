@@ -40,6 +40,33 @@ def _spec(**overrides):
     return type("Spec", (), base)()
 
 
+def test_git_metadata_dirs_collects_common_dirs():
+    from nightdesk.worker.run_one import _git_metadata_dirs
+    from nightdesk.worker.workspace import Workspace, WorkspaceBundle
+
+    wt = Workspace(
+        path=Path("/wt/feature"), kind="git_worktree",
+        git_common_dir=Path("/repo/.git"),
+    )
+    extra = Workspace(
+        path=Path("/wt/other"), kind="git_worktree", role="linked", label="lib",
+        git_common_dir=Path("/repo/.git"),  # duplicate, must be deduped
+    )
+    plain = Workspace(path=Path("/data"), kind="directory")
+    bundle = WorkspaceBundle(primary=wt, workspaces=[wt, extra, plain])
+
+    assert _git_metadata_dirs(bundle) == ["/repo/.git"]
+
+
+def test_git_metadata_dirs_empty_for_non_git_ticket():
+    from nightdesk.worker.run_one import _git_metadata_dirs
+    from nightdesk.worker.workspace import Workspace, WorkspaceBundle
+
+    plain = Workspace(path=Path("/data"), kind="directory")
+    bundle = WorkspaceBundle(primary=plain, workspaces=[plain])
+    assert _git_metadata_dirs(bundle) == []
+
+
 def test_build_env_sets_sandbox_home_and_fixed_path(monkeypatch):
     # v1 deliberately does NOT propagate the host PATH or HOME. The sandbox
     # has a curated PATH and HOME points at the sandbox tmpfs so CC writes

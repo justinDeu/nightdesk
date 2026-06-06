@@ -266,6 +266,78 @@ def test_tool_path_symlink_with_target_inside_tool_dir_does_not_mount_parent(tmp
     assert ("--ro-bind-try", str(tmp_path), str(tmp_path)) not in triples
 
 
+def test_git_dir_is_mounted_read_write(tmp_path):
+    """A git_worktree's git_common_dir must be bound read-write at the same
+    path so the worktree's `.git` pointer resolves and refs can be updated —
+    without the user hand-adding a `.git` workspace."""
+    git_common = tmp_path / "repo" / ".git"
+    git_common.mkdir(parents=True)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    spec = _spec(fs_read=[], fs_write=[str(worktree)], network_mode="off")
+    argv = build_bwrap_argv(
+        spec, working_dir=str(worktree), cmd=["true"], env={},
+        git_dirs=[str(git_common)],
+    )
+    triples = [(argv[i], argv[i + 1], argv[i + 2]) for i in range(len(argv) - 2)]
+    # Read-write (--bind-try, not --ro-bind-try) at the same absolute path.
+    assert ("--bind-try", str(git_common), str(git_common)) in triples
+    assert ("--ro-bind-try", str(git_common), str(git_common)) not in triples
+
+
+def test_bare_git_dir_is_mounted(tmp_path):
+    """The `.bare` dir of a bare-container layout (git_common_dir == .bare) is
+    bound the same way."""
+    bare = tmp_path / "repo" / ".bare"
+    bare.mkdir(parents=True)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    spec = _spec(fs_read=[], fs_write=[str(worktree)], network_mode="off")
+    argv = build_bwrap_argv(
+        spec, working_dir=str(worktree), cmd=["true"], env={},
+        git_dirs=[str(bare)],
+    )
+    triples = [(argv[i], argv[i + 1], argv[i + 2]) for i in range(len(argv) - 2)]
+    assert ("--bind-try", str(bare), str(bare)) in triples
+
+
+def test_no_git_dirs_adds_no_git_mounts(tmp_path):
+    """A non-git ticket (no git_dirs) gets no extra git binds."""
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    spec = _spec(fs_read=[], fs_write=[str(workspace)], network_mode="off")
+    base = build_bwrap_argv(spec, working_dir=str(workspace), cmd=["true"], env={})
+    with_empty = build_bwrap_argv(spec, working_dir=str(workspace), cmd=["true"],
+                                  env={}, git_dirs=[])
+    assert base == with_empty
+
+
+def test_git_dir_overlapping_fs_mount_is_not_double_mounted(tmp_path):
+    """If a git dir is already covered by the working dir / an fs mount, it is
+    not re-bound (bwrap rejects mounting the same destination twice)."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    spec = _spec(fs_read=[], fs_write=[str(worktree)], network_mode="off")
+    argv = build_bwrap_argv(
+        spec, working_dir=str(worktree), cmd=["true"], env={},
+        git_dirs=[str(worktree)],
+    )
+    # Exactly one bind of the worktree path (from fs_write), none added for git.
+    binds = [i for i in range(len(argv) - 2)
+             if argv[i] == "--bind-try" and argv[i + 1] == str(worktree)]
+    assert len(binds) == 1
+
+
+def test_git_dir_under_protected_dir_is_rejected():
+    """A git dir overlapping the protected nightdesk data dir is refused."""
+    bad = os.path.join(os.path.expanduser("~"), ".local", "share",
+                       "nightdesk", "repo", ".git")
+    spec = _spec(fs_read=[], fs_write=[], network_mode="off")
+    with pytest.raises(ValueError, match="protected directory"):
+        build_bwrap_argv(spec, working_dir="/tmp", cmd=["true"], env={},
+                         git_dirs=[bad])
+
+
 def test_tool_runtime_root_only_skips_exact_system_bins():
     from pathlib import Path
 

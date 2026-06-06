@@ -15,6 +15,7 @@ import json
 import logging
 from typing import Any, Optional
 
+from nightdesk.domain.permissions import GIT_PUSH_DENY_RULES
 from nightdesk.transcript import next_seq, now_iso, write_event
 from nightdesk.worker.claude_translator import translate
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult
@@ -46,6 +47,14 @@ class ClaudeExecutor:
         spec = req.permission_spec
         allowed = list(spec.allowed_tools) if spec.allowed_tools else list(self.allowed_tools)
         disallowed = list(spec.denied_tools)
+        # Block `git push` (and force-push) by default so a sandboxed agent
+        # can't accidentally destroy a real remote — the sandbox shares the
+        # host net namespace. Opt in per-run with allow_git_push (e.g. ticket
+        # permission override {"allow_git_push": true}).
+        if not getattr(spec, "allow_git_push", False):
+            for rule in GIT_PUSH_DENY_RULES:
+                if rule not in disallowed:
+                    disallowed.append(rule)
         model = spec.default_model or self.model
         permission_mode = getattr(spec, "permission_mode", None)  # None -> SDK default
         return {
