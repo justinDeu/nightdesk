@@ -2,10 +2,13 @@
 
   States (precedence top to bottom):
     1. stale / no heartbeat                 -> red, "offline"
-    2. out of window, no overflow run-nows  -> amber, "paused (resumes HH:MM)"
-       (no N/M fraction: capacity is 0, only run-now bypasses it)
-    3. overflow (total_running > max)       -> green, "host · N/M ⚡+K"
-    4. in window                            -> green, "host · N/M"
+    2. no capacity, nothing running         -> amber, "paused · no active window"
+       (no N/M fraction: there is no active window, so capacity is genuinely 0;
+        a fresh install with no windows configured lands here, NOT on "0/M")
+    3. no capacity, run-now jobs running     -> green, "host ⚡+K · run-now only"
+       (still no N/M fraction: the cap is 0, only run-now bypasses it)
+    4. overflow (total_running > max)       -> green, "host · N/M ⚡+K"
+    5. in window                            -> green, "host · N/M"
 #}
 
 {# Pill trigger - always visible in the header. #}
@@ -17,24 +20,35 @@
     <span class="inline-block w-2 h-2 rounded-full bg-warn"></span>
     <span class="text-warn">paused</span>
     <span class="text-fg-muted">· no active window</span>
-  {% else %}
+  {% elif status.max_parallel and status.max_parallel > 0 %}
     {% set overflow = status.total_running > status.max_parallel %}
-    {% set dot_class = "bg-accent" if (overflow or status.in_window) else "bg-warn" %}
-    <span class="inline-block w-2 h-2 rounded-full {{ dot_class }}"></span>
+    <span class="inline-block w-2 h-2 rounded-full bg-accent"></span>
     <span>{{ status.host }} · {{ status.total_running }}/{{ status.max_parallel }}</span>
     {% if status.run_now_running and status.run_now_running > 0 %}
       <span class="text-accent-strong">⚡+{{ status.run_now_running }}</span>
     {% endif %}
-    {% if not status.in_window %}
-      <span class="text-fg-muted">· run-now only</span>
+  {% else %}
+    {# No active window (capacity 0) but run-now jobs are executing. Show the
+       overflow count without a misleading "/0" denominator. #}
+    <span class="inline-block w-2 h-2 rounded-full bg-accent"></span>
+    <span>{{ status.host }}</span>
+    {% if status.run_now_running and status.run_now_running > 0 %}
+      <span class="text-accent-strong">⚡+{{ status.run_now_running }}</span>
     {% endif %}
+    <span class="text-fg-muted">· run-now only</span>
   {% endif %}
 </div>
 
-{# Hover panel - shown on hover or when pinned via click. #}
+{# Hover panel - shown on hover or when pinned via click.
+
+   The outer wrapper sits flush against the trigger (top-full, no margin) and
+   uses pt-1 as an *invisible hover bridge*: the small gap above the visible
+   card is still part of this hoverable element, so moving the mouse from the
+   trigger down onto the panel never crosses dead space that would close it
+   (group-hover). The visible card lives in the inner div. #}
 <div data-worker-panel
-     class="absolute right-0 top-full mt-1 w-80 bg-bg-elev border border-border rounded-lg shadow-lg z-50 hidden group-hover:block">
-  <div class="p-3 text-xs">
+     class="absolute right-0 top-full pt-1 w-80 z-50 hidden group-hover:block">
+  <div class="bg-bg-elev border border-border rounded-lg shadow-lg p-3 text-xs">
     <div class="space-y-1 font-mono">
       <div class="flex justify-between gap-4">
         <span class="text-fg-muted">Host</span>

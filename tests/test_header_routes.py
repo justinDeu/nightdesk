@@ -14,7 +14,13 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from nightdesk.api.app import create_app
-from nightdesk.db.models import Profile, Run, Ticket, WorkerHeartbeat
+from nightdesk.db.models import (
+    Profile,
+    Run,
+    ScheduleWindow,
+    Ticket,
+    WorkerHeartbeat,
+)
 
 
 @pytest.fixture
@@ -122,11 +128,26 @@ async def test_worker_pill_offline_when_no_heartbeat(cookie_client):
     assert "bg-danger" in r.text
 
 
+def _add_always_on_window(session, *, max_parallel=2, label="default"):
+    """An every-day, always-on schedule window so capacity is non-zero.
+
+    Mirrors what the Settings UI writes for an "always on" window (equal
+    start/end == always on; day_mask 127 == every day).
+    """
+    session.add(ScheduleWindow(label=label, day_mask=127, start="00:00",
+                               end="00:00", max_parallel=max_parallel,
+                               position=0))
+    session.commit()
+
+
 async def test_worker_pill_shows_host_and_counts_when_alive(cookie_client, session):
     hb = WorkerHeartbeat(id=1, host="thorpad", pid=4242,
                           last_seen_at=datetime.now(timezone.utc))
     session.add(hb)
     session.commit()
+    # Capacity comes from configured schedule windows now, not the legacy
+    # always-on ConfigRow default. Without a window there is no capacity.
+    _add_always_on_window(session, max_parallel=2)
     p = Profile(name="wp", fs_read=[], fs_write=[], allowed_tools=[],
                  denied_tools=[], network_mode="off", network_allowlist=[],
                  secret_keys=[])
@@ -181,6 +202,56 @@ async def test_worker_pill_run_now_overflow_indicator(cookie_client, session):
     r = await cookie_client.get("/header/worker-pill")
     assert r.status_code == 200
     assert "+1" in r.text
+
+
+async def test_worker_pill_fresh_install_no_windows_shows_honest_state(
+        cookie_client, session):
+    """Issue A: a live worker with no schedule windows configured (fresh
+    install) must NOT advertise a misleading "0/M" capacity fraction. Capacity
+    is genuinely 0, so the pill shows the honest "no active window" state."""
+    session.add(WorkerHeartbeat(id=1, host="thorpad", pid=4242,
+                                last_seen_at=datetime.now(timezone.utc)))
+    session.commit()
+    # No ScheduleWindow rows at all => no capacity.
+    r = await cookie_client.get("/header/worker-pill")
+    assert r.status_code == 200
+    assert "no active window" in r.text
+    # The misleading capacity fraction must not appear.
+    assert "0/" not in r.text
+
+
+async def test_worker_pill_populates_active_window(cookie_client, session):
+    """Issue B: when a schedule window is active, the popup reports its label
+    rather than "none". The label is computed in _collect_worker_status."""
+    session.add(WorkerHeartbeat(id=1, host="thorpad", pid=4242,
+                                last_seen_at=datetime.now(timezone.utc)))
+    session.commit()
+    _add_always_on_window(session, max_parallel=3, label="graveyard")
+    r = await cookie_client.get("/header/worker-pill")
+    assert r.status_code == 200
+    # Active-window label surfaces in the hover panel...
+    assert "graveyard" in r.text
+    # ...and the "none" placeholder is gone.
+    assert ">none<" not in r.text
+    # Honest capacity fraction (nothing running yet, real cap of 3).
+    assert "0/3" in r.text
+
+
+async def test_worker_pill_hover_panel_has_bridge_not_dead_gap(
+        cookie_client, session):
+    """Issue C: the hover panel must sit flush against the trigger (top-full,
+    no margin) and use a pt-1 hover bridge so the mouse path from trigger to
+    popup never crosses dead space. Guards against reintroducing the mt-1 gap."""
+    session.add(WorkerHeartbeat(id=1, host="thorpad", pid=4242,
+                                last_seen_at=datetime.now(timezone.utc)))
+    session.commit()
+    r = await cookie_client.get("/header/worker-pill")
+    assert r.status_code == 200
+    # The panel keeps group-hover behavior...
+    assert "group-hover:block" in r.text
+    # ...but the dead-gap margin is gone, replaced by a flush + padding bridge.
+    assert "mt-1" not in r.text
+    assert "top-full pt-1" in r.text
 
 
 async def _seed_today_spend(session):
