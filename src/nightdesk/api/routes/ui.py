@@ -120,6 +120,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "external_tools": "partials/settings_external_tools_pane.html",
             "notifications": "partials/settings_notifications_pane.html",
             "projects": "partials/settings_projects_pane.html",
+            "labels": "partials/settings_labels_pane.html",
         }[category]
         return {
             "title": "Settings",
@@ -500,5 +501,48 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         url: str = Form(""),
     ):
         return await test_webhook(request, url)
+
+    # --- Labels settings -----------------------------------------------------
+
+    @router.get("/settings/labels", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_labels_page(request: Request, session: Session = Depends(get_session)):
+        from nightdesk.domain.labels import list_labels
+        ctx = _settings_context(session, category="labels", saved=False)
+        ctx["labels"] = list_labels(session)
+        return templates.TemplateResponse(request, "settings_shell.html", ctx)
+
+    @router.post("/settings/labels", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_labels_create(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(""),
+        color: str = Form(""),
+    ):
+        from nightdesk.domain.labels import create_label, list_labels, LabelNameTaken
+        name_clean = (name or "").strip()
+        if not name_clean:
+            raise HTTPException(422, "label name is required")
+        try:
+            create_label(session, name=name_clean, color=(color or "").strip())
+        except LabelNameTaken:
+            raise HTTPException(409, f"label name already taken: {name_clean}")
+        ctx = _settings_context(session, category="labels", saved=True)
+        ctx["labels"] = list_labels(session)
+        return templates.TemplateResponse(request, "settings_shell.html", ctx)
+
+    @router.post("/settings/labels/{label_id}/delete", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_labels_delete(
+        request: Request,
+        label_id: str,
+        session: Session = Depends(get_session),
+    ):
+        from nightdesk.domain.labels import delete_label, list_labels, LabelNotFound
+        try:
+            delete_label(session, label_id)
+        except LabelNotFound:
+            raise HTTPException(404, "label not found")
+        ctx = _settings_context(session, category="labels", saved=True)
+        ctx["labels"] = list_labels(session)
+        return templates.TemplateResponse(request, "settings_shell.html", ctx)
 
     return router

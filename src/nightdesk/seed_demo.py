@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Ticket, WorkerHeartbeat
+from nightdesk.domain.labels import LabelNameTaken, create_label, list_labels
 from nightdesk.db.session import make_engine, session_factory
 from nightdesk.domain.profiles import seed_default_profiles
 from nightdesk.domain.projects import ProjectNameTaken, create_project
@@ -54,6 +55,7 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "draft",
         "priority": 2,
+        "labels": ["ui/ux"],
     },
     {
         "title": "Write onboarding guide",
@@ -64,6 +66,7 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "draft",
         "priority": 0,
+        "labels": ["docs"],
     },
     # --- Queued ---
     {
@@ -75,6 +78,7 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "queued",
         "priority": 3,
+        "labels": ["backend", "cleanup"],
     },
     {
         "title": "Add rate-limit banner component",
@@ -85,6 +89,7 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "queued",
         "priority": 1,
+        "labels": ["ui/ux", "backend"],
     },
     # --- Running ---
     {
@@ -98,6 +103,7 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "running",
         "priority": 4,
+        "labels": ["backend", "infra"],
         "run": {
             "intent": "first_run",
             "exit_status": None,
@@ -114,6 +120,7 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "review",
         "priority": 2,
+        "labels": ["backend"],
         "run": {
             "intent": "first_run",
             "exit_status": "success",
@@ -129,6 +136,7 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "review",
         "priority": 3,
+        "labels": ["backend", "cleanup"],
         "run": {
             "intent": "first_run",
             "exit_status": "failed",
@@ -145,6 +153,7 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "review",
         "priority": 1,
+        "labels": ["backend", "infra"],
         "run": {
             "intent": "retry",
             "exit_status": "cancelled",
@@ -162,6 +171,7 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "archived",
         "priority": 0,
+        "labels": ["cleanup"],
         "run": {
             "intent": "first_run",
             "exit_status": "success",
@@ -176,12 +186,27 @@ _TICKET_SPECS: list[dict] = [
         ),
         "status": "archived",
         "priority": 1,
+        "labels": ["backend", "docs"],
         "run": {
             "intent": "first_run",
             "exit_status": "success",
             "transcript": "archived_success_short",
         },
     },
+]
+
+
+# ---------------------------------------------------------------------------
+# Label specifications
+# ---------------------------------------------------------------------------
+
+_LABEL_SPECS: list[dict] = [
+    {"name": "backend",  "color": "#3b82f6"},  # blue
+    {"name": "ui/ux",    "color": "#8b5cf6"},  # violet
+    {"name": "research", "color": "#f59e0b"},  # amber
+    {"name": "infra",    "color": "#ef4444"},  # red
+    {"name": "docs",     "color": "#10b981"},  # emerald
+    {"name": "cleanup",  "color": "#6b7280"},  # gray
 ]
 
 
@@ -471,12 +496,28 @@ def seed(
                 ).fetchone()
                 if existing:
                     project_ids.append(existing[0])
+        # --- Seed labels ---
+        # Idempotent: tolerate re-seeding onto an existing DB by reusing any
+        # label that already exists under the same name.
+        label_by_name: dict[str, object] = {}
+        for spec in _LABEL_SPECS:
+            try:
+                lbl = create_label(session, name=spec["name"], color=spec["color"])
+            except LabelNameTaken:
+                lbl = next(
+                    (l for l in list_labels(session) if l.name == spec["name"]),
+                    None,
+                )
+                if lbl is None:
+                    continue
+            label_by_name[lbl.name] = lbl
 
         tickets_by_status: dict[str, list[Ticket]] = {}
 
         for idx, raw_spec in enumerate(_TICKET_SPECS):
             spec = dict(raw_spec)  # copy to avoid mutating the module-level list
             run_spec = spec.pop("run", None)
+            label_names = spec.pop("labels", [])
             profile_id = profile_ids[idx % len(profile_ids)]
             # Spread tickets across the demo projects (leaving every third one
             # unassigned so "No project" is represented too).
@@ -494,6 +535,16 @@ def seed(
                 source_path=source_path,
                 priority=spec.get("priority", idx % 3),
             )
+
+            # Assign labels to the ticket.
+            if label_names and label_by_name:
+                from nightdesk.domain.labels import set_ticket_labels
+                label_ids = [
+                    label_by_name[n].id for n in label_names
+                    if n in label_by_name
+                ]
+                if label_ids:
+                    set_ticket_labels(session, ticket.id, label_ids)
 
             tickets_by_status.setdefault(ticket.status, []).append(ticket)
 

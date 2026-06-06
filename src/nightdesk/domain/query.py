@@ -31,7 +31,7 @@ from typing import Optional
 from sqlalchemy import and_, column, false, func, not_, or_, select, table, text
 from sqlalchemy.orm import Session, aliased
 
-from nightdesk.db.models import Profile, Project, Run, Ticket
+from nightdesk.db.models import Label, Profile, Project, Run, Ticket, ticket_labels
 
 
 # --------------------------------------------------------------------------- #
@@ -78,12 +78,12 @@ Node = object
 FIELD_ALIASES: frozenset[str] = frozenset({
     "project", "status", "latest_status", "latest", "outcome", "profile",
     "backend", "model", "cost", "priority", "created", "started", "finished",
-    "intent", "failure_kind",
+    "intent", "failure_kind", "label",
 })
 
 # Fields offered as facet dropdowns per resource (drives the UI + /search/suggest).
 TICKET_FACETS: tuple[str, ...] = (
-    "project", "status", "latest_status", "profile", "backend", "model",
+    "project", "status", "latest_status", "profile", "backend", "model", "label",
 )
 RUN_FACETS: tuple[str, ...] = (
     "outcome", "model", "project", "profile", "backend", "intent",
@@ -469,6 +469,21 @@ def _fts_select(ctx: _Ctx, node: Text):
     return select(fts.c.id).where(clause)
 
 
+def _label_pred(ctx: _Ctx, op: str, value: str):
+    """Ticket has a label matching the given name(s)."""
+    wanted = {v.strip().lower() for v in _split_csv(value)}
+    label_ids = [
+        l.id for l in ctx.session.scalars(select(Label)).all()
+        if l.name.lower() in wanted
+    ] or ["__missing__"]
+    sub = select(ticket_labels.c.ticket_id).where(
+        ticket_labels.c.label_id.in_(label_ids)
+    )
+    if op == "!=":
+        return ~Ticket.id.in_(sub)
+    return Ticket.id.in_(sub)
+
+
 def _ticket_predicate(ctx: _Ctx, field: str, op: str, value: str):
     if field == "project":
         return _project_pred(ctx, op, value)
@@ -488,6 +503,8 @@ def _ticket_predicate(ctx: _Ctx, field: str, op: str, value: str):
         return _priority_pred(Ticket.priority, op, value)
     if field == "created":
         return _date_pred(Ticket.created_at, op, value)
+    if field == "label":
+        return _label_pred(ctx, op, value)
     return false()
 
 
@@ -654,6 +671,9 @@ def suggest_values(
         from nightdesk.domain.priority import PRIORITY_SCALE
         for s in PRIORITY_SCALE:
             add(s["name"], s["label"])
+    elif field == "label":
+        for l in session.scalars(select(Label).order_by(Label.name.asc())):
+            add(l.name)
 
     if pref:
         out = [o for o in out

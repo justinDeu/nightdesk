@@ -39,11 +39,16 @@
             {{ ticket.profile.name }}
           </span>
         {% endif %}
+        {# Interactive single-value pickers (shared property-picker primitive). #}
         {% with tid=ticket.id, prop='priority', chip=property_chip('priority', ticket) %}
           {% include "partials/property_picker.html" %}
         {% endwith %}
         {% with tid=ticket.id, prop='project', chip=property_chip('project', ticket) %}
           {% include "partials/property_picker.html" %}
+        {% endwith %}
+        {# Label chips (read-only display here; editing happens in the modal). #}
+        {% with labels=ticket.labels %}
+          {% include "partials/label_chips.html" %}
         {% endwith %}
       </div>
 

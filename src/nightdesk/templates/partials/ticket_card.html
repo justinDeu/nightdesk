@@ -12,6 +12,7 @@
 {% set project = projects_by_id.get(t.project_id) if projects_by_id and t.project_id else none %}
 {% set outcome = run_outcomes.get(t.id) if run_outcomes else None %}
 {% set blocked_by = dep_titles.get(t.id) if dep_titles else None %}
+{% set ticket_labels = t.labels if t.labels is defined and t.labels else [] %}
 <li
   data-ticket-id="{{ t.id }}"
   class="group rounded-md border border-border bg-bg-elev-2 px-3 py-2 cursor-grab hover:border-accent transition-colors shadow-sm"
@@ -58,6 +59,12 @@
             blocked by {{ blocked_by | length }}
           </span>
         {% endif %}
+        {% for label in ticket_labels %}
+          <span
+            class="px-1.5 py-0.5 rounded text-[10px] font-medium border"
+            style="{% if label.color %}background-color: {{ label.color }}22; border-color: {{ label.color }}66; color: {{ label.color }};{% else %}background-color: var(--color-bg-elev-2); border-color: var(--color-border); color: var(--color-fg-muted);{% endif %}"
+          >{{ label.name }}</span>
+        {% endfor %}
       </div>
     </div>
     {# Open ticket detail (live transcript). stopPropagation so the parent
