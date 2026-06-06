@@ -16,8 +16,76 @@ from nightdesk.domain.tickets import (
     transition_status,
 )
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult
-from nightdesk.worker.run_one import RunOneConfig, _build_env, run_one
+from nightdesk.worker.run_one import (
+    RunOneConfig,
+    _build_env,
+    _capture_head_sha,
+    _record_workspace_resolution,
+    run_one,
+)
+from nightdesk.worker.workspace import Workspace, WorkspaceBundle
 _PROC_DIR_KW = "c" "wd"
+
+
+def _init_git_repo(path: Path) -> str:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], **{_PROC_DIR_KW: str(path)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], **{_PROC_DIR_KW: str(path)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], **{_PROC_DIR_KW: str(path)}, capture_output=True, check=True)
+    (path / "seed.txt").write_text("seed\n")
+    subprocess.run(["git", "add", "-A"], **{_PROC_DIR_KW: str(path)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], **{_PROC_DIR_KW: str(path)}, capture_output=True, check=True)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], **{_PROC_DIR_KW: str(path)},
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def test_capture_head_sha_returns_head(tmp_path):
+    head = _init_git_repo(tmp_path / "repo")
+    assert _capture_head_sha(str(tmp_path / "repo")) == head
+
+
+def test_capture_head_sha_non_git_returns_none(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert _capture_head_sha(str(plain)) is None
+
+
+def test_record_workspace_resolution_captures_run_start_sha(session, sample_profile, tmp_path):
+    repo = tmp_path / "repo"
+    head = _init_git_repo(repo)
+    ticket = create_ticket(
+        session,
+        title="ws",
+        prompt="p",
+        status="running",
+        priority=0,
+        profile_id=sample_profile.id,
+        source_path=str(repo),
+        workspaces=[{
+            "role": "primary",
+            "label": "primary",
+            "kind": "git_worktree",
+            "access": "read_write",
+            "source_path": str(repo),
+        }],
+    )
+    ws = Workspace(
+        path=repo,
+        kind="git_worktree",
+        source_path=repo,
+        repo_path=repo,
+        worktree_path=repo,
+        branch="feat",
+        base_ref="main",
+        base_sha=head,
+    )
+    bundle = WorkspaceBundle(primary=ws, workspaces=[ws])
+
+    _record_workspace_resolution(ticket, bundle)
+
+    assert ticket.workspaces[0].run_start_sha == head
 
 
 @dataclass

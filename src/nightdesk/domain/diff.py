@@ -1,8 +1,11 @@
 """Compute per-run git diffs from workspace metadata.
 
-Given a Run and its associated TicketWorkspace, runs ``git diff`` between
-the base and head commits and parses the result into structured per-file
-hunks suitable for JSON rendering or template consumption.
+Given a Run and its associated TicketWorkspace, runs ``git diff`` from the
+run's start commit to the worktree's current end state and parses the result
+into structured per-file hunks suitable for JSON rendering or template
+consumption. The diff reflects only what the run changed -- its own commits
+plus uncommitted working-tree changes -- not the whole branch versus its
+target.
 """
 from __future__ import annotations
 
@@ -70,13 +73,18 @@ def diff_repo_path(workspace) -> str:
 
 def compute_run_diff(
     repo_root: str,
-    base_sha: Optional[str],
-    head_sha: Optional[str],
+    start_sha: Optional[str],
     branch: Optional[str] = None,
 ) -> RunDiff:
-    """Run ``git diff`` and parse into structured FileDiff list.
+    """Diff what THIS run changed, parsed into a structured FileDiff list.
 
-    Handles missing SHAs, dirty working trees, and large diffs gracefully.
+    The range is ``start_sha`` (the worktree's HEAD captured at run start) to
+    the current end state -- i.e. the run's own commits *plus* any uncommitted
+    working-tree changes, including new untracked files. This deliberately does
+    not diff ``base_ref..HEAD``, which would report the whole branch versus its
+    target (every prior run's commits), not just this run's work.
+
+    Handles a missing start commit, an empty diff, and large diffs gracefully.
     """
     root = Path(repo_root)
     if not root.is_dir():
@@ -86,40 +94,34 @@ def compute_run_diff(
     if not (root / ".git").exists() and not _git_cmd(root, ["rev-parse", "--git-dir"]):
         return RunDiff(error="not a git repository")
 
-    # Resolve base/head. If head_sha is missing, use HEAD.
-    resolved_head = head_sha or _git_cmd(root, ["rev-parse", "HEAD"])
+    resolved_head = _git_cmd(root, ["rev-parse", "HEAD"])
     if not resolved_head:
         return RunDiff(error="cannot resolve HEAD")
 
-    # If base_sha is missing, use the parent of head (diff against the
-    # commit before head, showing just the last commit).
-    resolved_base = base_sha
-    if not resolved_base:
-        # Default to parent of head: show changes introduced by the branch.
-        resolved_base = _git_cmd(root, ["rev-parse", f"{resolved_head}^"])
-        if not resolved_base:
-            return RunDiff(error="cannot resolve base commit")
+    # Resolve the run's start commit. If it wasn't captured (legacy workspace),
+    # fall back to the parent of HEAD so we at least show the last commit plus
+    # uncommitted changes rather than over-reporting the whole branch.
+    resolved_start = start_sha
+    if not resolved_start:
+        resolved_start = _git_cmd(root, ["rev-parse", f"{resolved_head}^"]) or resolved_head
 
-    # Check for uncommitted changes.
-    dirty = False
-    status_output = _git_cmd(root, ["status", "--porcelain"])
-    if status_output and status_output.strip():
-        dirty = True
-
-    # Run unified diff.
+    # Diff the start commit against the working tree (committed + uncommitted
+    # tracked changes), then append any untracked files the run created.
     diff_text = _git_cmd(root, [
-        "diff", "--no-color", "--unified=3",
-        resolved_base, resolved_head,
+        "diff", "--no-color", "--unified=3", resolved_start,
     ])
     if diff_text is None:
         return RunDiff(
             error="git diff failed",
             branch=branch or "",
-            base_sha=resolved_base[:12],
+            base_sha=resolved_start[:12],
             head_sha=resolved_head[:12],
         )
 
-    result = _parse_unified_diff(diff_text)
+    untracked_text = _untracked_diff(root)
+    combined = "\n".join(t for t in (diff_text, untracked_text) if t)
+
+    result = _parse_unified_diff(combined)
 
     # Check size and truncate if needed.
     total_lines = sum(len(f.hunks) for f in result.files)
@@ -133,14 +135,55 @@ def compute_run_diff(
         result.hidden_lines = hidden_lines
 
     result.branch = branch or ""
-    result.base_sha = resolved_base[:12]
+    result.base_sha = resolved_start[:12]
     result.head_sha = resolved_head[:12]
     result.repo_root = str(root)
 
-    if dirty:
-        result.error = "working tree has uncommitted changes; diff shows committed changes only"
-
     return result
+
+
+def _untracked_diff(root: Path) -> str:
+    """Render new untracked files as synthetic "new file" diff blocks.
+
+    ``git diff <commit>`` ignores untracked files, but those are exactly the
+    new files a run creates and leaves uncommitted. We list them and render
+    each as an added-file diff via ``git diff --no-index`` (read-only; it
+    never touches the index or working tree).
+    """
+    listing = _git_cmd(root, ["ls-files", "--others", "--exclude-standard"])
+    if not listing:
+        return ""
+    blocks: list[str] = []
+    for rel_path in listing.splitlines():
+        rel_path = rel_path.strip()
+        if not rel_path:
+            continue
+        # --no-index exits non-zero (1) when files differ, so _git_cmd returns
+        # None; capture the diff directly instead.
+        block = _git_no_index_diff(root, rel_path)
+        if block:
+            blocks.append(block)
+    return "\n".join(blocks)
+
+
+def _git_no_index_diff(repo_path: Path, rel_path: str) -> Optional[str]:
+    """Return a synthetic added-file diff for an untracked file."""
+    try:
+        r = subprocess.run(
+            ["git", "diff", "--no-color", "--unified=3", "--no-index",
+             "/dev/null", rel_path],
+            **{_PROC_DIR_KW: str(repo_path)},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    # --no-index returns 1 when the files differ (always, here) and 0 only when
+    # identical; treat anything with output as the diff.
+    if r.stdout:
+        return r.stdout.rstrip("\n")
+    return None
 
 
 def _git_cmd(repo_path: Path, args: list[str]) -> Optional[str]:

@@ -196,6 +196,26 @@ def _apply_workspace_permissions(spec: PermissionSpec,
     return spec
 
 
+def _capture_head_sha(path: str) -> Optional[str]:
+    """Return the current HEAD commit SHA of the git tree at ``path``.
+
+    Best-effort: returns None for non-git paths or any git failure.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "-C", path, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    sha = r.stdout.strip()
+    return sha or None
+
+
 def _record_workspace_resolution(ticket: Ticket, bundle: WorkspaceBundle) -> None:
     if not getattr(ticket, "workspaces", None):
         return
@@ -211,6 +231,9 @@ def _record_workspace_resolution(ticket: Ticket, bundle: WorkspaceBundle) -> Non
         row.branch = ws.branch
         row.base_ref = ws.base_ref
         row.base_sha = ws.base_sha
+        # Snapshot the worktree's HEAD now, before the agent does any work, so
+        # the run diff can report start-commit..end-state for THIS run only.
+        row.run_start_sha = _capture_head_sha(str(ws.path))
         row.retention = ws.retention
         row.state = "active"
 

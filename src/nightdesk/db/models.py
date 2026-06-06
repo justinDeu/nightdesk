@@ -208,6 +208,10 @@ class TicketWorkspace(Base):
     base_ref: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     base_sha: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     head_sha: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Worktree HEAD captured at the moment this run started. The run diff is
+    # computed from here to the current end state so it reflects only what the
+    # run changed, not the whole branch versus its target.
+    run_start_sha: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     retention: Mapped[str] = mapped_column(String, default="preserve", nullable=False)
     state: Mapped[str] = mapped_column(String, default="pending", nullable=False)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
