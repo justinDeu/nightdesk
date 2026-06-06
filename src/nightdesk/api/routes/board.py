@@ -1452,6 +1452,8 @@ def build_router(
             raise HTTPException(404, "not found")
         except ProjectNotFound:
             raise HTTPException(404, "project not found")
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
         except ValueError as e:
@@ -1707,5 +1709,111 @@ def build_router(
             {"id": l.id, "name": l.name, "color": l.color}
             for l in results
         ]
+
+    # --- Inline label editing (list rows) -----------------------------------
+    #
+    # A popover-style label picker for inline use in list rows. Each label is
+    # a toggle button that adds or removes that single label, then re-renders
+    # the anchor chips + popover in place. The re-render keeps the popover open
+    # so the user can toggle multiple labels without re-opening.
+
+    def _render_label_anchor(request: Request, tid: str, ticket, all_labels) -> HTMLResponse:
+        """Render the label anchor (chips + popover) for a list row."""
+        ticket_label_ids = {l.id for l in (ticket.labels or [])} if ticket.labels else set()
+        return templates.TemplateResponse(
+            request,
+            "partials/inline_label_anchor.html",
+            {
+                "tid": tid,
+                "ticket_labels": ticket.labels or [],
+                "ticket_label_ids": ticket_label_ids,
+                "all_labels": all_labels,
+            },
+        )
+
+    @router.get(
+        "/board/tickets/{tid}/inline-labels",
+        response_class=HTMLResponse,
+        dependencies=[auth],
+    )
+    async def inline_label_picker(
+        tid: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Lazy-loaded label popover body for inline list-row editing.
+
+        Returns the toggle-based option list the label picker JS injects
+        under the label anchor. Labels are always fresh so the user sees
+        newly-created labels without a page reload.
+        """
+        from nightdesk.db.models import Label
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        all_labels = list(session.scalars(select(Label).order_by(Label.name.asc())))
+        ticket_label_ids = {l.id for l in (ticket.labels or [])} if ticket.labels else set()
+        return templates.TemplateResponse(
+            request,
+            "partials/inline_label_picker.html",
+            {
+                "tid": tid,
+                "all_labels": all_labels,
+                "ticket_labels": ticket.labels or [],
+                "ticket_label_ids": ticket_label_ids,
+            },
+        )
+
+    @router.post("/board/tickets/{tid}/label-toggle", dependencies=[auth])
+    async def label_toggle(
+        tid: str,
+        request: Request,
+        label_id: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        """Toggle a single label on a ticket for inline editing.
+
+        If the label is present, remove it; if absent, add it. Returns the
+        full label anchor (chips + popover) so the popover stays open for
+        further toggles.
+        """
+        from nightdesk.domain.labels import set_ticket_labels as _set_labels
+        from nightdesk.domain.labels import LabelNotFound as _LNF
+        from nightdesk.db.models import Label
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "ticket not found")
+        current_ids = [l.id for l in (ticket.labels or [])] if ticket.labels else []
+        if label_id in current_ids:
+            desired = [lid for lid in current_ids if lid != label_id]
+        else:
+            desired = current_ids + [label_id]
+        try:
+            ticket = _set_labels(session, tid, desired)
+        except _LNF as e:
+            raise HTTPException(404, str(e))
+        all_labels = list(session.scalars(select(Label).order_by(Label.name.asc())))
+        ticket_label_ids = {l.id for l in (ticket.labels or [])} if ticket.labels else set()
+        # For HTMX callers: return the full anchor so the popover stays open.
+        # For JSON callers: return the updated label list.
+        if request.headers.get("HX-Request") == "true":
+            return templates.TemplateResponse(
+                request,
+                "partials/inline_label_anchor.html",
+                {
+                    "tid": tid,
+                    "ticket_labels": ticket.labels or [],
+                    "ticket_label_ids": ticket_label_ids,
+                    "all_labels": all_labels,
+                    "_inline_label_open": True,
+                },
+            )
+        return JSONResponse({
+            "id": ticket.id,
+            "labels": [{"id": l.id, "name": l.name, "color": l.color}
+                       for l in (ticket.labels or [])],
+        })
 
     return router

@@ -36,6 +36,10 @@
        labels (add/remove many, inline create). Separate primitive from the
        single-value property picker above; shares no globals with it. #}
     <script src="{{ static_v('label_picker.js') }}" defer></script>
+    {# inline_label_picker.js: toggle-based inline label popover for list rows.
+       Opens a compact popover where each label is toggled on/off individually.
+       Follows the same patterns as property_picker.js. #}
+    <script src="{{ static_v('inline_label_picker.js') }}" defer></script>
   </head>
   <body class="bg-bg text-fg min-h-screen">
     <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">
