@@ -16,6 +16,7 @@ from nightdesk.api.routes import config as config_routes
 from nightdesk.api.routes import cron_jobs as cron_jobs_routes
 from nightdesk.api.routes import cron_page as cron_page_routes
 from nightdesk.api.routes import diagnostics as diagnostics_routes
+from nightdesk.api.routes import effective_config as effective_config_routes
 from nightdesk.api.routes import fs as fs_routes
 from nightdesk.api.routes import header as header_routes
 from nightdesk.api.routes import health
@@ -58,6 +59,7 @@ def create_app(
         worktree_root=str(worktree_root), transcript_root=str(transcript_root),
     ))
     app.include_router(search_routes.build_router(get_session, bearer_token))
+    app.include_router(effective_config_routes.build_api_router(get_session, bearer_token))
     app.include_router(transcript_routes.build_router(get_session, bearer_token))
     app.include_router(cron_jobs_routes.build_router(get_session, bearer_token))
 
@@ -104,6 +106,7 @@ def create_app(
     ))
     app.include_router(archive_routes.build_router(get_session, bearer_token, templates))
     app.include_router(ticket_page_routes.build_router(get_session, bearer_token, templates))
+    app.include_router(effective_config_routes.build_router(get_session, bearer_token, templates))
     app.include_router(cron_page_routes.build_router(get_session, bearer_token, templates))
     app.include_router(header_routes.build_router(
         get_session, bearer_token, templates,

@@ -1,0 +1,78 @@
+{# Effective execution-context preview.
+ #
+ # Reusable across ticket preview, project-defaults preview, promote-from-inbox,
+ # and profile/backend UX. Expects a single context var ``effective`` that is a
+ # ``nightdesk.domain.effective_config.EffectiveConfig`` (groups + issues).
+ #
+ # Each value renders a provenance "chip" so the reader can tell at a glance
+ # where a value comes from: global config, project default, profile, ticket
+ # override, or derived workspace behavior.
+ #}
+{% macro prov_chip(source) %}
+  {% set classes = {
+    'global':  'border-info/40 text-info bg-info/10',
+    'project': 'border-accent/40 text-accent bg-accent/10',
+    'profile': 'border-border text-fg-muted bg-bg-elev-2',
+    'ticket':  'border-warn/40 text-warn bg-warn/10',
+    'derived': 'border-border text-fg-muted bg-bg-elev-2 italic',
+  }[source] | default('border-border text-fg-muted bg-bg-elev-2') %}
+  {% set label = {
+    'global':  'Global config',
+    'project': 'Project default',
+    'profile': 'Profile',
+    'ticket':  'Ticket override',
+    'derived': 'Derived',
+  }[source] | default(source) %}
+  <span class="rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide {{ classes }}"
+        data-provenance="{{ source }}" title="{{ label }}">{{ label }}</span>
+{% endmacro %}
+
+<div class="space-y-4" data-effective-config>
+  {% if effective.issues %}
+    <div class="rounded border border-warn/40 bg-warn/10 p-3">
+      <div class="text-xs font-semibold text-warn uppercase tracking-wide mb-1">Configuration notes</div>
+      <ul class="list-disc list-inside space-y-0.5 text-xs text-warn">
+        {% for issue in effective.issues %}
+          <li data-config-issue>{{ issue }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  {% for group in effective.groups %}
+    <section class="rounded border border-border bg-bg-elev" data-config-group="{{ group.title }}">
+      <div class="border-b border-border px-3 py-2">
+        <h3 class="text-xs font-semibold text-fg-muted uppercase tracking-wide">{{ group.title }}</h3>
+      </div>
+      <dl class="divide-y divide-border">
+        {% for field in group.fields %}
+          <div class="px-3 py-2" data-config-field="{{ field.key }}">
+            <div class="flex items-start gap-2 flex-wrap">
+              <dt class="text-xs text-fg-muted min-w-[9rem]">{{ field.label }}</dt>
+              <dd class="flex-1 min-w-0 text-xs">
+                {% if field.items %}
+                  <ul class="space-y-1 font-mono">
+                    {% for item in field.items %}
+                      <li class="flex items-center gap-2 bg-bg-elev-2 border border-border rounded px-2 py-1">
+                        <span class="text-fg flex-1 break-all">{{ item.value }}</span>
+                        {{ prov_chip(item.source) }}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-mono text-fg break-all">{{ field.value if field.value is not none else "—" }}</span>
+                    {{ prov_chip(field.source) }}
+                  </div>
+                {% endif %}
+                {% if field.note %}
+                  <p class="text-[11px] text-fg-muted mt-1">{{ field.note }}</p>
+                {% endif %}
+              </dd>
+            </div>
+          </div>
+        {% endfor %}
+      </dl>
+    </section>
+  {% endfor %}
+</div>

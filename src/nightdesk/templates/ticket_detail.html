@@ -248,6 +248,22 @@
       </div>
     </section>
 
+    {# --- Effective execution context ------------------------------------- #
+     # The merged run context with provenance chips, resolved by the shared
+     # effective-config resolver. Lazily loaded so the heavy merge only runs
+     # when the detail page is open. Reuses the same partial as the project
+     # defaults / promote-from-inbox / profile preview surfaces.
+     #}
+    <section class="bg-bg-elev border border-border rounded p-4">
+      <h2 class="text-sm font-semibold text-fg-muted uppercase tracking-wide mb-1">Effective config</h2>
+      <p class="text-[11px] text-fg-muted mb-3">Merged run context with provenance. Not a prediction of run success.</p>
+      <div hx-get="/tickets/{{ ticket.id }}/effective-config"
+           hx-trigger="load"
+           hx-swap="innerHTML">
+        <div class="text-xs text-fg-muted italic">Resolving effective config…</div>
+      </div>
+    </section>
+
     {# --- Workspaces ------------------------------------------------------ #
      # Each workspace row reads top-to-bottom: identity pills (role / kind /
      # access / state), optional label, then a definition-list of git-shaped
