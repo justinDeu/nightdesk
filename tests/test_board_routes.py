@@ -185,6 +185,85 @@ async def test_create_ticket_via_form(cookie_client, session, profile):
     ]
 
 
+async def test_new_ticket_modal_uses_toolchain_picker(cookie_client, session):
+    r = await cookie_client.get("/board/new-ticket-modal")
+    assert r.status_code == 200
+    body = r.text
+    # Enable/disable are now checkboxes drawn from the known presets, not raw
+    # free-text textareas (Issue B).
+    assert 'name="toolchain_enable"' in body
+    assert 'name="toolchain_disable"' in body
+    assert "<textarea name=\"toolchain_enable\"" not in body
+    assert "<textarea name=\"toolchain_disable\"" not in body
+    assert "<textarea name=\"toolchain_extra_paths\"" not in body
+    # The picker is populated from the available toolchains.
+    assert 'value="user-python-tools"' in body
+    assert 'value="rust-user-tools"' in body
+    # Extra paths reuse the existing path-search component.
+    assert 'name="toolchain_extra_paths"' in body
+    assert "ndPathSuggest" in body
+    assert "nd-suggest-host" in body
+
+
+async def test_create_ticket_form_rejects_unknown_toolchain(cookie_client, session, profile):
+    r = await cookie_client.post(
+        "/board/tickets",
+        data={
+            "title": "bad-tc",
+            "profile_id": profile.id,
+            "source_path": "/tmp",
+            "toolchain_form": "1",
+            "toolchain_enable": ["does-not-exist"],
+        },
+    )
+    assert r.status_code == 422
+    assert "unknown toolchain" in r.text
+
+
+async def test_create_ticket_form_accepts_known_toolchain_and_extra_paths(cookie_client, session, profile):
+    r = await cookie_client.post(
+        "/board/tickets",
+        data={
+            "title": "good-tc",
+            "profile_id": profile.id,
+            "source_path": "/tmp",
+            "toolchain_form": "1",
+            "toolchain_enable": ["user-python-tools"],
+            # Repeated rows; duplicates are de-duped.
+            "toolchain_extra_paths": ["./scripts/bin", "./scripts/bin"],
+        },
+    )
+    assert r.status_code == 204
+    created = next(t for t in list_tickets(session, status="draft")
+                   if t.title == "good-tc")
+    assert created.toolchain_overrides == {
+        "enable": ["user-python-tools"],
+        "disable": [],
+        "extra_paths": ["./scripts/bin"],
+    }
+
+
+async def test_edit_modal_surfaces_unknown_toolchain_override(cookie_client, session, profile):
+    t = create_ticket(
+        session,
+        title="stale-tc",
+        prompt="",
+        profile_id=profile.id,
+        source_path="/tmp",
+        toolchain_overrides={"enable": ["user-python-tools"]},
+    )
+    # Simulate a preset that was removed after the ticket selected it.
+    t.toolchain_overrides = {"enable": ["since-deleted"], "disable": [], "extra_paths": []}
+    session.commit()
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # The unknown name is clearly flagged, not silently dropped.
+    assert "data-toolchain-stale" in body
+    assert "since-deleted" in body
+
+
 async def test_create_ticket_via_form_accepts_multiple_linked_workspaces(cookie_client, session, profile):
     r = await cookie_client.post(
         "/board/tickets",

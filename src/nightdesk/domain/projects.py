@@ -163,6 +163,22 @@ def apply_project_defaults(session: Session, fields: dict[str, Any]) -> dict[str
         out["workspaces"] = _default_workspaces(project, out)
     if project.default_workspace_mode and not out.get("workspace_mode"):
         out["workspace_mode"] = project.default_workspace_mode
+    # Apply the project's default toolchains when the ticket itself does not
+    # specify any toolchain overrides. Stored as an ``enable`` override so the
+    # default is captured on the ticket (and visible in the editor) rather than
+    # only being resolved implicitly at run time. ``create_ticket`` still runs
+    # ``assert_known_toolchains`` over the merged list, so a stale/unknown
+    # default surfaces as an error instead of being silently dropped.
+    default_toolchains = [
+        name for name in (project.default_toolchains or [])
+        if isinstance(name, str) and name.strip()
+    ]
+    if default_toolchains and not out.get("toolchain_overrides"):
+        out["toolchain_overrides"] = {
+            "enable": list(default_toolchains),
+            "disable": [],
+            "extra_paths": [],
+        }
     return out
 
 
