@@ -48,7 +48,12 @@
            hx-get="/cron/{{ job.id }}/edit" hx-target="#cron-pane" hx-swap="outerHTML" hx-push-url="true"
            class="px-2 py-1 text-xs border border-border rounded hover:bg-bg-elev-2 text-fg">Edit</a>
         <form method="post" action="/cron/{{ job.id }}/fire-now">
-          <button type="submit" class="px-2 py-1 text-xs border border-accent text-accent rounded hover:bg-accent hover:text-bg">Fire now</button>
+          <button type="submit" class="px-2 py-1 text-xs border border-accent text-accent rounded hover:bg-accent hover:text-bg"
+                  data-tooltip="Create a queued ticket now; it waits for the normal scheduler window.">Fire now</button>
+        </form>
+        <form method="post" action="/cron/{{ job.id }}/fire-now-and-run">
+          <button type="submit" class="px-2 py-1 text-xs border border-accent bg-accent/10 text-accent rounded hover:bg-accent hover:text-bg"
+                  data-tooltip="Create a ticket and run it immediately, past the queue and outside work hours — for testing this cron's output.">Fire &amp; run</button>
         </form>
         {% if job.enabled %}
           <form method="post" action="/cron/{{ job.id }}/disable">

@@ -288,20 +288,24 @@ def delete_cron_job(session: Session, cron_job_id: str) -> None:
 # --- materialization ----------------------------------------------------------
 
 
-def _ticket_from_template(session: Session, job: CronJob) -> Ticket:
+def _ticket_from_template(
+    session: Session, job: CronJob, *, run_now: Optional[bool] = None
+) -> Ticket:
     """Create an ordinary queued ticket from the template.
 
-    ``run_now`` follows the job's ``force_run`` flag: false (default) means the
+    ``run_now`` follows the job's ``force_run`` flag by default: false means the
     ticket waits for the normal scheduler (window + capacity); true means the
     scheduler dispatches it unconditionally, past the queue and outside the
-    active-hours window.
+    active-hours window. Pass ``run_now=True`` to override ``force_run`` and
+    dispatch this one ticket immediately (used by fire-now-and-run).
     """
+    effective_run_now = bool(job.force_run) if run_now is None else bool(run_now)
     return create_ticket(
         session,
         title=job.title,
         prompt=job.prompt,
         status="queued",
-        run_now=bool(job.force_run),
+        run_now=effective_run_now,
         priority=job.priority,
         profile_id=job.profile_id,
         workspaces=[{
@@ -348,13 +352,24 @@ def _claim_fire(session: Session, job_id: str, fire_at: datetime) -> Optional[Cr
     return fire
 
 
-def fire_now(session: Session, cron_job_id: str, *, now: Optional[datetime] = None) -> Ticket:
+def fire_now(
+    session: Session,
+    cron_job_id: str,
+    *,
+    now: Optional[datetime] = None,
+    run: bool = False,
+) -> Ticket:
     """Manually materialize a ticket from the template immediately.
 
     Bypasses ``overlap_policy`` (a manual fire is an explicit user request). The
     generated ticket's ``run_now`` follows the job's ``force_run`` flag, same as
     a scheduled fire. Uses sub-minute ``now()`` for ``fire_at`` so it won't
     collide with a minute-granular scheduled fire in the same minute.
+
+    When ``run=True`` (fire-now-and-run), the materialized ticket is forced to
+    ``run_now=True`` regardless of ``force_run`` so the scheduler dispatches it
+    immediately, past the queue and outside the active-hours window — letting you
+    test a cron's output without waiting for the schedule window.
     """
     job = get_cron_job(session, cron_job_id)
     fire_at = _as_utc(now) or datetime.now(timezone.utc)
@@ -365,7 +380,7 @@ def fire_now(session: Session, cron_job_id: str, *, now: Optional[datetime] = No
         fire = _claim_fire(session, job.id, fire_at)
         if fire is None:
             raise InvalidCronJob("could not claim a manual fire slot")
-    ticket = _ticket_from_template(session, job)
+    ticket = _ticket_from_template(session, job, run_now=True if run else None)
     fire.ticket_id = ticket.id
     job.last_fire_at = fire_at
     job.last_ticket_id = ticket.id

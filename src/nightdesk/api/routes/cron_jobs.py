@@ -98,6 +98,22 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidCronJob as e:
             raise HTTPException(422, str(e))
 
+    @router.post("/{cid}/fire-now-and-run", response_model=TicketOut,
+                 status_code=status.HTTP_201_CREATED)
+    async def fire_now_and_run_route(cid: str, session: Session = Depends(get_session)):
+        """Materialize a ticket from the template and run it immediately.
+
+        Same as fire-now, but the generated ticket is forced ``run_now=True`` so
+        the scheduler dispatches it right away (queue bypass) — for testing a
+        cron's output without waiting for its schedule window.
+        """
+        try:
+            return fire_now(session, cid, run=True)
+        except CronJobNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidCronJob as e:
+            raise HTTPException(422, str(e))
+
     @router.delete("/{cid}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete(cid: str, session: Session = Depends(get_session)):
         try:
