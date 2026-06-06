@@ -81,6 +81,13 @@ def create_app(
 
     templates.env.globals["static_v"] = _static_v
 
+    # Priority scale helpers for templates (label, css class, name lookup).
+    from nightdesk.domain.priority import priority_label, priority_css, priority_name, PRIORITY_SCALE
+    templates.env.globals["priority_label"] = priority_label
+    templates.env.globals["priority_css"] = priority_css
+    templates.env.globals["priority_name"] = priority_name
+    templates.env.globals["PRIORITY_SCALE"] = PRIORITY_SCALE
+
     # UTC ISO string for client-side localization (localize_time.js). Run/
     # ticket datetimes are UTC but come back from SQLite naive; emitting a bare
     # isoformat() would make the browser parse them as local time. Force a UTC

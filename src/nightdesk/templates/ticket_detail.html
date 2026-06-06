@@ -35,8 +35,10 @@
           </span>
         {% endif %}
         {% if ticket.priority %}
-          <span class="inline-block border border-border rounded px-2 py-0.5 bg-bg-elev-2 text-fg-muted">
-            prio {{ ticket.priority }}
+          {% set _p_label = priority_label(ticket.priority) %}
+          {% set _p_css = priority_css(ticket.priority) %}
+          <span class="inline-block border rounded-full px-2 py-0.5 text-[11px] {{ _p_css }}">
+            {{ _p_label }}
           </span>
         {% endif %}
       </div>

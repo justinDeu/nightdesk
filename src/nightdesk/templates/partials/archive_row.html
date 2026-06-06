@@ -23,7 +23,11 @@
   <td class="px-3 py-2 text-fg-muted font-mono text-xs">
     <span{% if row.finished_at %} data-ts-title="{{ iso_utc(row.finished_at) }}"{% endif %}>{{ row.finished_rel or '-' }}</span>
   </td>
-  <td class="px-3 py-2 font-mono text-xs">{{ row.priority }}</td>
+  <td class="px-3 py-2 text-xs">
+    {% set _p_label = priority_label(row.priority) %}
+    {% set _p_css = priority_css(row.priority) %}
+    <span class="rounded-full border px-1.5 py-0.5 text-[11px] {{ _p_css }}">{{ _p_label }}</span>
+  </td>
   <td class="px-3 py-2 text-right">
     <form action="/archive/tickets/{{ row.id }}/unarchive" method="post" class="inline">
       <button type="submit"

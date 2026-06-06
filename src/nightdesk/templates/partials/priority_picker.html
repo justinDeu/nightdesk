@@ -1,0 +1,64 @@
+{#
+  Inline priority picker for ticket cards and sidebar.
+
+  Expects:
+    ticket_id   - The ticket UUID string.
+    priority    - Current integer priority value (0-4).
+
+  Renders as a clickable chip that expands into a dropdown of the 5-level
+  scale. Clicking a level POSTs to /board/tickets/{id}/priority via HTMX
+  and swaps the chip in place.
+
+  Structure is designed so the shared property-picker ticket can replace
+  this include without changing the surrounding templates — the outer
+  data-priority-picker div and data-priority-chip span are the contract.
+#}
+{% set priority_levels = [
+  {"value": 0, "label": "No priority", "css": "text-fg-muted border-border"},
+  {"value": 1, "label": "Low",          "css": "text-fg-muted border-border"},
+  {"value": 2, "label": "Medium",       "css": "text-info border-info/40"},
+  {"value": 3, "label": "High",         "css": "text-warn border-warn/40"},
+  {"value": 4, "label": "Urgent",       "css": "text-danger border-danger/40"},
+] %}
+{% set current = priority_levels | selectattr('value', 'equalto', priority) | first %}
+{% if not current %}{% set current = priority_levels[0] %}{% endif %}
+
+<div data-priority-picker="{{ ticket_id }}" class="relative inline-block">
+  <button
+    type="button"
+    data-priority-chip="{{ ticket_id }}"
+    onclick="window.ndTogglePriorityPicker(this)"
+    class="rounded-full border px-2 py-0.5 text-[11px] {{ current.css }} cursor-pointer hover:brightness-125 transition-colors"
+    title="Priority: {{ current.label }} ({{ priority }}) — click to change"
+    aria-label="Priority: {{ current.label }}"
+  >{{ current.label }}</button>
+  <div
+    data-priority-dropdown="{{ ticket_id }}"
+    class="absolute left-0 z-50 mt-1 hidden min-w-[140px] rounded border border-border bg-bg-elev shadow-lg py-1"
+  >
+    {% for level in priority_levels %}
+    <button
+      type="button"
+      hx-post="/board/tickets/{{ ticket_id }}/priority"
+      hx-vals='{"priority": "{{ level.value }}"}'
+      hx-target="[data-priority-chip='{{ ticket_id }}']"
+      hx-swap="outerHTML"
+      hx-on::after-request="window.ndClosePriorityPicker('{{ ticket_id }}')"
+      class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent/10 text-left {{ 'font-medium' if level.value == priority else '' }}"
+    >
+      <span class="rounded-full border w-3 h-3 inline-block shrink-0
+        {%- if level.value == 0 %} border-border bg-bg
+        {%- elif level.value == 1 %} border-border bg-bg-elev-2
+        {%- elif level.value == 2 %} border-info/40 bg-info/20
+        {%- elif level.value == 3 %} border-warn/40 bg-warn/20
+        {%- elif level.value == 4 %} border-danger/40 bg-danger/20
+        {%- endif %}"
+      ></span>
+      <span class="text-fg">{{ level.label }}</span>
+      {% if level.value == priority %}
+      <span class="ml-auto text-accent">✓</span>
+      {% endif %}
+    </button>
+    {% endfor %}
+  </div>
+</div>

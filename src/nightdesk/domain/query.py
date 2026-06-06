@@ -335,6 +335,24 @@ def _number_pred(col, op: str, value: str):
     }.get(op, false())
 
 
+def _priority_pred(col, op: str, value: str):
+    """Priority comparison that accepts both named values (``urgent``) and
+    numeric strings (``3``). Named values are only resolved for equality
+    operators (``= : !=``); range operators (``> >= < <=``) always use
+    numeric comparison so ``priority>=3`` keeps working."""
+    from nightdesk.domain.priority import is_priority_name, resolve_priority
+    if op in ("=", ":", "!=") and is_priority_name(value):
+        resolved = resolve_priority(value)
+        if resolved is None:
+            return false()
+        return {
+            "=": col == resolved, ":": col == resolved,
+            "!=": col != resolved,
+        }.get(op, false())
+    # Numeric or range comparison.
+    return _number_pred(col, op, value)
+
+
 def _string_pred(col, op: str, value: str):
     if op == ":":
         return col.ilike(f"%{value}%")
@@ -467,7 +485,7 @@ def _ticket_predicate(ctx: _Ctx, field: str, op: str, value: str):
     if field == "cost":
         return _number_pred(ctx.latest_run.cost_usd, op, value)
     if field == "priority":
-        return _number_pred(Ticket.priority, op, value)
+        return _priority_pred(Ticket.priority, op, value)
     if field == "created":
         return _date_pred(Ticket.created_at, op, value)
     return false()
@@ -495,7 +513,7 @@ def _run_predicate(ctx: _Ctx, field: str, op: str, value: str):
     if field == "failure_kind":
         return _string_pred(Run.failure_kind, op, value)
     if field == "priority":
-        return _number_pred(Ticket.priority, op, value)
+        return _priority_pred(Ticket.priority, op, value)
     return false()
 
 
@@ -632,6 +650,10 @@ def suggest_values(
             if it and it not in seen:
                 seen.add(it)
                 add(it)
+    elif field == "priority":
+        from nightdesk.domain.priority import PRIORITY_SCALE
+        for s in PRIORITY_SCALE:
+            add(s["name"], s["label"])
 
     if pref:
         out = [o for o in out
