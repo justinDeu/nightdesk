@@ -1108,6 +1108,11 @@ def build_router(
         (``{priority, label}``) is preserved.
         """
         raw = (await _read_property_value(request, "priority", "value")).strip()
+        # The focused priority route is a write surface, so it rejects negative
+        # numeric priorities (the named scale starts at 0). The picker route
+        # only ever submits named levels, so this guard is harmless there.
+        if raw.lstrip("-").isdigit() and int(raw) < 0:
+            raise HTTPException(422, f"priority must be >= 0: {raw!r}")
         try:
             ticket = get_property("priority").apply(session, tid, raw)
         except TicketNotFound:
@@ -1122,7 +1127,66 @@ def build_router(
             {"priority": ticket.priority, "label": priority_label(ticket.priority)}
         )
 
+    # --- Focused metadata updates (cookie-auth / HTMX) -----------------------
+    #
+    # Per-property HTMX aliases that mirror the JSON API focused-update routes.
+    # They delegate to the SAME domain functions the shared property registry
+    # uses (transition_status / update_ticket_project / update_ticket_profile),
+    # so there is exactly one write path per property — the picker, keyboard
+    # shortcuts, and these focused routes can never diverge. Kept as stable
+    # aliases for the metadata-update-routes contract and its callers; the
+    # picker route ``/property/{prop}`` remains the primary UI surface.
 
+    @router.post("/board/tickets/{tid}/status", dependencies=[auth])
+    async def update_status_inline(
+        tid: str,
+        request: Request,
+        new_status: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth status transition for inline status changes and keyboard
+        shortcuts.  Respects the lifecycle state machine."""
+        try:
+            t = transition_status(session, tid, new_status)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        return JSONResponse({"id": t.id, "status": t.status})
+
+    @router.post("/board/tickets/{tid}/project", dependencies=[auth])
+    async def update_project_inline(
+        tid: str,
+        request: Request,
+        project_id: str = Form(""),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth project assignment for the property picker.  Empty
+        string clears the project."""
+        pid = project_id.strip() or None
+        try:
+            t = update_ticket_project(session, tid, pid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        return JSONResponse({"id": t.id, "project_id": t.project_id})
+
+    @router.post("/board/tickets/{tid}/profile", dependencies=[auth])
+    async def update_profile_inline(
+        tid: str,
+        request: Request,
+        profile_id: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth profile reassignment for the property picker."""
+        try:
+            t = update_ticket_profile(session, tid, profile_id)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
+        return JSONResponse({"id": t.id, "profile_id": t.profile_id})
 
     # --- Dependency management (cookie-auth) ---------------------------------
 
