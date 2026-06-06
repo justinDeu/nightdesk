@@ -86,8 +86,9 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
         return _config_out(session, row)
 
     # --- Schedule windows CRUD ---------------------------------------------
-    # Multi-window schedule model. The scheduler unions all matching windows
-    # for the current time/day and uses the most permissive max_parallel.
+    # Multi-window schedule model. When several windows match the current
+    # time/day the scheduler resolves max_parallel from the highest-precedence
+    # one — the first in `position` order (dragged to the top in Settings).
 
     @router.get("/config/windows", response_model=list[ScheduleWindowOut])
     async def list_windows(session: Session = Depends(get_session)):

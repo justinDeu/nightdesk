@@ -125,13 +125,26 @@ def test_single_match_run_now_bypasses_capacity(session, sample_profile):
 # --- Multi-window: overlapping windows -------------------------------------
 
 
-def test_overlapping_windows_use_highest_max_parallel(session, sample_profile):
-    """Two windows match the same instant; the most permissive cap wins."""
+def test_overlapping_windows_use_precedence_order(session, sample_profile):
+    """Two windows match the same instant; the higher-precedence one (lowest
+    position, i.e. dragged to the top) wins — not the most permissive cap."""
     _window(session, label="lo", start="22:00", end="07:00", max_parallel=2, position=0)
     _window(session, label="hi", start="20:00", end="08:00", max_parallel=6, position=1)
     for i in range(10):
         _qt(session, sample_profile, title=f"t{i}", run_now=False)
-    # Highest cap is 6, nothing running → 6 picked.
+    # position=0 (cap 2) wins on overlap regardless of the larger cap below it.
+    picked = pick_eligible(session, now=SATURDAY, total_running=0)
+    assert len(picked) == 2
+
+
+def test_overlapping_windows_precedence_follows_reorder(session, sample_profile):
+    """Flipping the positions flips the winner: the same two windows now resolve
+    to the other cap once the larger-cap window is dragged to the top."""
+    _window(session, label="lo", start="22:00", end="07:00", max_parallel=2, position=1)
+    _window(session, label="hi", start="20:00", end="08:00", max_parallel=6, position=0)
+    for i in range(10):
+        _qt(session, sample_profile, title=f"t{i}", run_now=False)
+    # position=0 is now the cap-6 window → 6 picked.
     picked = pick_eligible(session, now=SATURDAY, total_running=0)
     assert len(picked) == 6
 
@@ -213,3 +226,26 @@ def test_window_matches_utc_default_unchanged():
                        max_parallel=1, position=0)
     assert window_matches(w, datetime(2026, 5, 9, 23, 0, tzinfo=timezone.utc), ZoneInfo("UTC")) is True
     assert window_matches(w, datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc), ZoneInfo("UTC")) is False
+
+
+def test_capacity_for_first_matching_window_wins():
+    """capacity_for resolves to the cap of the first matching window in the
+    supplied (position-ordered) sequence — precedence, not most-permissive."""
+    from zoneinfo import ZoneInfo
+    from nightdesk.worker.scheduler import capacity_for
+    tz = ZoneInfo("UTC")
+    hi = ScheduleWindow(label="hi", day_mask=127, start="20:00", end="08:00",
+                        max_parallel=6, position=0)
+    lo = ScheduleWindow(label="lo", day_mask=127, start="22:00", end="07:00",
+                        max_parallel=2, position=1)
+    # Both cover SATURDAY 23:00; the first in the list (hi) wins.
+    assert capacity_for([hi, lo], SATURDAY, tz) == 6
+    # Reverse the precedence order → the other cap wins.
+    assert capacity_for([lo, hi], SATURDAY, tz) == 2
+    # No window matches midday → None (paused).
+    noon = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
+    assert capacity_for([hi, lo], noon, tz) is None
+    # An earlier-position window that does NOT match is skipped for one that does.
+    day = ScheduleWindow(label="day", day_mask=127, start="09:00", end="17:00",
+                         max_parallel=9, position=0)
+    assert capacity_for([day, lo], SATURDAY, tz) == 2

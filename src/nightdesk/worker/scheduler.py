@@ -57,14 +57,17 @@ def window_matches(window: ScheduleWindow, now: datetime, tz: ZoneInfo) -> bool:
 def capacity_for(windows: Sequence[ScheduleWindow], now: datetime, tz: ZoneInfo) -> Optional[int]:
     """Resolve the parallelism cap from windows matching ``now`` in ``tz``.
 
-    Returns the highest ``max_parallel`` among matching windows (most
-    permissive). Returns ``None`` when no window matches (capacity 0; run-now
-    still works).
+    When several windows overlap the same instant, precedence follows the
+    user-defined order: ``windows`` must be supplied sorted by ``position``
+    ascending, and the first (lowest-position) matching window wins. This is
+    the order the Settings editor exposes via drag-to-reorder, so dragging a
+    window above another makes its cap take precedence on overlap. Returns
+    ``None`` when no window matches (capacity 0; run-now still works).
     """
-    matching = [w for w in windows if window_matches(w, now, tz)]
-    if not matching:
-        return None
-    return max(w.max_parallel for w in matching)
+    for w in windows:
+        if window_matches(w, now, tz):
+            return w.max_parallel
+    return None
 
 
 def pick_eligible(
@@ -79,9 +82,10 @@ def pick_eligible(
        of window or capacity. These are user-forced and may push the live count
        above the cap (overflow).
     2. Resolve the capacity from ScheduleWindow rows matching ``now``. With at
-       least one matching window, ``max_parallel`` is the highest cap among
-       matching windows. With no matching window, capacity is 0 and no normal
-       jobs dispatch.
+       least one matching window, ``max_parallel`` is the cap of the
+       highest-precedence matching window (the first in ``position`` order, i.e.
+       the one dragged highest in the Settings editor). With no matching window,
+       capacity is 0 and no normal jobs dispatch.
     3. Fill remaining ``capacity = max(0, max_parallel - total_running)`` slots
        from ``status='queued' AND run_now=false``, ordered by
        ``(position ASC, priority DESC, created_at ASC)``.
@@ -113,7 +117,11 @@ def pick_eligible(
     except Exception:
         tz = ZoneInfo("UTC")
     windows = list(
-        session.scalars(select(ScheduleWindow).order_by(ScheduleWindow.position.asc()))
+        session.scalars(
+            select(ScheduleWindow).order_by(
+                ScheduleWindow.position.asc(), ScheduleWindow.id.asc()
+            )
+        )
     )
     max_parallel = capacity_for(windows, now, tz)
     if max_parallel is None:
