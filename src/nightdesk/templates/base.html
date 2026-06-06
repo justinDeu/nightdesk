@@ -40,6 +40,10 @@
        Opens a compact popover where each label is toggled on/off individually.
        Follows the same patterns as property_picker.js. #}
     <script src="{{ static_v('inline_label_picker.js') }}" defer></script>
+    {# bulk_select.js: selection model (X / Shift+J/K / Esc) + bulk action bar.
+       Reuses command_palette.js's cursor (window.ndBoardCursor); no new
+       picker/cursor logic. #}
+    <script src="{{ static_v('bulk_select.js') }}" defer></script>
   </head>
   <body class="bg-bg text-fg min-h-screen">
     <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">

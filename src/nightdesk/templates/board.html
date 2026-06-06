@@ -73,6 +73,11 @@
   </div>
 </div>
 
+{# Bulk action bar — lives outside the polled column sections and the sidebar
+   so the 3s board poll never wipes it. Shown by static/bulk_select.js while a
+   selection is active. #}
+{% include "partials/bulk_action_bar.html" %}
+
 {# Create-mode modal always present on the board so the "+ New ticket"
    button can open it directly without re-fetching the sidebar. The
    sidebar renders its own edit-mode instance with a different id when a
