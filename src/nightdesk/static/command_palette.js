@@ -188,6 +188,55 @@
     return true;
   }
 
+  // ---- board cursor: H/L navigation between columns ----------------------
+  // J/K walk the flat, column-ordered card list (so they already cross column
+  // boundaries top-to-bottom). H/L jump horizontally to the adjacent column,
+  // landing on the card at the same row (clamped), skipping empty columns.
+  // Built on the same boardCards()/setCursor() infra as J/K so it inherits
+  // the sidebar wiring and post-poll cursor restoration for free.
+  function boardColumns() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll("section[data-column]")
+    );
+  }
+
+  function moveColumn(delta) {
+    if (!document.getElementById("board-grid")) return false;
+    var cols = boardColumns();
+    if (!cols.length) return false;
+    var cur = document.querySelector("li[data-ticket-id][data-nd-cursor]");
+    if (!cur) {
+      // No cursor yet — drop onto the first available card.
+      setCursor(0);
+      return true;
+    }
+    // Locate the current column and the cursor's row within it.
+    var ci = -1, row = 0;
+    for (var i = 0; i < cols.length; i++) {
+      if (cols[i].contains(cur)) {
+        ci = i;
+        var cards = cols[i].querySelectorAll("li[data-ticket-id]");
+        for (var r = 0; r < cards.length; r++) {
+          if (cards[r] === cur) { row = r; break; }
+        }
+        break;
+      }
+    }
+    if (ci < 0) { setCursor(0); return true; }
+    // Step to the nearest non-empty column in the requested direction.
+    var flat = boardCards();
+    for (var target = ci + delta; target >= 0 && target < cols.length; target += delta) {
+      var colCards = cols[target].querySelectorAll("li[data-ticket-id]");
+      if (!colCards.length) continue;
+      var pick = colCards[Math.min(row, colCards.length - 1)];
+      for (var f = 0; f < flat.length; f++) {
+        if (flat[f] === pick) { setCursor(f); return true; }
+      }
+      return true;
+    }
+    return true; // no column that direction — keep the cursor where it is
+  }
+
   // Re-apply cursor highlight after HTMX swaps replace cards.
   function restoreCursor() {
     var sidebar = document.getElementById("sidebar");
@@ -468,7 +517,7 @@
           },
         },
         "labels": {
-          label: "Set labels: " + short, shortcut: "L", hint: "",
+          label: "Set labels: " + short, shortcut: "Shift L", hint: "",
           section: "Properties",
           run: function () { openLabelPicker(ctx); },
         },
@@ -852,6 +901,23 @@
       }
       return;
     }
+    // --- Board cursor: H/L jump between columns (vim-style left/right) ----
+    // Only intercept on the board; off-board (e.g. ticket detail) these keys
+    // fall through so Shift+L can still open the label picker there.
+    if (key === "h" || key === "H") {
+      if (document.getElementById("board-grid")) {
+        e.preventDefault();
+        moveColumn(-1);
+        return;
+      }
+    }
+    if (key === "l" && !e.shiftKey) {
+      if (document.getElementById("board-grid")) {
+        e.preventDefault();
+        moveColumn(1);
+        return;
+      }
+    }
 
     // --- Focused-ticket property actions ----------------------------------
     // These require a selected/focused ticket context.
@@ -882,8 +948,9 @@
       }
       return;
     }
-    // L — label picker (hook for future labels property; falls back gracefully)
-    if (key === "l" || key === "L") {
+    // Shift+L — label picker. Plain "l" is board column-navigation (handled
+    // above), so labels live on Shift+L to keep the H/J/K/L cursor spine whole.
+    if (key === "L" && e.shiftKey) {
       if (ctx) { e.preventDefault(); openLabelPicker(ctx); }
       return;
     }
