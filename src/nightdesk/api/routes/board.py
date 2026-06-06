@@ -528,6 +528,85 @@ def _list_labels_sidebar(session: Session) -> list:
     return _ll(session)
 
 
+def _list_run_outcomes(session: Session, tickets: list) -> dict[str, str]:
+    """Map ticket_id -> last-run status for the list view's "last run" column.
+
+    Batched (one query for all current runs) so a 500-row list doesn't fan out
+    into 500 ``get_run`` calls. A run with no ``exit_status`` yet but no
+    ``finished_at`` reads as ``running``; everything else uses the exit status.
+    Tickets with no current run are simply absent from the map.
+    """
+    from nightdesk.db.models import Run as _Run
+
+    run_ids = [t.current_run_id for t in tickets if getattr(t, "current_run_id", None)]
+    if not run_ids:
+        return {}
+    rows = session.scalars(select(_Run).where(_Run.id.in_(run_ids))).all()
+    by_id = {r.id: r for r in rows}
+    out: dict[str, str] = {}
+    for t in tickets:
+        rid = getattr(t, "current_run_id", None)
+        run = by_id.get(rid) if rid else None
+        if run is None:
+            continue
+        if run.exit_status:
+            out[t.id] = run.exit_status
+        elif run.finished_at is None:
+            out[t.id] = "running"
+    return out
+
+
+def _gather_list(session: Session, *, q: str = "", group: str = "status", order: str = "manual"):
+    """Assemble the list-view context.
+
+    Reuses ``_gather_board`` for the *exact same* filtered, status-bucketed
+    ticket set as the board (including the run-now visual reshuffle), then
+    regroups/reorders per the display settings. Building on the board's columns
+    is what guarantees query/display parity: the list can never show a ticket
+    the board wouldn't, or vice versa.
+    """
+    from nightdesk.domain import display
+
+    ctx = _gather_board(session, q=q)
+    columns = ctx["columns"]
+    all_tickets = [t for col in columns for t in col["tickets"]]
+
+    g = display.normalize_group(group)
+    o = display.normalize_order(order)
+    if g == "status":
+        # Reuse the board's status columns verbatim (parity), applying only the
+        # within-group ordering.
+        groups = [
+            {
+                "key": col["status"],
+                "label": col["label"],
+                "swatch_color": None,
+                "count": len(col["tickets"]),
+                "tickets": display.order_tickets(col["tickets"], o),
+            }
+            for col in columns
+        ]
+    else:
+        groups = display.group_tickets(
+            all_tickets,
+            group=g,
+            order=o,
+            projects_by_id=ctx["projects_by_id"],
+            profiles_by_id=ctx["profiles_by_id"],
+        )
+
+    return {
+        **ctx,
+        "groups": groups,
+        "group": g,
+        "order": o,
+        "group_options": display.LIST_GROUP_OPTIONS,
+        "order_options": display.LIST_ORDER_OPTIONS,
+        "list_run_outcomes": _list_run_outcomes(session, all_tickets),
+        "list_count": len(all_tickets),
+    }
+
+
 def _gather_board(session: Session, *, q: str = "", group: str = "status"):
     group = _normalize_group(group)
     ast = parse_query(q)
@@ -774,6 +853,85 @@ def build_router(
                 "run_outcomes": ctx["run_outcomes"],
                 "dep_titles": ctx["dep_titles"],
                 "all_labels": ctx["all_labels"],
+            },
+        )
+
+    @router.get("/list", response_class=HTMLResponse, dependencies=[auth])
+    async def list_view(
+        request: Request,
+        q: str = Query(default=""),
+        project: str = Query(default=""),
+        group: str = Query(default="status"),
+        order: str = Query(default="manual"),
+        session: Session = Depends(get_session),
+    ):
+        """First-class list/table surface for ticket management.
+
+        Renders the same filtered ticket set as the board (via ``_gather_list``
+        -> ``_gather_board``) as grouped rows, honouring the Display grouping
+        and ordering settings. Inline property edits reuse the shared picker;
+        the focused-row cursor reuses the board's keyboard spine (the rows live
+        under ``#board-grid`` / ``section[data-column]`` so command_palette.js
+        drives them unchanged).
+        """
+        query = _board_query(q, project)
+        ctx = _gather_list(session, q=query, group=group, order=order)
+        return templates.TemplateResponse(
+            request,
+            "list.html",
+            {
+                "title": "List",
+                "groups": ctx["groups"],
+                "group": ctx["group"],
+                "order": ctx["order"],
+                "group_options": ctx["group_options"],
+                "order_options": ctx["order_options"],
+                "list_count": ctx["list_count"],
+                "profiles": ctx["profiles"],
+                "profiles_by_id": ctx["profiles_by_id"],
+                "projects": ctx["projects"],
+                "projects_by_id": ctx["projects_by_id"],
+                "run_outcomes": ctx["list_run_outcomes"],
+                "dep_titles": ctx["dep_titles"],
+                "dep_all": ctx["dep_all"],
+                "selected_project": ctx["selected_project"],
+                "toolchain_options": ctx["toolchain_options"],
+                "all_labels": ctx["all_labels"],
+                "query": ctx["query"],
+                "mode": "create",
+                "ticket": None,
+            },
+        )
+
+    @router.get("/board/list-rows", response_class=HTMLResponse, dependencies=[auth])
+    async def list_rows(
+        request: Request,
+        q: str = Query(default=""),
+        project: str = Query(default=""),
+        group: str = Query(default="status"),
+        order: str = Query(default="manual"),
+        session: Session = Depends(get_session),
+    ):
+        """Grouped list rows as a swappable fragment.
+
+        Backs both the live poll and the group/order toolbar refresh on the
+        list page. Returns just the groups (no shell, no sidebar) so the
+        sidebar's in-progress edit survives every refresh, exactly like the
+        board's column poll.
+        """
+        ctx = _gather_list(session, q=_board_query(q, project), group=group, order=order)
+        return templates.TemplateResponse(
+            request,
+            "partials/list_groups.html",
+            {
+                "groups": ctx["groups"],
+                "group": ctx["group"],
+                "profiles_by_id": ctx["profiles_by_id"],
+                "projects_by_id": ctx["projects_by_id"],
+                "run_outcomes": ctx["list_run_outcomes"],
+                "dep_titles": ctx["dep_titles"],
+                "query": ctx["query"],
+                "list_count": ctx["list_count"],
             },
         )
 

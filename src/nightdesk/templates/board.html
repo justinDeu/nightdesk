@@ -352,6 +352,12 @@
     });
 
     bar.addEventListener('nd:view', function (e) {
+      // The List view is a dedicated page; navigate there carrying the query.
+      if (e.detail.view === 'list') {
+        var lq = e.detail.query || '';
+        window.location = lq ? ('/list?q=' + enc(lq)) : '/list';
+        return;
+      }
       view = e.detail.view === 'runs' ? 'runs' : 'tickets';
       var q = e.detail.query || '';
       if (view === 'runs') {
