@@ -22,3 +22,5 @@
 .nd-prop-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nd-prop-check{margin-left:auto;color:var(--color-accent)}
 .nd-prop-msg{padding:.5rem .75rem;font-size:.75rem;color:var(--color-fg-muted)}
+/* ---- Keyboard cursor highlight ---- */
+li[data-ticket-id].nd-cursor-active{outline:2px solid var(--color-info);outline-offset:-1px;background:color-mix(in oklab, var(--color-info) 6%, var(--color-bg-elev-2))!important;transition:outline .1s,background .1s}

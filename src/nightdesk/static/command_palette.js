@@ -1,12 +1,13 @@
 // command_palette.js
 //
 // Keyboard navigation for the nightdesk board: a Ctrl/Cmd+K command palette
-// plus a small set of global shortcuts. Pure client JS, no build step.
+// plus a small set of global shortcuts and focused-ticket property actions.
+// Pure client JS, no build step.
 //
 // PROGRESSIVE ENHANCEMENT: every action here is also reachable by mouse
 // (header search box, "+ New ticket" button, per-ticket Run-now / Archive /
-// Requeue controls, nav links). If this script fails to load nothing breaks;
-// the shortcuts simply don't fire.
+// Requeue controls, nav links, property picker chips). If this script fails
+// to load nothing breaks; the shortcuts simply don't fire.
 //
 // AUTH NOTE: the JSON API under /api/v1/* is bearer-only and 401s for the
 // browser's cookie session, so the palette talks to the cookie-authed UI
@@ -74,17 +75,34 @@
     return qi === q.length ? score : null;
   }
 
-  // ---- current ticket context -------------------------------------------
-  // On /tickets/{id} the focused ticket is the page. On the board it's the
-  // card whose edit-sidebar is open (data-selected-ticket-id).
+  // ---- cursor / focused ticket -------------------------------------------
+  // On /tickets/{id} the focused ticket is the page. On the board the cursor
+  // tracks a position in the card list; J/K move it, and the sidebar opens
+  // when the cursor lands on a card. The cursor delegates to the existing
+  // HTMX sidebar swap so property pickers in the sidebar are always wired.
 
+  function cssEscape(s) {
+    if (window.CSS && CSS.escape) return CSS.escape(s);
+    return String(s).replace(/["\\\]]/g, "\\$&");
+  }
+
+  // Get the currently focused ticket context. On the board this is the
+  // cursor-selected card; on /tickets/{id} it's the page ticket.
   function currentTicket() {
+    // Ticket detail page — the focused ticket IS the page.
     var m = location.pathname.match(/^\/tickets\/([^/]+)\/?$/);
     if (m) {
       return { id: m[1], title: document.title.replace(/ \| nightdesk$/, "") };
     }
+    // Board — use the sidebar's selected ticket, or fall back to the
+    // cursor-tracked card.
     var sidebar = document.getElementById("sidebar");
     var sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    if (!sel) {
+      // Check the keyboard cursor
+      var cursor = document.querySelector("li[data-ticket-id][data-nd-cursor]");
+      if (cursor) sel = cursor.getAttribute("data-ticket-id");
+    }
     if (sel) {
       var card = document.querySelector('li[data-ticket-id="' + cssEscape(sel) + '"]');
       var title = card
@@ -95,9 +113,94 @@
     return null;
   }
 
-  function cssEscape(s) {
-    if (window.CSS && CSS.escape) return CSS.escape(s);
-    return String(s).replace(/["\\\]]/g, "\\$&");
+  // ---- board cursor: J/K navigation between cards ------------------------
+
+  // Collect all board cards in visual order (left-to-right columns, then
+  // top-to-bottom within each column).
+  function boardCards() {
+    var out = [];
+    var columns = document.querySelectorAll("section[data-column]");
+    columns.forEach(function (col) {
+      col.querySelectorAll("li[data-ticket-id]").forEach(function (card) {
+        out.push(card);
+      });
+    });
+    return out;
+  }
+
+  function cursorIndex() {
+    var cards = boardCards();
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].hasAttribute("data-nd-cursor")) return i;
+    }
+    // Fall back to the sidebar-selected card.
+    var sidebar = document.getElementById("sidebar");
+    var sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    if (sel) {
+      for (var j = 0; j < cards.length; j++) {
+        if (cards[j].getAttribute("data-ticket-id") === sel) return j;
+      }
+    }
+    return -1;
+  }
+
+  function setCursor(idx) {
+    var cards = boardCards();
+    if (!cards.length) return;
+    // Clamp to bounds.
+    if (idx < 0) idx = 0;
+    if (idx >= cards.length) idx = cards.length - 1;
+
+    // Clear old cursor highlight.
+    var prev = document.querySelector("li[data-ticket-id][data-nd-cursor]");
+    if (prev) {
+      prev.removeAttribute("data-nd-cursor");
+      prev.classList.remove("nd-cursor-active");
+    }
+
+    var card = cards[idx];
+    card.setAttribute("data-nd-cursor", "");
+    card.classList.add("nd-cursor-active");
+    card.scrollIntoView({ block: "nearest" });
+
+    // Open the sidebar for this card (same as clicking it), so property
+    // pickers are wired in the sidebar.
+    var tid = card.getAttribute("data-ticket-id");
+    var sidebar = document.getElementById("sidebar");
+    if (sidebar && typeof window.htmx !== "undefined") {
+      window.htmx.ajax("GET", "/board/sidebar?ticket_id=" + encodeURIComponent(tid), {
+        target: "#sidebar",
+        swap: "outerHTML",
+      });
+    }
+  }
+
+  function moveCursor(delta) {
+    // Only works on the board page.
+    if (!document.getElementById("board-grid")) return false;
+    var idx = cursorIndex();
+    if (idx < 0) {
+      // No cursor yet — place it on the first card.
+      setCursor(0);
+      return true;
+    }
+    setCursor(idx + delta);
+    return true;
+  }
+
+  // Re-apply cursor highlight after HTMX swaps replace cards.
+  function restoreCursor() {
+    var sidebar = document.getElementById("sidebar");
+    var sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    if (!sel) return;
+    var cards = boardCards();
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].getAttribute("data-ticket-id") === sel) {
+        cards[i].setAttribute("data-nd-cursor", "");
+        cards[i].classList.add("nd-cursor-active");
+        return;
+      }
+    }
   }
 
   // ---- ticket actions (cookie-authed UI endpoints) -----------------------
@@ -178,6 +281,82 @@
   }
   window.ndOpenCreateTicket = openCreateTicket;
 
+  // ---- focused ticket: property action shortcuts -------------------------
+  // These require a focused ticket (from the cursor on the board, or the
+  // page context on ticket detail). They reuse the same picker/update paths
+  // as mouse actions: ndOpenPropertyPicker for L/P/S, postAction for A/R,
+  // the edit modal for E, and a future peek panel for Space.
+
+  function openEditForTicket(ctx) {
+    // Board: the sidebar already carries an edit modal for the selected ticket.
+    var editModal = document.getElementById("ticket-edit-modal");
+    if (editModal) {
+      openModalEl(editModal);
+      return;
+    }
+    // Ticket detail page also has the edit modal.
+    editModal = document.querySelector('dialog[id="ticket-edit-modal"]');
+    if (editModal) {
+      openModalEl(editModal);
+      return;
+    }
+    // Fallback: navigate to the ticket page.
+    location.href = "/tickets/" + encodeURIComponent(ctx.id);
+  }
+
+  function smartRunOrRequeue(ctx) {
+    // "R" triggers run-now if the ticket can be run, otherwise requeue.
+    // The valid run-now statuses: draft, queued, review, archived.
+    // The valid requeue statuses: review, archived.
+    // We try run-now first; if the ticket is in running we show feedback.
+    // Use the sidebar or card to infer status.
+    var card = document.querySelector('li[data-ticket-id="' + cssEscape(ctx.id) + '"]');
+    var status = "";
+    if (card) {
+      // Card is inside a column with data-status.
+      var col = card.closest("section[data-column]");
+      if (col) status = col.getAttribute("data-column") || "";
+    }
+    // On ticket detail, look for status chip.
+    if (!status) {
+      var chip = document.querySelector('[data-property-chip="' + ctx.id + ':status"]');
+      if (chip) status = (chip.textContent || "").trim().toLowerCase();
+    }
+
+    if (status === "running") {
+      flashStatus("Ticket is already running");
+      return;
+    }
+    if (status === "review" || status === "archived") {
+      runTicketAction("requeue", ctx.id, ctx.title);
+      return;
+    }
+    // Default: try run-now (works for draft, queued, and any other valid state).
+    runTicketAction("run-now", ctx.id, ctx.title);
+  }
+
+  function openLabelPicker(ctx) {
+    // Labels may not be registered in the property picker yet. Check for the
+    // "labels" property in the registry; if absent, flash a message and leave
+    // a clear hook for the future implementation.
+    var ok = window.ndOpenPropertyPicker &&
+      window.ndOpenPropertyPicker(ctx.id, "labels");
+    if (!ok) {
+      flashStatus("Label picker: select a ticket first, or labels not yet configured");
+    }
+  }
+
+  function openPeek(ctx) {
+    // Lightweight peek panel — hook for future implementation.
+    // If a peek panel component exists (window.ndPeekTicket), delegate to it.
+    // Otherwise flash a placeholder message.
+    if (typeof window.ndPeekTicket === "function") {
+      window.ndPeekTicket(ctx.id);
+      return;
+    }
+    flashStatus("Peek: " + (ctx.title || ctx.id));
+  }
+
   // ---- command model -----------------------------------------------------
   // Each command: { label, hint, run }. Built fresh per open so the current
   // ticket context is accurate.
@@ -188,7 +367,7 @@
     if (ctx) {
       var short = ctx.title.length > 40 ? ctx.title.slice(0, 39) + "…" : ctx.title;
       cmds.push({
-        label: "Run now: " + short, hint: "selected ticket",
+        label: "Run now: " + short, hint: "R",
         run: function () { runTicketAction("run-now", ctx.id, ctx.title); },
       });
       cmds.push({
@@ -196,25 +375,36 @@
         run: function () { location.href = "/tickets/" + encodeURIComponent(ctx.id); },
       });
       cmds.push({
-        label: "Archive: " + short, hint: "selected ticket",
+        label: "Archive: " + short, hint: "A",
         run: function () { runTicketAction("archive", ctx.id, ctx.title); },
       });
       cmds.push({
-        label: "Requeue: " + short, hint: "selected ticket",
+        label: "Requeue: " + short, hint: "R",
         run: function () { runTicketAction("requeue", ctx.id, ctx.title); },
+      });
+      cmds.push({
+        label: "Edit: " + short, hint: "E",
+        run: function () { openEditForTicket(ctx); },
+      });
+      cmds.push({
+        label: "Peek: " + short, hint: "Space",
+        run: function () { openPeek(ctx); },
       });
       // Metadata edits reuse the ONE shared property-picker primitive: the
       // command just opens the relevant chip's popover (on the sidebar or the
       // detail header) rather than shipping its own metadata UI.
-      ["priority", "status", "project"].forEach(function (prop) {
-        var nice = prop.charAt(0).toUpperCase() + prop.slice(1);
+      [
+        { prop: "labels", key: "L", nice: "Label" },
+        { prop: "priority", key: "P", nice: "Priority" },
+        { prop: "status", key: "S", nice: "Status" },
+      ].forEach(function (p) {
         cmds.push({
-          label: "Set " + prop + ": " + short,
-          hint: "property",
+          label: "Set " + p.nice + ": " + short,
+          hint: p.key,
           run: function () {
             var ok = window.ndOpenPropertyPicker &&
-              window.ndOpenPropertyPicker(ctx.id, prop);
-            if (!ok) flashStatus("Open the ticket to change its " + prop);
+              window.ndOpenPropertyPicker(ctx.id, p.prop);
+            if (!ok) flashStatus("Open the ticket to change its " + p.nice.toLowerCase());
           },
         });
       });
@@ -454,6 +644,10 @@
     // dialog behavior deal with keys.
     if ((palette() && palette().open) || (cheatsheet() && cheatsheet().open)) return;
 
+    // If a property picker menu is open, don't hijack keys — the picker's
+    // own handler manages Arrow/Enter/Escape.
+    if (document.querySelector("[data-property-menu]:not(.hidden)")) return;
+
     var now = Date.now();
     var hadG = now - lastG < 800;
 
@@ -474,6 +668,72 @@
       return;
     }
     if (key === "?") { e.preventDefault(); openCheatSheet(); return; }
+
+    // --- Board cursor: J/K navigate cards (vim-style down/up) ------------
+    if (key === "j" || key === "J") {
+      if (document.getElementById("board-grid")) {
+        e.preventDefault();
+        moveCursor(1);
+      }
+      return;
+    }
+    if (key === "k" || key === "K") {
+      if (document.getElementById("board-grid")) {
+        e.preventDefault();
+        moveCursor(-1);
+      }
+      return;
+    }
+
+    // --- Focused-ticket property actions ----------------------------------
+    // These require a selected/focused ticket context.
+    var ctx = currentTicket();
+
+    // E — edit the focused ticket
+    if (key === "e" || key === "E") {
+      if (ctx) { e.preventDefault(); openEditForTicket(ctx); }
+      return;
+    }
+    // P — priority picker
+    if (key === "p" || key === "P") {
+      if (ctx) {
+        e.preventDefault();
+        var ok = window.ndOpenPropertyPicker &&
+          window.ndOpenPropertyPicker(ctx.id, "priority");
+        if (!ok) flashStatus("Open the ticket to change its priority");
+      }
+      return;
+    }
+    // S — status picker
+    if (key === "s" || key === "S") {
+      if (ctx) {
+        e.preventDefault();
+        var ok2 = window.ndOpenPropertyPicker &&
+          window.ndOpenPropertyPicker(ctx.id, "status");
+        if (!ok2) flashStatus("Open the ticket to change its status");
+      }
+      return;
+    }
+    // L — label picker (hook for future labels property; falls back gracefully)
+    if (key === "l" || key === "L") {
+      if (ctx) { e.preventDefault(); openLabelPicker(ctx); }
+      return;
+    }
+    // A — archive the focused ticket
+    if (key === "a" || key === "A") {
+      if (ctx) { e.preventDefault(); runTicketAction("archive", ctx.id, ctx.title); }
+      return;
+    }
+    // R — run/requeue the focused ticket
+    if (key === "r" || key === "R") {
+      if (ctx) { e.preventDefault(); smartRunOrRequeue(ctx); }
+      return;
+    }
+    // Space — peek (hook for future lightweight preview panel)
+    if (key === " ") {
+      if (ctx) { e.preventDefault(); openPeek(ctx); }
+      return;
+    }
   }
 
   // ---- init --------------------------------------------------------------
@@ -507,6 +767,14 @@
       var clean = location.pathname + location.hash;
       history.replaceState(null, "", clean);
     }
+
+    // Restore cursor highlight after HTMX column swaps on the board.
+    document.body.addEventListener("htmx:afterSwap", function () {
+      restoreCursor();
+    });
+    document.body.addEventListener("htmx:oobAfterSwap", function () {
+      restoreCursor();
+    });
   }
 
   if (document.readyState === "loading") {
