@@ -251,8 +251,10 @@ class ScheduleWindow(Base):
     """A named time window with its own parallelism cap.
 
     Replaces the single ``window_start``/``window_end``/``max_parallel`` triple
-    on ConfigRow with a list of windows. The scheduler unions all matching
-    windows for the current time/day and uses the most permissive cap.
+    on ConfigRow with a list of windows. When several windows match the current
+    time/day the scheduler uses the cap of the highest-precedence one — the
+    first in ``position`` order (lowest ``position`` = dragged to the top in the
+    Settings editor). ``position`` is therefore the overlap tie-breaker.
 
     ``day_mask`` is a bitmask: Mon=1 Tue=2 Wed=4 Thu=8 Fri=16 Sat=32 Sun=64.
     Bit ``i`` corresponds to ``1 << datetime.weekday()`` (Mon=0..Sun=6). The

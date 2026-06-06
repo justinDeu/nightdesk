@@ -2,10 +2,12 @@
 //
 // Each window is a card: label, day chips (Mon=0..Sun=6 -> day_mask bit 1<<d,
 // matching the scheduler), a time range or "All day" (00:00->00:00), and a
-// max-parallel footer. Cards serialize to the hidden #windows_json field; the
-// detected IANA timezone goes to #schedule_timezone. The resolved view overlays
-// all windows per weekday and shows the effective capacity (most permissive,
-// matching capacity_for) per time segment.
+// max-parallel footer. Cards serialize to the hidden #windows_json field in
+// DOM order, and that order IS the precedence: cards are drag-reorderable and
+// the server stores their order as `position`. The detected IANA timezone goes
+// to #schedule_timezone. The resolved view overlays all windows per weekday and
+// shows the effective capacity per time segment, where an overlap resolves to
+// the highest card in the list (first in order — matching capacity_for).
 
 (function () {
   var DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -53,6 +55,14 @@
 
     var head = document.createElement("div");
     head.className = "flex items-center gap-2";
+    var grip = document.createElement("button");
+    grip.type = "button";
+    grip.textContent = "⠿";
+    grip.dataset.windowHandle = "1";
+    grip.setAttribute("aria-label", "Drag to reorder window (sets overlap precedence)");
+    grip.title = "Drag to reorder — higher windows win when windows overlap";
+    grip.className = "cursor-grab select-none px-1 text-fg-muted hover:text-fg leading-none";
+    head.appendChild(grip);
     var label = document.createElement("input");
     label.type = "text"; label.value = w.label || "";
     label.placeholder = "window name";
@@ -205,11 +215,12 @@
   }
 
   function pickWinner(cover) {
-    var winner = null;
-    cover.forEach(function (c) {
-      if (!winner || c.window.max_parallel > winner.window.max_parallel) winner = c;
-    });
-    return winner;
+    // Precedence follows the editor order: the window highest in the list wins
+    // when several overlap. `contribs` is built by walking `windows` in DOM
+    // order, and `cover` (a filter of it) preserves that order, so cover[0] is
+    // the earliest/highest-precedence window covering this segment. Mirrors the
+    // server's capacity_for (first matching window by position wins).
+    return cover.length ? cover[0] : null;
   }
 
   // Resolve one weekday to merged winner-only segments: [{a,b,winner}] covering 0..1440.
@@ -546,6 +557,19 @@
 
   function addCard(w) {
     editor.appendChild(cardEl(w));
+  }
+
+  // Drag-to-reorder. The DOM order of cards IS the precedence order: sync()
+  // serializes #windows_json in document order and the server stores that as
+  // `position`, so dragging a card above another makes its cap win on overlap.
+  if (typeof Sortable !== "undefined") {
+    new Sortable(editor, {
+      animation: 120,
+      handle: "[data-window-handle]",
+      draggable: "[data-window]",
+      ghostClass: "opacity-50",
+      onEnd: sync,
+    });
   }
 
   if (addBtn) {

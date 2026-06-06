@@ -140,6 +140,47 @@ async def test_settings_post_persists_windows_and_timezone(cookie_client, sessio
     assert rows[0].max_parallel == 3
 
 
+async def test_settings_post_assigns_position_by_list_order(cookie_client, session):
+    """Drag order is encoded as the array order in windows_json; the server
+    stamps `position` from that order so precedence persists across reload."""
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    # The editor omits `position` and relies on array order (lowest = top).
+    windows = [
+        {"label": "first", "day_mask": 127, "start": "00:00", "end": "00:00", "max_parallel": 4},
+        {"label": "second", "day_mask": 127, "start": "00:00", "end": "00:00", "max_parallel": 1},
+    ]
+    r = await cookie_client.post(
+        "/settings/scheduling",
+        data={
+            "polling_interval_seconds": "5",
+            "cc_minimum_version": "2.1.80",
+            "windows_json": json.dumps(windows),
+            "schedule_timezone": "UTC",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    rows = session.query(ScheduleWindow).order_by(ScheduleWindow.position).all()
+    assert [(w.label, w.position) for w in rows] == [("first", 0), ("second", 1)]
+
+    # Reorder (drag "second" above "first") and re-save: positions flip.
+    r = await cookie_client.post(
+        "/settings/scheduling",
+        data={
+            "polling_interval_seconds": "5",
+            "cc_minimum_version": "2.1.80",
+            "windows_json": json.dumps([windows[1], windows[0]]),
+            "schedule_timezone": "UTC",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    rows = session.query(ScheduleWindow).order_by(ScheduleWindow.position).all()
+    assert [(w.label, w.position) for w in rows] == [("second", 0), ("first", 1)]
+
+
 async def test_settings_post_replaces_existing_windows(cookie_client, session):
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.add(ScheduleWindow(label="old", day_mask=127, start="00:00",
