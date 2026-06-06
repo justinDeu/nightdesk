@@ -27,6 +27,40 @@
         data-provenance="{{ source }}" title="{{ label }}">{{ label }}</span>
 {% endmacro %}
 
+{# A single merged-list entry: the value plus its provenance chip. #}
+{% macro item_row(item) %}
+  <li class="flex items-center gap-2 bg-bg-elev-2 border border-border rounded px-2 py-1" data-config-item>
+    <span class="text-fg flex-1 break-all">{{ item.value }}</span>
+    {{ prov_chip(item.source) }}
+  </li>
+{% endmacro %}
+
+{# Progressive disclosure for long path / tool lists. The first ``head`` rows
+ # are always visible; anything beyond is tucked into a native <details> so the
+ # preview stays scannable while every entry remains in the DOM (and findable in
+ # tests / search). Short lists render flat with no toggle. #}
+{% macro item_list(items, head=4) %}
+  {% set overflow = items|length - head %}
+  <ul class="space-y-1 font-mono">
+    {% for item in (items if overflow < 2 else items[:head]) %}
+      {{ item_row(item) }}
+    {% endfor %}
+  </ul>
+  {% if overflow >= 2 %}
+    <details class="mt-1 group" data-config-overflow>
+      <summary class="cursor-pointer select-none text-[11px] text-accent hover:underline list-none">
+        <span class="group-open:hidden">Show {{ overflow }} more…</span>
+        <span class="hidden group-open:inline">Show fewer</span>
+      </summary>
+      <ul class="space-y-1 font-mono mt-1">
+        {% for item in items[head:] %}
+          {{ item_row(item) }}
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+{% endmacro %}
+
 <div class="space-y-4" data-effective-config>
   {% if effective.issues %}
     <div class="rounded border border-warn/40 bg-warn/10 p-3">
@@ -51,14 +85,7 @@
               <dt class="text-xs text-fg-muted min-w-[9rem]">{{ field.label }}</dt>
               <dd class="flex-1 min-w-0 text-xs">
                 {% if field.items %}
-                  <ul class="space-y-1 font-mono">
-                    {% for item in field.items %}
-                      <li class="flex items-center gap-2 bg-bg-elev-2 border border-border rounded px-2 py-1">
-                        <span class="text-fg flex-1 break-all">{{ item.value }}</span>
-                        {{ prov_chip(item.source) }}
-                      </li>
-                    {% endfor %}
-                  </ul>
+                  {{ item_list(field.items) }}
                 {% else %}
                   <div class="flex items-center gap-2 flex-wrap">
                     <span class="font-mono text-fg break-all">{{ field.value if field.value is not none else "—" }}</span>

@@ -440,7 +440,7 @@ def _collect_issues(inp: ResolveInput, spec: PermissionSpec) -> list[str]:
     if backend and backend not in _available_backends():
         issues.append(
             f"Unknown backend {backend!r}; known backends: "
-            f"X"
+            f"{', '.join(_available_backends())}."
         )
 
     if spec.permission_mode and spec.permission_mode not in _CC_PERMISSION_MODES:

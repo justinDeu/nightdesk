@@ -28,6 +28,73 @@ from nightdesk.domain.effective_config import (
 from nightdesk.domain.tickets import get_ticket, TicketNotFound
 
 
+# Scalar fields the draft editors post directly. Structured fields
+# (workspaces / toolchain overrides / additional dirs) are parsed from the
+# ticket form below via the shared board helpers so a live preview reflects
+# exactly what ``create_ticket`` would persist.
+_SCALAR_DRAFT_FIELDS = (
+    "profile_id", "project_id", "source_path",
+    "workspace_mode", "base_ref", "title", "prompt",
+)
+
+
+def _draft_from_form(form) -> dict:
+    """Normalize a ticket create/edit form post into a draft dict.
+
+    Reuses the same form parsers the board create/update routes use so the
+    preview never re-implements workspace / toolchain / additional-dir
+    interpretation. Parsing is *lenient*: a half-typed or absent path must not
+    422 the preview, so validation errors fall back to a best-effort primary
+    workspace built from the raw scalar fields. The resolver then reports the
+    gap as a configuration note rather than the request failing.
+    """
+    # Imported lazily to avoid a route-module import cycle at app construction.
+    from nightdesk.api.routes import board as board_routes
+
+    fields: dict = {}
+    for key in _SCALAR_DRAFT_FIELDS:
+        if key in form and form[key] != "":
+            fields[key] = form[key]
+
+    # use_worktree drives the primary workspace kind in the board parser.
+    has_workspace = bool(
+        form.get("source_path") or form.get("primary_source_path")
+        or form.get("use_worktree") or form.getlist("linked_workspace_path")
+    )
+    if has_workspace:
+        try:
+            _mode, _wn, _wp, workspaces = board_routes._workspace_payload_from_form(form)
+            fields["workspaces"] = workspaces
+        except HTTPException:
+            # Best-effort primary so partial / mid-typing input still previews.
+            raw = (form.get("source_path") or form.get("primary_source_path") or "").strip()
+            kind = "git_worktree" if form.get("use_worktree") else "directory"
+            fields["workspaces"] = [{
+                "role": "primary",
+                "label": "primary",
+                "kind": kind,
+                "access": "read_write",
+                "source_path": raw or None,
+                "worktree_name": (form.get("worktree_name") or "").strip() or None,
+                "worktree_path": (form.get("worktree_path") or "").strip() or None,
+                "base_ref": (form.get("base_ref") or "").strip() or None,
+            }]
+
+    if (form.get("toolchain_form") == "1" or form.getlist("toolchain_enable")
+            or form.getlist("toolchain_disable") or form.getlist("toolchain_extra_paths")):
+        fields["toolchain_overrides"] = board_routes._toolchain_overrides_from_form(form)
+
+    if "additional_dirs" in form:
+        try:
+            fields["additional_dirs"] = board_routes._parse_additional_dirs(
+                form.getlist("additional_dirs")
+            )
+        except HTTPException:
+            pass
+
+    return fields
+
+
 def build_api_router(get_session, bearer_token: str) -> APIRouter:
     """JSON resolver endpoints (bearer auth)."""
     router = APIRouter(prefix="/api/v1", tags=["effective-config"])
@@ -90,10 +157,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
                 fields = {}
         else:
             form = await request.form()
-            for key in ("profile_id", "project_id", "source_path",
-                        "workspace_mode", "base_ref", "title"):
-                if key in form and form[key] != "":
-                    fields[key] = form[key]
+            fields = _draft_from_form(form)
         effective = resolve_for_draft(session, fields)
         return templates.TemplateResponse(
             request, "partials/effective_config.html",

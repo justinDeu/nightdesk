@@ -484,6 +484,30 @@
         </div>
       </section>
 
+      {# --- Execution context preview ----------------------------------- #
+       # A compact, read-only summary of how project + profile + ticket
+       # overrides merge into the actual run context, with provenance chips.
+       # Lives on the same reusable partial as the ticket-detail / sidebar
+       # previews. It refreshes (debounced) whenever a project / profile /
+       # workspace / toolchain field changes — the listener and the
+       # nd-config-refresh dispatch live in ticket_form.js. The whole form is
+       # posted via hx-include so the preview reflects exactly what would be
+       # persisted, including toolchain overrides and linked workspaces.
+       #}
+      <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm" data-effective-preview-section>
+        <div class="mb-2">
+          <h3 class="text-sm font-medium text-fg">Execution context preview</h3>
+          <p class="mt-0.5 text-xs leading-snug text-fg-muted">How project, profile, and overrides merge into what this ticket will actually run with. Updates as you edit — not a prediction of run success.</p>
+        </div>
+        <div data-effective-preview
+             hx-post="/effective-config/preview"
+             hx-trigger="nd-config-refresh"
+             hx-include="closest form"
+             hx-swap="innerHTML">
+          <div class="text-xs italic text-fg-muted" data-effective-preview-placeholder>Resolving execution context…</div>
+        </div>
+      </section>
+
     </div>
 
     {# Sticky footer. #}
