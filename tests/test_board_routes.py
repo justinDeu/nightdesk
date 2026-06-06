@@ -1114,3 +1114,42 @@ async def test_sidebar_omits_branch_for_directory_workspace(cookie_client, sessi
     assert r.status_code == 200
     body = r.text
     assert "Branch:" not in body
+
+
+async def test_sidebar_shows_effective_context_and_toolchain_together(
+    cookie_client, session, profile
+):
+    """Integration check for the ux-execution-context merge point.
+
+    The sidebar partial is where two source branches overlapped: the
+    effective-config execution-context block (ux/ticket-execution-preview) and
+    the toolchain provenance summary (ux/toolchain-picker). After the merge both
+    must render for an edit-mode ticket that has project-inherited toolchains —
+    neither feature may shadow the other.
+    """
+    project = create_project(
+        session, name="MergePoint", source_path="/tmp/mergepoint",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="merge-point",
+        prompt="p",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+    )
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+
+    # Effective-config execution-context block: lazily loaded from the shared
+    # resolver endpoint via the same partial used on the ticket detail page.
+    assert "Execution context" in body
+    assert "data-sidebar-effective-config" in body
+    assert f"/tickets/{t.id}/effective-config" in body
+
+    # Toolchain provenance summary coexists, showing the project-inherited preset.
+    assert "Toolchain" in body
+    assert "Inherited" in body
+    assert "user-python-tools" in body
