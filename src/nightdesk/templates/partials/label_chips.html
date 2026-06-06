@@ -1,0 +1,14 @@
+{#
+  Label chips — compact inline badges for a ticket's labels.
+  Expects: labels (list of Label objects).
+  Optional: compact (bool, default false) — use even smaller sizing.
+#}
+{% if labels %}
+  {% set _compact = compact if compact is defined else false %}
+  {% for label in labels %}
+    <span
+      class="inline-flex items-center px-1.5 {{ 'py-0.5' if not _compact else 'py-px' }} rounded text-[10px] font-medium border"
+      style="{% if label.color %}background-color: {{ label.color }}22; border-color: {{ label.color }}66; color: {{ label.color }};{% else %}background-color: var(--color-bg-elev-2); border-color: var(--color-border); color: var(--color-fg-muted);{% endif %}"
+    >{{ label.name }}</span>
+  {% endfor %}
+{% endif %}

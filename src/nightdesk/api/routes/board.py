@@ -19,6 +19,12 @@ from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.toolchains import current_config, toolchain_options
+from nightdesk.domain.priority import resolve_priority, PRIORITY_MIN, PRIORITY_MAX
+from nightdesk.domain.properties import (
+    PROPERTY_REGISTRY,
+    get_property,
+    property_chip,
+)
 from nightdesk.domain.tickets import (
     CyclicDependency,
     DependencyNotFound,
@@ -26,6 +32,7 @@ from nightdesk.domain.tickets import (
     TicketNotFound,
     add_dependency,
     archive,
+    bulk_update_priority, bulk_update_profile, bulk_update_project, bulk_update_status,
     create_ticket,
     delete_ticket,
     get_ticket,
@@ -38,7 +45,9 @@ from nightdesk.domain.tickets import (
     transition_status,
     transition_with_position,
     update_ticket,
+    update_ticket_priority, update_ticket_profile, update_ticket_project,
 )
+from nightdesk.domain.profiles import ProfileNotFound
 
 
 _COLUMNS = [
@@ -305,6 +314,12 @@ def _toolchain_options(session: Session) -> list[dict]:
     return toolchain_options(current_config(session))
 
 
+def _list_labels_sidebar(session: Session) -> list:
+    """Fetch all labels for template contexts (sidebar, modals)."""
+    from nightdesk.domain.labels import list_labels as _ll
+    return _ll(session)
+
+
 def _gather_board(session: Session, *, q: str = ""):
     ast = parse_query(q)
     selected_project = _sole_project(session, ast)
@@ -355,6 +370,10 @@ def _gather_board(session: Session, *, q: str = ""):
         for status, label in _COLUMNS
     ]
 
+    # All labels for the label picker on ticket cards.
+    from nightdesk.domain.labels import list_labels as _list_labels
+    all_labels = _list_labels(session)
+
     return {
         "columns": columns,
         "profiles": profiles,
@@ -374,6 +393,7 @@ def _gather_board(session: Session, *, q: str = ""):
             limit=500,
         ),
         "toolchain_options": _toolchain_options(session),
+        "all_labels": all_labels,
     }
 
 
@@ -493,6 +513,7 @@ def build_router(
                 "projects_by_id": ctx["projects_by_id"],
                 "selected_project": ctx["selected_project"],
                 "toolchain_options": ctx["toolchain_options"],
+                "all_labels": ctx["all_labels"],
                 "query": ctx["query"],
                 "view": view,
                 # Only assembled when the runs view is the initial render.
@@ -527,6 +548,7 @@ def build_router(
                 "projects_by_id": ctx["projects_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
                 "dep_titles": ctx["dep_titles"],
+                "all_labels": ctx["all_labels"],
             },
         )
 
@@ -581,6 +603,7 @@ def build_router(
                 "dep_all": list_tickets(session, limit=500),
                 "projects": list_projects(session),
                 "toolchain_options": _toolchain_options(session),
+                "all_labels": _list_labels_sidebar(session),
             },
         )
 
@@ -604,6 +627,7 @@ def build_router(
                 "projects": list_projects(session),
                 "selected_project": _project_filter(session, project)[1],
                 "toolchain_options": _toolchain_options(session),
+                "all_labels": _list_labels_sidebar(session),
             },
         )
 
@@ -638,6 +662,7 @@ def build_router(
                 prompt=(form.get("prompt") or ""),
                 profile_id=profile_id,
                 project_id=project_id,
+                priority=int(form.get("priority") or 0),
                 workspaces=workspaces,
                 additional_dirs=_parse_additional_dirs(form.getlist("additional_dirs")),
                 toolchain_overrides=_toolchain_overrides_from_form(form),
@@ -657,9 +682,115 @@ def build_router(
                     add_dependency(session, new_ticket.id, dep_id)
                 except (CyclicDependency, TicketNotFound):
                     pass
+        # Optional labels from the label picker.
+        if form.get("labels_form") == "1":
+            from nightdesk.domain.labels import set_ticket_labels as _sl
+            label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+            if label_ids:
+                try:
+                    _sl(session, new_ticket.id, label_ids)
+                except Exception:
+                    pass
         resp = Response(status_code=204)
         resp.headers["HX-Redirect"] = "/"
         return resp
+
+    # --- Bulk metadata update (cookie-auth / HTMX) ----------------------------
+    # Registered BEFORE /board/tickets/{tid} routes so FastAPI does not
+    # match "bulk" as a tid parameter.
+
+    @router.post("/board/tickets/bulk/priority", dependencies=[auth])
+    async def bulk_priority_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk priority update.  Accepts ``ticket_ids`` (comma-
+        separated) and ``priority`` as form fields.  Returns JSON with updated
+        and skipped lists."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        try:
+            priority = int(form.get("priority", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(422, "priority must be an integer")
+        if priority < 0:
+            raise HTTPException(422, "priority must be >= 0")
+        updated, skipped = bulk_update_priority(session, ticket_ids, priority)
+        return JSONResponse({
+            "updated": [{"id": t.id, "priority": t.priority} for t in updated],
+            "skipped": skipped,
+        })
+
+    @router.post("/board/tickets/bulk/status", dependencies=[auth])
+    async def bulk_status_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk status transition.  Each ticket is transitioned
+        independently; invalid transitions are skipped."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        new_status = (form.get("status") or "").strip()
+        if not new_status:
+            raise HTTPException(422, "status required")
+        try:
+            updated, skipped = bulk_update_status(session, ticket_ids, new_status)
+        except InvalidTransition as e:
+            raise HTTPException(422, str(e))
+        return JSONResponse({
+            "updated": [{"id": t.id, "status": t.status} for t in updated],
+            "skipped": skipped,
+        })
+
+    @router.post("/board/tickets/bulk/project", dependencies=[auth])
+    async def bulk_project_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk project assignment."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        project_id = (form.get("project_id") or "").strip() or None
+        try:
+            updated, skipped = bulk_update_project(session, ticket_ids, project_id)
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        return JSONResponse({
+            "updated": [{"id": t.id, "project_id": t.project_id} for t in updated],
+            "skipped": skipped,
+        })
+
+    @router.post("/board/tickets/bulk/profile", dependencies=[auth])
+    async def bulk_profile_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk profile reassignment."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        profile_id = (form.get("profile_id") or "").strip()
+        if not profile_id:
+            raise HTTPException(422, "profile_id required")
+        try:
+            updated, skipped = bulk_update_profile(session, ticket_ids, profile_id)
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
+        return JSONResponse({
+            "updated": [{"id": t.id, "profile_id": t.profile_id} for t in updated],
+            "skipped": skipped,
+        })
 
     @router.post("/board/tickets/{tid}", dependencies=[auth])
     async def update(
@@ -689,6 +820,8 @@ def build_router(
             fields["prompt"] = form.get("prompt") or ""
         if "project_id" in form:
             fields["project_id"] = (form.get("project_id") or "").strip() or None
+        if "priority" in form:
+            fields["priority"] = int(form.get("priority") or 0)
         if "source_path" in form or "primary_source_path" in form:
             if form.get("workspace_form") == "1":
                 workspace_mode, worktree_name, worktree_path, workspaces = _workspace_payload_from_form(form)
@@ -724,6 +857,15 @@ def build_router(
                     remove_dependency(session, tid, dep_id)
                 except DependencyNotFound:
                     pass
+        # Reconcile labels from the label picker. Only touched when the
+        # labels section was part of the submission (labels_form=1).
+        if form.get("labels_form") == "1":
+            from nightdesk.domain.labels import set_ticket_labels as _sl
+            label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+            try:
+                _sl(session, tid, label_ids)
+            except Exception:
+                pass
         # Return the sidebar partial re-rendered in edit mode for the same
         # ticket so HTMX swaps just the rail in place. Previously this
         # returned HX-Redirect to "/", which reloaded the board and dropped
@@ -739,7 +881,8 @@ def build_router(
              "deps_downstreams": list_dependents(session, tid),
              "dep_all": list_tickets(session, limit=500),
              "projects": list_projects(session),
-             "toolchain_options": _toolchain_options(session)},
+             "toolchain_options": _toolchain_options(session),
+             "all_labels": _list_labels_sidebar(session)},
         )
 
     @router.post("/board/tickets/{tid}/archive", dependencies=[auth])
@@ -772,7 +915,8 @@ def build_router(
              "deps_downstreams": list_dependents(session, tid),
              "dep_all": list_tickets(session, limit=500),
              "projects": list_projects(session),
-             "toolchain_options": _toolchain_options(session)},
+             "toolchain_options": _toolchain_options(session),
+             "all_labels": _list_labels_sidebar(session)},
         )
 
     @router.post("/board/tickets/{tid}/cancel", dependencies=[auth])
@@ -873,6 +1017,211 @@ def build_router(
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
         return Response(status_code=204)
+
+    # --- Shared property picker (priority / status / project / …) ------------
+    #
+    # ONE menu route + ONE commit route back the reusable property-picker
+    # primitive for every editable ticket metadata field. The per-property
+    # behaviour lives in domain.properties; nothing here is property-specific
+    # beyond looking the descriptor up by name. This is the "focused metadata
+    # update route" the picker calls instead of submitting the full ticket
+    # modal.
+
+    def _render_chip(request: Request, prop: str, ticket) -> HTMLResponse:
+        """Render the single property chip partial for an HTMX swap."""
+        return templates.TemplateResponse(
+            request,
+            "partials/property_chip.html",
+            {"tid": ticket.id, "prop": prop, "chip": property_chip(prop, ticket)},
+        )
+
+    @router.get(
+        "/board/tickets/{tid}/picker/{prop}",
+        response_class=HTMLResponse,
+        dependencies=[auth],
+    )
+    async def property_picker_menu(
+        tid: str,
+        prop: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Lazy-loaded popover body for a property picker.
+
+        Returns the option list (searchable for properties that opt in) the
+        picker JS injects under the chip. Options are computed fresh per open
+        so e.g. the project list and the valid status transitions are always
+        current.
+        """
+        try:
+            descriptor = get_property(prop)
+        except KeyError:
+            raise HTTPException(404, f"unknown property {prop!r}")
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        options = [o.as_dict() for o in descriptor.options(session, ticket)]
+        return templates.TemplateResponse(
+            request,
+            "partials/property_picker_menu.html",
+            {
+                "tid": tid,
+                "prop": prop,
+                "label": descriptor.label,
+                "searchable": descriptor.searchable,
+                "options": options,
+            },
+        )
+
+    async def _read_property_value(request: Request, *keys: str) -> str:
+        """Pull the submitted value from a form field or JSON body.
+
+        Accepts the canonical ``value`` key (picker) plus any property-specific
+        aliases (e.g. the legacy ``priority`` field) so HTMX forms and JSON API
+        clients share one parser.
+        """
+        content_type = request.headers.get("content-type") or ""
+        if "application/json" in content_type:
+            body = await request.json()
+            for k in keys:
+                if k in body:
+                    return str(body.get(k, ""))
+            return ""
+        form = await request.form()
+        for k in keys:
+            if k in form:
+                return str(form.get(k, ""))
+        return ""
+
+    @router.post("/board/tickets/{tid}/property/{prop}", dependencies=[auth])
+    async def update_property(
+        tid: str,
+        prop: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Focused metadata update for the shared property picker.
+
+        HTMX callers get the re-rendered chip to swap in place; JSON API
+        callers get ``{property, value, label}``.
+        """
+        try:
+            descriptor = get_property(prop)
+        except KeyError:
+            raise HTTPException(404, f"unknown property {prop!r}")
+        raw = (await _read_property_value(request, "value", prop)).strip()
+        try:
+            ticket = descriptor.apply(session, tid, raw)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+        if request.headers.get("HX-Request") == "true":
+            return _render_chip(request, prop, ticket)
+        chip = property_chip(prop, ticket)
+        return JSONResponse(
+            {"property": prop, "value": raw, "label": chip["label"]}
+        )
+
+    @router.post("/board/tickets/{tid}/priority", dependencies=[auth])
+    async def update_priority(
+        tid: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Back-compatible priority update.
+
+        Delegates to the shared property registry so there is exactly one
+        priority code path. Kept as a stable alias for the JSON API and any
+        existing clients posting a ``priority`` field; the response shape
+        (``{priority, label}``) is preserved.
+        """
+        raw = (await _read_property_value(request, "priority", "value")).strip()
+        # The focused priority route is a write surface, so it rejects negative
+        # numeric priorities (the named scale starts at 0). The picker route
+        # only ever submits named levels, so this guard is harmless there.
+        if raw.lstrip("-").isdigit() and int(raw) < 0:
+            raise HTTPException(422, f"priority must be >= 0: {raw!r}")
+        try:
+            ticket = get_property("priority").apply(session, tid, raw)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ValueError:
+            raise HTTPException(422, f"invalid priority value: {raw!r}")
+
+        if request.headers.get("HX-Request") == "true":
+            return _render_chip(request, "priority", ticket)
+        from nightdesk.domain.priority import priority_label
+        return JSONResponse(
+            {"priority": ticket.priority, "label": priority_label(ticket.priority)}
+        )
+
+    # --- Focused metadata updates (cookie-auth / HTMX) -----------------------
+    #
+    # Per-property HTMX aliases that mirror the JSON API focused-update routes.
+    # They delegate to the SAME domain functions the shared property registry
+    # uses (transition_status / update_ticket_project / update_ticket_profile),
+    # so there is exactly one write path per property — the picker, keyboard
+    # shortcuts, and these focused routes can never diverge. Kept as stable
+    # aliases for the metadata-update-routes contract and its callers; the
+    # picker route ``/property/{prop}`` remains the primary UI surface.
+
+    @router.post("/board/tickets/{tid}/status", dependencies=[auth])
+    async def update_status_inline(
+        tid: str,
+        request: Request,
+        new_status: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth status transition for inline status changes and keyboard
+        shortcuts.  Respects the lifecycle state machine."""
+        try:
+            t = transition_status(session, tid, new_status)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        return JSONResponse({"id": t.id, "status": t.status})
+
+    @router.post("/board/tickets/{tid}/project", dependencies=[auth])
+    async def update_project_inline(
+        tid: str,
+        request: Request,
+        project_id: str = Form(""),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth project assignment for the property picker.  Empty
+        string clears the project."""
+        pid = project_id.strip() or None
+        try:
+            t = update_ticket_project(session, tid, pid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        return JSONResponse({"id": t.id, "project_id": t.project_id})
+
+    @router.post("/board/tickets/{tid}/profile", dependencies=[auth])
+    async def update_profile_inline(
+        tid: str,
+        request: Request,
+        profile_id: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth profile reassignment for the property picker."""
+        try:
+            t = update_ticket_profile(session, tid, profile_id)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
+        return JSONResponse({"id": t.id, "profile_id": t.profile_id})
 
     # --- Dependency management (cookie-auth) ---------------------------------
 
@@ -975,6 +1324,53 @@ def build_router(
         return [
             {"id": t.id, "title": t.title, "status": t.status}
             for t in results
+        ]
+
+    @router.put("/board/tickets/{tid}/labels", dependencies=[auth])
+    async def set_ticket_labels_hx(
+        request: Request,
+        tid: str,
+        session: Session = Depends(get_session),
+    ):
+        """HTMX: replace a ticket's labels.  Body is ``label_ids`` (repeated)."""
+        from nightdesk.domain.labels import set_ticket_labels as _set_labels
+        from nightdesk.domain.labels import LabelNotFound as _LNF
+        from nightdesk.db.models import Label
+        form = await request.form()
+        label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+        try:
+            ticket = _set_labels(session, tid, label_ids)
+        except TicketNotFound:
+            raise HTTPException(404, "ticket not found")
+        except _LNF as e:
+            raise HTTPException(404, str(e))
+        all_labels = list(session.scalars(select(Label).order_by(Label.name.asc())))
+        return templates.TemplateResponse(
+            request,
+            "partials/label_picker.html",
+            {
+                "ticket": ticket,
+                "all_labels": all_labels,
+                "picker_name": "label_ids",
+                "picker_target": f"label-picker-{tid}",
+            },
+        )
+
+    @router.get("/board/labels-search", dependencies=[auth])
+    async def labels_search(
+        q: str = Query(default=""),
+        limit: int = Query(default=20, ge=1, le=100),
+        session: Session = Depends(get_session),
+    ):
+        """Search labels for the label picker.  Returns JSON."""
+        from nightdesk.db.models import Label as LabelModel
+        stmt = select(LabelModel).order_by(LabelModel.name.asc()).limit(limit)
+        if q:
+            stmt = stmt.where(LabelModel.name.ilike(f"%{q}%"))
+        results = session.scalars(stmt)
+        return [
+            {"id": l.id, "name": l.name, "color": l.color}
+            for l in results
         ]
 
     return router

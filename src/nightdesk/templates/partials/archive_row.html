@@ -1,6 +1,16 @@
 <tr class="border-t border-border hover:bg-bg-elev">
   <td class="px-3 py-2">
     <a href="/tickets/{{ row.id }}" class="text-accent hover:underline">{{ row.title }}</a>
+    {% if row.labels is defined and row.labels %}
+      <div class="mt-0.5 flex flex-wrap gap-0.5">
+        {% for label in row.labels %}
+          <span
+            class="inline-block px-1 py-px rounded text-[9px] font-medium border"
+            style="{% if label.color %}background-color: {{ label.color }}22; border-color: {{ label.color }}66; color: {{ label.color }};{% else %}background-color: var(--color-bg-elev-2); border-color: var(--color-border); color: var(--color-fg-muted);{% endif %}"
+          >{{ label.name }}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
   </td>
   <td class="px-3 py-2 text-fg-muted">
     {{ project_names.get(row.project_id, "—") if row.project_id else "—" }}
@@ -23,7 +33,11 @@
   <td class="px-3 py-2 text-fg-muted font-mono text-xs">
     <span{% if row.finished_at %} data-ts-title="{{ iso_utc(row.finished_at) }}"{% endif %}>{{ row.finished_rel or '-' }}</span>
   </td>
-  <td class="px-3 py-2 font-mono text-xs">{{ row.priority }}</td>
+  <td class="px-3 py-2 text-xs">
+    {% set _p_label = priority_label(row.priority) %}
+    {% set _p_css = priority_css(row.priority) %}
+    <span class="rounded-full border px-1.5 py-0.5 text-[11px] {{ _p_css }}">{{ _p_label }}</span>
+  </td>
   <td class="px-3 py-2 text-right">
     <form action="/archive/tickets/{{ row.id }}/unarchive" method="post" class="inline">
       <button type="submit"
