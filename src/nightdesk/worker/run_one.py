@@ -255,6 +255,36 @@ def _record_workspace_resolution(ticket: Ticket, bundle: WorkspaceBundle) -> Non
 
 
 
+def _capture_fs_snapshots(
+    ticket: Ticket, bundle: WorkspaceBundle, run_id: str, transcript_root: Path,
+) -> None:
+    """Snapshot non-git workspace trees at run start for the filesystem diff.
+
+    Git workspaces capture ``run_start_sha`` instead (see
+    ``_record_workspace_resolution``); they don't need a snapshot. For every
+    ``directory`` (non-git) workspace, persist a JSON sidecar of the current
+    tree so review can diff added/modified/deleted files against it. Best
+    effort: a snapshot failure must never abort the run.
+    """
+    from nightdesk.domain.fs_snapshot import (
+        snapshot_sidecar_path, snapshot_tree, write_snapshot,
+    )
+    rows = getattr(ticket, "workspaces", None) or []
+    for row, ws in zip(rows, bundle.workspaces):
+        if ws.kind == "git_worktree":
+            continue
+        try:
+            snap = snapshot_tree(str(ws.path))
+            write_snapshot(
+                snapshot_sidecar_path(transcript_root, run_id, row.id), snap,
+            )
+        except Exception:
+            log.exception(
+                "failed to capture filesystem snapshot for workspace %s (run %s)",
+                row.id, run_id,
+            )
+
+
 def _cleanup_recorded_worktrees(ticket: Ticket, *, delete_branches: bool = False) -> None:
     for row in getattr(ticket, "workspaces", []) or []:
         if row.kind != "git_worktree" or not row.worktree_path or not row.repo_root:
@@ -543,6 +573,11 @@ async def run_one(
             )
             log.info("run %s started for ticket %s: transcript=%s intent=%s",
                      run.id, ticket.id, run.transcript_path, run_intent)
+
+            # Snapshot non-git workspace trees now, before the agent touches
+            # anything, so the per-run Changes view can diff filesystem state
+            # for directory workspaces. Keyed to this run + workspace.
+            _capture_fs_snapshots(ticket, bundle, run.id, cfg.transcript_root)
 
             # Resolve scheduling knobs from the config table (live values).
             max_duration = getattr(schedule_cfg, "max_run_duration_seconds", 7200) or 7200
