@@ -41,11 +41,15 @@
     {% for t in _col.tickets %}
       {% include "partials/ticket_card.html" %}
     {% else %}
-      {# Empty-state: a non-card placeholder. It carries no data-ticket-id so
-         the drag wiring (which targets li[data-ticket-id]) ignores it. #}
+      {# Empty-state placeholder. Only rendered for read-only (non-droppable)
+         property groupings — status columns stay an empty <ul> so the
+         status-changing drag's drop indexing is unaffected. The placeholder
+         carries no data-ticket-id, so the drag wiring would ignore it anyway. #}
+      {% if not _droppable %}
       <li class="board-empty px-3 py-6 text-center text-xs text-fg-muted select-none" aria-hidden="true">
         No tickets
       </li>
+      {% endif %}
     {% endfor %}
   </ul>
 </section>
