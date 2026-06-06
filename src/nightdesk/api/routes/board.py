@@ -18,6 +18,7 @@ from nightdesk.domain.projects import ProjectNotFound, get_project_by_slug, list
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
 from nightdesk.domain.runs import get_run, list_runs
+from nightdesk.domain.toolchains import current_config, toolchain_options
 from nightdesk.domain.tickets import (
     CyclicDependency,
     DependencyNotFound,
@@ -160,11 +161,17 @@ def _workspace_payload_from_form(form) -> tuple[str, Optional[str], Optional[str
     return mode, worktree_name, worktree_path, workspaces
 
 
-def _split_lines(raw: object) -> list[str]:
+def _form_strs(form, key: str) -> list[str]:
+    """Order-preserving, de-duped, stripped values for a repeated form field.
+
+    The toolchain enable/disable pickers submit one checkbox value per chosen
+    name and the extra-paths picker submits one input per row, so the modal
+    posts these as repeated fields rather than newline-delimited textareas.
+    """
     seen: set[str] = set()
     out: list[str] = []
-    for line in str(raw or "").splitlines():
-        item = line.strip()
+    for raw in form.getlist(key):
+        item = str(raw or "").strip()
         if not item or item in seen:
             continue
         seen.add(item)
@@ -174,9 +181,9 @@ def _split_lines(raw: object) -> list[str]:
 
 def _toolchain_overrides_from_form(form) -> Optional[dict]:
     overrides = {
-        "enable": _split_lines(form.get("toolchain_enable")),
-        "disable": _split_lines(form.get("toolchain_disable")),
-        "extra_paths": _split_lines(form.get("toolchain_extra_paths")),
+        "enable": _form_strs(form, "toolchain_enable"),
+        "disable": _form_strs(form, "toolchain_disable"),
+        "extra_paths": _form_strs(form, "toolchain_extra_paths"),
     }
     return overrides if any(overrides.values()) else None
 
@@ -291,6 +298,13 @@ def _sole_project(session: Session, ast) -> object | None:
         return None
 
 
+def _toolchain_options(session: Session) -> list[dict]:
+    """Available toolchain presets (built-ins + configured) for the ticket modal
+    picker, so enable/disable are chosen from a discoverable list rather than
+    typed as free text."""
+    return toolchain_options(current_config(session))
+
+
 def _gather_board(session: Session, *, q: str = ""):
     ast = parse_query(q)
     selected_project = _sole_project(session, ast)
@@ -359,6 +373,7 @@ def _gather_board(session: Session, *, q: str = ""):
             project_id=selected_project.id if selected_project else None,
             limit=500,
         ),
+        "toolchain_options": _toolchain_options(session),
     }
 
 
@@ -477,6 +492,7 @@ def build_router(
                 "projects": ctx["projects"],
                 "projects_by_id": ctx["projects_by_id"],
                 "selected_project": ctx["selected_project"],
+                "toolchain_options": ctx["toolchain_options"],
                 "query": ctx["query"],
                 "view": view,
                 # Only assembled when the runs view is the initial render.
@@ -564,6 +580,7 @@ def build_router(
                 "deps_downstreams": deps_downstreams,
                 "dep_all": list_tickets(session, limit=500),
                 "projects": list_projects(session),
+                "toolchain_options": _toolchain_options(session),
             },
         )
 
@@ -586,6 +603,7 @@ def build_router(
                 "dep_all": list_tickets(session, limit=500),
                 "projects": list_projects(session),
                 "selected_project": _project_filter(session, project)[1],
+                "toolchain_options": _toolchain_options(session),
             },
         )
 
@@ -720,7 +738,8 @@ def build_router(
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
              "dep_all": list_tickets(session, limit=500),
-             "projects": list_projects(session)},
+             "projects": list_projects(session),
+             "toolchain_options": _toolchain_options(session)},
         )
 
     @router.post("/board/tickets/{tid}/archive", dependencies=[auth])
@@ -752,7 +771,8 @@ def build_router(
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
              "dep_all": list_tickets(session, limit=500),
-             "projects": list_projects(session)},
+             "projects": list_projects(session),
+             "toolchain_options": _toolchain_options(session)},
         )
 
     @router.post("/board/tickets/{tid}/cancel", dependencies=[auth])

@@ -436,6 +436,76 @@ async def test_external_tools_post_rejects_invalid_preset_paths_json(cookie_clie
     assert r.status_code == 422
 
 
+async def test_external_tools_pane_path_inputs_use_path_search(cookie_client, session):
+    session.add(ConfigRow(
+        id=1,
+        worktree_root="/tmp/w",
+        transcript_root="/tmp/t",
+        toolchain_presets={"go-user-tools": ["~/go/bin"]},
+    ))
+    session.commit()
+
+    r = await cookie_client.get("/settings/external-tools")
+    assert r.status_code == 200
+    body = r.text
+    # Preset path inputs reuse the existing path-search component (Issue C).
+    assert "ndPathSuggest" in body
+    assert "nd-suggest-host" in body
+    assert "data-preset-path" in body
+
+
+async def test_external_tools_post_rejects_builtin_preset_name(cookie_client, session):
+    import json
+
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings/external-tools",
+        data={
+            "preset_name": ["user-python-tools"],
+            "preset_paths_json": [json.dumps(["~/x/bin"])],
+        },
+    )
+    assert r.status_code == 422
+    assert "reserved" in r.text
+
+
+async def test_external_tools_post_rejects_duplicate_preset_name(cookie_client, session):
+    import json
+
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.post(
+        "/settings/external-tools",
+        data={
+            "preset_name": ["dupe", "dupe"],
+            "preset_paths_json": [json.dumps(["~/a/bin"]), json.dumps(["~/b/bin"])],
+        },
+    )
+    assert r.status_code == 422
+    assert "duplicate" in r.text
+
+
+async def test_external_tools_post_rejects_protected_path(cookie_client, session):
+    import json
+    import os
+
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    protected = os.path.expanduser("~/.claude")
+    r = await cookie_client.post(
+        "/settings/external-tools",
+        data={
+            "preset_name": ["snoop"],
+            "preset_paths_json": [json.dumps([protected])],
+        },
+    )
+    assert r.status_code == 422
+
+
 async def test_external_tools_post_skips_unnamed_preset_cards(cookie_client, session):
     import json
 

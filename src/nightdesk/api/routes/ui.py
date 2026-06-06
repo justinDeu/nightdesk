@@ -23,7 +23,12 @@ from nightdesk.domain.projects import (
     list_projects,
     update_project,
 )
-from nightdesk.domain.toolchains import toolchain_names, toolchain_options
+from nightdesk.domain.toolchains import (
+    BUILTIN_TOOLCHAINS,
+    assert_paths_not_excluded,
+    toolchain_names,
+    toolchain_options,
+)
 from nightdesk.domain.notifications import build_test_payload, fire_webhook
 from nightdesk.domain.tickets import (
     archive, requeue, request_run_now, transition_status,
@@ -47,6 +52,14 @@ def _parse_toolchain_presets(form) -> dict[str, list[str]]:
         name = str(raw_name or "").strip()
         if not name:
             continue
+        # A custom preset name must not shadow a built-in toolchain (which would
+        # silently override its paths) or collide with another custom card.
+        if name in BUILTIN_TOOLCHAINS:
+            raise HTTPException(
+                422, f"preset name {name!r} is reserved by a built-in toolchain"
+            )
+        if name in raw:
+            raise HTTPException(422, f"duplicate preset name {name!r}")
         try:
             paths = json.loads(raw_paths or "[]")
         except json.JSONDecodeError as exc:
@@ -60,7 +73,15 @@ def _parse_toolchain_presets(form) -> dict[str, list[str]]:
         validated = ConfigUpdate(toolchain_presets=raw)
     except ValidationError as exc:
         raise HTTPException(422, f"invalid toolchain presets: {exc.errors()[0]['msg']}")
-    return validated.toolchain_presets or {}
+    presets = validated.toolchain_presets or {}
+    # Reject absolute paths that overlap protected nightdesk directories, the
+    # same guard the ticket/project path inputs use.
+    for name, paths in presets.items():
+        try:
+            assert_paths_not_excluded(paths, field=f"toolchain_presets.{name}")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+    return presets
 
 
 def _windows_payload(session: Session) -> list[dict[str, str | int]]:

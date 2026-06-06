@@ -29,6 +29,10 @@
 {% set _use_worktree = ((_primary_ws.kind in ['git_worktree', 'worktree']) if _primary_ws else _create_use_worktree) %}
 {% set _form_action = ('/board/tickets/' ~ ticket.id) if _is_edit else '/board/tickets' %}
 {% set _toolchains = ticket.toolchain_overrides if _is_edit and ticket.toolchain_overrides else {} %}
+{% set _toolchain_options = toolchain_options if toolchain_options is defined else [] %}
+{% set _tc_enabled = _toolchains.get('enable') or [] %}
+{% set _tc_disabled = _toolchains.get('disable') or [] %}
+{% set _tc_extra_paths = _toolchains.get('extra_paths') or [] %}
 
 <dialog id="{{ _mid }}"
         class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[820px] max-w-[calc(100vw-2rem)]"
@@ -128,25 +132,113 @@
         }</script>
       </label>
 
-      <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm">
+      {# --- External tool overrides ------------------------------------- #
+       # Project external tools apply automatically. This section only adds
+       # per-ticket overrides. Enable/Disable are chosen from the known
+       # toolchain presets (no free text, so an unknown name can't be typed),
+       # and extra paths reuse the same path-search component as the workspace
+       # fields. The hidden toolchain_form marks the section as submitted so an
+       # all-cleared selection on edit means "no overrides" rather than
+       # "leave untouched".
+       #}
+      <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm" data-toolchain-overrides>
         <div class="mb-2">
           <h3 class="text-sm font-medium text-fg">External tool overrides</h3>
-          <p class="mt-0.5 text-xs leading-snug text-fg-muted">Project external tools apply by default. Use this only for one-off host tool access.</p>
+          <p class="mt-0.5 text-xs leading-snug text-fg-muted">Project external tools apply by default. Use this only to add or remove host tool access for this one ticket.</p>
         </div>
         <input type="hidden" name="toolchain_form" value="1" />
-        <div class="grid gap-2 md:grid-cols-3">
-          <label class="flex flex-col gap-1 text-sm">
-            <span class="text-fg-muted text-xs uppercase tracking-wide">Enable names</span>
-            <textarea name="toolchain_enable" rows="2" class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none" placeholder="rust-user-tools">{{ (_toolchains.get('enable') or []) | join('\n') }}</textarea>
-          </label>
-          <label class="flex flex-col gap-1 text-sm">
-            <span class="text-fg-muted text-xs uppercase tracking-wide">Disable names</span>
-            <textarea name="toolchain_disable" rows="2" class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none" placeholder="user-python-tools">{{ (_toolchains.get('disable') or []) | join('\n') }}</textarea>
-          </label>
-          <label class="flex flex-col gap-1 text-sm">
-            <span class="text-fg-muted text-xs uppercase tracking-wide">Extra paths</span>
-            <textarea name="toolchain_extra_paths" rows="2" class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none" placeholder="./scripts/bin">{{ (_toolchains.get('extra_paths') or []) | join('\n') }}</textarea>
-          </label>
+
+        <div class="mb-2">
+          <div class="mb-1 text-fg-muted text-[11px] uppercase tracking-wide">Toolchain presets</div>
+          {% if _toolchain_options %}
+            <ul class="divide-y divide-border rounded border border-border bg-bg">
+              {% for opt in _toolchain_options %}
+                <li class="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-1.5" data-toolchain-row>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-baseline gap-2">
+                      <span class="text-xs font-medium text-fg">{{ opt.label }}</span>
+                      <code class="text-[10px] text-fg-muted">{{ opt.name }}</code>
+                    </div>
+                    {% if opt.paths %}<code class="block truncate text-[10px] text-fg-muted">{{ opt.paths | join(', ') }}</code>{% endif %}
+                  </div>
+                  <label class="flex items-center gap-1 text-[11px] text-fg-muted">
+                    <input type="checkbox" name="toolchain_enable" value="{{ opt.name }}"
+                           data-toolchain-enable
+                           onchange="window.ndSyncToolchainRow && window.ndSyncToolchainRow(this)"
+                           {% if opt.name in _tc_enabled %}checked{% endif %} />
+                    Enable
+                  </label>
+                  <label class="flex items-center gap-1 text-[11px] text-fg-muted">
+                    <input type="checkbox" name="toolchain_disable" value="{{ opt.name }}"
+                           data-toolchain-disable
+                           onchange="window.ndSyncToolchainRow && window.ndSyncToolchainRow(this)"
+                           {% if opt.name in _tc_disabled %}checked{% endif %} />
+                    Disable
+                  </label>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="rounded border border-border bg-bg px-2 py-1.5 text-[11px] italic text-fg-muted">No toolchain presets defined. Add presets under Settings → External tools.</p>
+          {% endif %}
+          {# Any enabled/disabled names that are no longer known presets (e.g. a
+             deleted custom preset). Surfaced read-only so they aren't silently
+             dropped; clearing them removes the stale override. #}
+          {% set _known_names = _toolchain_options | map(attribute='name') | list %}
+          {% set _stale_enabled = _tc_enabled | reject('in', _known_names) | list %}
+          {% set _stale_disabled = _tc_disabled | reject('in', _known_names) | list %}
+          {% if _stale_enabled or _stale_disabled %}
+            <div class="mt-2 rounded border border-warn/50 bg-warn/10 px-2 py-1.5 text-[11px] text-warn" data-toolchain-stale>
+              <div class="font-medium">Unknown toolchains on this ticket</div>
+              {% for name in _stale_enabled %}
+                <label class="mt-1 flex items-center gap-1">
+                  <input type="checkbox" name="toolchain_enable" value="{{ name }}" checked />
+                  enable <code>{{ name }}</code> (no longer a known preset)
+                </label>
+              {% endfor %}
+              {% for name in _stale_disabled %}
+                <label class="mt-1 flex items-center gap-1">
+                  <input type="checkbox" name="toolchain_disable" value="{{ name }}" checked />
+                  disable <code>{{ name }}</code> (no longer a known preset)
+                </label>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+
+        <div data-toolchain-extra-paths-section>
+          <div class="mb-1 flex items-center justify-between gap-2">
+            <div class="text-fg-muted text-[11px] uppercase tracking-wide">Extra paths</div>
+            <button type="button"
+                    onclick="window.ndAddToolchainExtraPath && window.ndAddToolchainExtraPath('{{ _mid }}')"
+                    class="rounded border border-border px-2 py-0.5 text-[11px] text-accent hover:border-accent">+ Add path</button>
+          </div>
+          <p class="mb-1 text-[11px] text-fg-muted">Host bin directories to add to PATH for this ticket only.</p>
+          <div class="space-y-2" data-toolchain-extra-paths>
+            {% for path in _tc_extra_paths %}
+              {% set _tcp = _mid ~ '-tc-extra-' ~ loop.index0 %}
+              <div class="flex items-start gap-2" data-toolchain-extra-path-row>
+                <div class="relative flex-1">
+                  <input id="{{ _tcp }}"
+                         name="toolchain_extra_paths"
+                         autocomplete="off"
+                         spellcheck="false"
+                         value="{{ path }}"
+                         placeholder="./scripts/bin"
+                         oninput="window.ndPathSuggest(this, '{{ _tcp }}-suggest')"
+                         onfocus="window.ndPathSuggest(this, '{{ _tcp }}-suggest')"
+                         onblur="window.ndPathSuggestClose('{{ _tcp }}-suggest')"
+                         onkeydown="window.ndPathSuggestKey(event, this, '{{ _tcp }}-suggest')"
+                         class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <div id="{{ _tcp }}-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
+                </div>
+                <button type="button"
+                        onclick="this.closest('[data-toolchain-extra-path-row]').remove()"
+                        class="shrink-0 rounded px-2 py-1 text-xs text-fg-muted hover:text-danger"
+                        title="Remove path">&times;</button>
+              </div>
+            {% endfor %}
+          </div>
         </div>
       </section>
 
@@ -427,5 +519,46 @@
         if (window.ndInitTicketForm) window.ndInitTicketForm(form);
       };
     }
+  })();
+
+  // Toolchain override controls. Defined as window globals (re-assigned safely
+  // when the modal renders more than once on a page) so the inline handlers in
+  // the picker can reach them.
+  (function () {
+    // Enable and Disable are mutually exclusive for a given preset.
+    window.ndSyncToolchainRow = function (changed) {
+      var row = changed.closest('[data-toolchain-row]');
+      if (!row || !changed.checked) return;
+      var other = changed.hasAttribute('data-toolchain-enable')
+        ? row.querySelector('[data-toolchain-disable]')
+        : row.querySelector('[data-toolchain-enable]');
+      if (other) other.checked = false;
+    };
+
+    var seq = 0;
+    window.ndAddToolchainExtraPath = function (modalId, value) {
+      var dlg = document.getElementById(modalId);
+      var host = dlg && dlg.querySelector('[data-toolchain-extra-paths]');
+      if (!host) return null;
+      var id = modalId + '-tc-extra-new-' + (seq++);
+      var row = document.createElement('div');
+      row.className = 'flex items-start gap-2';
+      row.setAttribute('data-toolchain-extra-path-row', '');
+      row.innerHTML = '' +
+        '<div class="relative flex-1">' +
+        '<input id="' + id + '" name="toolchain_extra_paths" autocomplete="off" spellcheck="false" value="' + (value || '') + '" placeholder="./scripts/bin"' +
+        ' oninput="window.ndPathSuggest(this, \'' + id + '-suggest\')"' +
+        ' onfocus="window.ndPathSuggest(this, \'' + id + '-suggest\')"' +
+        ' onblur="window.ndPathSuggestClose(\'' + id + '-suggest\')"' +
+        ' onkeydown="window.ndPathSuggestKey(event, this, \'' + id + '-suggest\')"' +
+        ' class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />' +
+        '<div id="' + id + '-suggest" class="nd-suggest-host fixed z-50 hidden"></div>' +
+        '</div>' +
+        '<button type="button" onclick="this.closest(&quot;[data-toolchain-extra-path-row]&quot;).remove()" class="shrink-0 rounded px-2 py-1 text-xs text-fg-muted hover:text-danger" title="Remove path">&times;</button>';
+      host.appendChild(row);
+      var input = row.querySelector('input');
+      if (input) input.focus();
+      return row;
+    };
   })();
 </script>

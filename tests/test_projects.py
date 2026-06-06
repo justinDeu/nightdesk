@@ -603,6 +603,107 @@ def test_project_stores_toolchain_defaults_and_ticket_stores_overrides(session, 
     }
 
 
+def test_ticket_inherits_project_default_toolchains(session, sample_profile):
+    """A new ticket that omits toolchains receives the project defaults as an
+    ``enable`` override (Issue A)."""
+    from nightdesk.domain.projects import create_project
+
+    project = create_project(
+        session,
+        name="Defaults apply",
+        source_path="/tmp/defaults",
+        default_toolchains=["user-python-tools", "rust-user-tools"],
+    )
+
+    ticket = create_ticket(
+        session,
+        title="omits toolchains",
+        prompt="",
+        profile_id=sample_profile.id,
+        project_id=project.id,
+    )
+
+    assert ticket.toolchain_overrides == {
+        "enable": ["user-python-tools", "rust-user-tools"],
+        "disable": [],
+        "extra_paths": [],
+    }
+
+
+def test_ticket_explicit_toolchains_not_overwritten_by_project_defaults(session, sample_profile):
+    from nightdesk.domain.projects import create_project
+
+    project = create_project(
+        session,
+        name="Explicit wins",
+        source_path="/tmp/explicit",
+        default_toolchains=["user-python-tools"],
+    )
+
+    ticket = create_ticket(
+        session,
+        title="explicit override",
+        prompt="",
+        profile_id=sample_profile.id,
+        project_id=project.id,
+        toolchain_overrides={"enable": ["rust-user-tools"]},
+    )
+
+    assert ticket.toolchain_overrides["enable"] == ["rust-user-tools"]
+
+
+def test_ticket_without_project_gets_no_default_toolchains(session, sample_profile):
+    ticket = create_ticket(
+        session,
+        title="no project",
+        prompt="",
+        profile_id=sample_profile.id,
+        source_path="/tmp/np",
+    )
+    assert ticket.toolchain_overrides is None
+
+
+def test_ticket_without_project_defaults_keeps_overrides_none(session, sample_profile):
+    from nightdesk.domain.projects import create_project
+
+    project = create_project(session, name="No tool defaults", source_path="/tmp/none")
+
+    ticket = create_ticket(
+        session,
+        title="empty defaults",
+        prompt="",
+        profile_id=sample_profile.id,
+        project_id=project.id,
+    )
+    assert ticket.toolchain_overrides is None
+
+
+def test_applied_project_default_toolchains_are_validated(session, sample_profile):
+    """A default that is no longer a known preset must surface as an error when
+    applied to a new ticket, never be silently accepted (Issue A keeps
+    assert_known_toolchains intact)."""
+    from nightdesk.domain.projects import create_project
+
+    project = create_project(session, name="Stale defaults", source_path="/tmp/stale")
+    # Simulate a preset that was deleted after the project chose it as a default,
+    # bypassing the create-time validation that would otherwise reject it.
+    project.default_toolchains = ["since-deleted"]
+    session.commit()
+
+    try:
+        create_ticket(
+            session,
+            title="stale default",
+            prompt="",
+            profile_id=sample_profile.id,
+            project_id=project.id,
+        )
+    except ValueError as exc:
+        assert "unknown toolchain" in str(exc)
+    else:
+        raise AssertionError("unknown default toolchain was accepted")
+
+
 def test_clone_ticket_preserves_toolchain_overrides(session, sample_profile):
     original = create_ticket(
         session,
