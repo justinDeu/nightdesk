@@ -253,6 +253,17 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             return RedirectResponse(url=f"/cron/{cid}?error={e}", status_code=303)
         return RedirectResponse(url=f"/cron/{cid}", status_code=303)
 
+    @router.post("/cron/{cid}/fire-now-and-run", dependencies=[auth])
+    async def fire_now_and_run_form(cid: str, session: Session = Depends(get_session)):
+        """Materialize a ticket and run it immediately (queue bypass)."""
+        try:
+            fire_now(session, cid, run=True)
+        except CronJobNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidCronJob as e:
+            return RedirectResponse(url=f"/cron/{cid}?error={e}", status_code=303)
+        return RedirectResponse(url=f"/cron/{cid}", status_code=303)
+
     @router.post("/cron/{cid}/delete", dependencies=[auth])
     async def delete_form(cid: str, session: Session = Depends(get_session)):
         try:

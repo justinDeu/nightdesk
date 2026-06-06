@@ -282,6 +282,38 @@ def test_fire_now_bypasses_overlap_and_no_run_now(session):
     assert any(f.ticket_id == ticket.id for f in fires)
 
 
+def test_fire_now_and_run_sets_run_now(session):
+    p = _profile(session)
+    job = _job(session, p.id)  # force_run defaults False
+    assert job.force_run is False
+    ticket = fire_now(session, job.id, run=True)
+    # fire-now-and-run forces run_now=True past the queue/window.
+    assert ticket.status == "queued"
+    assert ticket.run_now is True
+    assert any(f.ticket_id == ticket.id for f in list_fires(session, job.id))
+
+
+def test_fire_now_and_run_bypasses_overlap(session):
+    p = _profile(session)
+    now = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
+    job = _job(session, p.id, overlap_policy="skip_if_active", now=now)
+    prev = create_ticket(session, title="prev", prompt="x", profile_id=p.id,
+                         source_path="/tmp", status="queued", run_now=False)
+    job.last_ticket_id = prev.id
+    session.commit()
+
+    ticket = fire_now(session, job.id, run=True)
+    assert ticket.run_now is True
+    assert any(f.ticket_id == ticket.id for f in list_fires(session, job.id))
+
+
+def test_fire_now_default_does_not_run(session):
+    p = _profile(session)
+    job = _job(session, p.id)
+    # Plain fire-now (run defaults False) still honors force_run only.
+    assert fire_now(session, job.id).run_now is False
+
+
 def test_fire_now_sub_minute_does_not_collide_with_scheduled(session):
     p = _profile(session)
     now = datetime(2026, 5, 24, 12, 0, 0, tzinfo=timezone.utc)
@@ -482,6 +514,26 @@ async def test_api_fire_now_creates_queued_ticket(client, session):
 
 
 @pytest.mark.anyio
+async def test_api_fire_now_and_run_creates_run_now_ticket(client, session):
+    pid = await _api_profile(client)
+    cid = (await client.post("/api/v1/cron-jobs", json={
+        "title": "x", "profile_id": pid, "source_path": "/tmp", "schedule": "0 9 * * *",
+    })).json()["id"]
+
+    r = await client.post(f"/api/v1/cron-jobs/{cid}/fire-now-and-run")
+    assert r.status_code == 201, r.text
+    ticket = r.json()
+    assert ticket["status"] == "queued"
+    assert ticket["run_now"] is True
+    assert any(f.ticket_id == ticket["id"] for f in list_fires(session, cid))
+
+
+@pytest.mark.anyio
+async def test_api_fire_now_and_run_unknown_job_404(client):
+    assert (await client.post("/api/v1/cron-jobs/nope/fire-now-and-run")).status_code == 404
+
+
+@pytest.mark.anyio
 async def test_api_delete_keeps_generated_tickets(client):
     pid = await _api_profile(client)
     cid = (await client.post("/api/v1/cron-jobs", json={
@@ -547,6 +599,32 @@ async def test_cron_page_enable_disable_fire_delete_forms(client, session):
     assert (await client.post(f"/cron/{cid}/fire-now", follow_redirects=False)).status_code == 303
     assert (await client.post(f"/cron/{cid}/delete", follow_redirects=False)).status_code == 303
     assert (await client.get(f"/api/v1/cron-jobs/{cid}")).status_code == 404
+
+
+@pytest.mark.anyio
+async def test_cron_page_fire_now_and_run_form(client, session):
+    pid = await _api_profile(client)
+    cid = (await client.post("/api/v1/cron-jobs", json={
+        "title": "x", "profile_id": pid, "source_path": "/tmp", "schedule": "0 9 * * *",
+    })).json()["id"]
+
+    r = await client.post(f"/cron/{cid}/fire-now-and-run", follow_redirects=False)
+    assert r.status_code == 303
+    fires = list_fires(session, cid)
+    assert fires and fires[0].ticket_id is not None
+    t = session.get(Ticket, fires[0].ticket_id)
+    assert t.run_now is True
+
+
+@pytest.mark.anyio
+async def test_cron_page_view_has_fire_and_run_button(client):
+    pid = await _api_profile(client)
+    cid = (await client.post("/api/v1/cron-jobs", json={
+        "title": "x", "profile_id": pid, "source_path": "/tmp", "schedule": "0 9 * * *",
+    })).json()["id"]
+    page = await client.get(f"/cron/{cid}")
+    assert f"/cron/{cid}/fire-now-and-run" in page.text
+    assert "Fire &amp; run" in page.text or "Fire & run" in page.text
 
 
 @pytest.mark.anyio
