@@ -134,6 +134,7 @@ def _build_rows(
             "outcome": run_outcome,
             "finished_at": finished_at,
             "finished_rel": _relative_time(finished_at),
+            "labels": list(t.labels),
         })
     return rows
 

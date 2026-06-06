@@ -132,6 +132,17 @@
         }</script>
       </label>
 
+      {# --- Labels --------------------------------------------------------- #}
+      {% set _all_labels = all_labels if all_labels is defined else [] %}
+      {% set _label_ticket = ticket if _is_edit else none %}
+      <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm" data-label-section>
+        <div class="mb-2">
+          <h3 class="text-sm font-medium text-fg">Labels</h3>
+          <p class="mt-0.5 text-xs leading-snug text-fg-muted">Tag tickets for categorisation and filtering.</p>
+        </div>
+        {% include "partials/label_picker.html" %}
+      </section>
+
       {# --- External tool overrides ------------------------------------- #
        # Project external tools apply automatically. This section only adds
        # per-ticket overrides. Enable/Disable are chosen from the known

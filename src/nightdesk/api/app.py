@@ -19,6 +19,7 @@ from nightdesk.api.routes import diagnostics as diagnostics_routes
 from nightdesk.api.routes import fs as fs_routes
 from nightdesk.api.routes import header as header_routes
 from nightdesk.api.routes import health
+from nightdesk.api.routes import labels as labels_routes
 from nightdesk.api.routes import profiles as profiles_routes
 from nightdesk.api.routes import projects as projects_routes
 from nightdesk.api.routes import runs as runs_routes
@@ -58,6 +59,7 @@ def create_app(
         worktree_root=str(worktree_root), transcript_root=str(transcript_root),
     ))
     app.include_router(search_routes.build_router(get_session, bearer_token))
+    app.include_router(labels_routes.build_router(get_session, bearer_token))
     app.include_router(transcript_routes.build_router(get_session, bearer_token))
     app.include_router(cron_jobs_routes.build_router(get_session, bearer_token))
 
