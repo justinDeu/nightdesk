@@ -471,6 +471,10 @@ async def run_one(
             spec = replace(spec, tool_paths=tool_paths)
             cfg.transcript_root.mkdir(parents=True, exist_ok=True)
 
+            # ``run_now`` is set only by an explicit user queue-bypass
+            # (request_run_now/set_run_now/drag-to-running). The queued->running
+            # transition no longer mutates it, so this flag accurately reflects
+            # whether the user ran-now; normal scheduler picks read False here.
             started_as_run_now = bool(ticket.run_now)
             if ticket.run_now:
                 ticket.run_now = False

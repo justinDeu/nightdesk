@@ -52,18 +52,27 @@ def test_transition_status_invalid_raises(session, sample_profile):
         transition_status(session, t.id, "review")
 
 
-def test_drop_to_running_from_draft_sets_run_now(session, sample_profile):
-    t = make_ticket(session, sample_profile)  # draft
+def test_transition_to_running_does_not_set_run_now(session, sample_profile):
+    """A bare status move to ``running`` must never invent run-now intent.
+
+    The worker transitions every *picked* ticket (including normal scheduled
+    ones) from queued to running through this function. Forcing ``run_now=True``
+    here mislabels normal scheduler picks as user run-nows.
+    """
+    t = make_ticket(session, sample_profile, status="queued")  # run_now=False
+    transition_with_position(session, t.id, "running")
+    refreshed = get_ticket(session, t.id)
+    assert refreshed.status == "running"
+    assert refreshed.run_now is False
+
+
+def test_transition_to_running_preserves_existing_run_now(session, sample_profile):
+    """A genuine run-now flag set by the user survives the move to running."""
+    t = make_ticket(session, sample_profile, status="queued", run_now=True)
     transition_with_position(session, t.id, "running")
     refreshed = get_ticket(session, t.id)
     assert refreshed.status == "running"
     assert refreshed.run_now is True
-
-
-def test_drop_to_running_from_queued_sets_run_now(session, sample_profile):
-    t = make_ticket(session, sample_profile, status="queued")
-    transition_with_position(session, t.id, "running")
-    assert get_ticket(session, t.id).run_now is True
 
 
 def test_set_run_now(session, sample_profile):

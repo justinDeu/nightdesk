@@ -227,14 +227,16 @@ async def test_transition_invalid_jump_409(client):
     assert r.status_code == 409
 
 
-async def test_transition_to_running_sets_run_now(client):
+async def test_transition_to_running_does_not_set_run_now(client):
+    """A bare transition to running must not invent run-now intent. run_now
+    means "user bypassed the queue" and is set only via the run-now endpoint."""
     pid = await _create_profile(client)
     t = await _create_ticket(client, pid)
     r = await client.post(f"/api/v1/tickets/{t['id']}/transition",
                            json={"status": "running"})
     assert r.status_code == 200
     assert r.json()["status"] == "running"
-    assert r.json()["run_now"] is True
+    assert r.json()["run_now"] is False
 
 
 async def test_reorder_endpoint(client):
