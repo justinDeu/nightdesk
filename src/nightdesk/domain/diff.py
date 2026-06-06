@@ -71,6 +71,63 @@ def diff_repo_path(workspace) -> str:
     )
 
 
+def select_diff_workspace(workspaces):
+    """Pick the workspace whose changes the run-diff should reflect.
+
+    The run executes in its *primary* workspace, so that is what the Changes
+    tab should show. We deliberately select by role/kind rather than "the first
+    workspace that happens to have a resolved path" -- the old behavior would
+    feed a plain ``directory`` workspace (which always has a resolved path) to
+    the git differ. Falls back to the first workspace with any resolved path
+    when no primary is marked (legacy rows).
+    """
+    candidates = [w for w in workspaces if w is not None]
+    primary = next(
+        (w for w in candidates if getattr(w, "role", None) == "primary"), None,
+    )
+    if primary is not None and diff_repo_path(primary):
+        return primary
+    return next((w for w in candidates if diff_repo_path(w)), primary)
+
+
+def compute_workspace_diff(workspace, *, transcript_root, run_id) -> Optional[RunDiff]:
+    """Compute a run-diff for ``workspace``, dispatching on its kind.
+
+    ``git_worktree`` workspaces go through the git differ (``start_sha..end``),
+    exactly as before. Every other kind (``directory`` and legacy/unknown
+    kinds normalized to it) goes through the filesystem snapshot differ. This
+    is the single gate both the JSON API and the HTMX ticket page share so the
+    two surfaces never disagree.
+
+    Returns ``None`` when there is no diffable workspace at all, so callers can
+    render their "no workspace" empty state.
+    """
+    if workspace is None:
+        return None
+    root = diff_repo_path(workspace)
+    if not root:
+        return None
+    if getattr(workspace, "kind", None) == "git_worktree":
+        return compute_run_diff(
+            repo_root=root,
+            start_sha=(
+                getattr(workspace, "run_start_sha", None)
+                or getattr(workspace, "base_sha", None)
+            ),
+            branch=getattr(workspace, "branch", None),
+        )
+    # Non-git workspace: diff the run-start filesystem snapshot vs the current
+    # tree. Imported lazily to avoid a circular import (fs_snapshot imports this
+    # module's RunDiff / parser).
+    from nightdesk.domain.fs_snapshot import (
+        compute_fs_run_diff, read_snapshot, snapshot_sidecar_path,
+    )
+    snap = read_snapshot(
+        snapshot_sidecar_path(transcript_root, run_id, workspace.id)
+    )
+    return compute_fs_run_diff(root, snap, branch=getattr(workspace, "branch", None))
+
+
 def compute_run_diff(
     repo_root: str,
     start_sha: Optional[str],

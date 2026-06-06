@@ -320,7 +320,7 @@ async def test_diff_endpoint_no_workspace(client, session):
     assert r.status_code == 200
     data = r.json()
     assert data["files"] == []
-    assert data["error"] == "no git workspace found for this run"
+    assert data["error"] == "no workspace found for this run"
 
 
 async def test_diff_endpoint_with_git_repo(client, session, tmp_path):

@@ -5,10 +5,14 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pathlib import Path
+
 from nightdesk.api.auth import require_bearer
 from nightdesk.api.schemas import RunOut
 from nightdesk.db.models import TicketWorkspace
-from nightdesk.domain.diff import RunDiff, compute_run_diff, diff_repo_path
+from nightdesk.domain.diff import (
+    RunDiff, compute_workspace_diff, select_diff_workspace,
+)
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
 from nightdesk.logging_setup import run_log_path
 
@@ -36,34 +40,23 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     async def run_diff(rid: str, session: Session = Depends(get_session)):
         """Return a structured unified diff for the run's workspace changes.
 
-        Looks up the TicketWorkspace associated with the run and uses its
-        git metadata (repo_root, base_sha, head_sha) to compute the diff.
+        Selects the run's diffable workspace by kind and dispatches: git
+        workspaces diff ``start_sha..end`` via git; non-git (directory)
+        workspaces diff the run-start filesystem snapshot against the current
+        tree. Both render through the same RunDiff structure.
         """
         try:
             run = get_run(session, rid)
         except RunNotFound:
             raise HTTPException(404, "not found")
 
-        # Find the workspace for this run.
-        ws = session.execute(
-            select(TicketWorkspace)
-            .where(TicketWorkspace.run_id == rid)
-            .order_by(TicketWorkspace.position)
-            .limit(1)
-        ).scalar_one_or_none()
-
-        if ws is None:
-            # Fall back to ticket-level workspace, preferring one with resolved
-            # git metadata over a placeholder source-only row.
-            candidates = list(session.execute(
-                select(TicketWorkspace)
-                .where(TicketWorkspace.ticket_id == run.ticket_id)
-                .order_by(TicketWorkspace.position)
-            ).scalars())
-            ws = next((item for item in candidates if diff_repo_path(item)), None)
-
-        repo_path = diff_repo_path(ws) if ws is not None else ""
-        if ws is None or not repo_path:
+        ws = select_diff_workspace(_run_workspaces(session, rid, run.ticket_id))
+        result = compute_workspace_diff(
+            ws,
+            transcript_root=Path(run.transcript_path).parent,
+            run_id=rid,
+        )
+        if result is None:
             return JSONResponse({
                 "files": [],
                 "total_added": 0,
@@ -72,18 +65,13 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
                 "truncated": False,
                 "hidden_files": 0,
                 "hidden_lines": 0,
-                "error": "no git workspace found for this run",
+                "error": "no workspace found for this run",
                 "branch": "",
                 "base_sha": "",
                 "head_sha": "",
                 "repo_root": "",
             })
 
-        result = compute_run_diff(
-            repo_root=repo_path,
-            start_sha=ws.run_start_sha or ws.base_sha,
-            branch=ws.branch,
-        )
         return JSONResponse(_diff_to_json(result))
 
     @router.get("/{rid}/log")
@@ -103,6 +91,27 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         )
 
     return router
+
+
+def _run_workspaces(session: Session, run_id: str, ticket_id: str) -> list:
+    """Candidate workspaces for a run, run-scoped rows first.
+
+    Prefer workspaces directly bound to this run; fall back to the ticket's
+    workspaces (legacy rows that never got a run_id stamped). The caller picks
+    the diffable one via ``select_diff_workspace``.
+    """
+    run_scoped = list(session.execute(
+        select(TicketWorkspace)
+        .where(TicketWorkspace.run_id == run_id)
+        .order_by(TicketWorkspace.position)
+    ).scalars())
+    if run_scoped:
+        return run_scoped
+    return list(session.execute(
+        select(TicketWorkspace)
+        .where(TicketWorkspace.ticket_id == ticket_id)
+        .order_by(TicketWorkspace.position)
+    ).scalars())
 
 
 def _diff_to_json(d: RunDiff) -> dict:

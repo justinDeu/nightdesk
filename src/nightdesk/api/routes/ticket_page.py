@@ -23,7 +23,7 @@ from sqlalchemy import select
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import TicketWorkspace
-from nightdesk.domain.diff import compute_run_diff, diff_repo_path
+from nightdesk.domain.diff import compute_workspace_diff, select_diff_workspace
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.projects import list_projects
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
@@ -182,15 +182,12 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         if run.ticket_id != tid:
             raise HTTPException(404, "run not on this ticket")
 
-        ws = _find_workspace(session, rid, run.ticket_id)
-        diff_result = None
-        repo_path = diff_repo_path(ws) if ws is not None else ""
-        if ws is not None and repo_path:
-            diff_result = compute_run_diff(
-                repo_root=repo_path,
-                start_sha=ws.run_start_sha or ws.base_sha,
-                branch=ws.branch,
-            )
+        ws = select_diff_workspace(_run_workspaces(session, rid, run.ticket_id))
+        diff_result = compute_workspace_diff(
+            ws,
+            transcript_root=Path(run.transcript_path).parent,
+            run_id=rid,
+        )
 
         return templates.TemplateResponse(
             request, "partials/diff_panel.html", {
@@ -400,19 +397,23 @@ def _remove_dir(session: Session, tid: str, path: str):
     return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
 
 
-def _find_workspace(session: Session, run_id: str, ticket_id: str):
-    """Look up the TicketWorkspace for a run, falling back to ticket-level."""
-    ws = session.execute(
+def _run_workspaces(session: Session, run_id: str, ticket_id: str) -> list:
+    """Candidate workspaces for a run, run-scoped rows first.
+
+    Prefer workspaces bound to this run; fall back to the ticket's workspaces
+    (legacy rows without a stamped run_id). The caller selects the diffable one
+    via ``select_diff_workspace`` -- identical to the JSON API path so the two
+    surfaces agree for every workspace kind.
+    """
+    run_scoped = list(session.execute(
         select(TicketWorkspace)
         .where(TicketWorkspace.run_id == run_id)
         .order_by(TicketWorkspace.position)
-        .limit(1)
-    ).scalar_one_or_none()
-    if ws is not None:
-        return ws
-    candidates = list(session.execute(
+    ).scalars())
+    if run_scoped:
+        return run_scoped
+    return list(session.execute(
         select(TicketWorkspace)
         .where(TicketWorkspace.ticket_id == ticket_id)
         .order_by(TicketWorkspace.position)
     ).scalars())
-    return next((item for item in candidates if diff_repo_path(item)), None)
