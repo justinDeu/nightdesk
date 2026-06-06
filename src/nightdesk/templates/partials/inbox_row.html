@@ -74,7 +74,11 @@
       </details>
     </div>
 
-    {# --- Actions ----------------------------------------------------- #}
+    {# --- Actions ----------------------------------------------------- #
+       Promote… opens the shared edit modal in promote mode (missing required
+       execution fields highlighted) so the item can be fleshed out and accepted
+       as a draft or queued in one step. Complete items also get quick-accept
+       shortcuts that skip the modal. #}
     <div class="shrink-0 flex flex-col items-stretch gap-1 w-36 text-xs">
       {% if _complete %}
         <button type="button"
@@ -99,9 +103,15 @@
           Needs: {{ _blockers | join('; ') }}
         </span>
       {% endif %}
+      <button type="button"
+              class="px-2 py-1 rounded border {% if _complete %}border-border bg-bg-elev text-fg hover:text-accent{% else %}border-accent text-accent hover:bg-accent hover:text-bg font-medium{% endif %}"
+              onclick="window.ndOpenPromoteTicket && window.ndOpenPromoteTicket('{{ t.id }}', {{ (project_filter or '') | tojson }})"
+              title="{{ 'Review and promote' if _complete else 'Flesh out the required fields and promote' }}">
+        Promote…
+      </button>
       <a href="/tickets/{{ t.id }}"
-         class="px-2 py-1 rounded border border-border bg-bg-elev text-fg hover:text-accent text-center">
-        {{ 'Edit' if _complete else 'Flesh out' }}
+         class="px-2 py-1 rounded border border-border bg-bg-elev text-fg-muted hover:text-accent text-center">
+        Details
       </a>
       <button type="button"
               class="px-2 py-1 rounded border border-border bg-bg-elev text-fg-muted hover:text-danger"
