@@ -504,6 +504,44 @@ def seed(
                             db_run.session_id = f"sess-demo-{ticket.id[:8]}"
                         session.commit()
 
+        # Demo project + ticket exercising the effective-config resolver so the
+        # provenance chips (project default / profile / ticket override /
+        # derived) are visible on the ticket detail page out of the box.
+        try:
+            from nightdesk.domain.projects import create_project
+
+            project = create_project(
+                session,
+                name="Demo project",
+                source_path=source_path,
+                default_workspace_mode="git_worktree",
+                default_base_ref="main",
+                default_toolchains=["user-python-tools"],
+                default_tool_paths=["/opt/demo/bin"],
+            )
+            create_ticket(
+                session,
+                title="Effective config showcase",
+                prompt=(
+                    "Demo ticket: open the detail page to see the effective "
+                    "execution context with provenance chips."
+                ),
+                status="draft",
+                profile_id=profile_ids[0],
+                project_id=project.id,
+                source_path=source_path,
+                priority=2,
+                permission_overrides={"default_model": "claude-opus-4-6"},
+                toolchain_overrides={
+                    "enable": ["rust-user-tools"],
+                    "disable": [],
+                    "extra_paths": ["/opt/ticket/bin"],
+                },
+                additional_dirs=[{"path": "/srv/shared-cache", "mode": "ro"}],
+            )
+        except Exception as exc:  # demo seeding is best-effort
+            print(f"effective-config demo seed skipped: {exc}", file=sys.stderr)
+
         # For the running ticket: insert a WorkerHeartbeat so the pill shows alive
         running_tickets = tickets_by_status.get("running", [])
         if running_tickets:

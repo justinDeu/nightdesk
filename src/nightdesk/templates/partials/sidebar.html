@@ -129,6 +129,21 @@
         </div>
       {% endif %}
 
+      {# --- Effective execution context (read-only) ----------------------- #
+       # The merged run context with provenance chips, resolved by the shared
+       # effective-config resolver and rendered with the same partial used on
+       # the ticket detail page and in the create/edit preview. Lazily loaded
+       # so the merge only runs when a ticket is actually selected. #}
+      <div class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Execution context</span>
+        <div hx-get="/tickets/{{ ticket.id }}/effective-config"
+             hx-trigger="load"
+             hx-swap="innerHTML"
+             data-sidebar-effective-config>
+          <div class="text-xs text-fg-muted italic">Resolving execution context…</div>
+        </div>
+      </div>
+
       {# --- Dependencies section ------------------------------------------- #}
       <div id="dependency-section">
         {% if is_edit %}
