@@ -7,8 +7,9 @@ the templates can evolve without API contract churn.
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -17,20 +18,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
-from nightdesk.db.models import ConfigRow, Run, Ticket, WorkerHeartbeat
+from nightdesk.db.models import ConfigRow, Run, ScheduleWindow, Ticket, WorkerHeartbeat
 from nightdesk.domain.analytics import compute_spend_status
 from nightdesk.domain.query import parse_query, search_tickets, suggest_values
 from nightdesk.domain.search import hit_from_ticket
-from nightdesk.worker.scheduler import in_window
+from nightdesk.worker.scheduler import capacity_for, window_matches
 
 
 _STALE_THRESHOLD_SECONDS = 30.0
 _MIN_QUERY_LEN = 2
-
-
-def _parse_hhmm(s: str) -> time:
-    h, m = s.split(":")
-    return time(int(h), int(m))
 
 
 def _collect_worker_status(session: Session, *, worktree_root: str,
@@ -83,13 +79,31 @@ def _collect_worker_status(session: Session, *, worktree_root: str,
     run_now_running = sum(1 for r in running_runs if r["started_as_run_now"])
     normal_running = max(0, total_running - run_now_running)
 
+    # Multi-window schedule model (mirrors config_routes.worker_status). The
+    # legacy single window_start/window_end/max_parallel triple on ConfigRow is
+    # no longer the source of truth: a fresh install has *no* ScheduleWindow
+    # rows, so capacity is genuinely 0 and there is no active window. Deriving
+    # capacity from the windows (instead of the always-on legacy default) is
+    # what stops the pill from showing a misleading "0/2" with no real capacity.
     now = datetime.now(timezone.utc)
+    tz_name = cfg.schedule_timezone or "UTC"
     try:
-        ws = _parse_hhmm(cfg.window_start)
-        we = _parse_hhmm(cfg.window_end)
-        in_win = in_window(ws, we, now)
+        tz = ZoneInfo(tz_name)
     except Exception:
-        in_win = False
+        tz = ZoneInfo("UTC")
+    windows = list(
+        session.scalars(
+            select(ScheduleWindow).order_by(
+                ScheduleWindow.position.asc(), ScheduleWindow.id.asc()
+            )
+        )
+    )
+    cap = capacity_for(windows, now, tz)
+    in_win = cap is not None
+    effective_max = cap if cap is not None else 0
+    active_window = next(
+        (w.label for w in windows if window_matches(w, now, tz)), None
+    )
 
     spend = compute_spend_status(session, now=now)
 
@@ -112,9 +126,9 @@ def _collect_worker_status(session: Session, *, worktree_root: str,
         "last_seen_at": last_seen_at,
         "stale": stale,
         "in_window": in_win,
-        "window_start": cfg.window_start,
-        "window_end": cfg.window_end,
-        "max_parallel": cfg.max_parallel,
+        "active_window": active_window,
+        "schedule_timezone": tz_name,
+        "max_parallel": effective_max,
         "normal_running": normal_running,
         "run_now_running": run_now_running,
         "total_running": total_running,
