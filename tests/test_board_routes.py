@@ -264,6 +264,142 @@ async def test_edit_modal_surfaces_unknown_toolchain_override(cookie_client, ses
     assert "since-deleted" in body
 
 
+async def test_edit_modal_marks_inherited_toolchain(cookie_client, session, profile):
+    """A toolchain inherited from the project shows an 'Inherited' badge."""
+    project = create_project(
+        session, name="InheritTest", source_path="/tmp/inherit",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="inherited-tc",
+        prompt="",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+        # Project defaults are applied to the ticket via apply_project_defaults,
+        # so user-python-tools appears in the enable list.
+    )
+    # Verify the default was applied.
+    assert t.toolchain_overrides["enable"] == ["user-python-tools"]
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # The inherited badge is rendered for the preset that came from the project.
+    assert "Inherited" in body
+    # The preset row is still a checkbox so the user can opt out.
+    assert 'value="user-python-tools"' in body
+
+
+async def test_edit_modal_marks_explicitly_enabled_toolchain(cookie_client, session, profile):
+    """A toolchain explicitly enabled on a ticket (not from project) shows 'Enabled'."""
+    t = create_ticket(
+        session,
+        title="explicit-tc",
+        prompt="",
+        profile_id=profile.id,
+        source_path="/tmp",
+        toolchain_overrides={"enable": ["rust-user-tools"], "disable": [], "extra_paths": []},
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # Explicitly-enabled presets get an 'Enabled' badge.
+    assert "Enabled" in body
+    assert 'value="rust-user-tools"' in body
+
+
+async def test_edit_modal_marks_disabled_toolchain(cookie_client, session, profile):
+    """A disabled toolchain shows a 'Disabled' badge."""
+    project = create_project(
+        session, name="DisableTest", source_path="/tmp/disable",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="disabled-tc",
+        prompt="",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+        toolchain_overrides={
+            "enable": [],
+            "disable": ["user-python-tools"],
+            "extra_paths": [],
+        },
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # The disabled badge appears for the opted-out preset.
+    assert "Disabled" in body
+    assert "user-python-tools" in body
+
+
+async def test_sidebar_shows_toolchain_summary_with_provenance(cookie_client, session, profile):
+    """The sidebar view-mode shows toolchain summary with inherited/enabled/disabled."""
+    project = create_project(
+        session, name="SidebarTC", source_path="/tmp/sidebar-tc",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="sidebar-tc-ticket",
+        prompt="",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+        toolchain_overrides={
+            "enable": ["user-python-tools", "rust-user-tools"],
+            "disable": [],
+            "extra_paths": ["/opt/custom/bin"],
+        },
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # Sidebar shows the toolchain section header.
+    assert "Toolchain" in body
+    # Inherited from project.
+    assert "Inherited" in body
+    # Explicitly enabled (rust-user-tools is not a project default).
+    assert "Enabled" in body
+    # Extra path is shown.
+    assert "/opt/custom/bin" in body
+
+
+async def test_stale_toolchain_notes_project_default_origin(cookie_client, session, profile):
+    """A stale toolchain that was a project default gets extra context."""
+    project = create_project(
+        session, name="StaleProject", source_path="/tmp/stale",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="stale-origin",
+        prompt="",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+        toolchain_overrides={"enable": ["user-python-tools"]},
+    )
+    # Simulate the preset being deleted after the ticket was created.
+    t.toolchain_overrides = {"enable": ["since-deleted"], "disable": [], "extra_paths": []}
+    # Update the project to no longer reference it either.
+    project.default_toolchains = []
+    session.commit()
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert "data-toolchain-stale" in body
+    assert "since-deleted" in body
+
+
 async def test_create_ticket_via_form_accepts_multiple_linked_workspaces(cookie_client, session, profile):
     r = await cookie_client.post(
         "/board/tickets",

@@ -539,6 +539,23 @@ def seed(
                 },
                 additional_dirs=[{"path": "/srv/shared-cache", "mode": "ro"}],
             )
+            # A second ticket that inherits all toolchains from the project
+            # (no explicit overrides) — exercises the "Inherited" provenance
+            # badge in the toolchain picker.
+            create_ticket(
+                session,
+                title="Inherited toolchains showcase",
+                prompt=(
+                    "Demo ticket: toolchains are inherited entirely from the "
+                    "project defaults (user-python-tools). No per-ticket "
+                    "overrides. The sidebar and edit modal should show "
+                    "'Inherited' badges."
+                ),
+                status="draft",
+                profile_id=profile_ids[0],
+                project_id=project.id,
+                source_path=source_path,
+            )
         except Exception as exc:  # demo seeding is best-effort
             print(f"effective-config demo seed skipped: {exc}", file=sys.stderr)
 

@@ -204,6 +204,56 @@ def test_extra_paths_project_vs_ticket_provenance(session):
     assert ("/opt/ticket-tools", TICKET) in extra
 
 
+def test_toolchain_inherited_from_project_applied_at_creation(session):
+    """apply_project_defaults copies project toolchains into the ticket's enable
+    list. The effective config resolver still attributes them to PROJECT, not
+    TICKET, because it compares against the project's defaults directly."""
+    p = _profile(session)
+    proj = create_project(
+        session, name="InheritProj", source_path="/tmp/inherit",
+        default_toolchains=["user-python-tools", "rust-user-tools"],
+    )
+    # No explicit toolchain_overrides — defaults are applied.
+    t = create_ticket(
+        session, title="Inherited", prompt="x", profile_id=p.id,
+        project_id=proj.id, source_path="/tmp/inherit",
+    )
+    # apply_project_defaults filled in the overrides.
+    assert t.toolchain_overrides["enable"] == ["user-python-tools", "rust-user-tools"]
+    # The resolver attributes both to PROJECT (not TICKET).
+    fm = resolve_for_ticket(session, t).field_map()
+    tc = _items(fm["toolchains"])
+    assert ("user-python-tools", PROJECT) in tc
+    assert ("rust-user-tools", PROJECT) in tc
+    # No TICKET-sourced toolchains because both came from the project.
+    assert not any(s == TICKET for _, s in tc)
+
+
+def test_toolchain_mixed_project_default_and_explicit(session):
+    """When a ticket inherits some presets from the project and explicitly
+    enables others, provenance distinguishes the two."""
+    p = _profile(session)
+    proj = create_project(
+        session, name="MixedProj", source_path="/tmp/mixed",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session, title="Mixed", prompt="x", profile_id=p.id,
+        project_id=proj.id, source_path="/tmp/mixed",
+        toolchain_overrides={
+            "enable": ["user-python-tools", "rust-user-tools"],
+            "disable": [],
+            "extra_paths": [],
+        },
+    )
+    fm = resolve_for_ticket(session, t).field_map()
+    tc = _items(fm["toolchains"])
+    # user-python-tools is in both project and enable → attributed to PROJECT.
+    assert ("user-python-tools", PROJECT) in tc
+    # rust-user-tools is only in enable → attributed to TICKET.
+    assert ("rust-user-tools", TICKET) in tc
+
+
 def test_resolved_tool_paths_are_derived(session):
     p = _profile(session)
     proj = create_project(
