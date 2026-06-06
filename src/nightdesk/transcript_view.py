@@ -14,6 +14,7 @@ for the same canonical event, using the CSS classes declared in
 from __future__ import annotations
 
 import difflib
+import html as _html
 import re
 from dataclasses import dataclass, field
 from typing import NamedTuple
@@ -173,6 +174,234 @@ def assistant_segments(text: str) -> list[TextSegment]:
     if buf:
         out.append(TextSegment("code" if in_code else "text", lang, "\n".join(buf)))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Markdown -> safe HTML for assistant prose (non-code segments).
+#
+# Agents emit GitHub-flavoured markdown in their narration: headings, bold /
+# italic, inline code, links, ordered/unordered lists, blockquotes, tables and
+# horizontal rules. ``render_markdown`` turns one non-code text segment into
+# formatted HTML. Fenced code blocks are split out upstream by
+# ``assistant_segments`` and rendered as <pre class="code"> — they never reach
+# here.
+#
+# SECURITY: the render is XSS-safe by construction. Every character of
+# transcript content is HTML-escaped (``&``, ``<``, ``>`` and, in attribute
+# context, quotes) BEFORE any markup is emitted, so a hostile transcript can
+# never inject raw HTML — a ``<script>`` in the source comes out as the literal
+# text ``&lt;script&gt;``. The only attribute we emit from content is a link
+# ``href``, and that is restricted to an explicit scheme allow-list
+# (http/https/mailto, or root-relative/fragment URLs); anything else (e.g.
+# ``javascript:``) renders as inert literal text. The result is therefore safe
+# to mark ``| safe`` in the template.
+#
+# The JS live-tail in ``templates/partials/transcript_panel.html`` mirrors this
+# (``renderMarkdown``) — keep the two in sync.
+# ---------------------------------------------------------------------------
+
+
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+# A horizontal rule: 3+ of -, * or _ (optionally space-separated), nothing else.
+_MD_HR_RE = re.compile(r"^\s{0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$")
+_MD_ULIST_RE = re.compile(r"^(\s*)[-*+][ \t]+(.*)$")
+_MD_OLIST_RE = re.compile(r"^(\s*)\d+[.)][ \t]+(.*)$")
+# A GFM table delimiter row: pipe-separated runs of dashes with optional colons.
+_MD_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$")
+
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+# Allowed link schemes; anything else renders as inert literal text.
+_MD_SAFE_SCHEMES = ("http://", "https://", "mailto:")
+
+
+def _md_safe_href(url: str) -> str | None:
+    """Return ``url`` if its scheme is safe to use as an href, else ``None``.
+
+    Allows absolute http(s)/mailto URLs and root-relative or in-page fragment
+    links. Rejects everything else (``javascript:``, ``data:``, ``vbscript:``,
+    …) so a hostile link can never run script.
+    """
+    u = url.strip()
+    if not u:
+        return None
+    if u.lower().startswith(_MD_SAFE_SCHEMES):
+        return u
+    if u.startswith(("/", "#")):
+        return u
+    return None
+
+
+def _md_inline(raw: str) -> str:
+    """Render inline markdown (code, links, bold, italic) for one text run.
+
+    Works escape-first: inline code spans and links are stashed behind NUL
+    placeholders, the remaining text is HTML-escaped, emphasis markers (which
+    survive escaping) are converted, then the stashed spans are restored with
+    their own escaping. This guarantees no transcript content reaches the
+    output un-escaped.
+    """
+    codes: list[str] = []
+    links: list[tuple[str, str]] = []
+
+    def _stash_code(m: re.Match) -> str:
+        codes.append(m.group(1))
+        return f"\x00C{len(codes) - 1}\x00"
+
+    def _stash_link(m: re.Match) -> str:
+        links.append((m.group(1), m.group(2)))
+        return f"\x00L{len(links) - 1}\x00"
+
+    s = re.sub(r"`([^`]+)`", _stash_code, raw)
+    s = _MD_LINK_RE.sub(_stash_link, s)
+
+    s = _html.escape(s, quote=False)
+
+    # Bold before italic so ``**x**`` is not eaten by the single-marker rules.
+    s = re.sub(r"\*\*([^*]+?)\*\*", r"<strong>\1</strong>", s)
+    s = re.sub(r"(?<![\w])__([^_]+?)__(?![\w])", r"<strong>\1</strong>", s)
+    s = re.sub(r"\*([^*\s][^*]*?)\*", r"<em>\1</em>", s)
+    s = re.sub(r"(?<![\w])_([^_\s][^_]*?)_(?![\w])", r"<em>\1</em>", s)
+
+    def _restore_link(m: re.Match) -> str:
+        text, url = links[int(m.group(1))]
+        href = _md_safe_href(url)
+        safe_text = _html.escape(text, quote=False)
+        if href is None:
+            return _html.escape(f"[{text}]({url})", quote=False)
+        return (
+            f'<a href="{_html.escape(href, quote=True)}"'
+            f' rel="noopener noreferrer nofollow">{safe_text}</a>'
+        )
+
+    def _restore_code(m: re.Match) -> str:
+        return f"<code>{_html.escape(codes[int(m.group(1))], quote=False)}</code>"
+
+    s = re.sub(r"\x00L(\d+)\x00", _restore_link, s)
+    s = re.sub(r"\x00C(\d+)\x00", _restore_code, s)
+    return s
+
+
+def _md_list_item(line: str):
+    """Return ``(ordered, content)`` if ``line`` is a list item, else ``None``."""
+    m = _MD_ULIST_RE.match(line)
+    if m:
+        return False, m.group(2)
+    m = _MD_OLIST_RE.match(line)
+    if m:
+        return True, m.group(2)
+    return None
+
+
+def _md_split_table_row(line: str) -> list[str]:
+    line = line.strip()
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|"):
+        line = line[:-1]
+    return [c.strip() for c in line.split("|")]
+
+
+def render_markdown(text: str) -> str:
+    """Render assistant markdown prose as XSS-safe formatted HTML.
+
+    Handles headings, bold/italic, inline code, links, ordered/unordered
+    lists, blockquotes, GFM tables, horizontal rules and paragraphs. Returns
+    an HTML string in which every piece of transcript content has been escaped;
+    see the module-level note for the security argument. Returns ``""`` for
+    empty/blank input.
+    """
+    if not text or not text.strip():
+        return ""
+    lines = text.split("\n")
+    n = len(lines)
+    out: list[str] = []
+    para: list[str] = []
+
+    def flush_para() -> None:
+        if para:
+            content = " ".join(p.strip() for p in para).strip()
+            if content:
+                out.append(f"<p>{_md_inline(content)}</p>")
+            para.clear()
+
+    i = 0
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+
+        if not stripped:
+            flush_para()
+            i += 1
+            continue
+
+        m = _MD_HEADING_RE.match(line)
+        if m:
+            flush_para()
+            level = len(m.group(1))
+            out.append(f"<h{level}>{_md_inline(m.group(2).strip())}</h{level}>")
+            i += 1
+            continue
+
+        if _MD_HR_RE.match(line):
+            flush_para()
+            out.append("<hr>")
+            i += 1
+            continue
+
+        # GFM table: a header row immediately followed by a delimiter row.
+        if "|" in line and i + 1 < n and _MD_TABLE_SEP_RE.match(lines[i + 1]):
+            flush_para()
+            header = _md_split_table_row(line)
+            i += 2
+            body: list[list[str]] = []
+            while i < n and lines[i].strip() and "|" in lines[i]:
+                body.append(_md_split_table_row(lines[i]))
+                i += 1
+            cells = ["<table><thead><tr>"]
+            cells += [f"<th>{_md_inline(c)}</th>" for c in header]
+            cells.append("</tr></thead><tbody>")
+            for row in body:
+                cells.append("<tr>")
+                cells += [f"<td>{_md_inline(c)}</td>" for c in row]
+                cells.append("</tr>")
+            cells.append("</tbody></table>")
+            out.append("".join(cells))
+            continue
+
+        if stripped.startswith(">"):
+            flush_para()
+            quote: list[str] = []
+            while i < n and lines[i].strip().startswith(">"):
+                quote.append(re.sub(r"^\s*>\s?", "", lines[i]))
+                i += 1
+            inner = " ".join(q.strip() for q in quote if q.strip()).strip()
+            out.append(f"<blockquote><p>{_md_inline(inner)}</p></blockquote>")
+            continue
+
+        if _md_list_item(line):
+            flush_para()
+            cur_tag: str | None = None
+            # A list is a run of consecutive item lines. Switching marker family
+            # (bullet <-> number) closes the current list and opens the other.
+            while i < n and _md_list_item(lines[i]):
+                ordered, content = _md_list_item(lines[i])
+                tag = "ol" if ordered else "ul"
+                if tag != cur_tag:
+                    if cur_tag:
+                        out.append(f"</{cur_tag}>")
+                    out.append(f"<{tag}>")
+                    cur_tag = tag
+                out.append(f"<li>{_md_inline(content.strip())}</li>")
+                i += 1
+            if cur_tag:
+                out.append(f"</{cur_tag}>")
+            continue
+
+        para.append(line)
+        i += 1
+
+    flush_para()
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------------

@@ -360,6 +360,160 @@
           return out;
         }
 
+        // Render assistant markdown prose to XSS-safe HTML. Mirrors
+        // nightdesk.transcript_view.render_markdown — keep the two in sync.
+        // Security: every piece of content is HTML-escaped before any markup
+        // is emitted; the only content-derived attribute (a link href) is
+        // restricted to an allow-list of safe schemes, so hostile transcript
+        // text can never inject raw HTML or script.
+        const MD_HEADING_RE = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
+        const MD_HR_RE = /^\s{0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$/;
+        const MD_ULIST_RE = /^(\s*)[-*+][ \t]+(.*)$/;
+        const MD_OLIST_RE = /^(\s*)\d+[.)][ \t]+(.*)$/;
+        const MD_TABLE_SEP_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/;
+        const MD_SAFE_SCHEMES = ['http://', 'https://', 'mailto:'];
+
+        function mdSafeHref(url) {
+          const u = (url || '').trim();
+          if (!u) return null;
+          const low = u.toLowerCase();
+          for (const scheme of MD_SAFE_SCHEMES) {
+            if (low.startsWith(scheme)) return u;
+          }
+          if (u.startsWith('/') || u.startsWith('#')) return u;
+          return null;
+        }
+
+        function mdInline(raw) {
+          const codes = [];
+          const links = [];
+          let s = (raw || '').replace(/`([^`]+)`/g, function (_m, c) {
+            codes.push(c);
+            return '\x00C' + (codes.length - 1) + '\x00';
+          });
+          s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_m, text, url) {
+            links.push([text, url]);
+            return '\x00L' + (links.length - 1) + '\x00';
+          });
+          // Escape everything (quote=false equivalent: leave quotes in text).
+          s = s.replace(/[&<>]/g, function (c) {
+            return ({'&': '&amp;', '<': '&lt;', '>': '&gt;'})[c];
+          });
+          s = s.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+          s = s.replace(/(^|[^\w])__([^_]+?)__(?![\w])/g, '$1<strong>$2</strong>');
+          s = s.replace(/\*([^*\s][^*]*?)\*/g, '<em>$1</em>');
+          s = s.replace(/(^|[^\w])_([^_\s][^_]*?)_(?![\w])/g, '$1<em>$2</em>');
+          s = s.replace(/\x00L(\d+)\x00/g, function (_m, idx) {
+            const pair = links[parseInt(idx, 10)];
+            const text = pair[0], url = pair[1];
+            const href = mdSafeHref(url);
+            const safeText = escapeHtml(text);
+            if (href === null) return escapeHtml('[' + text + '](' + url + ')');
+            return '<a href="' + escapeHtml(href) +
+              '" rel="noopener noreferrer nofollow">' + safeText + '</a>';
+          });
+          s = s.replace(/\x00C(\d+)\x00/g, function (_m, idx) {
+            return '<code>' + escapeHtml(codes[parseInt(idx, 10)]) + '</code>';
+          });
+          return s;
+        }
+
+        function mdListItem(line) {
+          let m = MD_ULIST_RE.exec(line);
+          if (m) return {ordered: false, content: m[2]};
+          m = MD_OLIST_RE.exec(line);
+          if (m) return {ordered: true, content: m[2]};
+          return null;
+        }
+
+        function mdSplitTableRow(line) {
+          let s = line.trim();
+          if (s.startsWith('|')) s = s.slice(1);
+          if (s.endsWith('|')) s = s.slice(0, -1);
+          return s.split('|').map(function (c) { return c.trim(); });
+        }
+
+        function renderMarkdown(text) {
+          if (!text || !text.trim()) return '';
+          const lines = text.split('\n');
+          const n = lines.length;
+          const out = [];
+          let para = [];
+          function flushPara() {
+            if (para.length) {
+              const content = para.map(function (p) { return p.trim(); })
+                .join(' ').trim();
+              if (content) out.push('<p>' + mdInline(content) + '</p>');
+              para = [];
+            }
+          }
+          let i = 0;
+          while (i < n) {
+            const line = lines[i];
+            const stripped = line.trim();
+            if (!stripped) { flushPara(); i++; continue; }
+            const h = MD_HEADING_RE.exec(line);
+            if (h) {
+              flushPara();
+              const level = h[1].length;
+              out.push('<h' + level + '>' + mdInline(h[2].trim()) + '</h' + level + '>');
+              i++; continue;
+            }
+            if (MD_HR_RE.test(line)) { flushPara(); out.push('<hr>'); i++; continue; }
+            if (line.indexOf('|') !== -1 && i + 1 < n && MD_TABLE_SEP_RE.test(lines[i + 1])) {
+              flushPara();
+              const header = mdSplitTableRow(line);
+              i += 2;
+              const body = [];
+              while (i < n && lines[i].trim() && lines[i].indexOf('|') !== -1) {
+                body.push(mdSplitTableRow(lines[i])); i++;
+              }
+              const cells = ['<table><thead><tr>'];
+              header.forEach(function (c) { cells.push('<th>' + mdInline(c) + '</th>'); });
+              cells.push('</tr></thead><tbody>');
+              body.forEach(function (row) {
+                cells.push('<tr>');
+                row.forEach(function (c) { cells.push('<td>' + mdInline(c) + '</td>'); });
+                cells.push('</tr>');
+              });
+              cells.push('</tbody></table>');
+              out.push(cells.join(''));
+              continue;
+            }
+            if (stripped.startsWith('>')) {
+              flushPara();
+              const quote = [];
+              while (i < n && lines[i].trim().startsWith('>')) {
+                quote.push(lines[i].replace(/^\s*>\s?/, '')); i++;
+              }
+              const inner = quote.map(function (q) { return q.trim(); })
+                .filter(Boolean).join(' ').trim();
+              out.push('<blockquote><p>' + mdInline(inner) + '</p></blockquote>');
+              continue;
+            }
+            if (mdListItem(line)) {
+              flushPara();
+              let curTag = null;
+              while (i < n && mdListItem(lines[i])) {
+                const it = mdListItem(lines[i]);
+                const tag = it.ordered ? 'ol' : 'ul';
+                if (tag !== curTag) {
+                  if (curTag) out.push('</' + curTag + '>');
+                  out.push('<' + tag + '>');
+                  curTag = tag;
+                }
+                out.push('<li>' + mdInline(it.content.trim()) + '</li>');
+                i++;
+              }
+              if (curTag) out.push('</' + curTag + '>');
+              continue;
+            }
+            para.push(line); i++;
+          }
+          flushPara();
+          return out.join('');
+        }
+
         function toolSummary(evt) {
           const tool = (evt.tool || '').trim();
           const input = evt.input || {};
@@ -527,7 +681,8 @@
               if (seg.kind === 'code') {
                 parts.push(`<pre class="code">${escapeHtml(seg.body)}</pre>`);
               } else if (seg.body) {
-                parts.push(`<p>${escapeHtml(seg.body)}</p>`);
+                // Markdown -> safe HTML (mirrors tv.render_markdown).
+                parts.push(renderMarkdown(seg.body));
               }
             }
             parts.push('</div>');
