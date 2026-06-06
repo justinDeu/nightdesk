@@ -37,7 +37,12 @@ def _run_git(repo_path, *args):
 
 @pytest.fixture
 def git_repo(tmp_path):
-    """Create a temp git repo with two commits and return (path, base_sha, head_sha)."""
+    """Create a temp git repo simulating a run.
+
+    Returns (path, start_sha, head_sha) where ``start_sha`` is the run's start
+    commit and the run then made a commit that modified, added, and deleted
+    files. The working tree is left clean (everything committed).
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -45,14 +50,14 @@ def git_repo(tmp_path):
     _run_git(repo, "config", "user.email", "test@test.com")
     _run_git(repo, "config", "user.name", "Test")
 
-    # Initial commit (base).
+    # State at run start.
     (repo / "hello.txt").write_text("hello world\n")
     (repo / "unchanged.txt").write_text("same content\n")
     _run_git(repo, "add", ".")
     _run_git(repo, "commit", "-m", "initial")
-    base_sha = _run_git(repo, "rev-parse", "HEAD")
+    start_sha = _run_git(repo, "rev-parse", "HEAD")
 
-    # Second commit (head): modify, add, delete files.
+    # What the run committed: modify, add, delete files.
     (repo / "hello.txt").write_text("hello universe\nsecond line\n")
     (repo / "new_file.py").write_text("print('hi')\n")
     (repo / "unchanged.txt").unlink()
@@ -60,7 +65,7 @@ def git_repo(tmp_path):
     _run_git(repo, "commit", "-m", "changes")
     head_sha = _run_git(repo, "rev-parse", "HEAD")
 
-    return repo, base_sha, head_sha
+    return repo, start_sha, head_sha
 
 
 # ---------------------------------------------------------------------------
@@ -71,14 +76,14 @@ def git_repo(tmp_path):
 class TestComputeRunDiff:
 
     def test_basic_diff(self, git_repo):
-        repo, base_sha, head_sha = git_repo
-        result = compute_run_diff(str(repo), base_sha, head_sha)
+        repo, start_sha, head_sha = git_repo
+        result = compute_run_diff(str(repo), start_sha)
 
         assert result.error == ""
         assert result.total_files == 3  # hello.txt, new_file.py, unchanged.txt
         assert result.total_added > 0
         assert result.total_deleted > 0
-        assert result.base_sha == base_sha[:12]
+        assert result.base_sha == start_sha[:12]
         assert result.head_sha == head_sha[:12]
 
         paths = [f.path for f in result.files]
@@ -87,8 +92,8 @@ class TestComputeRunDiff:
         assert "unchanged.txt" in paths
 
     def test_modified_file_counts(self, git_repo):
-        repo, base_sha, head_sha = git_repo
-        result = compute_run_diff(str(repo), base_sha, head_sha)
+        repo, start_sha, _ = git_repo
+        result = compute_run_diff(str(repo), start_sha)
 
         hello = next(f for f in result.files if f.path == "hello.txt")
         # "hello world\n" -> "hello universe\nsecond line\n"
@@ -96,44 +101,108 @@ class TestComputeRunDiff:
         assert hello.lines_deleted >= 1
 
     def test_added_file(self, git_repo):
-        repo, base_sha, head_sha = git_repo
-        result = compute_run_diff(str(repo), base_sha, head_sha)
+        repo, start_sha, _ = git_repo
+        result = compute_run_diff(str(repo), start_sha)
 
         new_file = next(f for f in result.files if f.path == "new_file.py")
         assert new_file.lines_added > 0
         assert new_file.lines_deleted == 0
 
     def test_deleted_file(self, git_repo):
-        repo, base_sha, head_sha = git_repo
-        result = compute_run_diff(str(repo), base_sha, head_sha)
+        repo, start_sha, _ = git_repo
+        result = compute_run_diff(str(repo), start_sha)
 
         deleted = next(f for f in result.files if f.path == "unchanged.txt")
         assert deleted.lines_added == 0
         assert deleted.lines_deleted > 0
 
     def test_no_changes(self, git_repo):
-        repo, base_sha, _ = git_repo
-        result = compute_run_diff(str(repo), base_sha, base_sha)
+        repo, _, head_sha = git_repo
+        # Start == end (no work done since the start commit) -> empty diff.
+        result = compute_run_diff(str(repo), head_sha)
         assert result.total_files == 0
         assert result.total_added == 0
         assert result.total_deleted == 0
         assert result.empty
 
+    def test_only_this_run_not_whole_branch(self, git_repo):
+        """The diff must start from the run's start commit, not the branch base.
+
+        A prior run's commit (between the branch base and this run's start) must
+        NOT show up in this run's diff.
+        """
+        repo, start_sha, _ = git_repo
+        # This run starts at HEAD and makes one more commit.
+        run_start = _run_git(repo, "rev-parse", "HEAD")
+        (repo / "this_run.txt").write_text("only this run\n")
+        _run_git(repo, "add", "-A")
+        _run_git(repo, "commit", "-m", "this run's work")
+
+        result = compute_run_diff(str(repo), run_start)
+        paths = [f.path for f in result.files]
+        assert paths == ["this_run.txt"]
+        # Files changed by earlier commits must not appear.
+        assert "hello.txt" not in paths
+        assert "new_file.py" not in paths
+
+    def test_includes_uncommitted_tracked_changes(self, git_repo):
+        """Uncommitted edits to tracked files are part of the run diff."""
+        repo, _, head_sha = git_repo
+        run_start = head_sha
+        # Run modifies a tracked file but does NOT commit.
+        (repo / "hello.txt").write_text("hello universe\nsecond line\nthird\n")
+
+        result = compute_run_diff(str(repo), run_start)
+        hello = next(f for f in result.files if f.path == "hello.txt")
+        assert hello.lines_added >= 1
+
+    def test_includes_untracked_files(self, git_repo):
+        """New untracked files the run created appear as added files."""
+        repo, _, head_sha = git_repo
+        run_start = head_sha
+        (repo / "scratch.md").write_text("notes from the run\n")
+
+        result = compute_run_diff(str(repo), run_start)
+        paths = [f.path for f in result.files]
+        assert "scratch.md" in paths
+        scratch = next(f for f in result.files if f.path == "scratch.md")
+        assert scratch.lines_added > 0
+        assert scratch.lines_deleted == 0
+
+    def test_commit_plus_uncommitted_plus_untracked(self, git_repo):
+        """A realistic run: a commit, a tracked edit, and an untracked file."""
+        repo, _, head_sha = git_repo
+        run_start = head_sha
+        # Committed work.
+        (repo / "committed.txt").write_text("committed during run\n")
+        _run_git(repo, "add", "-A")
+        _run_git(repo, "commit", "-m", "run commit")
+        # Uncommitted tracked edit.
+        (repo / "hello.txt").write_text("hello universe\nsecond line\nedited\n")
+        # Untracked file.
+        (repo / "untracked.txt").write_text("left behind\n")
+
+        result = compute_run_diff(str(repo), run_start)
+        paths = sorted(f.path for f in result.files)
+        assert paths == ["committed.txt", "hello.txt", "untracked.txt"]
+
     def test_nonexistent_repo(self, tmp_path):
-        result = compute_run_diff(str(tmp_path / "nonexistent"), None, None)
+        result = compute_run_diff(str(tmp_path / "nonexistent"), None)
         assert result.error != ""
         assert result.files == []
         assert result.total_files == 0
 
-    def test_missing_head_uses_current(self, git_repo):
-        repo, base_sha, head_sha = git_repo
-        # When head_sha is None, should resolve to HEAD.
-        result = compute_run_diff(str(repo), base_sha, None)
+    def test_missing_start_falls_back_to_last_commit(self, git_repo):
+        repo, start_sha, head_sha = git_repo
+        # With no start commit, fall back to parent of HEAD (the last commit).
+        result = compute_run_diff(str(repo), None)
         assert result.head_sha == head_sha[:12]
+        assert result.base_sha == start_sha[:12]
+        assert result.total_files == 3
 
     def test_branch_passed_through(self, git_repo):
-        repo, base_sha, head_sha = git_repo
-        result = compute_run_diff(str(repo), base_sha, head_sha, branch="feat-xyz")
+        repo, start_sha, _ = git_repo
+        result = compute_run_diff(str(repo), start_sha, branch="feat-xyz")
         assert result.branch == "feat-xyz"
 
 
@@ -320,6 +389,78 @@ async def test_diff_endpoint_with_git_repo(client, session, tmp_path):
     assert "a.txt" in paths
     assert "b.txt" in paths
 
+
+
+async def test_diff_endpoint_uses_run_start_sha(client, session, tmp_path):
+    """The endpoint diffs from the run's start commit, not the branch base.
+
+    Commits made before the run started must not appear in the run diff, and
+    uncommitted/untracked changes the run left behind must.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    (repo / "a.txt").write_text("aaa\n")
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "branch base"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], **{_PROC_DIR_KW: str(repo)},
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    # A prior run committed here — must NOT show in this run's diff.
+    (repo / "prior.txt").write_text("from an earlier run\n")
+    subprocess.run(["git", "add", "-A"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "prior run"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    run_start = subprocess.run(
+        ["git", "rev-parse", "HEAD"], **{_PROC_DIR_KW: str(repo)},
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    # This run: one commit + one untracked file left uncommitted.
+    (repo / "this_run.txt").write_text("this run's committed work\n")
+    subprocess.run(["git", "add", "-A"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "this run"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    (repo / "scratch.txt").write_text("uncommitted scratch\n")
+
+    profile = create_profile(
+        session, name="dp_start", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(session, title="dt_start", prompt="", priority=0,
+                      profile_id=profile.id, run_now=False,
+                      status="review", source_path=str(repo))
+    run = Run(
+        ticket_id=t.id,
+        started_at=datetime.now(timezone.utc),
+        worktree_path=str(repo),
+        transcript_path="/tmp/tr_start",
+        host="testhost",
+    )
+    session.add(run)
+    session.flush()
+    ws = TicketWorkspace(
+        ticket_id=t.id,
+        run_id=run.id,
+        role="primary",
+        kind="git_worktree",
+        repo_root=str(repo),
+        base_sha=base,          # branch base (wrong endpoint for a run diff)
+        run_start_sha=run_start,  # the run's actual start commit
+        branch="feat-test",
+        state="ready",
+    )
+    session.add(ws)
+    session.commit()
+
+    r = await client.get(f"/api/v1/runs/{run.id}/diff")
+    assert r.status_code == 200
+    data = r.json()
+    paths = sorted(f["path"] for f in data["files"])
+    assert paths == ["scratch.txt", "this_run.txt"]
+    assert "prior.txt" not in paths  # earlier run's commit excluded
+    assert data["base_sha"] == run_start[:12]
 
 
 async def test_diff_endpoint_ticket_workspace_fallback_uses_worktree_path(

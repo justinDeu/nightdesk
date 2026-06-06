@@ -81,8 +81,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
         result = compute_run_diff(
             repo_root=repo_path,
-            base_sha=ws.base_sha,
-            head_sha=ws.head_sha,
+            start_sha=ws.run_start_sha or ws.base_sha,
             branch=ws.branch,
         )
         return JSONResponse(_diff_to_json(result))
