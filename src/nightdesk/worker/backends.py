@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Callable
 
 from nightdesk.worker.claude_executor import ClaudeExecutor
-from nightdesk.worker.executor import DummyExecutor, Executor
+from nightdesk.worker.executor import DummyExecutor, Executor, OmpRpcExecutor
 
 
 _Factory = Callable[[], Executor]
@@ -23,6 +23,10 @@ _Factory = Callable[[], Executor]
 
 _REGISTRY: dict[str, _Factory] = {
     "claude_sdk": lambda: ClaudeExecutor(),
+    # ``omp_rpc`` dials a remote Open-Model-Protocol endpoint. Its config
+    # surface (profile editor, capability descriptors) is modelled ahead of
+    # the runtime wiring; the executor fails loudly until that lands.
+    "omp_rpc": lambda: OmpRpcExecutor(),
     # ``dummy`` is the test-mode backend used in conftest / CI smoke tests.
     "dummy": lambda: DummyExecutor(),
 }
