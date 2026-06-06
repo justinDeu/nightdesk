@@ -668,6 +668,150 @@ def _is_dependency_satisfied(session: Session, upstream: Ticket) -> tuple[bool, 
     return False, f"upstream status is '{upstream.status}'"
 
 
+# --- Focused metadata updates -------------------------------------------------
+# Thin helpers for the property picker, list inline edits, keyboard actions,
+# and bulk operations.  Each function touches exactly one field and returns
+# the updated Ticket.  They deliberately avoid the full ``update_ticket``
+# code path (which handles workspaces, toolchains, etc.) to keep the
+# interaction lightweight and avoid unintended side-effects.
+
+
+def update_ticket_priority(session: Session, ticket_id: str,
+                           priority: int) -> Ticket:
+    """Set the priority on a ticket.  ``priority`` must be a non-negative
+    integer; the UI maps named levels (critical / high / medium / low) to
+    concrete values before calling this."""
+    if not isinstance(priority, int) or priority < 0:
+        raise ValueError("priority must be a non-negative integer")
+    t = get_ticket(session, ticket_id)
+    t.priority = priority
+    t.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(t)
+    return t
+
+
+def update_ticket_project(session: Session, ticket_id: str,
+                          project_id: Optional[str]) -> Ticket:
+    """Set or clear the project assignment on a ticket.  Validates that the
+    project exists when setting a non-null value."""
+    if project_id is not None:
+        get_project(session, project_id)
+    t = get_ticket(session, ticket_id)
+    t.project_id = project_id
+    t.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(t)
+    return t
+
+
+def update_ticket_profile(session: Session, ticket_id: str,
+                          profile_id: str) -> Ticket:
+    """Reassign a ticket to a different profile.  Validates that the profile
+    exists."""
+    from nightdesk.domain.profiles import get_profile
+    get_profile(session, profile_id)
+    t = get_ticket(session, ticket_id)
+    t.profile_id = profile_id
+    t.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(t)
+    return t
+
+
+# --- Bulk metadata updates ----------------------------------------------------
+
+def bulk_update_priority(
+    session: Session,
+    ticket_ids: list[str],
+    priority: int,
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk priority update.  Returns ``(updated, skipped)`` where each
+    skipped entry is ``{"ticket_id": ..., "reason": ...}``."""
+    if not isinstance(priority, int) or priority < 0:
+        raise ValueError("priority must be a non-negative integer")
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = update_ticket_priority(session, tid, priority)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+    return updated, skipped
+
+
+def bulk_update_status(
+    session: Session,
+    ticket_ids: list[str],
+    new_status: str,
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk status transition.  Each ticket is transitioned independently;
+    tickets that cannot transition are skipped rather than failing the whole
+    batch.  Returns ``(updated, skipped)``."""
+    if new_status not in _ALL_STATUSES:
+        raise InvalidTransition(f"unknown status {new_status!r}")
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = transition_status(session, tid, new_status)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+        except InvalidTransition as exc:
+            skipped.append({"ticket_id": tid, "reason": str(exc)})
+    return updated, skipped
+
+
+def bulk_update_project(
+    session: Session,
+    ticket_ids: list[str],
+    project_id: Optional[str],
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk project assignment.  Validates the project once, then applies to
+    each ticket.  Returns ``(updated, skipped)``."""
+    if project_id is not None:
+        get_project(session, project_id)
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = get_ticket(session, tid)
+            t.project_id = project_id
+            t.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            session.refresh(t)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+    return updated, skipped
+
+
+def bulk_update_profile(
+    session: Session,
+    ticket_ids: list[str],
+    profile_id: str,
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk profile reassignment.  Validates the profile once, then applies to
+    each ticket.  Returns ``(updated, skipped)``."""
+    from nightdesk.domain.profiles import get_profile
+    get_profile(session, profile_id)
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = get_ticket(session, tid)
+            t.profile_id = profile_id
+            t.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            session.refresh(t)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+    return updated, skipped
+
+
 # --- internals ---------------------------------------------------------------
 
 

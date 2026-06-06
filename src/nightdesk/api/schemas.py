@@ -636,6 +636,101 @@ class DependencyCreate(BaseModel):
     depends_on_id: str
 
 
+# --- Focused metadata update schemas -------------------------------------------
+# Lightweight payloads for the property picker, list inline edits, keyboard
+# actions, and bulk operations.  Each schema targets exactly one ticket field
+# so callers don't need to construct a full TicketUpdate just to change the
+# priority.  Bulk variants accept a list of ticket IDs and return a
+# BulkUpdateResult with per-ticket success/skip details.
+
+
+class TicketPriorityUpdate(BaseModel):
+    """Sparse priority update.  Accepts any non-negative integer; the UI maps
+    named levels (critical / high / medium / low) to concrete values."""
+
+    priority: int
+
+    @field_validator("priority")
+    @classmethod
+    def _non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("priority must be >= 0")
+        return v
+
+
+class TicketStatusUpdate(BaseModel):
+    """Focused status transition.  Respects the ticket lifecycle state machine;
+    the domain layer rejects invalid transitions with InvalidTransition."""
+
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def _valid_status(cls, v: str) -> str:
+        if v not in _LIFECYCLE_STATUSES:
+            raise ValueError(
+                f"status must be one of {_LIFECYCLE_STATUSES}, got {v!r}"
+            )
+        return v
+
+
+class TicketProjectUpdate(BaseModel):
+    """Sparse project assignment.  Pass ``null`` to clear."""
+
+    project_id: Optional[str] = None
+
+
+class TicketProfileUpdate(BaseModel):
+    """Sparse profile reassignment.  The new profile must exist."""
+
+    profile_id: str
+
+
+class BulkPriorityUpdate(BaseModel):
+    ticket_ids: list[str] = Field(min_length=1)
+    priority: int
+
+    @field_validator("priority")
+    @classmethod
+    def _non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("priority must be >= 0")
+        return v
+
+
+class BulkStatusUpdate(BaseModel):
+    ticket_ids: list[str] = Field(min_length=1)
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def _valid_status(cls, v: str) -> str:
+        if v not in _LIFECYCLE_STATUSES:
+            raise ValueError(
+                f"status must be one of {_LIFECYCLE_STATUSES}, got {v!r}"
+            )
+        return v
+
+
+class BulkProjectUpdate(BaseModel):
+    ticket_ids: list[str] = Field(min_length=1)
+    project_id: Optional[str] = None
+
+
+class BulkProfileUpdate(BaseModel):
+    ticket_ids: list[str] = Field(min_length=1)
+    profile_id: str
+
+
+class BulkUpdateResult(BaseModel):
+    """Result of a bulk metadata update.  ``updated`` holds the tickets that
+    were changed; ``skipped`` lists tickets that could not be updated (not
+    found, invalid transition, etc.) with a human-readable reason."""
+
+    updated: list[TicketOut]
+    skipped: list[dict]
+
+
 # --- Cron jobs ----------------------------------------------------------------
 
 # Cron is directory-only in v1. The API accepts 'directory'/'in_place' and

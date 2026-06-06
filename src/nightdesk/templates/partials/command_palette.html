@@ -69,16 +69,61 @@
       ('?', 'Show this cheat sheet'),
       ('Esc', 'Close palette or dialog'),
     ] %}
+    {% set _nav_shortcuts = [
+      ('J / K', 'Next / previous ticket on board'),
+    ] %}
+    {% set _view_shortcuts = [
+      ('/', 'Focus search / filter bar'),
+    ] %}
+    {% set _ticket_shortcuts = [
+      ('E', 'Edit focused ticket'),
+      ('P', 'Set priority'),
+      ('S', 'Set status'),
+      ('L', 'Set labels'),
+      ('A', 'Archive'),
+      ('R', 'Run now / Requeue'),
+      ('Space', 'Peek ticket'),
+    ] %}
     {% for keys, label in _shortcuts %}
       <div class="flex items-center justify-between gap-4">
         <span class="text-fg-muted">{{ label }}</span>
         <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
       </div>
     {% endfor %}
+    {% if _nav_shortcuts %}
+    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">Board navigation</h3>
+    {% for keys, label in _nav_shortcuts %}
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-fg-muted">{{ label }}</span>
+        <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
+      </div>
+    {% endfor %}
+    {% endif %}
+    {% if _view_shortcuts %}
+    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">View &amp; display</h3>
+    {% for keys, label in _view_shortcuts %}
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-fg-muted">{{ label }}</span>
+        <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
+      </div>
+    {% endfor %}
+    <p class="text-[11px] text-fg-muted mt-1">Use the command palette to toggle board/runs view.</p>
+    {% endif %}
+    {% if _ticket_shortcuts %}
+    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">Focused ticket</h3>
+    {% for keys, label in _ticket_shortcuts %}
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-fg-muted">{{ label }}</span>
+        <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
+      </div>
+    {% endfor %}
+    <p class="text-[11px] text-fg-muted mt-1">These act on the cursor-selected ticket (board) or current ticket (detail page).</p>
+    {% endif %}
     <p class="pt-2 text-[11px] leading-snug text-fg-muted border-t border-border mt-3">
       Shortcuts are an enhancement. Every action stays reachable by mouse:
       the header search box, the + New ticket button, and the per-ticket
-      Run-now / Archive / Requeue controls.
+      Run-now / Archive / Requeue controls. Shortcuts are ignored while
+      typing in input fields.
     </p>
   </div>
   </div>

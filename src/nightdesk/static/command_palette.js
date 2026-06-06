@@ -1,12 +1,13 @@
 // command_palette.js
 //
 // Keyboard navigation for the nightdesk board: a Ctrl/Cmd+K command palette
-// plus a small set of global shortcuts. Pure client JS, no build step.
+// plus a small set of global shortcuts and focused-ticket property actions.
+// Pure client JS, no build step.
 //
 // PROGRESSIVE ENHANCEMENT: every action here is also reachable by mouse
 // (header search box, "+ New ticket" button, per-ticket Run-now / Archive /
-// Requeue controls, nav links). If this script fails to load nothing breaks;
-// the shortcuts simply don't fire.
+// Requeue controls, nav links, property picker chips). If this script fails
+// to load nothing breaks; the shortcuts simply don't fire.
 //
 // AUTH NOTE: the JSON API under /api/v1/* is bearer-only and 401s for the
 // browser's cookie session, so the palette talks to the cookie-authed UI
@@ -74,17 +75,34 @@
     return qi === q.length ? score : null;
   }
 
-  // ---- current ticket context -------------------------------------------
-  // On /tickets/{id} the focused ticket is the page. On the board it's the
-  // card whose edit-sidebar is open (data-selected-ticket-id).
+  // ---- cursor / focused ticket -------------------------------------------
+  // On /tickets/{id} the focused ticket is the page. On the board the cursor
+  // tracks a position in the card list; J/K move it, and the sidebar opens
+  // when the cursor lands on a card. The cursor delegates to the existing
+  // HTMX sidebar swap so property pickers in the sidebar are always wired.
 
+  function cssEscape(s) {
+    if (window.CSS && CSS.escape) return CSS.escape(s);
+    return String(s).replace(/["\\\]]/g, "\\$&");
+  }
+
+  // Get the currently focused ticket context. On the board this is the
+  // cursor-selected card; on /tickets/{id} it's the page ticket.
   function currentTicket() {
+    // Ticket detail page — the focused ticket IS the page.
     var m = location.pathname.match(/^\/tickets\/([^/]+)\/?$/);
     if (m) {
       return { id: m[1], title: document.title.replace(/ \| nightdesk$/, "") };
     }
+    // Board — use the sidebar's selected ticket, or fall back to the
+    // cursor-tracked card.
     var sidebar = document.getElementById("sidebar");
     var sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    if (!sel) {
+      // Check the keyboard cursor
+      var cursor = document.querySelector("li[data-ticket-id][data-nd-cursor]");
+      if (cursor) sel = cursor.getAttribute("data-ticket-id");
+    }
     if (sel) {
       var card = document.querySelector('li[data-ticket-id="' + cssEscape(sel) + '"]');
       var title = card
@@ -95,9 +113,94 @@
     return null;
   }
 
-  function cssEscape(s) {
-    if (window.CSS && CSS.escape) return CSS.escape(s);
-    return String(s).replace(/["\\\]]/g, "\\$&");
+  // ---- board cursor: J/K navigation between cards ------------------------
+
+  // Collect all board cards in visual order (left-to-right columns, then
+  // top-to-bottom within each column).
+  function boardCards() {
+    var out = [];
+    var columns = document.querySelectorAll("section[data-column]");
+    columns.forEach(function (col) {
+      col.querySelectorAll("li[data-ticket-id]").forEach(function (card) {
+        out.push(card);
+      });
+    });
+    return out;
+  }
+
+  function cursorIndex() {
+    var cards = boardCards();
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].hasAttribute("data-nd-cursor")) return i;
+    }
+    // Fall back to the sidebar-selected card.
+    var sidebar = document.getElementById("sidebar");
+    var sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    if (sel) {
+      for (var j = 0; j < cards.length; j++) {
+        if (cards[j].getAttribute("data-ticket-id") === sel) return j;
+      }
+    }
+    return -1;
+  }
+
+  function setCursor(idx) {
+    var cards = boardCards();
+    if (!cards.length) return;
+    // Clamp to bounds.
+    if (idx < 0) idx = 0;
+    if (idx >= cards.length) idx = cards.length - 1;
+
+    // Clear old cursor highlight.
+    var prev = document.querySelector("li[data-ticket-id][data-nd-cursor]");
+    if (prev) {
+      prev.removeAttribute("data-nd-cursor");
+      prev.classList.remove("nd-cursor-active");
+    }
+
+    var card = cards[idx];
+    card.setAttribute("data-nd-cursor", "");
+    card.classList.add("nd-cursor-active");
+    card.scrollIntoView({ block: "nearest" });
+
+    // Open the sidebar for this card (same as clicking it), so property
+    // pickers are wired in the sidebar.
+    var tid = card.getAttribute("data-ticket-id");
+    var sidebar = document.getElementById("sidebar");
+    if (sidebar && typeof window.htmx !== "undefined") {
+      window.htmx.ajax("GET", "/board/sidebar?ticket_id=" + encodeURIComponent(tid), {
+        target: "#sidebar",
+        swap: "outerHTML",
+      });
+    }
+  }
+
+  function moveCursor(delta) {
+    // Only works on the board page.
+    if (!document.getElementById("board-grid")) return false;
+    var idx = cursorIndex();
+    if (idx < 0) {
+      // No cursor yet — place it on the first card.
+      setCursor(0);
+      return true;
+    }
+    setCursor(idx + delta);
+    return true;
+  }
+
+  // Re-apply cursor highlight after HTMX swaps replace cards.
+  function restoreCursor() {
+    var sidebar = document.getElementById("sidebar");
+    var sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    if (!sel) return;
+    var cards = boardCards();
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].getAttribute("data-ticket-id") === sel) {
+        cards[i].setAttribute("data-nd-cursor", "");
+        cards[i].classList.add("nd-cursor-active");
+        return;
+      }
+    }
   }
 
   // ---- ticket actions (cookie-authed UI endpoints) -----------------------
@@ -178,51 +281,255 @@
   }
   window.ndOpenCreateTicket = openCreateTicket;
 
+  // ---- focused ticket: property action shortcuts -------------------------
+  // These require a focused ticket (from the cursor on the board, or the
+  // page context on ticket detail). They reuse the same picker/update paths
+  // as mouse actions: ndOpenPropertyPicker for L/P/S, postAction for A/R,
+  // the edit modal for E, and a future peek panel for Space.
+
+  function openEditForTicket(ctx) {
+    // Board: the sidebar already carries an edit modal for the selected ticket.
+    var editModal = document.getElementById("ticket-edit-modal");
+    if (editModal) {
+      openModalEl(editModal);
+      return;
+    }
+    // Ticket detail page also has the edit modal.
+    editModal = document.querySelector('dialog[id="ticket-edit-modal"]');
+    if (editModal) {
+      openModalEl(editModal);
+      return;
+    }
+    // Fallback: navigate to the ticket page.
+    location.href = "/tickets/" + encodeURIComponent(ctx.id);
+  }
+
+  function smartRunOrRequeue(ctx) {
+    // "R" triggers run-now if the ticket can be run, otherwise requeue.
+    // The valid run-now statuses: draft, queued, review, archived.
+    // The valid requeue statuses: review, archived.
+    // We try run-now first; if the ticket is in running we show feedback.
+    // Use the sidebar or card to infer status.
+    var card = document.querySelector('li[data-ticket-id="' + cssEscape(ctx.id) + '"]');
+    var status = "";
+    if (card) {
+      // Card is inside a column with data-status.
+      var col = card.closest("section[data-column]");
+      if (col) status = col.getAttribute("data-column") || "";
+    }
+    // On ticket detail, look for status chip.
+    if (!status) {
+      var chip = document.querySelector('[data-property-chip="' + ctx.id + ':status"]');
+      if (chip) status = (chip.textContent || "").trim().toLowerCase();
+    }
+
+    if (status === "running") {
+      flashStatus("Ticket is already running");
+      return;
+    }
+    if (status === "review" || status === "archived") {
+      runTicketAction("requeue", ctx.id, ctx.title);
+      return;
+    }
+    // Default: try run-now (works for draft, queued, and any other valid state).
+    runTicketAction("run-now", ctx.id, ctx.title);
+  }
+
+  function openLabelPicker(ctx) {
+    // Labels may not be registered in the property picker yet. Check for the
+    // "labels" property in the registry; if absent, flash a message and leave
+    // a clear hook for the future implementation.
+    var ok = window.ndOpenPropertyPicker &&
+      window.ndOpenPropertyPicker(ctx.id, "labels");
+    if (!ok) {
+      flashStatus("Label picker: select a ticket first, or labels not yet configured");
+    }
+  }
+
+  function openPeek(ctx) {
+    // Lightweight peek panel — hook for future implementation.
+    // If a peek panel component exists (window.ndPeekTicket), delegate to it.
+    // Otherwise flash a placeholder message.
+    if (typeof window.ndPeekTicket === "function") {
+      window.ndPeekTicket(ctx.id);
+      return;
+    }
+    flashStatus("Peek: " + (ctx.title || ctx.id));
+  }
+
   // ---- command model -----------------------------------------------------
-  // Each command: { label, hint, run }. Built fresh per open so the current
-  // ticket context is accurate.
+  // Each command: { label, shortcut, hint, section, run }.
+  //   shortcut  — the direct keyboard key(s), shown as a kbd badge so users
+  //               discover shortcuts from the palette and learn to bypass it.
+  //   hint      — secondary context (e.g. "draft"), shown as muted text.
+  //   section   — groups commands visually (header row in the list).
+  // Built fresh per open so the current ticket context and status are accurate.
+
+  function focusedTicketStatus(ctx) {
+    if (!ctx) return "";
+    var card = document.querySelector('li[data-ticket-id="' + cssEscape(ctx.id) + '"]');
+    if (card) {
+      var col = card.closest("section[data-column]");
+      if (col) return (col.getAttribute("data-column") || "").toLowerCase();
+    }
+    var chip = document.querySelector('[data-property-chip="' + ctx.id + ':status"]');
+    if (chip) return (chip.textContent || "").trim().toLowerCase();
+    return "";
+  }
+
+  // Status-aware sort order for ticket actions. When a ticket is focused we
+  // promote the most relevant actions and demote invalid ones. Returns an
+  // array of action keys in display order.
+  function statusActionOrder(status) {
+    // Default order: run → detail → edit → peek → priority → status →
+    // labels → archive → requeue
+    var order = [
+      "run-now", "open-detail", "edit", "peek",
+      "priority", "status", "labels", "archive", "requeue",
+    ];
+    switch (status) {
+      case "running":
+        // Can't run/requeue/archive while running; show peek & edit first.
+        order = ["peek", "edit", "open-detail", "priority", "status", "labels"];
+        break;
+      case "review":
+        // Requeue & archive are the primary actions from review.
+        order = ["requeue", "archive", "open-detail", "edit", "peek", "priority", "status", "labels", "run-now"];
+        break;
+      case "archived":
+        // Requeue is the primary action from archived.
+        order = ["requeue", "open-detail", "edit", "peek", "priority", "status", "labels", "archive", "run-now"];
+        break;
+      case "draft":
+      case "queued":
+        // Run-now is the primary action.
+        order = ["run-now", "edit", "open-detail", "peek", "priority", "status", "labels", "archive", "requeue"];
+        break;
+    }
+    return order;
+  }
 
   function baseCommands() {
     var cmds = [];
     var ctx = currentTicket();
+    var status = focusedTicketStatus(ctx);
+
     if (ctx) {
       var short = ctx.title.length > 40 ? ctx.title.slice(0, 39) + "…" : ctx.title;
-      cmds.push({
-        label: "Run now: " + short, hint: "selected ticket",
-        run: function () { runTicketAction("run-now", ctx.id, ctx.title); },
-      });
-      cmds.push({
-        label: "Open detail: " + short, hint: "selected ticket",
-        run: function () { location.href = "/tickets/" + encodeURIComponent(ctx.id); },
-      });
-      cmds.push({
-        label: "Archive: " + short, hint: "selected ticket",
-        run: function () { runTicketAction("archive", ctx.id, ctx.title); },
-      });
-      cmds.push({
-        label: "Requeue: " + short, hint: "selected ticket",
-        run: function () { runTicketAction("requeue", ctx.id, ctx.title); },
-      });
-      // Metadata edits reuse the ONE shared property-picker primitive: the
-      // command just opens the relevant chip's popover (on the sidebar or the
-      // detail header) rather than shipping its own metadata UI.
-      ["priority", "status", "project"].forEach(function (prop) {
-        var nice = prop.charAt(0).toUpperCase() + prop.slice(1);
-        cmds.push({
-          label: "Set " + prop + ": " + short,
-          hint: "property",
+
+      // Build ticket-action commands with status-aware ordering.
+      var ticketActions = {
+        "run-now": {
+          label: "Run now: " + short, shortcut: "R", hint: status || "ticket",
+          section: "Ticket actions",
+          run: function () { runTicketAction("run-now", ctx.id, ctx.title); },
+        },
+        "open-detail": {
+          label: "Open detail: " + short, shortcut: "", hint: "Enter",
+          section: "Ticket actions",
+          run: function () { location.href = "/tickets/" + encodeURIComponent(ctx.id); },
+        },
+        "archive": {
+          label: "Archive: " + short, shortcut: "A", hint: status || "ticket",
+          section: "Ticket actions",
+          run: function () { runTicketAction("archive", ctx.id, ctx.title); },
+        },
+        "requeue": {
+          label: "Requeue: " + short, shortcut: "R", hint: status || "ticket",
+          section: "Ticket actions",
+          run: function () { runTicketAction("requeue", ctx.id, ctx.title); },
+        },
+        "edit": {
+          label: "Edit: " + short, shortcut: "E", hint: "",
+          section: "Ticket actions",
+          run: function () { openEditForTicket(ctx); },
+        },
+        "peek": {
+          label: "Peek: " + short, shortcut: "Space", hint: "",
+          section: "Ticket actions",
+          run: function () { openPeek(ctx); },
+        },
+        "priority": {
+          label: "Set priority: " + short, shortcut: "P", hint: "",
+          section: "Properties",
           run: function () {
             var ok = window.ndOpenPropertyPicker &&
-              window.ndOpenPropertyPicker(ctx.id, prop);
-            if (!ok) flashStatus("Open the ticket to change its " + prop);
+              window.ndOpenPropertyPicker(ctx.id, "priority");
+            if (!ok) flashStatus("Open the ticket to change its priority");
           },
-        });
+        },
+        "status": {
+          label: "Set status: " + short, shortcut: "S", hint: "",
+          section: "Properties",
+          run: function () {
+            var ok = window.ndOpenPropertyPicker &&
+              window.ndOpenPropertyPicker(ctx.id, "status");
+            if (!ok) flashStatus("Open the ticket to change its status");
+          },
+        },
+        "labels": {
+          label: "Set labels: " + short, shortcut: "L", hint: "",
+          section: "Properties",
+          run: function () { openLabelPicker(ctx); },
+        },
+      };
+
+      var actionOrder = statusActionOrder(status);
+      actionOrder.forEach(function (key) {
+        var cmd = ticketActions[key];
+        if (!cmd) return;
+        // For running tickets, skip run-now/requeue/archive (they'd fail).
+        if (status === "running" && (key === "run-now" || key === "requeue" || key === "archive")) return;
+        cmds.push(cmd);
       });
     }
-    cmds.push({ label: "New ticket", hint: "c", run: openCreateTicket });
-    cmds.push({ label: "Go to board", hint: "g b", run: function () { location.href = "/"; } });
-    cmds.push({ label: "Go to archive", hint: "g a", run: function () { location.href = "/archive"; } });
-    cmds.push({ label: "Show keyboard shortcuts", hint: "?", run: openCheatSheet });
+
+    // --- View / display commands ---
+    // Toggle board/list view, focus search, future saved-views hook.
+    var isBoard = !!document.getElementById("board-grid");
+    var isRuns = !!document.querySelector("[data-board-view='runs']");
+    if (isBoard || isRuns) {
+      cmds.push({
+        label: isRuns ? "Switch to tickets view" : "Switch to runs view",
+        shortcut: "", hint: "view toggle",
+        section: "View",
+        run: function () {
+          var btn = document.querySelector(
+            isRuns ? '[data-sb-view="tickets"]' : '[data-sb-view="runs"]'
+          );
+          if (btn) { btn.click(); return; }
+          // Fallback: navigate with query param.
+          location.href = isRuns ? "/" : "/?view=runs";
+        },
+      });
+    }
+    cmds.push({
+      label: "Focus search", shortcut: "/", hint: "",
+      section: "View",
+      run: function () {
+        var search = document.querySelector('#header-search input[name="q"]');
+        if (search) { search.focus(); search.select(); }
+      },
+    });
+    // Saved views placeholder — active once the saved-views surface exists.
+    if (typeof window.ndSavedViews === "function") {
+      cmds.push({
+        label: "Jump to saved view…", shortcut: "g v", hint: "",
+        section: "View",
+        run: function () { window.ndSavedViews(); },
+      });
+    }
+
+    // --- Navigation & general commands ---
+    cmds.push({ label: "New ticket", shortcut: "c", hint: "", section: "Navigation",
+      run: openCreateTicket });
+    cmds.push({ label: "Go to board", shortcut: "g b", hint: "", section: "Navigation",
+      run: function () { location.href = "/"; } });
+    cmds.push({ label: "Go to archive", shortcut: "g a", hint: "", section: "Navigation",
+      run: function () { location.href = "/archive"; } });
+    cmds.push({ label: "Show keyboard shortcuts", shortcut: "?", hint: "", section: "Navigation",
+      run: openCheatSheet });
+
     return cmds;
   }
 
@@ -260,6 +567,7 @@
 
   function render(items) {
     state.items = items;
+    // Compute active index excluding section headers (only command items).
     if (state.active >= items.length) state.active = Math.max(0, items.length - 1);
     var ul = list();
     ul.innerHTML = "";
@@ -271,6 +579,15 @@
       return;
     }
     items.forEach(function (it, i) {
+      // Section header — not selectable, not an option.
+      if (it.section && !it.run) {
+        var hdr = document.createElement("li");
+        hdr.className = "px-3 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-muted";
+        hdr.setAttribute("role", "presentation");
+        hdr.textContent = it.section;
+        ul.appendChild(hdr);
+        return;
+      }
       var li = document.createElement("li");
       li.id = "nd-cmdk-opt-" + i;
       li.setAttribute("role", "option");
@@ -279,12 +596,22 @@
         "flex items-center gap-3 px-3 py-2 text-sm cursor-pointer " +
         (i === state.active ? "bg-bg-elev-2 text-fg" : "text-fg-muted");
       var label = document.createElement("span");
-      label.className = "flex-1 min-w-0 truncate " + (i === state.active ? "text-fg" : "text-fg");
+      label.className = "flex-1 min-w-0 truncate text-fg";
       label.textContent = it.label;
       li.appendChild(label);
+      // Show shortcut as a kbd badge (teaches direct shortcuts).
+      if (it.shortcut) {
+        var kbd = document.createElement("kbd");
+        kbd.className =
+          "shrink-0 rounded border border-border bg-bg-elev-2 " +
+          "px-1.5 py-0.5 font-mono text-[11px] text-fg";
+        kbd.textContent = it.shortcut;
+        li.appendChild(kbd);
+      }
+      // Show context hint as muted text (e.g. "draft", "view toggle").
       if (it.hint) {
         var hint = document.createElement("span");
-        hint.className = "shrink-0 text-[11px] text-fg-muted uppercase tracking-wide";
+        hint.className = "shrink-0 text-[11px] text-fg-muted";
         hint.textContent = it.hint;
         li.appendChild(hint);
       }
@@ -299,6 +626,8 @@
     var ul = list();
     var children = ul.children;
     for (var i = 0; i < children.length; i++) {
+      // Skip section headers — they aren't selectable.
+      if (children[i].getAttribute("role") === "presentation") continue;
       var on = i === state.active;
       children[i].setAttribute("aria-selected", on ? "true" : "false");
       children[i].className =
@@ -314,6 +643,8 @@
 
   function setActive(i) {
     if (i < 0 || i >= state.items.length) return;
+    // Skip over section headers.
+    if (state.items[i] && state.items[i].section && !state.items[i].run) return;
     state.active = i;
     syncActiveAttr();
   }
@@ -321,20 +652,47 @@
   function move(delta) {
     if (!state.items.length) return;
     var n = state.items.length;
-    state.active = (state.active + delta + n) % n;
+    var next = state.active;
+    // Skip over section headers when navigating.
+    for (var steps = 0; steps < n; steps++) {
+      next = (next + delta + n) % n;
+      if (state.items[next] && state.items[next].run) break;
+    }
+    state.active = next;
     syncActiveAttr();
   }
 
   function execute(i) {
     var idx = typeof i === "number" ? i : state.active;
     var it = state.items[idx];
-    if (!it) return;
+    if (!it || !it.run) return;
     closePalette();
     // Defer so the dialog has closed before navigation/fetch side effects.
     setTimeout(function () { it.run(); }, 0);
   }
 
   // ---- query handling ----------------------------------------------------
+
+  // Build display items from matched commands, inserting section headers.
+  // Each item is either { section: "Name" } (a header) or a regular command.
+  function buildItems(matched) {
+    var items = [];
+    var lastSection = "";
+    matched.forEach(function (m) {
+      if (m.cmd.section && m.cmd.section !== lastSection) {
+        lastSection = m.cmd.section;
+        items.push({ section: lastSection });
+      }
+      items.push({
+        label: m.cmd.label,
+        shortcut: m.cmd.shortcut || "",
+        hint: m.cmd.hint || "",
+        section: m.cmd.section || "",
+        run: m.cmd.run,
+      });
+    });
+    return items;
+  }
 
   function refresh() {
     var q = (input().value || "").trim();
@@ -350,9 +708,7 @@
       });
       matched.sort(function (a, b) { return b.score - a.score; });
     }
-    var items = matched.map(function (m) {
-      return { label: m.cmd.label, hint: m.cmd.hint, run: m.cmd.run };
-    });
+    var items = buildItems(matched);
 
     // The query language filters the ticket results: status=review, project=x,
     // cost>0.5, free text, etc. all go through /header/search. Guard against
@@ -364,7 +720,9 @@
       var ticketItems = tickets.map(function (t) {
         return {
           label: t.title,
+          shortcut: "",
           hint: t.status ? "ticket · " + t.status : "ticket",
+          section: "Search results",
           run: function () { location.href = "/tickets/" + encodeURIComponent(t.id); },
         };
       });
@@ -454,6 +812,10 @@
     // dialog behavior deal with keys.
     if ((palette() && palette().open) || (cheatsheet() && cheatsheet().open)) return;
 
+    // If a property picker menu is open, don't hijack keys — the picker's
+    // own handler manages Arrow/Enter/Escape.
+    if (document.querySelector("[data-property-menu]:not(.hidden)")) return;
+
     var now = Date.now();
     var hadG = now - lastG < 800;
 
@@ -474,6 +836,72 @@
       return;
     }
     if (key === "?") { e.preventDefault(); openCheatSheet(); return; }
+
+    // --- Board cursor: J/K navigate cards (vim-style down/up) ------------
+    if (key === "j" || key === "J") {
+      if (document.getElementById("board-grid")) {
+        e.preventDefault();
+        moveCursor(1);
+      }
+      return;
+    }
+    if (key === "k" || key === "K") {
+      if (document.getElementById("board-grid")) {
+        e.preventDefault();
+        moveCursor(-1);
+      }
+      return;
+    }
+
+    // --- Focused-ticket property actions ----------------------------------
+    // These require a selected/focused ticket context.
+    var ctx = currentTicket();
+
+    // E — edit the focused ticket
+    if (key === "e" || key === "E") {
+      if (ctx) { e.preventDefault(); openEditForTicket(ctx); }
+      return;
+    }
+    // P — priority picker
+    if (key === "p" || key === "P") {
+      if (ctx) {
+        e.preventDefault();
+        var ok = window.ndOpenPropertyPicker &&
+          window.ndOpenPropertyPicker(ctx.id, "priority");
+        if (!ok) flashStatus("Open the ticket to change its priority");
+      }
+      return;
+    }
+    // S — status picker
+    if (key === "s" || key === "S") {
+      if (ctx) {
+        e.preventDefault();
+        var ok2 = window.ndOpenPropertyPicker &&
+          window.ndOpenPropertyPicker(ctx.id, "status");
+        if (!ok2) flashStatus("Open the ticket to change its status");
+      }
+      return;
+    }
+    // L — label picker (hook for future labels property; falls back gracefully)
+    if (key === "l" || key === "L") {
+      if (ctx) { e.preventDefault(); openLabelPicker(ctx); }
+      return;
+    }
+    // A — archive the focused ticket
+    if (key === "a" || key === "A") {
+      if (ctx) { e.preventDefault(); runTicketAction("archive", ctx.id, ctx.title); }
+      return;
+    }
+    // R — run/requeue the focused ticket
+    if (key === "r" || key === "R") {
+      if (ctx) { e.preventDefault(); smartRunOrRequeue(ctx); }
+      return;
+    }
+    // Space — peek (hook for future lightweight preview panel)
+    if (key === " ") {
+      if (ctx) { e.preventDefault(); openPeek(ctx); }
+      return;
+    }
   }
 
   // ---- init --------------------------------------------------------------
@@ -507,6 +935,14 @@
       var clean = location.pathname + location.hash;
       history.replaceState(null, "", clean);
     }
+
+    // Restore cursor highlight after HTMX column swaps on the board.
+    document.body.addEventListener("htmx:afterSwap", function () {
+      restoreCursor();
+    });
+    document.body.addEventListener("htmx:oobAfterSwap", function () {
+      restoreCursor();
+    });
   }
 
   if (document.readyState === "loading") {
