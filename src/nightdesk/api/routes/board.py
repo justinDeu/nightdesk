@@ -32,6 +32,7 @@ from nightdesk.domain.tickets import (
     TicketNotFound,
     add_dependency,
     archive,
+    bulk_update_priority, bulk_update_profile, bulk_update_project, bulk_update_status,
     create_ticket,
     delete_ticket,
     get_ticket,
@@ -44,7 +45,9 @@ from nightdesk.domain.tickets import (
     transition_status,
     transition_with_position,
     update_ticket,
+    update_ticket_priority, update_ticket_profile, update_ticket_project,
 )
+from nightdesk.domain.profiles import ProfileNotFound
 
 
 _COLUMNS = [
@@ -668,6 +671,103 @@ def build_router(
         resp.headers["HX-Redirect"] = "/"
         return resp
 
+    # --- Bulk metadata update (cookie-auth / HTMX) ----------------------------
+    # Registered BEFORE /board/tickets/{tid} routes so FastAPI does not
+    # match "bulk" as a tid parameter.
+
+    @router.post("/board/tickets/bulk/priority", dependencies=[auth])
+    async def bulk_priority_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk priority update.  Accepts ``ticket_ids`` (comma-
+        separated) and ``priority`` as form fields.  Returns JSON with updated
+        and skipped lists."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        try:
+            priority = int(form.get("priority", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(422, "priority must be an integer")
+        if priority < 0:
+            raise HTTPException(422, "priority must be >= 0")
+        updated, skipped = bulk_update_priority(session, ticket_ids, priority)
+        return JSONResponse({
+            "updated": [{"id": t.id, "priority": t.priority} for t in updated],
+            "skipped": skipped,
+        })
+
+    @router.post("/board/tickets/bulk/status", dependencies=[auth])
+    async def bulk_status_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk status transition.  Each ticket is transitioned
+        independently; invalid transitions are skipped."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        new_status = (form.get("status") or "").strip()
+        if not new_status:
+            raise HTTPException(422, "status required")
+        try:
+            updated, skipped = bulk_update_status(session, ticket_ids, new_status)
+        except InvalidTransition as e:
+            raise HTTPException(422, str(e))
+        return JSONResponse({
+            "updated": [{"id": t.id, "status": t.status} for t in updated],
+            "skipped": skipped,
+        })
+
+    @router.post("/board/tickets/bulk/project", dependencies=[auth])
+    async def bulk_project_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk project assignment."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        project_id = (form.get("project_id") or "").strip() or None
+        try:
+            updated, skipped = bulk_update_project(session, ticket_ids, project_id)
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        return JSONResponse({
+            "updated": [{"id": t.id, "project_id": t.project_id} for t in updated],
+            "skipped": skipped,
+        })
+
+    @router.post("/board/tickets/bulk/profile", dependencies=[auth])
+    async def bulk_profile_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk profile reassignment."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        profile_id = (form.get("profile_id") or "").strip()
+        if not profile_id:
+            raise HTTPException(422, "profile_id required")
+        try:
+            updated, skipped = bulk_update_profile(session, ticket_ids, profile_id)
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
+        return JSONResponse({
+            "updated": [{"id": t.id, "profile_id": t.profile_id} for t in updated],
+            "skipped": skipped,
+        })
+
     @router.post("/board/tickets/{tid}", dependencies=[auth])
     async def update(
         tid: str,
@@ -1021,6 +1121,8 @@ def build_router(
         return JSONResponse(
             {"priority": ticket.priority, "label": priority_label(ticket.priority)}
         )
+
+
 
     # --- Dependency management (cookie-auth) ---------------------------------
 
