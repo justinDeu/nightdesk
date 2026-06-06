@@ -172,6 +172,32 @@ def is_ticket_complete(ticket: Ticket) -> bool:
     return not ticket_completeness(ticket)
 
 
+def ticket_missing_fields(ticket: Ticket) -> set[str]:
+    """Return the set of *form field* keys an inbox item must still satisfy
+    before it can be promoted onto the runnable board.
+
+    This is the field-level counterpart to ``ticket_completeness`` (which yields
+    human-readable sentences): the promote modal uses it to highlight exactly the
+    inputs that need attention. Keys mirror the edit-modal field names:
+
+      * ``"title"``     — title input
+      * ``"profile"``   — profile select (``profile_id``)
+      * ``"workspace"`` — primary workspace source path
+
+    Kept in lock-step with ``ticket_completeness`` so the highlight and the
+    server-side validation boundary can never disagree.
+    """
+    missing: set[str] = set()
+    if not (ticket.title or "").strip():
+        missing.add("title")
+    if not ticket.profile_id:
+        missing.add("profile")
+    primary = next((w for w in ticket.workspaces if w.role == "primary"), None)
+    if primary is None or not (primary.source_path or "").strip():
+        missing.add("workspace")
+    return missing
+
+
 def create_ticket(session: Session, **fields) -> Ticket:
     """Create a ticket. Defaults to status='draft' (v2).
 

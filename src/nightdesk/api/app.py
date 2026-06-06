@@ -101,7 +101,11 @@ def create_app(
     # ticket is not yet promotable (empty list == complete). The inbox row uses
     # it to gate the promote actions behind the completeness boundary.
     from nightdesk.domain.tickets import ticket_completeness as _ticket_completeness
+    from nightdesk.domain.tickets import ticket_missing_fields as _ticket_missing_fields
     templates.env.globals["inbox_blockers"] = _ticket_completeness
+    # Field-level companion: which edit-modal inputs an inbox item must still
+    # satisfy before promotion, so the promote modal can highlight exactly them.
+    templates.env.globals["inbox_missing_fields"] = _ticket_missing_fields
 
     # UTC ISO string for client-side localization (localize_time.js). Run/
     # ticket datetimes are UTC but come back from SQLite naive; emitting a bare

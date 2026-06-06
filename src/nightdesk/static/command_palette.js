@@ -330,6 +330,53 @@
   }
   window.ndOpenCreateTicket = openCreateTicket;
 
+  // Inbox promote: lazy-load the promote modal (the shared edit modal in
+  // "promote" mode, pre-filled for one inbox item) into #promote-modal-host
+  // and open it. Falls back to the ticket detail page if HTMX is unavailable.
+  function openPromoteTicket(tid, project) {
+    if (!tid) return;
+    var host = document.getElementById("promote-modal-host");
+    if (!host || typeof window.htmx === "undefined") {
+      location.href = "/tickets/" + encodeURIComponent(tid);
+      return;
+    }
+    var url = "/inbox/tickets/" + encodeURIComponent(tid) + "/promote-modal";
+    if (project) url += "?project=" + encodeURIComponent(project);
+    window.htmx
+      .ajax("GET", url, { target: "#promote-modal-host", swap: "innerHTML" })
+      .then(function () {
+        openModalEl(document.getElementById("inbox-promote-modal"));
+      });
+  }
+  window.ndOpenPromoteTicket = openPromoteTicket;
+
+  // After-request handler for the promote modal form. On success the inbox list
+  // has already been swapped in, so just close the dialog. On a rejected
+  // promotion (e.g. queueing with required fields still missing) keep the modal
+  // open and surface the reason in the error banner, preserving the edits.
+  window.ndPromoteAfterRequest = function (event, modalId) {
+    var dlg = document.getElementById(modalId);
+    var ok = !!(event && event.detail && event.detail.successful);
+    if (ok) {
+      if (dlg) dlg.close();
+      return;
+    }
+    var box = dlg && dlg.querySelector("[data-promote-error]");
+    if (!box) return;
+    var msg = "Promotion failed.";
+    var xhr = event && event.detail && event.detail.xhr;
+    if (xhr && xhr.responseText) {
+      try {
+        var body = JSON.parse(xhr.responseText);
+        if (body && body.detail) msg = "Cannot promote: " + body.detail;
+      } catch (e) {
+        if (xhr.responseText.length < 300) msg = xhr.responseText;
+      }
+    }
+    box.textContent = msg;
+    box.classList.remove("hidden");
+  };
+
   // ---- focused ticket: property action shortcuts -------------------------
   // These require a focused ticket (from the cursor on the board, or the
   // page context on ticket detail). They reuse the same picker/update paths

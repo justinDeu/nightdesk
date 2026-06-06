@@ -196,6 +196,84 @@ def _toolchain_overrides_from_form(form) -> Optional[dict]:
     }
     return overrides if any(overrides.values()) else None
 
+
+def ticket_fields_from_form(form) -> dict:
+    """PATCH-style field dict from an edit/create-modal form submission.
+
+    Only keys the form actually carries are included, so a partial submission
+    never clobbers untouched fields. Shared by the board edit route and the
+    Inbox promote flow (which posts the very same modal), so the two can never
+    drift on how a workspace/toolchain/priority payload is parsed.
+    """
+    fields: dict = {}
+    if "title" in form:
+        title = (form.get("title") or "").strip()
+        if not title:
+            raise HTTPException(422, "title cannot be empty")
+        fields["title"] = title
+    if "profile_id" in form:
+        profile_id = form.get("profile_id")
+        if not profile_id:
+            raise HTTPException(422, "profile_id cannot be empty")
+        fields["profile_id"] = profile_id
+    if "prompt" in form:
+        fields["prompt"] = form.get("prompt") or ""
+    if "project_id" in form:
+        fields["project_id"] = (form.get("project_id") or "").strip() or None
+    if "priority" in form:
+        fields["priority"] = int(form.get("priority") or 0)
+    if "source_path" in form or "primary_source_path" in form:
+        if form.get("workspace_form") == "1":
+            _mode, _wt_name, _wt_path, workspaces = _workspace_payload_from_form(form)
+            fields["workspaces"] = workspaces
+            if "additional_dirs" in form:
+                fields["additional_dirs"] = _parse_additional_dirs(form.getlist("additional_dirs"))
+        else:
+            fields["source_path"] = _normalize_source_path(form.get("source_path"))
+    if "toolchain_form" in form:
+        fields["toolchain_overrides"] = _toolchain_overrides_from_form(form)
+    return fields
+
+
+def reconcile_deps_from_form(session: Session, tid: str, form) -> None:
+    """Reconcile a ticket's direct dependencies from a modal submission.
+
+    Only acts when the deps section was part of the submission (``deps_form=1``);
+    an empty selection then means "remove all". Cycles and unknown ids are
+    skipped rather than failing the whole request.
+    """
+    if form.get("deps_form") != "1":
+        return
+    desired = {d.strip() for d in form.getlist("depends_on_id")
+               if d.strip() and d.strip() != tid}
+    current = {d.id for d in list_dependencies(session, tid)}
+    for dep_id in desired - current:
+        try:
+            add_dependency(session, tid, dep_id)
+        except (CyclicDependency, TicketNotFound):
+            pass
+    for dep_id in current - desired:
+        try:
+            remove_dependency(session, tid, dep_id)
+        except DependencyNotFound:
+            pass
+
+
+def reconcile_labels_from_form(session: Session, tid: str, form) -> None:
+    """Reconcile a ticket's labels from a modal submission.
+
+    Only acts when the label section was part of the submission
+    (``labels_form=1``); an empty selection then means "clear all".
+    """
+    if form.get("labels_form") != "1":
+        return
+    from nightdesk.domain.labels import set_ticket_labels as _sl
+    label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+    try:
+        _sl(session, tid, label_ids)
+    except Exception:
+        pass
+
 def _safe_preview_name(name: Optional[str]) -> str:
     raw = (name or "").strip().strip("/")
     if not raw:
@@ -805,33 +883,7 @@ def build_router(
         # would otherwise wipe (e.g.) the prompt to "" because the field
         # wasn't part of the submission.
         form = await request.form()
-        fields: dict = {}
-        if "title" in form:
-            title = (form.get("title") or "").strip()
-            if not title:
-                raise HTTPException(422, "title cannot be empty")
-            fields["title"] = title
-        if "profile_id" in form:
-            profile_id = form.get("profile_id")
-            if not profile_id:
-                raise HTTPException(422, "profile_id cannot be empty")
-            fields["profile_id"] = profile_id
-        if "prompt" in form:
-            fields["prompt"] = form.get("prompt") or ""
-        if "project_id" in form:
-            fields["project_id"] = (form.get("project_id") or "").strip() or None
-        if "priority" in form:
-            fields["priority"] = int(form.get("priority") or 0)
-        if "source_path" in form or "primary_source_path" in form:
-            if form.get("workspace_form") == "1":
-                workspace_mode, worktree_name, worktree_path, workspaces = _workspace_payload_from_form(form)
-                fields["workspaces"] = workspaces
-                if "additional_dirs" in form:
-                    fields["additional_dirs"] = _parse_additional_dirs(form.getlist("additional_dirs"))
-            else:
-                fields["source_path"] = _normalize_source_path(form.get("source_path"))
-        if "toolchain_form" in form:
-            fields["toolchain_overrides"] = _toolchain_overrides_from_form(form)
+        fields = ticket_fields_from_form(form)
         try:
             update_ticket(session, tid, **fields)
         except TicketNotFound:
@@ -840,32 +892,10 @@ def build_router(
             raise HTTPException(404, "project not found")
         except ValueError as e:
             raise HTTPException(422, str(e))
-        # Reconcile dependencies from the modal's "Depends on" picker. Only
-        # touched when the deps section was part of the submission (the modal
-        # sends deps_form=1); an empty selection then means "remove all".
-        if form.get("deps_form") == "1":
-            desired = {d.strip() for d in form.getlist("depends_on_id")
-                       if d.strip() and d.strip() != tid}
-            current = {d.id for d in list_dependencies(session, tid)}
-            for dep_id in desired - current:
-                try:
-                    add_dependency(session, tid, dep_id)
-                except (CyclicDependency, TicketNotFound):
-                    pass
-            for dep_id in current - desired:
-                try:
-                    remove_dependency(session, tid, dep_id)
-                except DependencyNotFound:
-                    pass
-        # Reconcile labels from the label picker. Only touched when the
-        # labels section was part of the submission (labels_form=1).
-        if form.get("labels_form") == "1":
-            from nightdesk.domain.labels import set_ticket_labels as _sl
-            label_ids = [v for v in form.getlist("label_ids") if v.strip()]
-            try:
-                _sl(session, tid, label_ids)
-            except Exception:
-                pass
+        # Reconcile dependencies + labels from the modal's pickers (shared with
+        # the Inbox promote flow). No-ops unless those sections were submitted.
+        reconcile_deps_from_form(session, tid, form)
+        reconcile_labels_from_form(session, tid, form)
         # Return the sidebar partial re-rendered in edit mode for the same
         # ticket so HTMX swaps just the rail in place. Previously this
         # returned HX-Redirect to "/", which reloaded the board and dropped

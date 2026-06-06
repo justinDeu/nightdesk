@@ -118,6 +118,9 @@
     {# Lazy-load target for the create-ticket modal on pages that don't embed
        it inline (everything except the board). Filled by ndOpenCreateTicket. #}
     <div id="create-modal-host"></div>
+    {# Lazy-load target for the Inbox promote modal (the shared edit modal in
+       promote mode). Filled by ndOpenPromoteTicket. #}
+    <div id="promote-modal-host"></div>
     <script>
       // Shared feedback for Run-now buttons (board sidebar + ticket detail).
       // The endpoint returns 204 on success (HTMX) or 409 if the ticket is
