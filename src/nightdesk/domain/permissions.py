@@ -5,6 +5,22 @@ from dataclasses import dataclass, field, replace
 from typing import Optional
 
 
+# Claude Code Bash permission rules that block `git push` (and force-push, which
+# is just `git push --force …`). These are injected into the sandboxed agent's
+# disallowed-tools set UNLESS the run opts in via ``allow_git_push``. The goal is
+# to stop a sandboxed agent from accidentally pushing to (and destroying) a real
+# remote — the sandbox shares the host network namespace, so without this gate a
+# stray ``git push --force`` would reach origin.
+#
+# Both forms are needed: ``Bash(git push)`` matches the bare command and
+# ``Bash(git push:*)`` matches any command that starts with ``git push`` (so
+# ``git push origin main``, ``git push --force``, etc. are all covered).
+GIT_PUSH_DENY_RULES = (
+    "Bash(git push)",
+    "Bash(git push:*)",
+)
+
+
 @dataclass(frozen=True)
 class PermissionSpec:
     fs_read: list[str] = field(default_factory=list)
@@ -28,11 +44,15 @@ class PermissionSpec:
     claude_binary_path: Optional[str] = None
     permission_mode: Optional[str] = None
     system_prompt: Optional[str] = None
+    # Destructive-remote gate. ``git push`` is DISALLOWED by default (see
+    # GIT_PUSH_DENY_RULES); set this True (e.g. ticket permission override
+    # ``{"allow_git_push": true}``) to let the sandboxed agent push.
+    allow_git_push: bool = False
 
 
 _ADDITIVE = ("fs_read", "fs_write", "allowed_tools", "network_allowlist", "secret_keys", "tool_paths")
 _RESTRICTIVE = ("denied_tools",)
-_REPLACE = ("network_mode", "default_model", "backend", "permission_mode")
+_REPLACE = ("network_mode", "default_model", "backend", "permission_mode", "allow_git_push")
 
 
 def _dedup(seq):

@@ -107,7 +107,9 @@ async def test_claude_executor_writes_transcript_and_final_summary(tmp_path):
     sent = json.loads(fake.stdin.buffer.decode("utf-8"))
     assert sent["prompt"] == "hi"
     assert sent["allowed_tools"] == ["Read", "Write"]
-    assert sent["disallowed_tools"] == ["Bash"]
+    # The profile's own deny stays, plus the default git-push gate is injected.
+    assert sent["disallowed_tools"][0] == "Bash"
+    assert "Bash(git push:*)" in sent["disallowed_tools"]
     assert sent["model"] == "claude-sonnet-4-6"
     assert fake.stdin.closed
 
@@ -290,6 +292,47 @@ def test_translator_passes_cancelled_event_through():
     evt = {"type": "cancelled", "message": "Run cancelled by user.",
            "seq": 7, "ts": "2026-05-19T00:00:00+00:00"}
     assert translate(evt) == [evt]
+
+
+def _runner_spec_for(spec: PermissionSpec, tmp_path) -> dict:
+    from nightdesk.worker.claude_executor import ClaudeExecutor
+    req = ExecutionRequest(
+        ticket_id="t1", prompt="hi", working_dir=tmp_path,
+        transcript_path=tmp_path / "t.log",
+        bwrap_argv=["bwrap"], env={}, permission_spec=spec,
+    )
+    return ClaudeExecutor()._build_runner_spec(req)
+
+
+def test_git_push_blocked_by_default(tmp_path):
+    """With no opt-in, the git-push deny rules are injected into the disallowed
+    tools so a sandboxed agent can't push to a real remote."""
+    from nightdesk.domain.permissions import GIT_PUSH_DENY_RULES
+
+    spec = PermissionSpec(denied_tools=["Bash(rm:*)"])
+    runner = _runner_spec_for(spec, tmp_path)
+    for rule in GIT_PUSH_DENY_RULES:
+        assert rule in runner["disallowed_tools"]
+    # The profile's own deny rules are preserved alongside the gate.
+    assert "Bash(rm:*)" in runner["disallowed_tools"]
+
+
+def test_git_push_opt_in_removes_gate(tmp_path):
+    """allow_git_push=True is the clear opt-in: the push deny rules are not
+    injected, so the agent may push."""
+    from nightdesk.domain.permissions import GIT_PUSH_DENY_RULES
+
+    spec = PermissionSpec(allow_git_push=True)
+    runner = _runner_spec_for(spec, tmp_path)
+    for rule in GIT_PUSH_DENY_RULES:
+        assert rule not in runner["disallowed_tools"]
+
+
+def test_git_push_gate_does_not_duplicate_existing_rule(tmp_path):
+    """If a profile already denies git push, the gate doesn't add a duplicate."""
+    spec = PermissionSpec(denied_tools=["Bash(git push:*)"])
+    runner = _runner_spec_for(spec, tmp_path)
+    assert runner["disallowed_tools"].count("Bash(git push:*)") == 1
 
 
 def test_module_imports_without_sdk():

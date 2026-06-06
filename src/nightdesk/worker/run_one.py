@@ -187,6 +187,22 @@ def _dedup_append(target: list[str], path: str) -> None:
         target.append(path)
 
 
+def _git_metadata_dirs(bundle: WorkspaceBundle) -> list[str]:
+    """Host paths to the git metadata each git_worktree needs mounted.
+
+    For a git worktree the working dir's ``.git`` is a file pointing at
+    ``git_common_dir/worktrees/<name>`` outside the working dir; the bare/
+    ``.bare`` layout resolves ``git_common_dir`` to the ``.bare`` dir. Binding
+    ``git_common_dir`` read-write covers both (the per-worktree dir lives under
+    it), so git operations work in the sandbox without a hand-added workspace.
+    """
+    dirs: list[str] = []
+    for w in bundle.workspaces:
+        if w.kind == "git_worktree" and w.git_common_dir:
+            _dedup_append(dirs, str(w.git_common_dir))
+    return dirs
+
+
 def _apply_workspace_permissions(spec: PermissionSpec,
                                  bundle: WorkspaceBundle) -> PermissionSpec:
     for ws in bundle.fs_write:
@@ -574,6 +590,7 @@ async def run_one(
                 cmd=[sys.executable, "-m", "nightdesk.worker._sdk_runner"],
                 env=env,
                 cc_sessions_dir=cc_sessions_dir,
+                git_dirs=_git_metadata_dirs(bundle),
             )
             log.debug("building headless prompt for ticket %s run %s", ticket.id, run.id)
             _setup_phase = "prompt_build"

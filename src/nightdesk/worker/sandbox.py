@@ -264,6 +264,7 @@ def build_bwrap_argv(
     cmd: list[str],
     env: dict[str, str],
     cc_sessions_dir: Optional[str] = None,
+    git_dirs: Optional[Iterable[str]] = None,
 ) -> list[str]:
     """Compose the bwrap invocation for a single sandboxed run.
 
@@ -271,10 +272,22 @@ def build_bwrap_argv(
     caller is responsible for resolving secret references, injecting
     ``NIGHTDESK_RUN_TOKEN``, and applying the credentials env-var path
     (``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN``).
+
+    ``git_dirs`` are absolute host paths to the repo's git metadata directory
+    (the worktree's ``git_common_dir``, or the ``.bare`` dir for bare-container
+    layouts). For a git worktree the working dir's ``.git`` is a *file* pointing
+    at ``git_common_dir/worktrees/<name>`` which lives OUTSIDE the working dir,
+    so without binding the common dir every git operation (status, checkout,
+    rebase, merge) fails inside the sandbox. They are bound read-write at the
+    same absolute path so the ``.git`` pointer resolves and refs can be updated.
     """
+    git_dirs = [str(g) for g in (git_dirs or []) if g]
     # Validate before assembling so the error message points at the cause.
     tool_mounts = _tool_mount_paths(getattr(spec, "tool_paths", None) or [])
-    candidates = list(spec.fs_read) + list(spec.fs_write) + tool_mounts + [working_dir]
+    candidates = (
+        list(spec.fs_read) + list(spec.fs_write) + tool_mounts
+        + [working_dir] + git_dirs
+    )
     assert_no_excluded_paths(candidates)
 
     cc_bin = spec.claude_binary_path or shutil.which("claude") or "/usr/local/bin/claude"
@@ -387,6 +400,19 @@ def build_bwrap_argv(
         argv += ["--ro-bind-try", p, p]
     for p in spec.fs_write:
         argv += ["--bind-try", p, p]
+
+    # Git metadata dirs (worktree common dir / ``.bare``). Bound read-write so
+    # checkouts/rebases/merges can update refs, at the same absolute path so the
+    # worktree's ``.git`` pointer resolves. Skip any already covered by the
+    # working dir or a user-declared fs mount to avoid bwrap double-mount errors.
+    fs_dsts = {
+        str(Path(p).resolve())
+        for p in ([working_dir] + list(spec.fs_read) + list(spec.fs_write))
+    }
+    for g in _dedup_under(git_dirs):
+        if str(Path(g).resolve()) in fs_dsts:
+            continue
+        argv += ["--bind-try", g, g]
 
     # Environment: clear and re-apply only what we explicitly want.
     argv += ["--clearenv"]
