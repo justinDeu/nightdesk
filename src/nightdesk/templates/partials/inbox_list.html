@@ -1,0 +1,30 @@
+{#
+  Inbox list fragment — swapped in place after capture / promote / decline.
+
+  Root carries id="inbox-list" so actions can target it with
+  hx-target="#inbox-list" hx-swap="outerHTML". Expects the inbox context dict
+  from routes/inbox.py (tickets, count, projects_by_id, profiles_by_id,
+  all_labels, project_filter).
+#}
+<div id="inbox-list" class="space-y-2">
+  <div class="flex items-center gap-2 text-xs text-fg-muted">
+    <span class="font-medium text-fg">{{ count }}</span>
+    item{{ '' if count == 1 else 's' }} awaiting triage
+  </div>
+
+  {% if not tickets %}
+    <div class="rounded-md border border-dashed border-border bg-bg-elev px-4 py-10 text-center text-sm text-fg-muted">
+      Inbox zero. Captured but under-specified work shows up here for triage.
+    </div>
+  {% else %}
+    <ul class="space-y-2">
+      {% for t in tickets %}
+        {% with t=t,
+                project=(projects_by_id.get(t.project_id) if t.project_id else none),
+                profile=(profiles_by_id.get(t.profile_id) if t.profile_id else none) %}
+          {% include "partials/inbox_row.html" %}
+        {% endwith %}
+      {% endfor %}
+    </ul>
+  {% endif %}
+</div>

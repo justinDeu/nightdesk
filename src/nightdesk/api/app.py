@@ -19,6 +19,7 @@ from nightdesk.api.routes import diagnostics as diagnostics_routes
 from nightdesk.api.routes import fs as fs_routes
 from nightdesk.api.routes import header as header_routes
 from nightdesk.api.routes import health
+from nightdesk.api.routes import inbox as inbox_routes
 from nightdesk.api.routes import labels as labels_routes
 from nightdesk.api.routes import profiles as profiles_routes
 from nightdesk.api.routes import projects as projects_routes
@@ -96,6 +97,16 @@ def create_app(
     from nightdesk.domain.properties import property_chip as _property_chip
     templates.env.globals["property_chip"] = _property_chip
 
+    # Inbox triage helper: returns the list of reasons an under-specified inbox
+    # ticket is not yet promotable (empty list == complete). The inbox row uses
+    # it to gate the promote actions behind the completeness boundary.
+    from nightdesk.domain.tickets import ticket_completeness as _ticket_completeness
+    from nightdesk.domain.tickets import ticket_missing_fields as _ticket_missing_fields
+    templates.env.globals["inbox_blockers"] = _ticket_completeness
+    # Field-level companion: which edit-modal inputs an inbox item must still
+    # satisfy before promotion, so the promote modal can highlight exactly them.
+    templates.env.globals["inbox_missing_fields"] = _ticket_missing_fields
+
     # UTC ISO string for client-side localization (localize_time.js). Run/
     # ticket datetimes are UTC but come back from SQLite naive; emitting a bare
     # isoformat() would make the browser parse them as local time. Force a UTC
@@ -118,6 +129,7 @@ def create_app(
         transcript_root=transcript_root, worktree_root=worktree_root,
     ))
     app.include_router(archive_routes.build_router(get_session, bearer_token, templates))
+    app.include_router(inbox_routes.build_router(get_session, bearer_token, templates))
     app.include_router(ticket_page_routes.build_router(get_session, bearer_token, templates))
     app.include_router(cron_page_routes.build_router(get_session, bearer_token, templates))
     app.include_router(header_routes.build_router(

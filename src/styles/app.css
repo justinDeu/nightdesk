@@ -1254,3 +1254,17 @@ dialog button[aria-label="Close"]:focus-visible {
 .nd-prop-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nd-prop-check { margin-left: auto; color: var(--color-accent); }
 .nd-prop-msg { padding: 0.5rem 0.75rem; font-size: 0.75rem; color: var(--color-fg-muted); }
+
+/* ---- Keyboard cursor highlight (nd-cursor-active) -----------------------
+   The H/J/K/L board/list/inbox cursor (static/command_palette.js) toggles this
+   class on the focused ticket/inbox row. Authored as plain CSS keyed off the
+   theme variables and kept in the source bundle so a Tailwind rebuild can no
+   longer drop it (it was previously hand-injected into the built artifact only,
+   and a rebuild on the promote branch silently removed it). Lives outside
+   @layer so the outline/background sit above the utility classes. */
+.nd-cursor-active {
+  outline: 2px solid var(--color-info);
+  outline-offset: -1px;
+  background: color-mix(in oklab, var(--color-info) 6%, var(--color-bg-elev-2)) !important;
+  transition: outline .1s, background .1s;
+}

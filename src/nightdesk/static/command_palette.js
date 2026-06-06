@@ -1,13 +1,24 @@
 // command_palette.js
 //
-// Keyboard navigation for the nightdesk board: a Ctrl/Cmd+K command palette
-// plus a small set of global shortcuts and focused-ticket property actions.
-// Pure client JS, no build step.
+// Keyboard navigation for the nightdesk board and inbox: a Ctrl/Cmd+K command
+// palette plus a small set of global shortcuts and focused-ticket property
+// actions. Pure client JS, no build step.
 //
 // PROGRESSIVE ENHANCEMENT: every action here is also reachable by mouse
 // (header search box, "+ New ticket" button, per-ticket Run-now / Archive /
-// Requeue controls, nav links, property picker chips). If this script fails
-// to load nothing breaks; the shortcuts simply don't fire.
+// Requeue controls, nav links, property picker chips, inbox promote/decline
+// buttons). If this script fails to load nothing breaks; the shortcuts simply
+// don't fire.
+//
+// INBOX TRIAGE SHORTCUTS (active on /inbox):
+//   J/K       — next/previous inbox item
+//   Enter     — open focused item (ticket detail)
+//   A         — accept/promote (queued if complete, draft if not)
+//   D         — decline (archive)
+//   E         — edit details (ticket detail page)
+//   L         — edit labels (plain L — no column nav on inbox)
+//   P         — set priority
+//   S         — unbound (snooze not yet implemented)
 //
 // AUTH NOTE: the JSON API under /api/v1/* is bearer-only and 401s for the
 // browser's cookie session, so the palette talks to the cookie-authed UI
@@ -16,6 +27,8 @@
 //   - run-now  POST /tickets/{id}/run-now
 //   - archive  POST /tickets/{id}/archive
 //   - requeue  POST /tickets/{id}/requeue
+//   - promote  POST /inbox/tickets/{id}/promote
+//   - decline  POST /inbox/tickets/{id}/decline
 //   - open     navigate to /tickets/{id}
 // No new server routes were added for this feature.
 
@@ -87,12 +100,18 @@
   }
 
   // Get the currently focused ticket context. On the board this is the
-  // cursor-selected card; on /tickets/{id} it's the page ticket.
+  // cursor-selected card; on /inbox it's the inbox cursor; on /tickets/{id}
+  // it's the page ticket.
   function currentTicket() {
     // Ticket detail page — the focused ticket IS the page.
     var m = location.pathname.match(/^\/tickets\/([^/]+)\/?$/);
     if (m) {
       return { id: m[1], title: document.title.replace(/ \| nightdesk$/, "") };
+    }
+    // Inbox — use the inbox cursor.
+    if (isInboxPage()) {
+      var ic = inboxCurrentTicket();
+      if (ic) return ic;
     }
     // Board — use the sidebar's selected ticket, or fall back to the
     // cursor-tracked card.
@@ -252,6 +271,147 @@
     }
   }
 
+  // ---- inbox page detection -----------------------------------------------
+  // The inbox page (/inbox) uses the same cursor pattern as the board but
+  // with different shortcuts (A=promote, D=decline, Enter=open, L=labels).
+
+  function isInboxPage() {
+    return !!document.getElementById("inbox-list");
+  }
+
+  // ---- inbox cursor: J/K navigation between items -------------------------
+  // Inbox items live in #inbox-list ul > li[data-ticket-id]. J/K walks the
+  // list top-to-bottom. The cursor highlights the row and enables triage
+  // shortcuts (A/D/E/L/P/Enter) on the focused item.
+
+  function inboxCards() {
+    var host = document.getElementById("inbox-list");
+    if (!host) return [];
+    return Array.prototype.slice.call(
+      host.querySelectorAll("li[data-ticket-id]")
+    );
+  }
+
+  function inboxCursorIndex() {
+    var cards = inboxCards();
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].hasAttribute("data-nd-cursor")) return i;
+    }
+    return -1;
+  }
+
+  function inboxSetCursor(idx) {
+    var cards = inboxCards();
+    if (!cards.length) return;
+    if (idx < 0) idx = 0;
+    if (idx >= cards.length) idx = cards.length - 1;
+
+    // Clear old cursor highlight.
+    var prev = document.querySelector("#inbox-list li[data-ticket-id][data-nd-cursor]");
+    if (prev) {
+      prev.removeAttribute("data-nd-cursor");
+      prev.classList.remove("nd-cursor-active");
+    }
+
+    var card = cards[idx];
+    card.setAttribute("data-nd-cursor", "");
+    card.classList.add("nd-cursor-active");
+    card.scrollIntoView({ block: "nearest" });
+  }
+
+  function inboxMoveCursor(delta) {
+    if (!isInboxPage()) return false;
+    var idx = inboxCursorIndex();
+    if (idx < 0) {
+      inboxSetCursor(0);
+      return true;
+    }
+    inboxSetCursor(idx + delta);
+    return true;
+  }
+
+  function inboxCurrentTicket() {
+    var card = document.querySelector("#inbox-list li[data-ticket-id][data-nd-cursor]");
+    if (!card) return null;
+    var id = card.getAttribute("data-ticket-id");
+    var titleEl = card.querySelector(".font-medium, .font-bold");
+    var title = (titleEl ? titleEl.textContent : "").trim();
+    return { id: id, title: title || id };
+  }
+
+  // Re-apply inbox cursor highlight after HTMX swaps.
+  function restoreInboxCursor() {
+    if (!isInboxPage()) return;
+    var prev = document.querySelector("#inbox-list li[data-ticket-id][data-nd-cursor]");
+    if (prev) return; // cursor survived the swap
+    // No cursor — nothing to restore. The user must press J/K to start.
+  }
+
+  // ---- inbox triage actions ------------------------------------------------
+  // Post promote/decline via fetch (reusing cookie-authed routes), then
+  // refresh the inbox list via HTMX swap.
+
+  function inboxPostAction(url, feedback) {
+    return fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "HX-Request": "true" },
+    }).then(function (r) {
+      if (r.ok || r.status === 204) {
+        flashStatus(feedback);
+        // Refresh the inbox list in place.
+        var listEl = document.getElementById("inbox-list");
+        if (listEl && typeof window.htmx !== "undefined") {
+          var qs = location.search || "";
+          window.htmx.ajax("GET", "/inbox/list" + qs, {
+            target: "#inbox-list",
+            swap: "outerHTML",
+          }).then(function () {
+            // Re-land the cursor on the item now at the same index (or last).
+            var cards = inboxCards();
+            if (cards.length) {
+              var oldIdx = inboxCursorIndex();
+              if (oldIdx < 0) inboxSetCursor(0);
+            }
+          });
+        }
+      } else if (r.status === 422) {
+        // Incomplete ticket — can't promote.
+        r.text().then(function (msg) {
+          flashStatus("Can't promote: " + (msg || "incomplete"));
+        });
+      } else if (r.status === 409) {
+        flashStatus("Action not allowed for this item");
+      } else if (r.status === 404) {
+        flashStatus("Item not found");
+      } else {
+        flashStatus("Action failed (" + r.status + ")");
+      }
+    }).catch(function () {
+      flashStatus("Action failed");
+    });
+  }
+
+  function inboxPromote(ctx, target) {
+    var qs = location.search || "";
+    inboxPostAction(
+      "/inbox/tickets/" + encodeURIComponent(ctx.id) + "/promote" + qs,
+      "Promoted: " + (ctx.title || ctx.id)
+    );
+  }
+
+  function inboxDecline(ctx) {
+    var qs = location.search || "";
+    inboxPostAction(
+      "/inbox/tickets/" + encodeURIComponent(ctx.id) + "/decline" + qs,
+      "Declined: " + (ctx.title || ctx.id)
+    );
+  }
+
+  function inboxOpenDetail(ctx) {
+    location.href = "/tickets/" + encodeURIComponent(ctx.id);
+  }
+
   // ---- ticket actions (cookie-authed UI endpoints) -----------------------
 
   function postAction(url) {
@@ -329,6 +489,53 @@
       });
   }
   window.ndOpenCreateTicket = openCreateTicket;
+
+  // Inbox promote: lazy-load the promote modal (the shared edit modal in
+  // "promote" mode, pre-filled for one inbox item) into #promote-modal-host
+  // and open it. Falls back to the ticket detail page if HTMX is unavailable.
+  function openPromoteTicket(tid, project) {
+    if (!tid) return;
+    var host = document.getElementById("promote-modal-host");
+    if (!host || typeof window.htmx === "undefined") {
+      location.href = "/tickets/" + encodeURIComponent(tid);
+      return;
+    }
+    var url = "/inbox/tickets/" + encodeURIComponent(tid) + "/promote-modal";
+    if (project) url += "?project=" + encodeURIComponent(project);
+    window.htmx
+      .ajax("GET", url, { target: "#promote-modal-host", swap: "innerHTML" })
+      .then(function () {
+        openModalEl(document.getElementById("inbox-promote-modal"));
+      });
+  }
+  window.ndOpenPromoteTicket = openPromoteTicket;
+
+  // After-request handler for the promote modal form. On success the inbox list
+  // has already been swapped in, so just close the dialog. On a rejected
+  // promotion (e.g. queueing with required fields still missing) keep the modal
+  // open and surface the reason in the error banner, preserving the edits.
+  window.ndPromoteAfterRequest = function (event, modalId) {
+    var dlg = document.getElementById(modalId);
+    var ok = !!(event && event.detail && event.detail.successful);
+    if (ok) {
+      if (dlg) dlg.close();
+      return;
+    }
+    var box = dlg && dlg.querySelector("[data-promote-error]");
+    if (!box) return;
+    var msg = "Promotion failed.";
+    var xhr = event && event.detail && event.detail.xhr;
+    if (xhr && xhr.responseText) {
+      try {
+        var body = JSON.parse(xhr.responseText);
+        if (body && body.detail) msg = "Cannot promote: " + body.detail;
+      } catch (e) {
+        if (xhr.responseText.length < 300) msg = xhr.responseText;
+      }
+    }
+    box.textContent = msg;
+    box.classList.remove("hidden");
+  };
 
   // ---- focused ticket: property action shortcuts -------------------------
   // These require a focused ticket (from the cursor on the board, or the
@@ -462,75 +669,113 @@
     var cmds = [];
     var ctx = currentTicket();
     var status = focusedTicketStatus(ctx);
+    var onInbox = isInboxPage();
 
     if (ctx) {
       var short = ctx.title.length > 40 ? ctx.title.slice(0, 39) + "…" : ctx.title;
 
-      // Build ticket-action commands with status-aware ordering.
-      var ticketActions = {
-        "run-now": {
-          label: "Run now: " + short, shortcut: "R", hint: status || "ticket",
-          section: "Ticket actions",
-          run: function () { runTicketAction("run-now", ctx.id, ctx.title); },
-        },
-        "open-detail": {
-          label: "Open detail: " + short, shortcut: "", hint: "Enter",
-          section: "Ticket actions",
-          run: function () { location.href = "/tickets/" + encodeURIComponent(ctx.id); },
-        },
-        "archive": {
-          label: "Archive: " + short, shortcut: "A", hint: status || "ticket",
-          section: "Ticket actions",
-          run: function () { runTicketAction("archive", ctx.id, ctx.title); },
-        },
-        "requeue": {
-          label: "Requeue: " + short, shortcut: "R", hint: status || "ticket",
-          section: "Ticket actions",
-          run: function () { runTicketAction("requeue", ctx.id, ctx.title); },
-        },
-        "edit": {
+      // Inbox triage commands — surface promote/decline/open/labels/priority.
+      if (onInbox) {
+        cmds.push({
+          label: "Accept & queue: " + short, shortcut: "A", hint: "",
+          section: "Inbox triage",
+          run: function () { inboxPromote(ctx, "queued"); },
+        });
+        cmds.push({
+          label: "Decline: " + short, shortcut: "D", hint: "",
+          section: "Inbox triage",
+          run: function () { inboxDecline(ctx); },
+        });
+        cmds.push({
+          label: "Open detail: " + short, shortcut: "Enter", hint: "",
+          section: "Inbox triage",
+          run: function () { inboxOpenDetail(ctx); },
+        });
+        cmds.push({
           label: "Edit: " + short, shortcut: "E", hint: "",
-          section: "Ticket actions",
-          run: function () { openEditForTicket(ctx); },
-        },
-        "peek": {
-          label: "Peek: " + short, shortcut: "Space", hint: "",
-          section: "Ticket actions",
-          run: function () { openPeek(ctx); },
-        },
-        "priority": {
+          section: "Inbox triage",
+          run: function () { inboxOpenDetail(ctx); },
+        });
+        cmds.push({
           label: "Set priority: " + short, shortcut: "P", hint: "",
-          section: "Properties",
+          section: "Inbox triage",
           run: function () {
             var ok = window.ndOpenPropertyPicker &&
               window.ndOpenPropertyPicker(ctx.id, "priority");
-            if (!ok) flashStatus("Open the ticket to change its priority");
+            if (!ok) flashStatus("No priority picker found for this item");
           },
-        },
-        "status": {
-          label: "Set status: " + short, shortcut: "S", hint: "",
-          section: "Properties",
-          run: function () {
-            var ok = window.ndOpenPropertyPicker &&
-              window.ndOpenPropertyPicker(ctx.id, "status");
-            if (!ok) flashStatus("Open the ticket to change its status");
-          },
-        },
-        "labels": {
-          label: "Set labels: " + short, shortcut: "Shift L", hint: "",
-          section: "Properties",
+        });
+        cmds.push({
+          label: "Set labels: " + short, shortcut: "L", hint: "",
+          section: "Inbox triage",
           run: function () { openLabelPicker(ctx); },
-        },
-      };
+        });
+      } else {
+        // Board / ticket-detail commands.
+        var ticketActions = {
+          "run-now": {
+            label: "Run now: " + short, shortcut: "R", hint: status || "ticket",
+            section: "Ticket actions",
+            run: function () { runTicketAction("run-now", ctx.id, ctx.title); },
+          },
+          "open-detail": {
+            label: "Open detail: " + short, shortcut: "", hint: "Enter",
+            section: "Ticket actions",
+            run: function () { location.href = "/tickets/" + encodeURIComponent(ctx.id); },
+          },
+          "archive": {
+            label: "Archive: " + short, shortcut: "A", hint: status || "ticket",
+            section: "Ticket actions",
+            run: function () { runTicketAction("archive", ctx.id, ctx.title); },
+          },
+          "requeue": {
+            label: "Requeue: " + short, shortcut: "R", hint: status || "ticket",
+            section: "Ticket actions",
+            run: function () { runTicketAction("requeue", ctx.id, ctx.title); },
+          },
+          "edit": {
+            label: "Edit: " + short, shortcut: "E", hint: "",
+            section: "Ticket actions",
+            run: function () { openEditForTicket(ctx); },
+          },
+          "peek": {
+            label: "Peek: " + short, shortcut: "Space", hint: "",
+            section: "Ticket actions",
+            run: function () { openPeek(ctx); },
+          },
+          "priority": {
+            label: "Set priority: " + short, shortcut: "P", hint: "",
+            section: "Properties",
+            run: function () {
+              var ok = window.ndOpenPropertyPicker &&
+                window.ndOpenPropertyPicker(ctx.id, "priority");
+              if (!ok) flashStatus("Open the ticket to change its priority");
+            },
+          },
+          "status": {
+            label: "Set status: " + short, shortcut: "S", hint: "",
+            section: "Properties",
+            run: function () {
+              var ok = window.ndOpenPropertyPicker &&
+                window.ndOpenPropertyPicker(ctx.id, "status");
+              if (!ok) flashStatus("Open the ticket to change its status");
+            },
+          },
+          "labels": {
+            label: "Set labels: " + short, shortcut: "Shift L", hint: "",
+            section: "Properties",
+            run: function () { openLabelPicker(ctx); },
+          },
+        };
 
-      var actionOrder = statusActionOrder(status);
-      actionOrder.forEach(function (key) {
-        var cmd = ticketActions[key];
-        if (!cmd) return;
-        // For running tickets, skip run-now/requeue/archive (they'd fail).
-        if (status === "running" && (key === "run-now" || key === "requeue" || key === "archive")) return;
-        cmds.push(cmd);
-      });
+        var actionOrder = statusActionOrder(status);
+        actionOrder.forEach(function (key) {
+          var cmd = ticketActions[key];
+          if (!cmd) return;
+          if (status === "running" && (key === "run-now" || key === "requeue" || key === "archive")) return;
+          cmds.push(cmd);
+        });
+      }
     }
 
     // --- View / display commands ---
@@ -574,6 +819,8 @@
       run: openCreateTicket });
     cmds.push({ label: "Go to board", shortcut: "g b", hint: "", section: "Navigation",
       run: function () { location.href = "/"; } });
+    cmds.push({ label: "Go to inbox", shortcut: "g i", hint: "", section: "Navigation",
+      run: function () { location.href = "/inbox"; } });
     cmds.push({ label: "Go to archive", shortcut: "g a", hint: "", section: "Navigation",
       run: function () { location.href = "/archive"; } });
     cmds.push({ label: "Show keyboard shortcuts", shortcut: "?", hint: "", section: "Navigation",
@@ -874,6 +1121,9 @@
     if (hadG && (key === "a" || key === "A")) {
       e.preventDefault(); lastG = 0; location.href = "/archive"; return;
     }
+    if (hadG && (key === "i" || key === "I")) {
+      e.preventDefault(); lastG = 0; location.href = "/inbox"; return;
+    }
     lastG = 0;
 
     if (key === "g" || key === "G") { lastG = now; return; }
@@ -888,19 +1138,80 @@
 
     // --- Board cursor: J/K navigate cards (vim-style down/up) ------------
     if (key === "j" || key === "J") {
-      if (document.getElementById("board-grid")) {
+      if (isInboxPage()) {
+        e.preventDefault();
+        inboxMoveCursor(1);
+      } else if (document.getElementById("board-grid")) {
         e.preventDefault();
         moveCursor(1);
       }
       return;
     }
     if (key === "k" || key === "K") {
-      if (document.getElementById("board-grid")) {
+      if (isInboxPage()) {
+        e.preventDefault();
+        inboxMoveCursor(-1);
+      } else if (document.getElementById("board-grid")) {
         e.preventDefault();
         moveCursor(-1);
       }
       return;
     }
+
+    // --- Inbox triage shortcuts -------------------------------------------
+    // On the inbox page, keys are repurposed for triage flow:
+    //   Enter = open detail, A = promote, D = decline, E = edit,
+    //   L = labels (plain L — no column nav on inbox), P = priority,
+    //   S = unbound (snooze not yet implemented).
+    if (isInboxPage()) {
+      var ictx = inboxCurrentTicket();
+
+      // Enter — open focused inbox item
+      if (key === "Enter") {
+        if (ictx) { e.preventDefault(); inboxOpenDetail(ictx); }
+        return;
+      }
+      // A — accept / promote (queued if complete, shows blocker feedback if not)
+      if (key === "a" || key === "A") {
+        if (ictx) { e.preventDefault(); inboxPromote(ictx, "queued"); }
+        return;
+      }
+      // D — decline / archive
+      if (key === "d" || key === "D") {
+        if (ictx) { e.preventDefault(); inboxDecline(ictx); }
+        return;
+      }
+      // E — edit / open detail
+      if (key === "e" || key === "E") {
+        if (ictx) { e.preventDefault(); inboxOpenDetail(ictx); }
+        return;
+      }
+      // L — labels (plain L on inbox; no column navigation here)
+      if ((key === "l" || key === "L") && !e.shiftKey) {
+        if (ictx) { e.preventDefault(); openLabelPicker(ictx); }
+        return;
+      }
+      // P — priority picker
+      if (key === "p" || key === "P") {
+        if (ictx) {
+          e.preventDefault();
+          var pok = window.ndOpenPropertyPicker &&
+            window.ndOpenPropertyPicker(ictx.id, "priority");
+          if (!pok) flashStatus("No priority picker found for this item");
+        }
+        return;
+      }
+      // S — intentionally unbound on inbox (snooze does not exist yet).
+      // Falls through so it doesn't fire any action.
+      if (key === "s" || key === "S") {
+        return;
+      }
+
+      // Anything else on the inbox page: stop here — don't leak board
+      // shortcuts (R, Space, H/L column nav, Shift+L) into the inbox.
+      return;
+    }
+
     // --- Board cursor: H/L jump between columns (vim-style left/right) ----
     // Only intercept on the board; off-board (e.g. ticket detail) these keys
     // fall through so Shift+L can still open the label picker there.
@@ -1003,12 +1314,14 @@
       history.replaceState(null, "", clean);
     }
 
-    // Restore cursor highlight after HTMX column swaps on the board.
+    // Restore cursor highlight after HTMX column swaps on the board or inbox.
     document.body.addEventListener("htmx:afterSwap", function () {
       restoreCursor();
+      restoreInboxCursor();
     });
     document.body.addEventListener("htmx:oobAfterSwap", function () {
       restoreCursor();
+      restoreInboxCursor();
     });
   }
 
