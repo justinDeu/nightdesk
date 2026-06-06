@@ -53,6 +53,28 @@ def test_all_five_statuses_present(demo_engine, demo_session, demo_transcript_ro
     assert statuses == {"draft", "queued", "running", "review", "archived"}
 
 
+def test_projects_seeded_and_assigned(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    """Demo seeds projects and assigns tickets so group-by-project has content,
+    while leaving some tickets unassigned for the No-project bucket."""
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    slugs = set(
+        demo_session.execute(text("SELECT slug FROM projects")).scalars()
+    )
+    assert {"web-app", "platform"} <= slugs
+    assigned = demo_session.execute(
+        text("SELECT COUNT(*) FROM tickets WHERE project_id IS NOT NULL")
+    ).scalar()
+    unassigned = demo_session.execute(
+        text("SELECT COUNT(*) FROM tickets WHERE project_id IS NULL")
+    ).scalar()
+    assert assigned > 0
+    assert unassigned > 0
+
+
 def test_profiles_seeded(demo_engine, demo_session, demo_transcript_root, tmp_path):
     seed_demo(
         db_path=Path(demo_engine.url.database),

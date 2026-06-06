@@ -199,6 +199,14 @@ _LABEL_SPECS: list[dict] = [
 ]
 
 
+# Demo projects so the board's group-by-project view has content. Tickets are
+# assigned to these round-robin in the seeder (with some left unassigned).
+_PROJECT_SPECS: list[dict] = [
+    {"name": "Web App",   "slug": "web-app",  "color": "#2563eb"},
+    {"name": "Platform",  "slug": "platform", "color": "#db2777"},
+]
+
+
 # ---------------------------------------------------------------------------
 # Synthetic transcript builders
 # ---------------------------------------------------------------------------
@@ -482,6 +490,30 @@ def seed(
             lbl = create_label(session, name=spec["name"], color=spec["color"])
             label_by_name[lbl.name] = lbl
 
+        # --- Seed projects ---
+        # A couple of demo projects so the board's group-by-project view (and
+        # the project facet) has something to show. Idempotent like labels.
+        from nightdesk.domain.projects import (
+            create_project as _create_project,
+            list_projects as _list_projects,
+        )
+        project_by_slug: dict[str, object] = {
+            p.slug: p for p in _list_projects(session)
+        }
+        seeded_projects: list = []
+        for spec in _PROJECT_SPECS:
+            existing = project_by_slug.get(spec["slug"])
+            if existing is None:
+                existing = _create_project(
+                    session,
+                    name=spec["name"],
+                    slug=spec["slug"],
+                    source_path=source_path,
+                    color=spec.get("color"),
+                )
+                project_by_slug[existing.slug] = existing
+            seeded_projects.append(existing)
+
         tickets_by_status: dict[str, list[Ticket]] = {}
 
         for idx, raw_spec in enumerate(_TICKET_SPECS):
@@ -489,6 +521,11 @@ def seed(
             run_spec = spec.pop("run", None)
             label_names = spec.pop("labels", [])
             profile_id = profile_ids[idx % len(profile_ids)]
+            # Assign most tickets to a project (round-robin), leaving every
+            # third one unassigned so the "No project" bucket is populated too.
+            project_id = None
+            if seeded_projects and idx % 3 != 2:
+                project_id = seeded_projects[idx % len(seeded_projects)].id
 
             ticket = create_ticket(
                 session,
@@ -498,6 +535,7 @@ def seed(
                 profile_id=profile_id,
                 source_path=source_path,
                 priority=idx % 3,
+                project_id=project_id,
             )
 
             # Assign labels to the ticket.

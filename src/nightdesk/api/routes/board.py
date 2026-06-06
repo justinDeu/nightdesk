@@ -16,6 +16,7 @@ from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow
 from nightdesk.domain.projects import ProjectNotFound, get_project_by_slug, list_projects
 from nightdesk.domain.profiles import list_profiles
+from nightdesk.domain.labels import list_labels
 from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.toolchains import current_config, toolchain_options
@@ -47,6 +48,135 @@ _COLUMNS = [
     ("running", "Running"),
     ("review", "Review"),
 ]
+
+# Properties the board can group cards by. ``status`` is the default and keeps
+# the classic kanban layout (with status-changing drag). The others arrange the
+# same cards by the chosen property; they are read-only groupings that must not
+# imply status drag (see the Sortable wiring in board.html).
+_GROUPABLE = ("status", "label", "project", "priority")
+
+# Human-friendly labels for the small integer priority scale. Higher = more
+# important (Ticket.priority is ordered ``priority.desc()`` everywhere). Values
+# outside the named range fall back to ``Priority N``.
+_PRIORITY_LABELS = {2: "High", 1: "Medium", 0: "Low"}
+
+
+def _priority_label(n: int) -> str:
+    return _PRIORITY_LABELS.get(n, f"Priority {n}")
+
+
+def _normalize_group(raw: Optional[str]) -> str:
+    """Coerce a ``group`` query value to a supported grouping (default status)."""
+    g = (raw or "status").strip().lower()
+    return g if g in _GROUPABLE else "status"
+
+
+def _status_column(status: str, label: str, tickets: list) -> dict:
+    """A real status column: keyed by status, droppable (status-changing drag)."""
+    return {
+        "key": status,
+        "status": status,
+        "label": label,
+        "tickets": tickets,
+        "count": len(tickets),
+        "color": None,
+        "droppable": True,
+    }
+
+
+def _group_by_label(session: Session, tickets: list) -> list[dict]:
+    """One column per label (plus an Unlabeled bucket). A ticket with several
+    labels appears under each of them. Read-only: no status drag."""
+    labels = list_labels(session)
+    buckets: dict[str, list] = {l.id: [] for l in labels}
+    unlabeled: list = []
+    for t in tickets:
+        tl = list(t.labels) if t.labels else []
+        if not tl:
+            unlabeled.append(t)
+            continue
+        for l in tl:
+            buckets.setdefault(l.id, []).append(t)
+    cols: list[dict] = []
+    for l in labels:
+        ts = buckets.get(l.id, [])
+        cols.append({
+            "key": f"label-{l.id}",
+            "status": None,
+            "label": l.name,
+            "tickets": ts,
+            "count": len(ts),
+            "color": l.color or None,
+            "droppable": False,
+        })
+    cols.append({
+        "key": "label-none",
+        "status": None,
+        "label": "Unlabeled",
+        "tickets": unlabeled,
+        "count": len(unlabeled),
+        "color": None,
+        "droppable": False,
+    })
+    return cols
+
+
+def _group_by_project(projects: list, tickets: list) -> list[dict]:
+    """One column per project (plus a No-project bucket). Read-only."""
+    buckets: dict[str, list] = {p.id: [] for p in projects}
+    no_project: list = []
+    for t in tickets:
+        pid = getattr(t, "project_id", None)
+        if pid and pid in buckets:
+            buckets[pid].append(t)
+        else:
+            # No project, or a project not in the active list (e.g. archived):
+            # fold into the No-project bucket so the ticket never disappears.
+            no_project.append(t)
+    cols: list[dict] = []
+    for p in projects:
+        ts = buckets.get(p.id, [])
+        cols.append({
+            "key": f"project-{p.id}",
+            "status": None,
+            "label": p.name,
+            "tickets": ts,
+            "count": len(ts),
+            "color": getattr(p, "color", None) or None,
+            "droppable": False,
+        })
+    cols.append({
+        "key": "project-none",
+        "status": None,
+        "label": "No project",
+        "tickets": no_project,
+        "count": len(no_project),
+        "color": None,
+        "droppable": False,
+    })
+    return cols
+
+
+def _group_by_priority(tickets: list) -> list[dict]:
+    """One column per priority value, highest first. Always shows the 0..2 base
+    scale so the buckets (and their empty-states) are stable. Read-only."""
+    present = {int(getattr(t, "priority", 0) or 0) for t in tickets}
+    values = sorted(present | {0, 1, 2}, reverse=True)
+    buckets: dict[int, list] = {v: [] for v in values}
+    for t in tickets:
+        buckets[int(getattr(t, "priority", 0) or 0)].append(t)
+    return [
+        {
+            "key": f"priority-{v}",
+            "status": None,
+            "label": _priority_label(v),
+            "tickets": buckets[v],
+            "count": len(buckets[v]),
+            "color": None,
+            "droppable": False,
+        }
+        for v in values
+    ]
 
 
 def _parse_additional_dirs(values: list[str] | None) -> list[dict]:
@@ -311,7 +441,8 @@ def _list_labels_sidebar(session: Session) -> list:
     return _ll(session)
 
 
-def _gather_board(session: Session, *, q: str = ""):
+def _gather_board(session: Session, *, q: str = "", group: str = "status"):
+    group = _normalize_group(group)
     ast = parse_query(q)
     selected_project = _sole_project(session, ast)
     projects = list_projects(session)
@@ -356,17 +487,25 @@ def _gather_board(session: Session, *, q: str = ""):
             if titles:
                 dep_titles[t.id] = titles
 
-    columns = [
-        {"status": status, "label": label, "tickets": raw[status]}
-        for status, label in _COLUMNS
-    ]
-
     # All labels for the label picker on ticket cards.
     from nightdesk.domain.labels import list_labels as _list_labels
     all_labels = _list_labels(session)
 
+    if group == "label":
+        columns = _group_by_label(session, all_tickets)
+    elif group == "project":
+        columns = _group_by_project(projects, all_tickets)
+    elif group == "priority":
+        columns = _group_by_priority(all_tickets)
+    else:  # status (default): the classic kanban with status-changing drag.
+        columns = [
+            _status_column(status, label, raw[status])
+            for status, label in _COLUMNS
+        ]
+
     return {
         "columns": columns,
+        "group": group,
         "profiles": profiles,
         "profiles_by_id": profiles_by_id,
         "run_outcomes": review_run_outcomes,
@@ -484,17 +623,20 @@ def build_router(
         q: str = Query(default=""),
         project: str = Query(default=""),
         view: str = Query(default="tickets"),
+        group: str = Query(default="status"),
         session: Session = Depends(get_session),
     ):
         query = _board_query(q, project)
         view = "runs" if view == "runs" else "tickets"
-        ctx = _gather_board(session, q=query)
+        ctx = _gather_board(session, q=query, group=group)
         return templates.TemplateResponse(
             request,
             "board.html",
             {
                 "title": "Board",
                 "columns": ctx["columns"],
+                "group": ctx["group"],
+                "groupable": _GROUPABLE,
                 "profiles": ctx["profiles"],
                 "profiles_by_id": ctx["profiles_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
@@ -519,22 +661,27 @@ def build_router(
         request: Request,
         q: str = Query(default=""),
         project: str = Query(default=""),
+        group: str = Query(default="status"),
         session: Session = Depends(get_session),
     ):
-        """Polled fragment returning the four column sections as OOB swaps.
+        """Polled fragment returning the grouped column sections as OOB swaps.
 
         The board template polls this every few seconds. The response carries
         no main-target body — each column is an ``hx-swap-oob="true"`` block
-        that replaces the matching ``#board-col-<status>`` section in place.
-        The sidebar is outside those ids and is never touched, so unsaved
-        edits in the editor survive every poll cycle.
+        that replaces the matching ``#board-col-<key>`` section in place. The
+        ``group`` param mirrors the active grouping so the polled columns line
+        up with the rendered grid (status keys for the default kanban, or
+        ``label-/project-/priority-`` keys for the property groupings). The
+        sidebar is outside those ids and is never touched, so unsaved edits in
+        the editor survive every poll cycle.
         """
-        ctx = _gather_board(session, q=_board_query(q, project))
+        ctx = _gather_board(session, q=_board_query(q, project), group=group)
         return templates.TemplateResponse(
             request,
             "partials/board_columns_oob.html",
             {
                 "columns": ctx["columns"],
+                "group": ctx["group"],
                 "profiles_by_id": ctx["profiles_by_id"],
                 "projects_by_id": ctx["projects_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
