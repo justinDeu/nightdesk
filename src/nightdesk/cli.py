@@ -39,15 +39,17 @@ bind_port = 8765
 # Minimum claude CLI version supported.
 _CC_FLOOR = "2.1.80"
 
-# Unit file templates.
-_API_UNIT = """\
+# Unit file templates. ``{exec_start}`` is filled in at install time with the
+# absolute path of the matching console script, resolved from wherever the
+# package was actually installed (see ``_resolve_entrypoint``).
+_API_UNIT_TEMPLATE = """\
 [Unit]
 Description=nightdesk API server
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/nightdesk-api
+ExecStart={exec_start}
 Restart=on-failure
 RestartSec=2
 RestartPreventExitStatus=70
@@ -59,14 +61,14 @@ Environment="PYTHONUNBUFFERED=1"
 WantedBy=default.target
 """
 
-_WORKER_UNIT = """\
+_WORKER_UNIT_TEMPLATE = """\
 [Unit]
 Description=nightdesk worker daemon
 After=network.target nightdesk-api.service
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/nightdesk-worker
+ExecStart={exec_start}
 Restart=on-failure
 RestartSec=2
 RestartPreventExitStatus=70
@@ -77,6 +79,57 @@ Environment="PYTHONUNBUFFERED=1"
 [Install]
 WantedBy=default.target
 """
+
+
+def _entrypoint_dir_candidates() -> list[Path]:
+    """Directories likely to hold the nightdesk console scripts, in priority order.
+
+    ``nightdesk-setup`` is itself a console script, so its own directory
+    (``sys.argv[0]``) and the bin dir of the interpreter running it
+    (``sys.executable``) are where pip/uv/pipx placed its siblings. Returns
+    resolved, de-duplicated directories.
+    """
+    dirs: list[Path] = []
+    argv0 = sys.argv[0] if sys.argv else ""
+    sources = [argv0, sys.executable]
+    for src in sources:
+        if not src:
+            continue
+        try:
+            d = Path(src).resolve().parent
+        except OSError:
+            continue
+        if d not in dirs:
+            dirs.append(d)
+    return dirs
+
+
+def _resolve_entrypoint(name: str) -> str:
+    """Resolve the absolute path of an installed nightdesk console script.
+
+    Console scripts are installed next to the interpreter/shim that runs them:
+    a uv-tool or ``~/.local/bin`` shim dir, a project ``.venv/bin``, or
+    ``~/.local/bin`` for ``pip install --user``. We probe, in order, the dir of
+    the running setup script and the interpreter's bin dir (the reliable cases),
+    then ``PATH``, then fall back to ``~/.local/bin/<name>``. Returning a real,
+    existing path is what lets the systemd unit's ``ExecStart`` actually start.
+    """
+    for d in _entrypoint_dir_candidates():
+        cand = d / name
+        if cand.is_file():
+            return str(cand)
+    which = shutil.which(name)
+    if which:
+        return str(Path(which))
+    return str(Path(os.path.expanduser("~/.local/bin")) / name)
+
+
+def _render_api_unit() -> str:
+    return _API_UNIT_TEMPLATE.format(exec_start=_resolve_entrypoint("nightdesk-api"))
+
+
+def _render_worker_unit() -> str:
+    return _WORKER_UNIT_TEMPLATE.format(exec_start=_resolve_entrypoint("nightdesk-worker"))
 
 
 def _alembic_config(cfg: NightdeskConfig):
@@ -377,13 +430,15 @@ def _install_systemd_units(dry_run: bool) -> Path:
     unit_dir = Path(os.path.expanduser("~/.config/systemd/user"))
     if dry_run:
         print(f"[dry-run] would create directory {unit_dir}")
-        print("[dry-run] would write nightdesk-api.service")
-        print("[dry-run] would write nightdesk-worker.service")
+        print(f"[dry-run] would write nightdesk-api.service "
+              f"(ExecStart={_resolve_entrypoint('nightdesk-api')})")
+        print(f"[dry-run] would write nightdesk-worker.service "
+              f"(ExecStart={_resolve_entrypoint('nightdesk-worker')})")
         return unit_dir
 
     unit_dir.mkdir(parents=True, exist_ok=True)
-    (unit_dir / "nightdesk-api.service").write_text(_API_UNIT)
-    (unit_dir / "nightdesk-worker.service").write_text(_WORKER_UNIT)
+    (unit_dir / "nightdesk-api.service").write_text(_render_api_unit())
+    (unit_dir / "nightdesk-worker.service").write_text(_render_worker_unit())
     print(f"Unit files written to {unit_dir}.")
     return unit_dir
 
