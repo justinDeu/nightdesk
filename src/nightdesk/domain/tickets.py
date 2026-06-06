@@ -812,6 +812,47 @@ def bulk_update_profile(
     return updated, skipped
 
 
+def bulk_archive(
+    session: Session,
+    ticket_ids: list[str],
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk archive.  Archives each ticket that is in ``review`` (the only
+    state from which archiving is valid); every other ticket is skipped with a
+    reason rather than failing the whole batch.  Returns ``(updated, skipped)``
+    where each skipped entry is ``{"ticket_id": ..., "reason": ...}``."""
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = archive(session, tid)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+        except InvalidTransition as exc:
+            skipped.append({"ticket_id": tid, "reason": str(exc)})
+    return updated, skipped
+
+
+def bulk_unarchive(
+    session: Session,
+    ticket_ids: list[str],
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk unarchive.  Returns each archived ticket to ``queued`` (the
+    supported reverse of archiving) and is the undo path for ``bulk_archive``.
+    Tickets that are not archived are skipped.  Returns ``(updated, skipped)``."""
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = unarchive(session, tid)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+        except InvalidTransition as exc:
+            skipped.append({"ticket_id": tid, "reason": str(exc)})
+    return updated, skipped
+
+
 # --- internals ---------------------------------------------------------------
 
 

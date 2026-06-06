@@ -19,7 +19,9 @@ from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.toolchains import current_config, toolchain_options
-from nightdesk.domain.priority import resolve_priority, PRIORITY_MIN, PRIORITY_MAX
+from nightdesk.domain.priority import (
+    resolve_priority, PRIORITY_MIN, PRIORITY_MAX, PRIORITY_SCALE,
+)
 from nightdesk.domain.properties import (
     PROPERTY_REGISTRY,
     get_property,
@@ -32,6 +34,7 @@ from nightdesk.domain.tickets import (
     TicketNotFound,
     add_dependency,
     archive,
+    bulk_archive, bulk_unarchive,
     bulk_update_priority, bulk_update_profile, bulk_update_project, bulk_update_status,
     create_ticket,
     delete_ticket,
@@ -48,6 +51,9 @@ from nightdesk.domain.tickets import (
     update_ticket_priority, update_ticket_profile, update_ticket_project,
 )
 from nightdesk.domain.profiles import ProfileNotFound
+from nightdesk.domain.labels import (
+    LabelNotFound, bulk_add_labels, get_ticket_labels,
+)
 
 
 _COLUMNS = [
@@ -320,6 +326,31 @@ def _list_labels_sidebar(session: Session) -> list:
     return _ll(session)
 
 
+def _ticket_exists(session: Session, ticket_id: str) -> bool:
+    """True if a ticket with this id exists (no raise). Used to capture prior
+    values for bulk undo without aborting on already-deleted ids."""
+    try:
+        get_ticket(session, ticket_id)
+        return True
+    except TicketNotFound:
+        return False
+
+
+def _restore_undo(label: str, prop: str, prior: dict) -> Optional[dict]:
+    """Build the undo descriptor for a reversible bulk metadata change. The
+    client re-POSTs ``payload`` to ``/board/tickets/bulk/restore`` (JSON) to
+    revert each ticket to its captured prior value. Returns ``None`` when there
+    is nothing to undo."""
+    if not prior:
+        return None
+    return {
+        "label": label,
+        "route": "/board/tickets/bulk/restore",
+        "json": True,
+        "payload": {"prop": prop, "values": prior},
+    }
+
+
 def _gather_board(session: Session, *, q: str = ""):
     ast = parse_query(q)
     selected_project = _sole_project(session, ast)
@@ -514,6 +545,9 @@ def build_router(
                 "selected_project": ctx["selected_project"],
                 "toolchain_options": ctx["toolchain_options"],
                 "all_labels": ctx["all_labels"],
+                # Bulk action bar option sources.
+                "priority_scale": PRIORITY_SCALE,
+                "bulk_statuses": ["draft", "queued", "review", "archived"],
                 "query": ctx["query"],
                 "view": view,
                 # Only assembled when the runs view is the initial render.
@@ -718,10 +752,14 @@ def build_router(
             raise HTTPException(422, "priority must be an integer")
         if priority < 0:
             raise HTTPException(422, "priority must be >= 0")
+        # Capture prior priorities so the action bar can offer an Undo.
+        prior = {tid: get_ticket(session, tid).priority
+                 for tid in ticket_ids if _ticket_exists(session, tid)}
         updated, skipped = bulk_update_priority(session, ticket_ids, priority)
         return JSONResponse({
             "updated": [{"id": t.id, "priority": t.priority} for t in updated],
             "skipped": skipped,
+            "undo": _restore_undo("priority", "priority", prior),
         })
 
     @router.post("/board/tickets/bulk/status", dependencies=[auth])
@@ -739,13 +777,20 @@ def build_router(
         new_status = (form.get("status") or "").strip()
         if not new_status:
             raise HTTPException(422, "status required")
+        prior = {tid: get_ticket(session, tid).status
+                 for tid in ticket_ids if _ticket_exists(session, tid)}
         try:
             updated, skipped = bulk_update_status(session, ticket_ids, new_status)
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
+        # Only offer undo for tickets that actually moved; restoring a status is
+        # best-effort because the lifecycle state machine may reject the reverse
+        # transition (that's the "where feasible" caveat).
+        moved = {t.id: prior[t.id] for t in updated if t.id in prior}
         return JSONResponse({
             "updated": [{"id": t.id, "status": t.status} for t in updated],
             "skipped": skipped,
+            "undo": _restore_undo("status", "status", moved),
         })
 
     @router.post("/board/tickets/bulk/project", dependencies=[auth])
@@ -760,6 +805,8 @@ def build_router(
         if not ticket_ids:
             raise HTTPException(422, "ticket_ids required")
         project_id = (form.get("project_id") or "").strip() or None
+        prior = {tid: (get_ticket(session, tid).project_id or "")
+                 for tid in ticket_ids if _ticket_exists(session, tid)}
         try:
             updated, skipped = bulk_update_project(session, ticket_ids, project_id)
         except ProjectNotFound:
@@ -767,6 +814,7 @@ def build_router(
         return JSONResponse({
             "updated": [{"id": t.id, "project_id": t.project_id} for t in updated],
             "skipped": skipped,
+            "undo": _restore_undo("project", "project", prior),
         })
 
     @router.post("/board/tickets/bulk/profile", dependencies=[auth])
@@ -783,6 +831,8 @@ def build_router(
         profile_id = (form.get("profile_id") or "").strip()
         if not profile_id:
             raise HTTPException(422, "profile_id required")
+        prior = {tid: get_ticket(session, tid).profile_id
+                 for tid in ticket_ids if _ticket_exists(session, tid)}
         try:
             updated, skipped = bulk_update_profile(session, ticket_ids, profile_id)
         except ProfileNotFound:
@@ -790,7 +840,137 @@ def build_router(
         return JSONResponse({
             "updated": [{"id": t.id, "profile_id": t.profile_id} for t in updated],
             "skipped": skipped,
+            "undo": _restore_undo("profile", "profile", prior),
         })
+
+    @router.post("/board/tickets/bulk/labels", dependencies=[auth])
+    async def bulk_labels_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk label add.  Adds the given ``label_ids`` (comma-
+        separated) to every selected ticket (set union — existing labels are
+        kept).  Returns JSON with updated/skipped lists and an undo payload
+        that restores each ticket's prior label set."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        raw_labels = (form.get("label_ids") or "")
+        label_ids = [s.strip() for s in raw_labels.split(",") if s.strip()]
+        if not label_ids:
+            raise HTTPException(422, "label_ids required")
+        # Capture prior label sets for undo before mutating.
+        prior = {
+            tid: [lbl.id for lbl in get_ticket_labels(session, tid)]
+            for tid in ticket_ids if _ticket_exists(session, tid)
+        }
+        try:
+            updated, skipped = bulk_add_labels(session, ticket_ids, label_ids)
+        except LabelNotFound as e:
+            raise HTTPException(404, str(e))
+        return JSONResponse({
+            "updated": [
+                {"id": t.id, "label_ids": [lbl.id for lbl in t.labels]}
+                for t in updated
+            ],
+            "skipped": skipped,
+            "undo": _restore_undo("labels", "labels", prior),
+        })
+
+    @router.post("/board/tickets/bulk/archive", dependencies=[auth])
+    async def bulk_archive_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk archive.  Archives every selected ticket that is in
+        ``review`` (the only valid source state); others are skipped.  The undo
+        payload unarchives exactly the tickets that were archived."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        updated, skipped = bulk_archive(session, ticket_ids)
+        archived_ids = [t.id for t in updated]
+        undo = None
+        if archived_ids:
+            undo = {
+                "label": "archive",
+                "route": "/board/tickets/bulk/unarchive",
+                "json": False,
+                "payload": {"ticket_ids": ",".join(archived_ids)},
+            }
+        return JSONResponse({
+            "updated": [{"id": t.id, "status": t.status} for t in updated],
+            "skipped": skipped,
+            "undo": undo,
+        })
+
+    @router.post("/board/tickets/bulk/unarchive", dependencies=[auth])
+    async def bulk_unarchive_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk unarchive.  Returns each archived ticket to
+        ``queued``.  Used both as a standalone action and as the undo path for
+        bulk archive."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        updated, skipped = bulk_unarchive(session, ticket_ids)
+        return JSONResponse({
+            "updated": [{"id": t.id, "status": t.status} for t in updated],
+            "skipped": skipped,
+        })
+
+    @router.post("/board/tickets/bulk/restore", dependencies=[auth])
+    async def bulk_restore_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Generic undo endpoint: restore a property to per-ticket prior values.
+
+        Accepts a JSON body ``{"prop": <name>, "values": {tid: value}}`` where
+        the value type depends on the property (int for priority, id-or-empty
+        for project/profile, status string, or a list of label ids). Each ticket
+        is restored independently; failures (missing ticket, invalid status
+        transition) are skipped so a partial undo still applies what it can."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "JSON body required")
+        prop = (body.get("prop") or "").strip()
+        values = body.get("values") or {}
+        if prop not in ("priority", "project", "profile", "status", "labels"):
+            raise HTTPException(422, f"cannot restore property {prop!r}")
+        if not isinstance(values, dict):
+            raise HTTPException(422, "values must be an object")
+        restored: list[str] = []
+        skipped: list[dict] = []
+        for tid, val in values.items():
+            try:
+                if prop == "priority":
+                    update_ticket_priority(session, tid, int(val))
+                elif prop == "project":
+                    update_ticket_project(session, tid, (val or None))
+                elif prop == "profile":
+                    update_ticket_profile(session, tid, val)
+                elif prop == "status":
+                    transition_status(session, tid, val)
+                elif prop == "labels":
+                    from nightdesk.domain.labels import set_ticket_labels
+                    set_ticket_labels(session, tid, list(val or []))
+                restored.append(tid)
+            except TicketNotFound:
+                skipped.append({"ticket_id": tid, "reason": "not found"})
+            except (InvalidTransition, ProjectNotFound, ProfileNotFound,
+                    LabelNotFound, ValueError) as exc:
+                skipped.append({"ticket_id": tid, "reason": str(exc)})
+        return JSONResponse({"restored": restored, "skipped": skipped})
 
     @router.post("/board/tickets/{tid}", dependencies=[auth])
     async def update(

@@ -237,6 +237,20 @@
     return true; // no column that direction — keep the cursor where it is
   }
 
+  // Public cursor API so the bulk-selection module can reuse the cursor logic
+  // (X selects the focused card; Shift+J/K extend the selection) without
+  // duplicating boardCards()/setCursor(). Returns the focused ticket id.
+  window.ndBoardCursor = {
+    cards: boardCards,
+    index: cursorIndex,
+    set: setCursor,
+    move: moveCursor,
+    currentId: function () {
+      var c = document.querySelector("li[data-ticket-id][data-nd-cursor]");
+      return c ? c.getAttribute("data-ticket-id") : null;
+    },
+  };
+
   // Re-apply cursor highlight after HTMX swaps replace cards.
   function restoreCursor() {
     var sidebar = document.getElementById("sidebar");
@@ -865,6 +879,16 @@
     // own handler manages Arrow/Enter/Escape.
     if (document.querySelector("[data-property-menu]:not(.hidden)")) return;
 
+    // Esc clears an active bulk selection (only when one exists, so it doesn't
+    // swallow Esc elsewhere).
+    if (key === "Escape" || key === "Esc") {
+      if (window.ndBulkSelect && window.ndBulkSelect.count() > 0) {
+        e.preventDefault();
+        window.ndBulkSelect.clear();
+      }
+      return;
+    }
+
     var now = Date.now();
     var hadG = now - lastG < 800;
 
@@ -887,17 +911,28 @@
     if (key === "?") { e.preventDefault(); openCheatSheet(); return; }
 
     // --- Board cursor: J/K navigate cards (vim-style down/up) ------------
+    // Shift+J / Shift+K extend the bulk selection while moving the cursor.
     if (key === "j" || key === "J") {
       if (document.getElementById("board-grid")) {
         e.preventDefault();
-        moveCursor(1);
+        if (e.shiftKey && window.ndBulkSelect) window.ndBulkSelect.extend(1);
+        else moveCursor(1);
       }
       return;
     }
     if (key === "k" || key === "K") {
       if (document.getElementById("board-grid")) {
         e.preventDefault();
-        moveCursor(-1);
+        if (e.shiftKey && window.ndBulkSelect) window.ndBulkSelect.extend(-1);
+        else moveCursor(-1);
+      }
+      return;
+    }
+    // --- X: toggle bulk selection of the focused card --------------------
+    if ((key === "x" || key === "X") && !e.shiftKey) {
+      if (document.getElementById("board-grid") && window.ndBulkSelect) {
+        e.preventDefault();
+        window.ndBulkSelect.toggleFocused();
       }
       return;
     }
