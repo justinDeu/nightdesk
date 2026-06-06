@@ -215,31 +215,152 @@ def test_setup_dry_run_no_filesystem_changes(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_api_unit_file_content():
-    """API unit file must include all required directives."""
-    from nightdesk.cli import _API_UNIT
-
-    assert "StandardOutput=journal" in _API_UNIT
-    assert "StandardError=journal" in _API_UNIT
-    assert 'Environment="PYTHONUNBUFFERED=1"' in _API_UNIT
-    assert "Restart=on-failure" in _API_UNIT
-    assert "RestartSec=2" in _API_UNIT
-    assert "RestartPreventExitStatus=70" in _API_UNIT
-    assert "ExecStart=%h/.local/bin/nightdesk-api" in _API_UNIT
+def _execstart_path(unit_text: str) -> Path:
+    """Extract the ExecStart binary path (first token) from a rendered unit."""
+    lines = [ln for ln in unit_text.splitlines() if ln.startswith("ExecStart=")]
+    assert lines, f"no ExecStart line in unit:\n{unit_text}"
+    return Path(lines[0].split("=", 1)[1].split()[0])
 
 
-def test_worker_unit_file_content():
-    """Worker unit file must include all required directives."""
-    from nightdesk.cli import _WORKER_UNIT
+def _fake_bindir(tmp_path: Path, *names: str) -> Path:
+    """Create a bin dir holding executable shim scripts for the given names."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    for name in names:
+        p = bindir / name
+        p.write_text("#!/bin/sh\nexit 0\n")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return bindir
 
-    assert "StandardOutput=journal" in _WORKER_UNIT
-    assert "StandardError=journal" in _WORKER_UNIT
-    assert 'Environment="PYTHONUNBUFFERED=1"' in _WORKER_UNIT
-    assert "Restart=on-failure" in _WORKER_UNIT
-    assert "RestartSec=2" in _WORKER_UNIT
-    assert "RestartPreventExitStatus=70" in _WORKER_UNIT
-    assert "ExecStart=%h/.local/bin/nightdesk-worker" in _WORKER_UNIT
-    assert "nightdesk-api.service" in _WORKER_UNIT
+
+def test_api_unit_file_content(tmp_path, monkeypatch):
+    """Rendered API unit must include all required directives and a real ExecStart."""
+    from nightdesk.cli import _render_api_unit
+
+    bindir = _fake_bindir(tmp_path, "nightdesk-setup", "nightdesk-api")
+    monkeypatch.setattr(sys, "argv", [str(bindir / "nightdesk-setup")])
+
+    rendered = _render_api_unit()
+    assert "StandardOutput=journal" in rendered
+    assert "StandardError=journal" in rendered
+    assert 'Environment="PYTHONUNBUFFERED=1"' in rendered
+    assert "Restart=on-failure" in rendered
+    assert "RestartSec=2" in rendered
+    assert "RestartPreventExitStatus=70" in rendered
+    # ExecStart must point at an absolute, existing nightdesk-api binary —
+    # not the old hardcoded %h/.local/bin path that setup never installed.
+    exec_path = _execstart_path(rendered)
+    assert exec_path.is_absolute()
+    assert exec_path.name == "nightdesk-api"
+    assert exec_path.is_file()
+
+
+def test_worker_unit_file_content(tmp_path, monkeypatch):
+    """Rendered worker unit must include all required directives and a real ExecStart."""
+    from nightdesk.cli import _render_worker_unit
+
+    bindir = _fake_bindir(tmp_path, "nightdesk-setup", "nightdesk-worker")
+    monkeypatch.setattr(sys, "argv", [str(bindir / "nightdesk-setup")])
+
+    rendered = _render_worker_unit()
+    assert "StandardOutput=journal" in rendered
+    assert "StandardError=journal" in rendered
+    assert 'Environment="PYTHONUNBUFFERED=1"' in rendered
+    assert "Restart=on-failure" in rendered
+    assert "RestartSec=2" in rendered
+    assert "RestartPreventExitStatus=70" in rendered
+    assert "nightdesk-api.service" in rendered
+    exec_path = _execstart_path(rendered)
+    assert exec_path.is_absolute()
+    assert exec_path.name == "nightdesk-worker"
+    assert exec_path.is_file()
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint resolution tests.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_entrypoint_prefers_setup_sibling(tmp_path, monkeypatch):
+    """The script next to the running nightdesk-setup wins (the venv/shim dir)."""
+    import nightdesk.cli as cli
+
+    bindir = _fake_bindir(tmp_path, "nightdesk-setup", "nightdesk-api")
+    monkeypatch.setattr(sys, "argv", [str(bindir / "nightdesk-setup")])
+
+    got = Path(cli._resolve_entrypoint("nightdesk-api"))
+    assert got.is_file()
+    assert got.name == "nightdesk-api"
+    assert got.parent == bindir.resolve()
+
+
+def test_resolve_entrypoint_uses_interpreter_bindir(tmp_path, monkeypatch):
+    """When argv0 has no sibling, fall back to the interpreter's bin dir."""
+    import nightdesk.cli as cli
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    bindir = _fake_bindir(tmp_path, "nightdesk-worker")
+    monkeypatch.setattr(sys, "argv", [str(empty / "nightdesk-setup")])
+    monkeypatch.setattr(sys, "executable", str(bindir / "python"))
+
+    got = Path(cli._resolve_entrypoint("nightdesk-worker"))
+    assert got == bindir.resolve() / "nightdesk-worker"
+    assert got.is_file()
+
+
+def test_resolve_entrypoint_falls_back_to_local_bin(tmp_path, monkeypatch):
+    """With nothing found on disk or PATH, fall back to ~/.local/bin/<name>."""
+    import nightdesk.cli as cli
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setattr(sys, "argv", [str(empty / "nightdesk-setup")])
+    monkeypatch.setattr(sys, "executable", str(empty / "python"))
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    got = cli._resolve_entrypoint("nightdesk-worker")
+    assert got == str(tmp_path / ".local" / "bin" / "nightdesk-worker")
+
+
+def test_install_systemd_units_writes_runnable_execstart(tmp_path, monkeypatch):
+    """_install_systemd_units must write units whose ExecStart binaries exist.
+
+    This is the core regression guard: before the fix, units pointed at
+    ~/.local/bin/nightdesk-* which setup never installed.
+    """
+    import nightdesk.cli as cli
+
+    bindir = _fake_bindir(
+        tmp_path, "nightdesk-setup", "nightdesk-api", "nightdesk-worker"
+    )
+    monkeypatch.setattr(sys, "argv", [str(bindir / "nightdesk-setup")])
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    unit_dir = cli._install_systemd_units(dry_run=False)
+    assert unit_dir == Path(tmp_path) / ".config" / "systemd" / "user"
+
+    for unit_name, script in (
+        ("nightdesk-api.service", "nightdesk-api"),
+        ("nightdesk-worker.service", "nightdesk-worker"),
+    ):
+        text = (unit_dir / unit_name).read_text()
+        exec_path = _execstart_path(text)
+        assert exec_path.name == script
+        assert exec_path.is_file(), f"{unit_name} ExecStart references a missing file"
+
+    # Idempotent: a second install writes byte-identical units.
+    before = {
+        n: (unit_dir / n).read_text()
+        for n in ("nightdesk-api.service", "nightdesk-worker.service")
+    }
+    cli._install_systemd_units(dry_run=False)
+    after = {
+        n: (unit_dir / n).read_text()
+        for n in ("nightdesk-api.service", "nightdesk-worker.service")
+    }
+    assert before == after
 
 
 # ---------------------------------------------------------------------------

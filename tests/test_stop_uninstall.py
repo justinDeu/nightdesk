@@ -43,8 +43,8 @@ def fake_home(tmp_path):
         d.mkdir(parents=True, exist_ok=True)
 
     (cfg_dir / "config.toml").write_text('bearer_token = "test"\n')
-    (unit_dir / "nightdesk-api.service").write_text(cli_mod._API_UNIT)
-    (unit_dir / "nightdesk-worker.service").write_text(cli_mod._WORKER_UNIT)
+    (unit_dir / "nightdesk-api.service").write_text(cli_mod._render_api_unit())
+    (unit_dir / "nightdesk-worker.service").write_text(cli_mod._render_worker_unit())
     (data_dir / "nightdesk.db").write_text("fake-db")
 
     return {
