@@ -1,0 +1,84 @@
+{#
+  Inline label anchor for list rows — the swappable wrapper that carries
+  both the label chips and the popover container.
+
+  This is the hx-swap target for the label-toggle route: on each toggle
+  the whole anchor is replaced (chips + open popover) so the user can keep
+  toggling labels without re-opening the popover.
+
+  For the initial render in list_row.html, only chips + empty popover
+  container are emitted (all_labels is absent). The popover body is loaded
+  lazily on first click via GET /board/tickets/{tid}/inline-labels.
+
+  For the HTMX swap after a toggle, all_labels IS provided so the popover
+  stays open with fresh toggle states.
+
+  Expects:
+    tid              - ticket id
+    ticket_labels    - list of Label objects on the ticket
+    all_labels       - all Label objects (optional; only for toggle swap)
+    ticket_label_ids - set of label ids currently on the ticket (optional)
+#}
+<span class="nd-label-anchor" data-label-picker="{{ tid }}">
+  {# Label chips (current state). #}
+  {% for label in ticket_labels %}
+    <span
+      class="inline-flex items-center px-1.5 py-px rounded text-[10px] font-medium border"
+      style="{% if label.color %}background-color: {{ label.color }}22; border-color: {{ label.color }}66; color: {{ label.color }};{% else %}background-color: var(--color-bg-elev-2); border-color: var(--color-border); color: var(--color-fg-muted);{% endif %}"
+    >{{ label.name }}</span>
+  {% endfor %}
+  {% if not ticket_labels %}
+    <span class="text-[10px] text-fg-muted/50 nd-label-placeholder">—</span>
+  {% endif %}
+  {# Popover container. Filled lazily on first click (initial render), or
+     re-rendered after a toggle (when _inline_label_open is true). #}
+  <div
+    data-inline-label-menu="{{ tid }}"
+    {% if not _inline_label_open %}data-picker-url="/board/tickets/{{ tid }}/inline-labels"{% endif %}
+    role="presentation"
+    class="nd-label-menu {{ '' if _inline_label_open else 'hidden' }}"
+  >
+    {% if _inline_label_open %}
+    {# Re-render the popover content so it stays open after a toggle. #}
+    <div data-inline-label-menu-inner>
+      <div class="nd-prop-search-wrap">
+        <input
+          type="text"
+          data-inline-label-search
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Filter labels…"
+          aria-label="Filter labels"
+          class="nd-prop-search"
+        />
+      </div>
+      <div data-inline-label-options class="nd-prop-options">
+        {% for label in all_labels %}
+        {% set is_current = label.id in ticket_label_ids %}
+        <button
+          type="button"
+          data-inline-label-option
+          data-search-text="{{ label.name | lower }}"
+          {% if is_current %}aria-selected="true"{% endif %}
+          hx-post="/board/tickets/{{ tid }}/label-toggle"
+          hx-vals='{"label_id": "{{ label.id }}"}'
+          hx-target="[data-label-picker='{{ tid }}']"
+          hx-swap="outerHTML"
+          hx-on::after-request="window.ndInlineLabelCommitted && window.ndInlineLabelCommitted(this, event)"
+          class="nd-prop-option {{ 'nd-prop-current' if is_current else '' }}"
+        >
+          {% if label.color %}
+            <span class="nd-prop-swatch" style="background: {{ label.color }}; border-color: {{ label.color }}"></span>
+          {% else %}
+            <span class="nd-prop-swatch border border-border"></span>
+          {% endif %}
+          <span class="nd-prop-label">{{ label.name }}</span>
+          {% if is_current %}<span class="nd-prop-check" aria-hidden="true">✓</span>{% endif %}
+        </button>
+        {% endfor %}
+        <div data-inline-label-empty class="nd-prop-msg hidden">No matches</div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</span>

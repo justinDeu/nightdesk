@@ -3,10 +3,11 @@
 
   Mirrors partials/ticket_card.html's data contract so the two surfaces stay in
   sync, but lays the metadata out as aligned columns instead of a card. Inline
-  edits reuse the ONE shared property picker (status / priority / project); the
-  row carries data-ticket-id so it participates in the board's keyboard cursor
-  spine (J/K, sidebar-on-focus) with no extra JS. Clicking the row opens the
-  sidebar editor; the ↗ link opens the full ticket detail page.
+  edits reuse the shared property picker (status / priority / project / profile)
+  and the inline label picker popover for labels; the row carries
+  data-ticket-id so it participates in the board's keyboard cursor spine
+  (J/K, sidebar-on-focus) with no extra JS. Clicking the row opens the sidebar
+  editor; the ↗ link opens the full ticket detail page.
 
   Expects: t (Ticket-like), profiles_by_id, projects_by_id,
            run_outcomes (ticket_id -> last-run status), dep_titles.
@@ -48,15 +49,19 @@
     {% endwith %}
   </div>
 
-  {# Labels. #}
+  {# Labels — clickable to open inline label picker popover. #}
   <div class="shrink-0 w-48 hidden md:flex flex-wrap items-center gap-1 overflow-hidden">
-    {% with labels=ticket_labels, compact=true %}
-      {% include "partials/label_chips.html" %}
+    {% with tid=t.id, ticket_labels=ticket_labels %}
+      {% include "partials/inline_label_anchor.html" %}
     {% endwith %}
   </div>
 
-  {# Profile. #}
-  <div class="shrink-0 w-24 truncate text-fg-muted text-xs">{{ profile.name if profile else "—" }}</div>
+  {# Profile — shared property picker (reassign inline). #}
+  <div class="shrink-0 w-24 truncate">
+    {% with tid=t.id, prop='profile', chip=property_chip('profile', t, profile) %}
+      {% include "partials/property_picker.html" %}
+    {% endwith %}
+  </div>
 
   {# Last run status (where available). #}
   <div class="shrink-0 w-20 text-xs">

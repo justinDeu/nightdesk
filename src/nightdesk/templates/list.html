@@ -87,10 +87,13 @@
       });
     }
 
-    // Don't yank the rows out from under an open property-picker popover or a
-    // text selection mid-edit.
+    // Don't yank the rows out from under an open property-picker popover, an
+    // inline label picker popover, or a text selection mid-edit.
     function pickerOpen() {
-      return !!document.querySelector('[data-property-menu]:not(.hidden)');
+      return !!(
+        document.querySelector('[data-property-menu]:not(.hidden)') ||
+        document.querySelector('[data-inline-label-menu]:not(.hidden)')
+      );
     }
 
     if (groupSel) {
@@ -131,6 +134,13 @@
     setInterval(function () {
       if (!document.hidden && !pickerOpen()) refreshList();
     }, 4000);
+
+    // Property picker commits dispatch nd:property-changed. Trigger a list
+    // refresh so the row reflects the new state (e.g. status change moves it
+    // to a different group). Delay slightly so the chip swap completes first.
+    document.addEventListener("nd:property-changed", function () {
+      setTimeout(function () { if (!pickerOpen()) refreshList(); }, 150);
+    });
   })();
 </script>
 {% endblock %}
