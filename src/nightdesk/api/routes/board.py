@@ -19,6 +19,7 @@ from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.toolchains import current_config, toolchain_options
+from nightdesk.domain.priority import resolve_priority, PRIORITY_MIN, PRIORITY_MAX
 from nightdesk.domain.tickets import (
     CyclicDependency,
     DependencyNotFound,
@@ -193,6 +194,18 @@ def _safe_preview_name(name: Optional[str]) -> str:
         return "ticket-worktree"
     safe = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in raw)
     return safe.strip(".-_") or "ticket-worktree"
+
+
+def _priority_chip_html(ticket_id: str, priority: int, label: str) -> str:
+    """Render an inline priority chip for HTMX swap responses."""
+    from nightdesk.domain.priority import priority_css
+    css = priority_css(priority)
+    return (
+        f'<span data-priority-chip="{ticket_id}" '
+        f'class="rounded-full border px-2 py-0.5 text-[11px] {css}" '
+        f'title="Priority: {label} ({priority})">'
+        f'{html.escape(label)}</span>'
+    )
 
 
 def _git_value(source_dir: Path, *args: str) -> Optional[str]:
@@ -638,6 +651,7 @@ def build_router(
                 prompt=(form.get("prompt") or ""),
                 profile_id=profile_id,
                 project_id=project_id,
+                priority=int(form.get("priority") or 0),
                 workspaces=workspaces,
                 additional_dirs=_parse_additional_dirs(form.getlist("additional_dirs")),
                 toolchain_overrides=_toolchain_overrides_from_form(form),
@@ -689,6 +703,8 @@ def build_router(
             fields["prompt"] = form.get("prompt") or ""
         if "project_id" in form:
             fields["project_id"] = (form.get("project_id") or "").strip() or None
+        if "priority" in form:
+            fields["priority"] = int(form.get("priority") or 0)
         if "source_path" in form or "primary_source_path" in form:
             if form.get("workspace_form") == "1":
                 workspace_mode, worktree_name, worktree_path, workspaces = _workspace_payload_from_form(form)
@@ -873,6 +889,50 @@ def build_router(
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
         return Response(status_code=204)
+
+    # --- Priority update (HTMX inline picker) --------------------------------
+
+    @router.post("/board/tickets/{tid}/priority", dependencies=[auth])
+    async def update_priority(
+        tid: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Focused priority update for the inline priority picker.
+
+        Accepts ``priority`` as either a form field (HTMX picker) or a JSON
+        body key (API clients). The value can be a named priority
+        (``"urgent"``) or an integer string (``"3"``).
+        """
+        # Accept both form-encoded and JSON payloads.
+        content_type = (request.headers.get("content-type") or "")
+        if "application/json" in content_type:
+            body = await request.json()
+            raw = str(body.get("priority", ""))
+        else:
+            form = await request.form()
+            raw = str(form.get("priority", ""))
+
+        resolved = resolve_priority(raw.strip())
+        if resolved is None:
+            raise HTTPException(422, f"invalid priority value: {raw!r}")
+
+        try:
+            update_ticket(session, tid, priority=resolved)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+
+        ticket = get_ticket(session, tid)
+        from nightdesk.domain.priority import priority_label
+        label = priority_label(ticket.priority)
+
+        # HTMX callers get a rendered priority chip to swap inline.
+        if request.headers.get("HX-Request") == "true":
+            return HTMLResponse(
+                _priority_chip_html(ticket.id, ticket.priority, label),
+            )
+        # JSON API callers get a simple ack.
+        return JSONResponse({"priority": ticket.priority, "label": label})
 
     # --- Dependency management (cookie-auth) ---------------------------------
 

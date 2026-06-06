@@ -12,6 +12,8 @@
 {% set project = projects_by_id.get(t.project_id) if projects_by_id and t.project_id else none %}
 {% set outcome = run_outcomes.get(t.id) if run_outcomes else None %}
 {% set blocked_by = dep_titles.get(t.id) if dep_titles else None %}
+{% set _p_label = priority_label(t.priority) %}
+{% set _p_css = priority_css(t.priority) %}
 <li
   data-ticket-id="{{ t.id }}"
   class="group rounded-md border border-border bg-bg-elev-2 px-3 py-2 cursor-grab hover:border-accent transition-colors shadow-sm"
@@ -24,6 +26,16 @@
     <div class="flex-1 min-w-0">
       <div class="text-sm text-fg truncate font-medium">{{ t.title }}</div>
       <div class="mt-1 flex flex-wrap items-center gap-1 text-xs">
+        {# Priority chip: clickable inline picker. stopPropagation so the card
+           click doesn't also open the sidebar. The picker's HTMX request
+           swaps the chip span in place after update. #}
+        {% if t.priority > 0 %}
+        <span onclick="event.stopPropagation();"
+              data-priority-chip="{{ t.id }}"
+              class="rounded-full border px-1.5 py-0.5 text-[11px] {{ _p_css }} cursor-pointer hover:brightness-125 transition-colors">
+          {{ _p_label }}
+        </span>
+        {% endif %}
         {% if profile %}
           <span class="px-1.5 py-0.5 rounded bg-bg-elev border border-border text-fg-muted">
             {{ profile.name }}

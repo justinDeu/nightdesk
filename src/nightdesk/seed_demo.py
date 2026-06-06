@@ -52,6 +52,7 @@ _TICKET_SPECS: list[dict] = [
             "variants kick in automatically."
         ),
         "status": "draft",
+        "priority": 2,
     },
     {
         "title": "Write onboarding guide",
@@ -61,6 +62,7 @@ _TICKET_SPECS: list[dict] = [
             "your first ticket. Keep it under 200 words."
         ),
         "status": "draft",
+        "priority": 0,
     },
     # --- Queued ---
     {
@@ -71,6 +73,7 @@ _TICKET_SPECS: list[dict] = [
             "Reproduce with > 200 archived tickets and fix the cursor encoding."
         ),
         "status": "queued",
+        "priority": 3,
     },
     {
         "title": "Add rate-limit banner component",
@@ -80,6 +83,7 @@ _TICKET_SPECS: list[dict] = [
             "endpoint. Show utilization percentage and time until reset."
         ),
         "status": "queued",
+        "priority": 1,
     },
     # --- Running ---
     {
@@ -92,6 +96,7 @@ _TICKET_SPECS: list[dict] = [
             "bearer-token flow."
         ),
         "status": "running",
+        "priority": 4,
         "run": {
             "intent": "first_run",
             "exit_status": None,
@@ -107,6 +112,7 @@ _TICKET_SPECS: list[dict] = [
             "run count. Use streaming response so large exports don't OOM."
         ),
         "status": "review",
+        "priority": 2,
         "run": {
             "intent": "first_run",
             "exit_status": "success",
@@ -121,6 +127,7 @@ _TICKET_SPECS: list[dict] = [
             "with model_validator. Run the test suite and fix any breakage."
         ),
         "status": "review",
+        "priority": 3,
         "run": {
             "intent": "first_run",
             "exit_status": "failed",
@@ -136,6 +143,7 @@ _TICKET_SPECS: list[dict] = [
             "Keep the existing sync session paths working."
         ),
         "status": "review",
+        "priority": 1,
         "run": {
             "intent": "retry",
             "exit_status": "cancelled",
@@ -152,6 +160,7 @@ _TICKET_SPECS: list[dict] = [
             "deprecation warnings."
         ),
         "status": "archived",
+        "priority": 0,
         "run": {
             "intent": "first_run",
             "exit_status": "success",
@@ -165,6 +174,7 @@ _TICKET_SPECS: list[dict] = [
             "Include DB connectivity check. Document in the API reference."
         ),
         "status": "archived",
+        "priority": 1,
         "run": {
             "intent": "first_run",
             "exit_status": "success",
@@ -458,7 +468,7 @@ def seed(
                 status=spec["status"],
                 profile_id=profile_id,
                 source_path=source_path,
-                priority=idx % 3,
+                priority=spec.get("priority", idx % 3),
             )
 
             tickets_by_status.setdefault(ticket.status, []).append(ticket)

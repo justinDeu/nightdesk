@@ -48,6 +48,7 @@
         <h3 class="text-base font-semibold text-fg break-words">{{ ticket.title }}</h3>
         <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
           <span class="rounded-full border px-2 py-0.5 uppercase tracking-wide {{ status_chip_class.get(ticket.status, 'border-border text-fg-muted') }}">{{ ticket.status }}</span>
+          {% include "partials/priority_picker.html" %}
           {% if ticket_profile %}
             <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">{{ ticket_profile.name }}</span>
           {% endif %}

@@ -132,6 +132,16 @@
         }</script>
       </label>
 
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Priority</span>
+        <select name="priority"
+                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
+          {% for level in PRIORITY_SCALE %}
+            <option value="{{ level.value }}" {% if _is_edit and ticket.priority == level.value %}selected{% elif not _is_edit and level.value == 0 %}selected{% endif %}>{{ level.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
       {# --- External tool overrides ------------------------------------- #
        # Project external tools apply automatically. This section only adds
        # per-ticket overrides. Enable/Disable are chosen from the known
