@@ -5,8 +5,8 @@ from typing import Optional
 import uuid
 
 from sqlalchemy import (
-    String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, Time,
-    UniqueConstraint,
+    Column, String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, Time,
+    Table, UniqueConstraint,
 )
 from sqlalchemy import Float as sa_Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -22,6 +22,17 @@ def _now() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+# ---------------------------------------------------------------------------
+# Many-to-many: tickets <-> labels
+# ---------------------------------------------------------------------------
+ticket_labels = Table(
+    "ticket_labels",
+    Base.metadata,
+    Column("ticket_id", ForeignKey("tickets.id", ondelete="CASCADE"), primary_key=True),
+    Column("label_id", ForeignKey("labels.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class Profile(Base):
@@ -53,6 +64,21 @@ class Profile(Base):
     run_token_scopes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class Label(Base):
+    """A named, colored tag that can be attached to tickets."""
+    __tablename__ = "labels"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    color: Mapped[str] = mapped_column(String, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    tickets: Mapped[list["Ticket"]] = relationship(
+        secondary=ticket_labels, back_populates="labels", lazy="dynamic",
+    )
+
 
 class Project(Base):
     __tablename__ = "projects"
@@ -119,6 +145,9 @@ class Ticket(Base):
         foreign_keys="TicketDependency.depends_on_id",
         back_populates="depends_on",
         cascade="all, delete-orphan",
+    )
+    labels: Mapped[list["Label"]] = relationship(
+        secondary=ticket_labels, back_populates="tickets", lazy="selectin",
     )
 
 
