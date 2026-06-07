@@ -49,17 +49,20 @@
 {# --- Keyboard shortcuts cheat sheet -------------------------------------- #}
 <dialog id="nd-shortcuts-cheatsheet"
         aria-label="Keyboard shortcuts"
-        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[460px] max-w-[calc(100vw-2rem)]"
+        class="bg-bg-elev border border-border rounded-xl shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[1120px] max-w-[calc(100vw-2rem)]"
         style="margin: auto;">
-  <div tabindex="-1" autofocus class="focus:outline-none">
-  <div class="flex items-center justify-between px-5 py-3 border-b border-border">
-    <h2 class="text-base font-semibold">Keyboard shortcuts</h2>
+  <div tabindex="-1" autofocus class="focus:outline-none max-h-[min(760px,calc(100vh-4rem))] flex flex-col">
+  <div class="flex shrink-0 items-center justify-between px-5 py-3 border-b border-border bg-bg-elev-2/50">
+    <div>
+      <h2 class="text-base font-semibold">Keyboard shortcuts</h2>
+      <p class="mt-0.5 text-xs text-fg-muted">Quick commands grouped by where they work.</p>
+    </div>
     <button type="button"
             onclick="document.getElementById('nd-shortcuts-cheatsheet').close()"
             class="text-fg-muted hover:text-fg text-2xl leading-none px-2"
             aria-label="Close">&times;</button>
   </div>
-  <div class="px-5 py-4 space-y-2 text-sm">
+  <div class="overflow-y-auto px-5 py-4 text-sm">
     {% set _shortcuts = [
       ('Ctrl / Cmd + K', 'Open the command palette'),
       ('c', 'New ticket'),
@@ -84,7 +87,8 @@
     ] %}
     {% set _ticket_shortcuts = [
       ('E', 'Edit focused ticket'),
-      ('P', 'Set priority'),
+      ('P', 'Set project'),
+      ('Shift + P', 'Set priority'),
       ('S', 'Set status'),
       ('Shift + L', 'Set labels'),
       ('A', 'Archive'),
@@ -98,54 +102,44 @@
       ('D', 'Decline / archive'),
       ('E', 'Edit details'),
       ('L', 'Set labels'),
-      ('P', 'Set priority'),
+      ('P', 'Set project'),
+      ('Shift + P', 'Set priority'),
     ] %}
-    {% for keys, label in _shortcuts %}
-      <div class="flex items-center justify-between gap-4">
-        <span class="text-fg-muted">{{ label }}</span>
+    {% macro shortcut_row(keys, label) %}
+      <div class="flex items-center justify-between gap-4 rounded border border-border/70 bg-bg px-2.5 py-1.5">
+        <span class="min-w-0 text-fg-muted">{{ label }}</span>
         <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
       </div>
-    {% endfor %}
-    {% if _nav_shortcuts %}
-    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">Board navigation</h3>
-    {% for keys, label in _nav_shortcuts %}
-      <div class="flex items-center justify-between gap-4">
-        <span class="text-fg-muted">{{ label }}</span>
-        <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
+    {% endmacro %}
+    {% macro shortcut_card(title, rows, note='') %}
+      <section class="rounded-lg border border-border bg-bg-elev-2/35 p-3">
+        <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">{{ title }}</h3>
+        <div class="space-y-1.5">
+          {% for keys, label in rows %}
+            {{ shortcut_row(keys, label) }}
+          {% endfor %}
+        </div>
+        {% if note %}<p class="mt-2 text-[11px] leading-snug text-fg-muted">{{ note }}</p>{% endif %}
+      </section>
+    {% endmacro %}
+
+    <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+      <div class="space-y-3">
+        {{ shortcut_card('Global', _shortcuts) }}
       </div>
-    {% endfor %}
-    {% endif %}
-    {% if _view_shortcuts %}
-    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">View &amp; display</h3>
-    {% for keys, label in _view_shortcuts %}
-      <div class="flex items-center justify-between gap-4">
-        <span class="text-fg-muted">{{ label }}</span>
-        <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
+      <div class="space-y-3">
+        {{ shortcut_card('Board navigation', _nav_shortcuts) }}
+        {{ shortcut_card('View & display', _view_shortcuts, 'Use Work for Board/List display modes plus Inbox, Archive, and Scheduled views.') }}
       </div>
-    {% endfor %}
-    <p class="text-[11px] text-fg-muted mt-1">Use Work for Board/List display modes plus Inbox, Archive, and Scheduled views.</p>
-    {% endif %}
-    {% if _inbox_shortcuts %}
-    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">Inbox triage</h3>
-    {% for keys, label in _inbox_shortcuts %}
-      <div class="flex items-center justify-between gap-4">
-        <span class="text-fg-muted">{{ label }}</span>
-        <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
+      <div class="space-y-3">
+        {{ shortcut_card('Inbox triage', _inbox_shortcuts, 'Active on the Inbox page (/inbox). S is reserved for future snooze support.') }}
       </div>
-    {% endfor %}
-    <p class="text-[11px] text-fg-muted mt-1">Active on the Inbox page (/inbox). S is reserved for future snooze support.</p>
-    {% endif %}
-    {% if _ticket_shortcuts %}
-    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">Focused ticket (board)</h3>
-    {% for keys, label in _ticket_shortcuts %}
-      <div class="flex items-center justify-between gap-4">
-        <span class="text-fg-muted">{{ label }}</span>
-        <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
+      <div class="space-y-3">
+        {{ shortcut_card('Focused ticket', _ticket_shortcuts, 'These act on the cursor-selected ticket on the board or the current ticket detail page.') }}
       </div>
-    {% endfor %}
-    <p class="text-[11px] text-fg-muted mt-1">These act on the cursor-selected ticket (board) or current ticket (detail page).</p>
-    {% endif %}
-    <p class="pt-2 text-[11px] leading-snug text-fg-muted border-t border-border mt-3">
+    </div>
+
+    <p class="mt-3 rounded border border-border bg-bg px-3 py-2 text-[11px] leading-snug text-fg-muted">
       Shortcuts are an enhancement. Every action stays reachable by mouse:
       the header search box, the + New ticket button, and the per-ticket
       Run-now / Archive / Requeue controls. Shortcuts are ignored while

@@ -134,15 +134,15 @@ li[data-ticket-id][data-selected] {
    inbox rows alike — see "Keyboard cursor highlight" below.) */
 
 /* ---- Bulk selection + action bar (board/list management) -------------------
-   Selection is a distinct visual layer from the sidebar's single "selected"
-   card and the keyboard cursor: it uses `outline` (which nothing sets inline,
-   so it survives board.html's syncSelectedCard mutations and the column poll
-   re-applying classes). Toggled by static/bulk_select.js keyed on an in-memory
-   Set of ticket ids, so the highlight is restored by ticket id after every
-   HTMX swap. */
+   Green is reserved for the single active ticket tied to keyboard focus and the
+   sidebar. Batch-selected tickets use blue unless they are also active. */
 li[data-ticket-id].nd-bulk-selected {
-  outline: 2px solid var(--color-accent-strong);
+  outline: 2px solid var(--color-info);
   outline-offset: 2px;
+}
+li[data-ticket-id].nd-bulk-selected[data-selected] {
+  outline-color: var(--color-accent);
+  outline-offset: 4px;
 }
 
 .nd-bulk-bar {
@@ -937,34 +937,25 @@ li[data-ticket-id].nd-bulk-selected {
   }
 }
   /* ---- scrollbars --------------------------------------------------- */
-  /* Thin, dark scrollbars for the transcript panel and any overflow
-     containers. Matches the bg-bg-elev surface they sit on. */
-  .overflow-y-auto,
-  .overflow-x-auto,
-  .overflow-auto {
+  /* Thin, dark scrollbars for every scroll container. Earlier this only
+     targeted Tailwind overflow utility classes, so native scroll areas like
+     dialogs could fall back to the browser scrollbar. */
+  * {
     scrollbar-width: thin;
     scrollbar-color: var(--color-bg-elev-2) transparent;
   }
-  .overflow-y-auto::-webkit-scrollbar,
-  .overflow-x-auto::-webkit-scrollbar,
-  .overflow-auto::-webkit-scrollbar {
+  *::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
-  .overflow-y-auto::-webkit-scrollbar-track,
-  .overflow-x-auto::-webkit-scrollbar-track,
-  .overflow-auto::-webkit-scrollbar-track {
+  *::-webkit-scrollbar-track {
     background: transparent;
   }
-  .overflow-y-auto::-webkit-scrollbar-thumb,
-  .overflow-x-auto::-webkit-scrollbar-thumb,
-  .overflow-auto::-webkit-scrollbar-thumb {
+  *::-webkit-scrollbar-thumb {
     background: var(--color-bg-elev-2);
     border-radius: 4px;
   }
-  .overflow-y-auto::-webkit-scrollbar-thumb:hover,
-  .overflow-x-auto::-webkit-scrollbar-thumb:hover,
-  .overflow-auto::-webkit-scrollbar-thumb:hover {
+  *::-webkit-scrollbar-thumb:hover {
     background: var(--color-border);
   }
 
@@ -1455,17 +1446,12 @@ dialog button[aria-label="Close"]:focus-visible {
 .nd-prop-msg { padding: 0.5rem 0.75rem; font-size: 0.75rem; color: var(--color-fg-muted); }
 
 /* ---- Keyboard cursor highlight (nd-cursor-active) -----------------------
-   The H/J/K/L board/list/inbox cursor (static/command_palette.js) toggles this
-   class on the focused ticket/inbox row (board cards and list rows alike).
-   Authored as plain CSS keyed off the theme variables and kept in the source
-   bundle so a Tailwind rebuild can no longer drop it (it was previously
-   hand-injected into the built artifact only, and a rebuild on the promote
-   branch silently removed it). Lives outside @layer so the outline/background
-   sit above the utility classes. */
+   The keyboard cursor is the active ticket. It shares the green active-ticket
+   language with the sidebar selection, while bulk-only selection remains blue. */
 .nd-cursor-active {
-  outline: 2px solid var(--color-info);
+  outline: 2px solid var(--color-accent);
   outline-offset: -1px;
-  background: color-mix(in oklab, var(--color-info) 6%, var(--color-bg-elev-2)) !important;
+  background: color-mix(in oklab, var(--color-accent) 8%, var(--color-bg-elev-2)) !important;
   transition: outline .1s, background .1s;
 }
 

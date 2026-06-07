@@ -136,6 +136,7 @@
     toggleFocused: toggleFocused,
     extend: extend,
     clear: clear,
+    openMenu: openMenu,
     has: function (id) { return selected.has(id); },
     count: function () { return selected.size; },
     ids: ids,
@@ -233,6 +234,21 @@
     closeMenus();
     menu.hidden = !willOpen;
     if (btn) btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+  }
+
+  function openMenu(name) {
+    var b = bar();
+    if (!b || b.hidden) return false;
+    var menu = b.querySelector('[data-nd-bulk-menu="' + name + '"]');
+    var btn = b.querySelector('[data-nd-bulk-toggle="' + name + '"]');
+    if (!menu) return false;
+    closeMenus();
+    menu.hidden = false;
+    if (btn) btn.setAttribute("aria-expanded", "true");
+    var first = menu.querySelector("button:not([disabled])");
+    if (first) first.focus();
+    else if (btn) btn.focus();
+    return true;
   }
 
   function describe(prop) {

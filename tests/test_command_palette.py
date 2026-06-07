@@ -185,6 +185,25 @@ async def test_palette_js_navigation_skips_section_headers(cookie_client):
     assert "state.items[next].run" in r.text
 
 
+async def test_palette_js_includes_bulk_action_commands(cookie_client):
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    assert "Bulk actions" in r.text
+    assert "Bulk: set project" in r.text
+    assert "Bulk: add label" in r.text
+    assert "bulk.openMenu" in r.text
+
+
+async def test_palette_js_prefers_project_shortcut_over_priority(cookie_client):
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    assert "Set project" in r.text
+    assert 'shortcut: "P"' in r.text
+    assert 'window.ndOpenPropertyPicker(ctx.id, "project")' in r.text
+    assert 'shortcut: "Shift P"' in r.text
+    assert 'window.ndOpenPropertyPicker(ctx.id, "priority")' in r.text
+
+
 # ---------------------------------------------------------------------------
 # View / display commands
 # ---------------------------------------------------------------------------

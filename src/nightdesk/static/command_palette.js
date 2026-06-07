@@ -17,7 +17,8 @@
 //   D         — decline (archive)
 //   E         — edit details (ticket detail page)
 //   L         — edit labels (plain L — no column nav on inbox)
-//   P         — set priority
+//   P         — set project
+//   Shift+P   — set priority
 //   S         — unbound (snooze not yet implemented)
 //
 // AUTH NOTE: the JSON API under /api/v1/* is bearer-only and 401s for the
@@ -99,6 +100,145 @@
     return String(s).replace(/["\\\]]/g, "\\$&");
   }
 
+  var desiredBoardSidebarTicketId = null;
+  var pendingBoardFocus = null;
+
+  function clearBoardCursor() {
+    document.querySelectorAll("li[data-ticket-id][data-nd-cursor]").forEach(function (card) {
+      card.removeAttribute("data-nd-cursor");
+      card.classList.remove("nd-cursor-active");
+    });
+  }
+
+  function paintBoardSelectedCard(ticketId) {
+    var accent = getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim() || "#34d399";
+    document.querySelectorAll("li[data-ticket-id]").forEach(function (card) {
+      var match = ticketId && card.getAttribute("data-ticket-id") === ticketId;
+      if (match) {
+        card.dataset.selected = "1";
+        card.style.borderColor = accent;
+        card.style.boxShadow = "0 0 0 1px " + accent + ", 0 4px 12px rgba(52, 211, 153, .2)";
+        card.style.background = "color-mix(in oklab, " + accent + " 8%, var(--color-bg-elev-2))";
+      } else {
+        delete card.dataset.selected;
+        card.style.borderColor = "";
+        card.style.boxShadow = "";
+        card.style.background = "";
+      }
+    });
+  }
+
+  function markBoardCursor(card) {
+    if (!card) return;
+    clearBoardCursor();
+    card.setAttribute("data-nd-cursor", "");
+    card.classList.add("nd-cursor-active");
+    card.scrollIntoView({ block: "nearest" });
+  }
+
+  function rememberBoardFocusAfterMutation(ticketId, opts) {
+    opts = opts || {};
+    if (!document.getElementById("board-grid")) return;
+    var cards = boardCards();
+    var index = cursorIndex();
+    if (index < 0 && ticketId) {
+      for (var i = 0; i < cards.length; i++) {
+        if (cards[i].getAttribute("data-ticket-id") === ticketId) {
+          index = i;
+          break;
+        }
+      }
+    }
+    pendingBoardFocus = {
+      id: ticketId || null,
+      index: Math.max(0, index),
+      follow: !!opts.follow,
+      followUntil: opts.follow ? Date.now() + 8000 : 0,
+    };
+  }
+
+  function restorePendingBoardFocus() {
+    if (!pendingBoardFocus) return false;
+    var pending = pendingBoardFocus;
+    pendingBoardFocus = null;
+    var cards = boardCards();
+    if (!cards.length) {
+      clearBoardCursor();
+      paintBoardSelectedCard(null);
+      return true;
+    }
+
+    var target = null;
+    if (pending.follow && pending.id) {
+      for (var i = 0; i < cards.length; i++) {
+        if (cards[i].getAttribute("data-ticket-id") === pending.id) {
+          target = cards[i];
+          break;
+        }
+      }
+    }
+    if (!target && pending.follow && Date.now() < pending.followUntil) {
+      pendingBoardFocus = pending;
+      window.setTimeout(restorePendingBoardFocus, 250);
+      return true;
+    }
+    if (!target) {
+      var fallbackCards = cards;
+      if (!pending.follow && pending.id) {
+        fallbackCards = cards.filter(function (card) {
+          return card.getAttribute("data-ticket-id") !== pending.id;
+        });
+      }
+      target = fallbackCards[Math.min(pending.index, fallbackCards.length - 1)];
+    }
+    var targetId = target && target.getAttribute("data-ticket-id");
+    desiredBoardSidebarTicketId = targetId;
+    markBoardCursor(target);
+    paintBoardSelectedCard(targetId);
+    var sidebar = document.getElementById("sidebar");
+    if (targetId && sidebar && sidebar.getAttribute("data-selected-ticket-id") !== targetId && typeof window.htmx !== "undefined") {
+      window.htmx.ajax("GET", "/board/sidebar?ticket_id=" + encodeURIComponent(targetId), {
+        target: "#sidebar",
+        swap: "outerHTML",
+      });
+    }
+    return true;
+  }
+
+  function sidebarResponseTicketId(html) {
+    var m = String(html || "").match(/data-selected-ticket-id=["']([^"']+)["']/);
+    return m ? m[1] : null;
+  }
+
+  document.body.addEventListener("htmx:beforeSwap", function (evt) {
+    var detail = evt.detail || {};
+    var target = detail.target;
+    if (!target || target.id !== "sidebar" || !desiredBoardSidebarTicketId) return;
+    var responseId = sidebarResponseTicketId(detail.xhr && detail.xhr.responseText);
+    if (responseId && responseId !== desiredBoardSidebarTicketId) {
+      detail.shouldSwap = false;
+      evt.preventDefault();
+    }
+  });
+
+  document.body.addEventListener("htmx:beforeRequest", function (evt) {
+    var detail = evt.detail || {};
+    var elt = detail.elt;
+    if (!elt || !document.getElementById("board-grid")) return;
+    var archiveBtn = elt.closest && elt.closest("[data-archive-btn]");
+    var deleteBtn = elt.closest && elt.closest("[hx-delete]");
+    if (!archiveBtn && !deleteBtn) return;
+    var sidebar = document.getElementById("sidebar");
+    var tid = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    rememberBoardFocusAfterMutation(tid, { follow: false });
+  });
+
+  document.addEventListener("click", function (evt) {
+    var card = evt.target && evt.target.closest && evt.target.closest("li[data-ticket-id]");
+    if (!card || !document.getElementById("board-grid")) return;
+    desiredBoardSidebarTicketId = card.getAttribute("data-ticket-id");
+  });
+
   // Get the currently focused ticket context. On the board this is the
   // cursor-selected card; on /inbox it's the inbox cursor; on /tickets/{id}
   // it's the page ticket.
@@ -170,21 +310,14 @@
     if (idx < 0) idx = 0;
     if (idx >= cards.length) idx = cards.length - 1;
 
-    // Clear old cursor highlight.
-    var prev = document.querySelector("li[data-ticket-id][data-nd-cursor]");
-    if (prev) {
-      prev.removeAttribute("data-nd-cursor");
-      prev.classList.remove("nd-cursor-active");
-    }
-
     var card = cards[idx];
-    card.setAttribute("data-nd-cursor", "");
-    card.classList.add("nd-cursor-active");
-    card.scrollIntoView({ block: "nearest" });
+    markBoardCursor(card);
 
     // Open the sidebar for this card (same as clicking it), so property
     // pickers are wired in the sidebar.
     var tid = card.getAttribute("data-ticket-id");
+    desiredBoardSidebarTicketId = tid;
+    paintBoardSelectedCard(tid);
     var sidebar = document.getElementById("sidebar");
     if (sidebar && typeof window.htmx !== "undefined") {
       window.htmx.ajax("GET", "/board/sidebar?ticket_id=" + encodeURIComponent(tid), {
@@ -272,9 +405,11 @@
 
   // Re-apply cursor highlight after HTMX swaps replace cards.
   function restoreCursor() {
+    if (restorePendingBoardFocus()) return;
     var sidebar = document.getElementById("sidebar");
     var sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
     if (!sel) return;
+    clearBoardCursor();
     var cards = boardCards();
     for (var i = 0; i < cards.length; i++) {
       if (cards[i].getAttribute("data-ticket-id") === sel) {
@@ -458,9 +593,11 @@
       requeue: "/tickets/" + encodeURIComponent(id) + "/requeue",
     };
     var labels = { "run-now": "Queued", archive: "Archived", requeue: "Requeued" };
+    rememberBoardFocusAfterMutation(id, { follow: verb !== "archive" });
     postAction(routes[verb]).then(function (r) {
       if (r.ok || r.status === 204) {
         flashStatus(labels[verb] + ": " + (title || id));
+        if (verb === "archive") restorePendingBoardFocus();
         // Nudge the board to refresh its columns if we're on it.
         var poll = document.getElementById("board-columns-poll");
         if (poll && typeof window.htmx !== "undefined") {
@@ -654,29 +791,29 @@
   // promote the most relevant actions and demote invalid ones. Returns an
   // array of action keys in display order.
   function statusActionOrder(status) {
-    // Default order: run → detail → edit → peek → priority → status →
+    // Default order: run → detail → edit → peek → project → priority → status →
     // labels → archive → requeue
     var order = [
       "run-now", "open-detail", "edit", "peek",
-      "priority", "status", "labels", "archive", "requeue",
+      "project", "priority", "status", "labels", "archive", "requeue",
     ];
     switch (status) {
       case "running":
         // Can't run/requeue/archive while running; show peek & edit first.
-        order = ["peek", "edit", "open-detail", "priority", "status", "labels"];
+        order = ["peek", "edit", "open-detail", "project", "priority", "status", "labels"];
         break;
       case "review":
         // Requeue & archive are the primary actions from review.
-        order = ["requeue", "archive", "open-detail", "edit", "peek", "priority", "status", "labels", "run-now"];
+        order = ["requeue", "archive", "open-detail", "edit", "peek", "project", "priority", "status", "labels", "run-now"];
         break;
       case "archived":
         // Requeue is the primary action from archived.
-        order = ["requeue", "open-detail", "edit", "peek", "priority", "status", "labels", "archive", "run-now"];
+        order = ["requeue", "open-detail", "edit", "peek", "project", "priority", "status", "labels", "archive", "run-now"];
         break;
       case "draft":
       case "queued":
         // Run-now is the primary action.
-        order = ["run-now", "edit", "open-detail", "peek", "priority", "status", "labels", "archive", "requeue"];
+        order = ["run-now", "edit", "open-detail", "peek", "project", "priority", "status", "labels", "archive", "requeue"];
         break;
     }
     return order;
@@ -714,7 +851,16 @@
           run: function () { inboxOpenDetail(ctx); },
         });
         cmds.push({
-          label: "Set priority: " + short, shortcut: "P", hint: "",
+          label: "Set project: " + short, shortcut: "P", hint: "",
+          section: "Inbox triage",
+          run: function () {
+            var ok = window.ndOpenPropertyPicker &&
+              window.ndOpenPropertyPicker(ctx.id, "project");
+            if (!ok) flashStatus("No project picker found for this item");
+          },
+        });
+        cmds.push({
+          label: "Set priority: " + short, shortcut: "Shift P", hint: "",
           section: "Inbox triage",
           run: function () {
             var ok = window.ndOpenPropertyPicker &&
@@ -761,12 +907,21 @@
             run: function () { openPeek(ctx); },
           },
           "priority": {
-            label: "Set priority: " + short, shortcut: "P", hint: "",
+            label: "Set priority: " + short, shortcut: "Shift P", hint: "",
             section: "Properties",
             run: function () {
               var ok = window.ndOpenPropertyPicker &&
                 window.ndOpenPropertyPicker(ctx.id, "priority");
               if (!ok) flashStatus("Open the ticket to change its priority");
+            },
+          },
+          "project": {
+            label: "Set project: " + short, shortcut: "P", hint: "",
+            section: "Properties",
+            run: function () {
+              var ok = window.ndOpenPropertyPicker &&
+                window.ndOpenPropertyPicker(ctx.id, "project");
+              if (!ok) flashStatus("Open the ticket to change its project");
             },
           },
           "status": {
@@ -793,6 +948,28 @@
           cmds.push(cmd);
         });
       }
+    }
+
+    var bulk = window.ndBulkSelect;
+    var bulkCount = bulk && bulk.count ? bulk.count() : 0;
+    if (bulkCount > 0) {
+      [
+        ["priority", "Bulk: set priority"],
+        ["status", "Bulk: set status"],
+        ["project", "Bulk: set project"],
+        ["labels", "Bulk: add label"],
+      ].forEach(function (entry) {
+        cmds.push({
+          label: entry[1] + " (" + bulkCount + " selected)",
+          shortcut: "Ctrl/Cmd K",
+          hint: "selected tickets",
+          section: "Bulk actions",
+          run: function () {
+            var ok = bulk.openMenu && bulk.openMenu(entry[0]);
+            if (!ok) flashStatus("Select tickets first");
+          },
+        });
+      });
     }
 
     // --- View / display commands ---
@@ -1217,7 +1394,8 @@
     // --- Inbox triage shortcuts -------------------------------------------
     // On the inbox page, keys are repurposed for triage flow:
     //   Enter = open detail, A = promote, D = decline, E = edit,
-    //   L = labels (plain L — no column nav on inbox), P = priority,
+    //   L = labels (plain L — no column nav on inbox), P = project,
+    //   Shift+P = priority,
     //   S = unbound (snooze not yet implemented).
     if (isInboxPage()) {
       var ictx = inboxCurrentTicket();
@@ -1247,13 +1425,14 @@
         if (ictx) { e.preventDefault(); openLabelPicker(ictx); }
         return;
       }
-      // P — priority picker
+      // P — project picker, Shift+P — priority picker
       if (key === "p" || key === "P") {
         if (ictx) {
           e.preventDefault();
+          var prop = e.shiftKey ? "priority" : "project";
           var pok = window.ndOpenPropertyPicker &&
-            window.ndOpenPropertyPicker(ictx.id, "priority");
-          if (!pok) flashStatus("No priority picker found for this item");
+            window.ndOpenPropertyPicker(ictx.id, prop);
+          if (!pok) flashStatus("No " + prop + " picker found for this item");
         }
         return;
       }
@@ -1295,13 +1474,14 @@
       if (ctx) { e.preventDefault(); openEditForTicket(ctx); }
       return;
     }
-    // P — priority picker
+    // P — project picker, Shift+P — priority picker
     if (key === "p" || key === "P") {
       if (ctx) {
         e.preventDefault();
+        var prop = e.shiftKey ? "priority" : "project";
         var ok = window.ndOpenPropertyPicker &&
-          window.ndOpenPropertyPicker(ctx.id, "priority");
-        if (!ok) flashStatus("Open the ticket to change its priority");
+          window.ndOpenPropertyPicker(ctx.id, prop);
+        if (!ok) flashStatus("Open the ticket to change its " + prop);
       }
       return;
     }
