@@ -65,6 +65,7 @@
       ('c', 'New ticket'),
       ('/', 'Focus search'),
       ('g then b', 'Go to board'),
+      ('g then i', 'Go to inbox'),
       ('g then a', 'Go to archive'),
       ('?', 'Show this cheat sheet'),
       ('Esc', 'Close palette or dialog'),
@@ -84,6 +85,15 @@
       ('A', 'Archive'),
       ('R', 'Run now / Requeue'),
       ('Space', 'Peek ticket'),
+    ] %}
+    {% set _inbox_shortcuts = [
+      ('J / K', 'Next / previous inbox item'),
+      ('Enter', 'Open focused item'),
+      ('A', 'Accept / promote'),
+      ('D', 'Decline / archive'),
+      ('E', 'Edit details'),
+      ('L', 'Set labels'),
+      ('P', 'Set priority'),
     ] %}
     {% for keys, label in _shortcuts %}
       <div class="flex items-center justify-between gap-4">
@@ -110,8 +120,18 @@
     {% endfor %}
     <p class="text-[11px] text-fg-muted mt-1">Use the command palette to toggle board/runs view.</p>
     {% endif %}
+    {% if _inbox_shortcuts %}
+    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">Inbox triage</h3>
+    {% for keys, label in _inbox_shortcuts %}
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-fg-muted">{{ label }}</span>
+        <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
+      </div>
+    {% endfor %}
+    <p class="text-[11px] text-fg-muted mt-1">Active on the Inbox page (/inbox). S is reserved for future snooze support.</p>
+    {% endif %}
     {% if _ticket_shortcuts %}
-    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">Focused ticket</h3>
+    <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">Focused ticket (board)</h3>
     {% for keys, label in _ticket_shortcuts %}
       <div class="flex items-center justify-between gap-4">
         <span class="text-fg-muted">{{ label }}</span>
