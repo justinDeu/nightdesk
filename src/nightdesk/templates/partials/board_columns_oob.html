@@ -11,6 +11,7 @@
 #}
 {% for col in columns %}
   {% set column = col %}
+  {% set column_extra_class = 'flex-1 min-w-[260px]' if group != 'status' else '' %}
   {% set oob = true %}
   {% include "partials/board_column.html" %}
 {% endfor %}

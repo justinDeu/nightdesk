@@ -381,8 +381,45 @@
       syncUrl(q);
     });
 
-    // Group-by selector: navigate so the server re-renders the grid for the
-    // chosen grouping. The current query is carried along.
+    function setGroupButtons(active) {
+      if (!groupBar) return;
+      groupBar.querySelectorAll('[data-board-group]').forEach(function (button) {
+        button.setAttribute('aria-pressed', button.getAttribute('data-board-group') === active ? 'true' : 'false');
+      });
+    }
+
+    function replaceBoardGridFrom(url, nextGroup) {
+      if (!grid || !window.fetch || !window.DOMParser) {
+        window.location.assign(url);
+        return;
+      }
+      grid.style.transition = 'opacity 120ms ease';
+      grid.style.opacity = '0.45';
+      fetch(url, { credentials: 'same-origin' })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error('group load failed');
+          return resp.text();
+        })
+        .then(function (html) {
+          var doc = new DOMParser().parseFromString(html, 'text/html');
+          var nextGrid = doc.getElementById('board-grid');
+          if (!nextGrid) throw new Error('missing board grid');
+          grid.replaceWith(nextGrid);
+          grid = document.getElementById('board-grid');
+          boardGroup = nextGroup;
+          setGroupButtons(nextGroup);
+          syncUrl(bar.dataset.query || currentQuery || '');
+          document.body.dispatchEvent(new Event('htmx:afterSwap'));
+          if (poll && typeof htmx !== 'undefined') htmx.trigger(poll, 'poll');
+        })
+        .catch(function () {
+          window.location.assign(url);
+        });
+    }
+
+    // Group-by selector: swap only the board grid so the whole page/header does
+    // not flash. The server still owns the grid markup because status vs
+    // property grouping changes the wrapper structure.
     if (groupBar) {
       groupBar.addEventListener('click', function (e) {
         var btn = e.target.closest('[data-board-group]');
@@ -394,7 +431,7 @@
         if (q) params.set('q', q);
         if (g && g !== 'status') params.set('group', g);
         var qs = params.toString();
-        window.location.assign(qs ? ('/?' + qs) : '/');
+        replaceBoardGridFrom(qs ? ('/?' + qs) : '/', g);
       });
     }
 
