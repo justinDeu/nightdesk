@@ -231,6 +231,63 @@ class TestBulkLabels:
         session.expire_all()
         assert get_ticket_labels(session, a.id) == []
 
+    async def test_creates_label_by_name_and_applies_it(self, cookie_client,
+                                                       session, profile):
+        a = _make_ticket(session, profile, title="a")
+        b = _make_ticket(session, profile, title="b")
+        r = await cookie_client.post(
+            "/board/tickets/bulk/labels",
+            data={
+                "ticket_ids": f"{a.id},{b.id}",
+                "label_name": "triage",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["label"]["name"] == "triage"
+        assert body["label"]["color"] == ""
+        session.expire_all()
+        assert [lbl.name for lbl in get_ticket_labels(session, a.id)] == ["triage"]
+        assert [lbl.name for lbl in get_ticket_labels(session, b.id)] == ["triage"]
+
+    async def test_label_name_reuses_existing_label(self, cookie_client, session,
+                                                   profile):
+        a = _make_ticket(session, profile, title="a")
+        existing = create_label(session, name="triage", color="#111111")
+        r = await cookie_client.post(
+            "/board/tickets/bulk/labels",
+            data={"ticket_ids": a.id, "label_name": "triage"},
+        )
+        assert r.status_code == 200
+        assert r.json()["label"]["id"] == existing.id
+        session.expire_all()
+        labels = get_ticket_labels(session, a.id)
+        assert [lbl.id for lbl in labels] == [existing.id]
+
+    async def test_removes_labels_from_selected_tickets(self, cookie_client,
+                                                       session, profile):
+        a = _make_ticket(session, profile, title="a")
+        b = _make_ticket(session, profile, title="b")
+        keep = create_label(session, name="keep")
+        remove = create_label(session, name="remove")
+        from nightdesk.domain.labels import set_ticket_labels
+        set_ticket_labels(session, a.id, [keep.id, remove.id])
+        set_ticket_labels(session, b.id, [remove.id])
+
+        r = await cookie_client.post(
+            "/board/tickets/bulk/labels",
+            data={
+                "ticket_ids": f"{a.id},{b.id}",
+                "label_ids": remove.id,
+                "label_action": "remove",
+            },
+        )
+
+        assert r.status_code == 200
+        session.expire_all()
+        assert [lbl.id for lbl in get_ticket_labels(session, a.id)] == [keep.id]
+        assert get_ticket_labels(session, b.id) == []
+
     async def test_unknown_label_404(self, cookie_client, session, profile):
         a = _make_ticket(session, profile, title="a")
         r = await cookie_client.post(

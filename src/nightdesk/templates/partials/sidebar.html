@@ -111,6 +111,7 @@
           {% if ticket.labels %}
             {% for label in ticket.labels %}
               <span
+                data-label-id="{{ label.id }}"
                 class="rounded-full px-2 py-0.5 text-[10px] font-medium border"
                 style="{% if label.color %}background-color: {{ label.color }}22; border-color: {{ label.color }}66; color: {{ label.color }};{% else %}background-color: var(--color-bg-elev-2); border-color: var(--color-border); color: var(--color-fg-muted);{% endif %}"
               >{{ label.name }}</span>

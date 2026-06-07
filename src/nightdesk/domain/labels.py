@@ -163,3 +163,39 @@ def bulk_add_labels(
         for t in updated:
             session.refresh(t)
     return updated, skipped
+
+
+def bulk_remove_labels(
+    session: Session,
+    ticket_ids: list[str],
+    label_ids: list[str],
+) -> tuple[list[Ticket], list[dict]]:
+    """Remove the given labels from each ticket. Missing ticket labels are a
+    no-op; unknown label IDs fail the whole batch up front."""
+    from nightdesk.domain.tickets import TicketNotFound, get_ticket
+
+    label_ids = [lid for lid in label_ids if lid]
+    if label_ids:
+        found = session.scalars(
+            select(Label).where(Label.id.in_(label_ids))
+        ).all()
+        if len(found) != len(set(label_ids)):
+            missing = set(label_ids) - {lbl.id for lbl in found}
+            raise LabelNotFound(f"label(s) not found: {', '.join(sorted(missing))}")
+
+    remove_ids = set(label_ids)
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+            continue
+        ticket.labels = [lbl for lbl in ticket.labels if lbl.id not in remove_ids]
+        updated.append(ticket)
+    if updated:
+        session.commit()
+        for t in updated:
+            session.refresh(t)
+    return updated, skipped

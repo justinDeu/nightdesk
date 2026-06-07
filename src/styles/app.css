@@ -204,6 +204,16 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
   padding: .25rem;
   z-index: 95;
 }
+.nd-bulk-menu.nd-bulk-menu-modal {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  z-index: 140;
+  width: min(520px, calc(100vw - 2rem));
+  max-height: min(620px, calc(100vh - 4rem));
+}
 .nd-bulk-menu[hidden] { display: none; }
 .nd-bulk-opt {
   display: flex;

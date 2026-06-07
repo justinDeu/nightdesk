@@ -746,6 +746,16 @@
   }
 
   function openLabelPicker(ctx) {
+    var bulk = window.ndBulkSelect;
+    if (bulk && bulk.count && bulk.count() > 0) {
+      var opened = bulk.openMenu && bulk.openMenu("labels");
+      if (!opened) flashStatus("Bulk labels: select tickets first");
+      return;
+    }
+    if (!ctx) {
+      flashStatus("Label picker: select a ticket first");
+      return;
+    }
     // Labels may not be registered in the property picker yet. Check for the
     // "labels" property in the registry; if absent, flash a message and leave
     // a clear hook for the future implementation.
@@ -754,6 +764,17 @@
     if (!ok) {
       flashStatus("Label picker: select a ticket first, or labels not yet configured");
     }
+  }
+
+  function bulkCount() {
+    var bulk = window.ndBulkSelect;
+    return bulk && bulk.count ? bulk.count() : 0;
+  }
+
+  function openBulkMenu(name) {
+    var bulk = window.ndBulkSelect;
+    return !!(bulk && bulk.count && bulk.count() > 0 &&
+      bulk.openMenu && bulk.openMenu(name));
   }
 
   function openPeek(ctx) {
@@ -1317,6 +1338,7 @@
     // If a property picker menu is open, don't hijack keys — the picker's
     // own handler manages Arrow/Enter/Escape.
     if (document.querySelector("[data-property-menu]:not(.hidden)")) return;
+    if (document.querySelector("[data-nd-bulk-menu]:not([hidden])")) return;
 
     // Esc clears an active bulk selection (only when one exists, so it doesn't
     // swallow Esc elsewhere).
@@ -1476,6 +1498,11 @@
     }
     // P — project picker, Shift+P — priority picker
     if (key === "p" || key === "P") {
+      if (bulkCount() > 0) {
+        e.preventDefault();
+        openBulkMenu(e.shiftKey ? "priority" : "project");
+        return;
+      }
       if (ctx) {
         e.preventDefault();
         var prop = e.shiftKey ? "priority" : "project";
@@ -1487,6 +1514,11 @@
     }
     // S — status picker
     if (key === "s" || key === "S") {
+      if (bulkCount() > 0) {
+        e.preventDefault();
+        openBulkMenu("status");
+        return;
+      }
       if (ctx) {
         e.preventDefault();
         var ok2 = window.ndOpenPropertyPicker &&
@@ -1495,14 +1527,21 @@
       }
       return;
     }
-    // Shift+L — label picker. Plain "l" is board column-navigation (handled
-    // above), so labels live on Shift+L to keep the H/J/K/L cursor spine whole.
+    // Shift+L — bulk labels when a selection exists, otherwise focused-ticket
+    // label picker. Plain "l" is board column-navigation (handled above), so
+    // labels live on Shift+L to keep the H/J/K/L cursor spine whole.
     if (key === "L" && e.shiftKey) {
-      if (ctx) { e.preventDefault(); openLabelPicker(ctx); }
+      e.preventDefault();
+      openLabelPicker(ctx);
       return;
     }
     // A — archive the focused ticket
     if (key === "a" || key === "A") {
+      if (bulkCount() > 0 && window.ndBulkSelect && window.ndBulkSelect.archive) {
+        e.preventDefault();
+        window.ndBulkSelect.archive();
+        return;
+      }
       if (ctx) { e.preventDefault(); runTicketAction("archive", ctx.id, ctx.title); }
       return;
     }

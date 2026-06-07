@@ -13,7 +13,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
-from nightdesk.db.models import ConfigRow
+from nightdesk.db.models import ConfigRow, Label
 from nightdesk.domain.projects import ProjectNotFound, get_project_by_slug, list_projects
 from nightdesk.domain.effective_config import resolve_for_ticket
 from nightdesk.domain.profiles import list_profiles
@@ -60,7 +60,8 @@ from nightdesk.domain.tickets import (
 )
 from nightdesk.domain.profiles import ProfileNotFound
 from nightdesk.domain.labels import (
-    LabelNotFound, bulk_add_labels, get_ticket_labels,
+    LabelNameTaken, LabelNotFound, bulk_add_labels, bulk_remove_labels,
+    create_label, get_ticket_labels,
 )
 
 
@@ -1249,10 +1250,9 @@ def build_router(
         request: Request,
         session: Session = Depends(get_session),
     ):
-        """Cookie-auth bulk label add.  Adds the given ``label_ids`` (comma-
-        separated) to every selected ticket (set union — existing labels are
-        kept).  Returns JSON with updated/skipped lists and an undo payload
-        that restores each ticket's prior label set."""
+        """Cookie-auth bulk label add/remove. Returns JSON with
+        updated/skipped lists and an undo payload that restores each ticket's
+        prior label set."""
         form = await request.form()
         raw_ids = (form.get("ticket_ids") or "")
         ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
@@ -1260,6 +1260,26 @@ def build_router(
             raise HTTPException(422, "ticket_ids required")
         raw_labels = (form.get("label_ids") or "")
         label_ids = [s.strip() for s in raw_labels.split(",") if s.strip()]
+        label_action = (form.get("label_action") or "add").strip().lower()
+        if label_action not in {"add", "remove"}:
+            raise HTTPException(422, "label_action must be add or remove")
+        created_label = None
+        label_name = (form.get("label_name") or "").strip()
+        if label_name:
+            if label_action != "add":
+                raise HTTPException(422, "label_name can only be used with add")
+            label_color = (form.get("label_color") or "").strip()
+            try:
+                created_label = create_label(
+                    session, name=label_name, color=label_color,
+                )
+            except LabelNameTaken:
+                created_label = session.scalar(
+                    select(Label).where(Label.name == label_name)
+                )
+                if created_label is None:
+                    raise HTTPException(409, f"label name already taken: {label_name}")
+            label_ids.append(created_label.id)
         if not label_ids:
             raise HTTPException(422, "label_ids required")
         # Capture prior label sets for undo before mutating.
@@ -1268,7 +1288,10 @@ def build_router(
             for tid in ticket_ids if _ticket_exists(session, tid)
         }
         try:
-            updated, skipped = bulk_add_labels(session, ticket_ids, label_ids)
+            if label_action == "remove":
+                updated, skipped = bulk_remove_labels(session, ticket_ids, label_ids)
+            else:
+                updated, skipped = bulk_add_labels(session, ticket_ids, label_ids)
         except LabelNotFound as e:
             raise HTTPException(404, str(e))
         return JSONResponse({
@@ -1278,6 +1301,14 @@ def build_router(
             ],
             "skipped": skipped,
             "undo": _restore_undo("labels", "labels", prior),
+            "label": (
+                {
+                    "id": created_label.id,
+                    "name": created_label.name,
+                    "color": created_label.color,
+                }
+                if created_label is not None else None
+            ),
         })
 
     @router.post("/board/tickets/bulk/archive", dependencies=[auth])

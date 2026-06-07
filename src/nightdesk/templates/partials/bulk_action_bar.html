@@ -69,18 +69,38 @@
   <div class="nd-bulk-group">
     <button type="button" class="nd-bulk-btn" data-nd-bulk-toggle="labels"
             aria-haspopup="true" aria-expanded="false">Labels ▾</button>
-    <div class="nd-bulk-menu" data-nd-bulk-menu="labels" hidden role="menu">
+    <div class="nd-bulk-menu nd-bulk-menu-modal overflow-hidden rounded-xl border border-border bg-bg-elev p-0 shadow-2xl"
+         data-nd-bulk-menu="labels" hidden role="listbox" aria-label="Bulk labels">
+      <form class="border-b border-border p-2" data-nd-bulk-create-label>
+        <label class="block">
+          <span class="sr-only">Search or create label</span>
+          <input type="text" name="label_name" autocomplete="off" spellcheck="false"
+                 placeholder="Search or create label…"
+                 role="combobox" aria-expanded="true" aria-controls="nd-bulk-label-results"
+                 data-nd-bulk-label-search
+                 class="w-full rounded border border-border bg-bg px-2 py-1 text-xs text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+          <input type="hidden" name="label_color" value="" />
+        </label>
+        <div class="mt-1 text-[10px] text-fg-muted">Marked labels are on the selection. Select again to remove.</div>
+      </form>
+      <div id="nd-bulk-label-results" class="max-h-80 overflow-y-auto p-1" data-nd-bulk-label-results>
       {% if all_labels %}
         {% for lbl in all_labels %}
-          <button type="button" class="nd-bulk-opt" role="menuitem"
-                  data-nd-bulk-apply="labels" data-value="{{ lbl.id }}">
+          <button type="button" class="nd-bulk-opt w-full" role="option"
+                  data-nd-bulk-apply="labels" data-value="{{ lbl.id }}"
+                  data-nd-bulk-label-option data-search-text="{{ lbl.name | lower }}">
+            <span class="inline-flex w-5 justify-center text-accent" data-nd-bulk-label-marker></span>
             <span class="nd-bulk-dot" style="background: {{ lbl.color or 'var(--color-fg-muted)' }}"></span>
             <span>{{ lbl.name }}</span>
           </button>
         {% endfor %}
       {% else %}
-        <span class="nd-bulk-opt text-fg-muted">No labels defined</span>
+        <span class="nd-bulk-opt text-fg-muted" data-nd-bulk-label-empty>No labels defined</span>
       {% endif %}
+      </div>
+      <button type="button" class="nd-bulk-opt hidden" role="option" data-nd-bulk-create-option>
+        Create and apply <span data-nd-bulk-create-name></span>
+      </button>
     </div>
   </div>
 
