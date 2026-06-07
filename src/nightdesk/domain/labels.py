@@ -117,3 +117,49 @@ def tickets_for_label(session: Session, label_id: str) -> list[Ticket]:
     """All tickets that have the given label."""
     label = get_label(session, label_id)
     return list(label.tickets)
+
+
+def bulk_add_labels(
+    session: Session,
+    ticket_ids: list[str],
+    label_ids: list[str],
+) -> tuple[list[Ticket], list[dict]]:
+    """Add the given labels to each ticket (set union — existing labels are
+    preserved, duplicates are a no-op).  Tickets that don't exist are skipped.
+    Returns ``(updated, skipped)`` where each skipped entry is
+    ``{"ticket_id": ..., "reason": ...}``.
+
+    Raises ``LabelNotFound`` once up front if any label id is unknown, so the
+    whole batch fails fast rather than partially applying."""
+    from nightdesk.domain.tickets import TicketNotFound, get_ticket
+
+    label_ids = [lid for lid in label_ids if lid]
+    if label_ids:
+        found = session.scalars(
+            select(Label).where(Label.id.in_(label_ids))
+        ).all()
+        if len(found) != len(set(label_ids)):
+            missing = set(label_ids) - {lbl.id for lbl in found}
+            raise LabelNotFound(f"label(s) not found: {', '.join(sorted(missing))}")
+        labels_to_add = list(found)
+    else:
+        labels_to_add = []
+
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+            continue
+        existing = {lbl.id for lbl in ticket.labels}
+        for lbl in labels_to_add:
+            if lbl.id not in existing:
+                ticket.labels.append(lbl)
+        updated.append(ticket)
+    if updated:
+        session.commit()
+        for t in updated:
+            session.refresh(t)
+    return updated, skipped

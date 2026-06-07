@@ -2,6 +2,8 @@
 {% set active_page = 'board' %}
 {% block body %}
 {% set _view = view | default('tickets') %}
+{% set _group = group | default('status') %}
+{% set _groupable = groupable | default(['status', 'label', 'project', 'priority']) %}
 <div class="flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
   {% with sb_id='board-search',
           sb_resource=('run' if _view == 'runs' else 'ticket'),
@@ -9,25 +11,58 @@
           sb_view=_view %}
     {% include "partials/search_bar.html" %}
   {% endwith %}
+
+  {# Group-by selector. Switching grouping reloads the board: both the grid
+     template and the column set change, so a fragment swap can't express it.
+     Hidden in the runs view (grouping applies to the kanban only). #}
+  <div id="board-group-bar" class="flex items-center gap-2 text-xs"
+       {% if _view == 'runs' %}hidden{% endif %}>
+    <span class="text-fg-muted">Group by</span>
+    <div class="nd-view-toggle" role="tablist" aria-label="Group board by">
+      {% for g in _groupable %}
+        <button type="button" class="nd-view-btn" data-board-group="{{ g }}"
+                aria-pressed="{{ 'true' if _group == g else 'false' }}">{{ g | capitalize }}</button>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if _group == 'status' %}
+  {# Default kanban: four equal status columns + the 480px sidebar cell.
+     grid-rows-1 (minmax(0,1fr)) pins the single row to the container height so
+     each column's own overflow-y-auto handles internal scrolling. #}
   <div
     {% if _view == 'runs' %}hidden{% endif %}
     id="board-grid"
-    {# grid-rows-1 (minmax(0,1fr)) pins the single row to the container height.
-       Without an explicit row track the implicit `auto` row grows to fit the
-       tallest column's full card list, overflowing the viewport and forcing
-       the whole page to scroll. min-h-0 lets the grid items shrink to the
-       track so their own overflow-y-auto handles internal scrolling. #}
     class="grid flex-1 min-h-0 overflow-hidden gap-3 grid-cols-[1fr_1fr_1fr_1fr_480px] grid-rows-1"
   >
-  {% for col in columns %}
-    {% set column_status = col.status %}
-    {% set column_label = col.label %}
-    {% set tickets = col.tickets %}
-    {% include "partials/board_column.html" %}
-  {% endfor %}
-
-  {% include "partials/sidebar.html" %}
-</div>
+    {% for col in columns %}
+      {% set column = col %}
+      {% include "partials/board_column.html" %}
+    {% endfor %}
+    {% include "partials/sidebar.html" %}
+  </div>
+  {% else %}
+  {# Property grouping (label/project/priority): a variable number of read-only
+     columns in a horizontally scrolling rail, with the sidebar pinned beside
+     it. Columns flex to fill when few and shrink to a min width (then scroll)
+     when many. #}
+  <div
+    {% if _view == 'runs' %}hidden{% endif %}
+    id="board-grid"
+    class="flex flex-1 min-h-0 overflow-hidden gap-3 grid-rows-1"
+  >
+    <div id="board-columns-scroll" class="flex-1 min-h-0 flex gap-3 overflow-x-auto pb-1">
+      {% for col in columns %}
+        {% set column = col %}
+        {% set column_extra_class = 'flex-1 min-w-[260px]' %}
+        {% include "partials/board_column.html" %}
+      {% endfor %}
+    </div>
+    <div class="w-[480px] shrink-0 min-h-0">
+      {% include "partials/sidebar.html" %}
+    </div>
+  </div>
+  {% endif %}
 
   {# Runs view: swaps in where the kanban grid sits when the bar's
      Tickets/Runs toggle is set to Runs. Loaded via /board/runs. #}
@@ -37,6 +72,11 @@
     {% endif %}
   </div>
 </div>
+
+{# Bulk action bar — lives outside the polled column sections and the sidebar
+   so the 3s board poll never wipes it. Shown by static/bulk_select.js while a
+   selection is active. #}
+{% include "partials/bulk_action_bar.html" %}
 
 {# Create-mode modal always present on the board so the "+ New ticket"
    button can open it directly without re-fetching the sidebar. The
@@ -56,8 +96,8 @@
 <div
   id="board-columns-poll"
   {# Static path on purpose: htmx captures a polling element's URL at process
-     time, so the live query is injected per-request via htmx:configRequest in
-     the search-bar wiring below. #}
+     time, so the live query/grouping are injected per-request via
+     htmx:configRequest in the search-bar wiring below. #}
   hx-get="/board/columns"
   hx-trigger="every 3s, poll"
   hx-swap="none"
@@ -99,23 +139,24 @@
       );
     }
 
-    // Per-column scroll memory keyed by status. The 3s poll OOB-replaces each
-    // <section> wholesale — including its scrollable <ul.board-list> — so the
-    // new list mounts at scrollTop 0 and a column scrolled down would snap
-    // back to the top every tick. Record positions as the user scrolls (scroll
-    // doesn't bubble, so listen in the capture phase) and reapply them once the
-    // replacement lists are in the DOM.
+    // Per-column scroll memory keyed by the column's group key (status value
+    // for the kanban, label-/project-/priority- key otherwise). The 3s poll
+    // OOB-replaces each <section> wholesale — including its scrollable
+    // <ul.board-list> — so the new list mounts at scrollTop 0 and a scrolled
+    // column would snap back to the top every tick. Record positions as the
+    // user scrolls (scroll doesn't bubble, so listen in the capture phase) and
+    // reapply them once the replacement lists are in the DOM.
     var columnScroll = {};
     document.addEventListener('scroll', function (e) {
       var t = e.target;
       if (t && t.classList && t.classList.contains('board-list')) {
-        columnScroll[t.dataset.status] = t.scrollTop;
+        columnScroll[t.dataset.groupKey] = t.scrollTop;
       }
     }, true);
 
     function restoreColumnScroll() {
       document.querySelectorAll('ul.board-list').forEach(function (ul) {
-        var s = columnScroll[ul.dataset.status];
+        var s = columnScroll[ul.dataset.groupKey];
         if (s != null) ul.scrollTop = s;
       });
     }
@@ -123,10 +164,7 @@
     // Live registry of Sortable instances keyed by their <ul>. The columns
     // poll OOB-replaces each column section (including its <ul>) every few
     // seconds, so without this every poll would construct a fresh Sortable and
-    // orphan the previous one. SortableJS retains the detached <ul> (and all
-    // its cards) via document-level drag listeners and its animation-state
-    // manager until destroy() is called, so the heap climbed without bound on
-    // any board tab left open. Reap instances whose element has left the DOM
+    // orphan the previous one. Reap instances whose element has left the DOM
     // before binding new ones.
     var sortables = new Map();
 
@@ -139,11 +177,24 @@
         }
       });
       document.querySelectorAll('ul.board-list').forEach(function (list) {
+        // Drag is wired only on droppable (status) columns. Property
+        // groupings (label/project/priority) are read-only: a cross-group
+        // drop there has no status meaning, so we deliberately do not bind
+        // Sortable to them — preventing accidental status changes.
+        if (list.dataset.droppable !== '1') {
+          if (sortables.has(list)) {
+            try { sortables.get(list).destroy(); } catch (e) {}
+            sortables.delete(list);
+          }
+          return;
+        }
         if (sortables.has(list)) return;
         sortables.set(list, new Sortable(list, {
           group: 'board',
           animation: 120,
           ghostClass: 'opacity-50',
+          // Only real cards drag; the empty-state placeholder is inert.
+          draggable: 'li[data-ticket-id]',
           onEnd: function (evt) {
             var fromStatus = evt.from.dataset.status;
             var toStatus = evt.to.dataset.status;
@@ -175,12 +226,6 @@
       // Highlight whichever board card matches the sidebar's currently
       // open ticket. The sidebar partial sets data-selected-ticket-id on
       // its <aside>; if it's missing (create mode) no card is highlighted.
-      //
-      // Inline styles instead of a CSS class — Tailwind utilities like
-      // `border-border` on the card were winning the cascade against
-      // every layered approach we tried. Inline styles beat any rule
-      // without !important, and column polls re-create the <li> so the
-      // styles get re-applied here on every htmx swap anyway.
       var sidebar = document.getElementById('sidebar');
       var selectedId = sidebar && sidebar.getAttribute('data-selected-ticket-id');
       var accent = getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim() || '#34d399';
@@ -211,9 +256,8 @@
     }
     // Re-init after HTMX swaps too — every poll replaces the column
     // sections, so the new <ul>s need fresh Sortable bindings. The
-    // selection highlight also needs re-application: column swaps replace
-    // <li>s (losing the data-selected attribute) and sidebar swaps change
-    // which ticket is selected.
+    // selection highlight also needs re-application; column polls also
+    // reset scroll positions that we restore from memory.
     document.body.addEventListener('htmx:afterSwap', function () {
       initSortable();
       syncSelectedCard();
@@ -241,15 +285,18 @@
 {# Search-bar wiring: connect the unified bar to the board's ticket poll and
    the runs view. The bar (partials/search_bar.html + static/search_bar.js)
    owns the query string and emits nd:search / nd:view; this glue applies the
-   effect. #}
+   effect. The board's group-by selector navigates (a full reload) because the
+   grid layout and column set both change with the grouping. #}
 <script>
   (function () {
     var bar = document.getElementById('board-search');
     if (!bar) return;
     var grid = document.getElementById('board-grid');
     var runs = document.getElementById('board-runs');
+    var groupBar = document.getElementById('board-group-bar');
     var poll = document.getElementById('board-columns-poll');
     var view = {{ ('runs' if _view == 'runs' else 'tickets') | tojson }};
+    var boardGroup = {{ _group | tojson }};
     var currentQuery = {{ (query or '') | tojson }};
     var runsTimer = null;
 
@@ -257,20 +304,26 @@
 
     // htmx captures a polling element's request config at process time, so
     // updating the poll's hx-get at runtime is ignored. Inject the live query
-    // into every board-columns request instead. Covers the periodic 3s poll,
-    // the immediate post-filter trigger, and the drag-drop refresh.
+    // and the active grouping into every board-columns request instead, so the
+    // polled OOB sections line up with the rendered grid.
     document.body.addEventListener('htmx:configRequest', function (evt) {
       var elt = evt.detail && evt.detail.elt;
       if (!elt || elt.id !== 'board-columns-poll') return;
       var params = evt.detail.parameters;
-      if (params && typeof params.set === 'function') params.set('q', currentQuery);
-      else if (params) params.q = currentQuery;
+      if (params && typeof params.set === 'function') {
+        params.set('q', currentQuery);
+        params.set('group', boardGroup);
+      } else if (params) {
+        params.q = currentQuery;
+        params.group = boardGroup;
+      }
     });
 
     function syncUrl(q) {
       var params = new URLSearchParams();
       if (q) params.set('q', q);
       if (view === 'runs') params.set('view', 'runs');
+      if (boardGroup && boardGroup !== 'status') params.set('group', boardGroup);
       var qs = params.toString();
       history.replaceState(null, '', qs ? ('/?' + qs) : '/');
     }
@@ -304,21 +357,46 @@
     });
 
     bar.addEventListener('nd:view', function (e) {
+      // The List view is a dedicated page; navigate there carrying the query.
+      if (e.detail.view === 'list') {
+        var lq = e.detail.query || '';
+        window.location = lq ? ('/list?q=' + enc(lq)) : '/list';
+        return;
+      }
       view = e.detail.view === 'runs' ? 'runs' : 'tickets';
       var q = e.detail.query || '';
       if (view === 'runs') {
         grid.hidden = true;
         runs.hidden = false;
+        if (groupBar) groupBar.hidden = true;
         loadRuns(q);
         startRunsTimer();
       } else {
         stopRunsTimer();
         runs.hidden = true;
         grid.hidden = false;
+        if (groupBar) groupBar.hidden = false;
         refreshTickets(q);
       }
       syncUrl(q);
     });
+
+    // Group-by selector: navigate so the server re-renders the grid for the
+    // chosen grouping. The current query is carried along.
+    if (groupBar) {
+      groupBar.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-board-group]');
+        if (!btn) return;
+        var g = btn.getAttribute('data-board-group') || 'status';
+        if (g === boardGroup) return;
+        var q = bar.dataset.query || currentQuery || '';
+        var params = new URLSearchParams();
+        if (q) params.set('q', q);
+        if (g && g !== 'status') params.set('group', g);
+        var qs = params.toString();
+        window.location.assign(qs ? ('/?' + qs) : '/');
+      });
+    }
 
     if (view === 'runs') startRunsTimer();
   })();

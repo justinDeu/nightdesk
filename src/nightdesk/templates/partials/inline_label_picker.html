@@ -1,0 +1,57 @@
+{#
+  Inline label picker popover for list rows.
+
+  A compact toggle-based picker that lets users add/remove individual labels
+  without opening the sidebar. Loaded lazily by clicking the label area in a
+  list row. Each label toggle is an HTMX button that POSTs to the toggle
+  route and swaps the anchor chips + popover in place.
+
+  Expects:
+    tid          - ticket id
+    all_labels   - all Label objects
+    ticket_labels - labels currently on the ticket
+#}
+<div data-inline-label-menu-inner>
+  {% if all_labels %}
+  <div class="nd-prop-search-wrap">
+    <input
+      type="text"
+      data-inline-label-search
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="Filter labels…"
+      aria-label="Filter labels"
+      class="nd-prop-search"
+    />
+  </div>
+  {% endif %}
+  <div data-inline-label-options class="nd-prop-options">
+    {% for label in all_labels %}
+    {% set is_current = label.id in ticket_label_ids %}
+    <button
+      type="button"
+      data-inline-label-option
+      data-search-text="{{ label.name | lower }}"
+      {% if is_current %}aria-selected="true"{% endif %}
+      hx-post="/board/tickets/{{ tid }}/label-toggle"
+      hx-vals='{"label_id": "{{ label.id }}"}'
+      hx-target="[data-label-picker='{{ tid }}']"
+      hx-swap="outerHTML"
+      hx-on::after-request="window.ndInlineLabelCommitted && window.ndInlineLabelCommitted(this, event)"
+      class="nd-prop-option {{ 'nd-prop-current' if is_current else '' }}"
+    >
+      {% if label.color %}
+        <span class="nd-prop-swatch" style="background: {{ label.color }}; border-color: {{ label.color }}"></span>
+      {% else %}
+        <span class="nd-prop-swatch border border-border"></span>
+      {% endif %}
+      <span class="nd-prop-label">{{ label.name }}</span>
+      {% if is_current %}<span class="nd-prop-check" aria-hidden="true">✓</span>{% endif %}
+    </button>
+    {% endfor %}
+    {% if not all_labels %}
+    <div class="nd-prop-msg">No labels configured</div>
+    {% endif %}
+    <div data-inline-label-empty class="nd-prop-msg hidden">No matches</div>
+  </div>
+</div>

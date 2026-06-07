@@ -1,14 +1,16 @@
 {#
-  Polled fragment from /board/columns. Renders each of the four columns as
-  an OOB swap so the existing #board-col-<status> section is replaced in
-  place. There is no main-target body — the polling element uses
-  hx-swap="none". The sidebar lives outside these ids and is left alone,
-  which is what preserves an in-progress edit across polls.
+  Polled fragment from /board/columns. Renders each column as an OOB swap so
+  the existing #board-col-<key> section is replaced in place. There is no
+  main-target body — the polling element uses hx-swap="none". The sidebar lives
+  outside these ids and is left alone, which is what preserves an in-progress
+  edit across polls.
+
+  Works for every grouping: the column ``key`` matches the id rendered in the
+  initial grid (status keys for the default kanban, label-/project-/priority-
+  keys otherwise), so the OOB swap targets line up with the active layout.
 #}
 {% for col in columns %}
-  {% set column_status = col.status %}
-  {% set column_label = col.label %}
-  {% set tickets = col.tickets %}
+  {% set column = col %}
   {% set oob = true %}
   {% include "partials/board_column.html" %}
 {% endfor %}

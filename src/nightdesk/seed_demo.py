@@ -243,6 +243,14 @@ _LABEL_SPECS: list[dict] = [
 ]
 
 
+# Demo projects so the board's group-by-project view has content. Tickets are
+# assigned to these round-robin in the seeder (with some left unassigned).
+_PROJECT_SPECS: list[dict] = [
+    {"name": "Web App",   "slug": "web-app",  "color": "#2563eb"},
+    {"name": "Platform",  "slug": "platform", "color": "#db2777"},
+]
+
+
 # ---------------------------------------------------------------------------
 # Synthetic transcript builders
 # ---------------------------------------------------------------------------
@@ -565,37 +573,41 @@ def seed(
             print("No profiles found after seeding.", file=sys.stderr)
             return
 
-        # Demo projects so the shared property picker's project option has real
-        # data to pick from. Idempotent: tolerate re-seeding onto an existing DB.
-        project_ids: list[str] = []
-        for name, color, src in (
-            ("Nightdesk", "#34d399", source_path),
-            ("Docs site", "#60a5fa", source_path),
-        ):
-            try:
-                proj = create_project(session, name=name, color=color, source_path=src)
-                project_ids.append(proj.id)
-            except ProjectNameTaken:
-                existing = session.execute(
-                    text("SELECT id FROM projects WHERE name = :n"), {"n": name}
-                ).fetchone()
-                if existing:
-                    project_ids.append(existing[0])
         # --- Seed labels ---
-        # Idempotent: tolerate re-seeding onto an existing DB by reusing any
-        # label that already exists under the same name.
-        label_by_name: dict[str, object] = {}
+        # Idempotent: reuse any label already present (the demo seeder is
+        # designed to be safe to re-run), creating only the missing ones.
+        label_by_name: dict[str, object] = {
+            lbl.name: lbl for lbl in list_labels(session)
+        }
         for spec in _LABEL_SPECS:
-            try:
-                lbl = create_label(session, name=spec["name"], color=spec["color"])
-            except LabelNameTaken:
-                lbl = next(
-                    (l for l in list_labels(session) if l.name == spec["name"]),
-                    None,
-                )
-                if lbl is None:
-                    continue
+            if spec["name"] in label_by_name:
+                continue
+            lbl = create_label(session, name=spec["name"], color=spec["color"])
             label_by_name[lbl.name] = lbl
+
+        # --- Seed projects ---
+        # A couple of demo projects so the board's group-by-project view (and
+        # the project facet) has something to show. Idempotent like labels.
+        from nightdesk.domain.projects import (
+            create_project as _create_project,
+            list_projects as _list_projects,
+        )
+        project_by_slug: dict[str, object] = {
+            p.slug: p for p in _list_projects(session)
+        }
+        seeded_projects: list = []
+        for spec in _PROJECT_SPECS:
+            existing = project_by_slug.get(spec["slug"])
+            if existing is None:
+                existing = _create_project(
+                    session,
+                    name=spec["name"],
+                    slug=spec["slug"],
+                    source_path=source_path,
+                    color=spec.get("color"),
+                )
+                project_by_slug[existing.slug] = existing
+            seeded_projects.append(existing)
 
         tickets_by_status: dict[str, list[Ticket]] = {}
 
@@ -607,11 +619,11 @@ def seed(
             # Inbox surface can demo the "flesh out before promoting" boundary.
             incomplete = spec.pop("incomplete", False)
             profile_id = profile_ids[idx % len(profile_ids)]
-            # Spread tickets across the demo projects (leaving every third one
-            # unassigned so "No project" is represented too).
+            # Assign most tickets to a project (round-robin), leaving every
+            # third one unassigned so the "No project" bucket is populated too.
             project_id = None
-            if project_ids and idx % 3 != 2:
-                project_id = project_ids[idx % len(project_ids)]
+            if seeded_projects and idx % 3 != 2:
+                project_id = seeded_projects[idx % len(seeded_projects)].id
             # Assigning a project injects that project's default workspace, which
             # would make an "incomplete" inbox item complete. Keep these
             # project-less so they stay genuinely under-specified for the demo.

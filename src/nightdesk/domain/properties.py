@@ -35,6 +35,7 @@ from nightdesk.domain.priority import (
     priority_label,
     resolve_priority,
 )
+from nightdesk.domain.profiles import ProfileNotFound, get_profile, list_profiles
 from nightdesk.domain.projects import get_project, list_projects
 from nightdesk.domain.tickets import (
     _VALID_TRANSITIONS,
@@ -282,6 +283,54 @@ def _project_apply(session: Session, ticket_id: str, value: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Profile
+# ---------------------------------------------------------------------------
+
+
+def _profile_chip(ticket: Any, project: Any = None) -> Chip:
+    # The ``project`` parameter is the generic second argument to chip().
+    # Callers that have already resolved the profile pass it here (like
+    # project_chip does with the project object).
+    prof = project if project is not None else getattr(ticket, "profile", None)
+    if prof is None:
+        return Chip(
+            label="—",
+            css="border-border text-fg-muted",
+            title="Profile — click to change",
+        )
+    return Chip(
+        label=prof.name,
+        css="border-border text-fg-muted",
+        title=f"Profile: {prof.name} — click to change",
+    )
+
+
+def _profile_options(session: Session, ticket: Any) -> list[Option]:
+    current_id = getattr(ticket, "profile_id", None) or ""
+    opts: list[Option] = []
+    for prof in list_profiles(session):
+        opts.append(
+            Option(
+                value=prof.id,
+                label=prof.name,
+                current=(prof.id == current_id),
+                search_text=prof.name.lower(),
+            )
+        )
+    return opts
+
+
+def _profile_apply(session: Session, ticket_id: str, value: str) -> Any:
+    from nightdesk.domain.tickets import update_ticket_profile
+    profile_id = (value or "").strip()
+    if not profile_id:
+        raise ValueError("profile cannot be cleared")
+    # Validate early
+    get_profile(session, profile_id)
+    return update_ticket_profile(session, ticket_id, profile_id)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -309,6 +358,14 @@ PROPERTY_REGISTRY: dict[str, Property] = {
         chip_fn=_project_chip,
         options_fn=_project_options,
         apply_fn=_project_apply,
+    ),
+    "profile": Property(
+        key="profile",
+        label="Profile",
+        searchable=True,
+        chip_fn=_profile_chip,
+        options_fn=_profile_options,
+        apply_fn=_profile_apply,
     ),
 }
 

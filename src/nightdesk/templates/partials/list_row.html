@@ -1,0 +1,98 @@
+{#
+  Single ticket row for the list view.
+
+  Mirrors partials/ticket_card.html's data contract so the two surfaces stay in
+  sync, but lays the metadata out as aligned columns instead of a card. Inline
+  edits reuse the shared property picker (status / priority / project / profile)
+  and the inline label picker popover for labels; the row carries
+  data-ticket-id so it participates in the board's keyboard cursor spine
+  (J/K, sidebar-on-focus) with no extra JS. Clicking the row opens the sidebar
+  editor; the ↗ link opens the full ticket detail page.
+
+  Expects: t (Ticket-like), profiles_by_id, projects_by_id,
+           run_outcomes (ticket_id -> last-run status), dep_titles.
+#}
+{% set profile = profiles_by_id.get(t.profile_id) if profiles_by_id else None %}
+{% set project = projects_by_id.get(t.project_id) if projects_by_id and t.project_id else None %}
+{% set outcome = run_outcomes.get(t.id) if run_outcomes else None %}
+{% set blocked_by = dep_titles.get(t.id) if dep_titles else None %}
+{% set ticket_labels = t.labels if t.labels is defined and t.labels else [] %}
+<li
+  data-ticket-id="{{ t.id }}"
+  class="nd-list-row group flex items-center gap-3 px-3 py-1.5 border-b border-border/60 hover:bg-bg-elev cursor-pointer text-sm"
+  hx-get="/board/sidebar?ticket_id={{ t.id }}"
+  hx-target="#sidebar"
+  hx-swap="outerHTML"
+  hx-trigger="click"
+>
+  {# Status — shared property picker. #}
+  <div class="shrink-0 w-28">
+    {% with tid=t.id, prop='status', chip=property_chip('status', t) %}
+      {% include "partials/property_picker.html" %}
+    {% endwith %}
+  </div>
+
+  {# Title (primary). #}
+  <div class="flex-1 min-w-0 truncate font-medium text-fg" title="{{ t.title }}">{{ t.title }}</div>
+
+  {# Priority — shared property picker (always editable here, unlike the card). #}
+  <div class="shrink-0 w-24">
+    {% with tid=t.id, prop='priority', chip=property_chip('priority', t) %}
+      {% include "partials/property_picker.html" %}
+    {% endwith %}
+  </div>
+
+  {# Project — shared property picker (assign / reassign / clear inline). #}
+  <div class="shrink-0 w-32 truncate">
+    {% with tid=t.id, prop='project', chip=property_chip('project', t, project) %}
+      {% include "partials/property_picker.html" %}
+    {% endwith %}
+  </div>
+
+  {# Labels — clickable to open inline label picker popover. #}
+  <div class="shrink-0 w-48 hidden md:flex flex-wrap items-center gap-1 overflow-hidden">
+    {% with tid=t.id, ticket_labels=ticket_labels %}
+      {% include "partials/inline_label_anchor.html" %}
+    {% endwith %}
+  </div>
+
+  {# Profile — shared property picker (reassign inline). #}
+  <div class="shrink-0 w-24 truncate">
+    {% with tid=t.id, prop='profile', chip=property_chip('profile', t, profile) %}
+      {% include "partials/property_picker.html" %}
+    {% endwith %}
+  </div>
+
+  {# Last run status (where available). #}
+  <div class="shrink-0 w-20 text-xs">
+    {% if outcome %}
+      {% set oc = 'text-fg-muted border-border' %}
+      {% if outcome == 'success' %}{% set oc = 'text-accent border-accent/40' %}{% endif %}
+      {% if outcome == 'failed' %}{% set oc = 'text-danger border-danger/40' %}{% endif %}
+      {% if outcome in ('cancelled', 'worker_crash') %}{% set oc = 'text-warn border-warn/40' %}{% endif %}
+      {% if outcome == 'running' %}{% set oc = 'text-info border-info/40' %}{% endif %}
+      <span class="inline-block px-1.5 py-0.5 rounded border bg-bg-elev-2 text-[10px] font-mono {{ oc }}">{{ outcome }}</span>
+    {% else %}
+      <span class="text-fg-muted/60">—</span>
+    {% endif %}
+  </div>
+
+  {# Updated time (localized client-side from the UTC iso). #}
+  <div class="shrink-0 w-28 text-fg-muted font-mono text-xs">
+    <span data-ts="{{ iso_utc(t.updated_at) }}">{{ t.updated_at }}</span>
+  </div>
+
+  {# Blocked indicator + open-detail link. #}
+  <div class="shrink-0 w-12 flex items-center justify-end gap-1">
+    {% if blocked_by %}
+      <span class="text-warn text-xs" title="Waiting on: {{ blocked_by | join(', ') }}" aria-label="blocked by {{ blocked_by | length }}">&#x26d4;</span>
+    {% endif %}
+    <a
+      href="/tickets/{{ t.id }}"
+      onclick="event.stopPropagation();"
+      title="Open ticket detail"
+      class="opacity-60 group-hover:opacity-100 text-fg-muted hover:text-accent text-sm leading-none"
+      aria-label="Open ticket detail"
+    >&#x2197;</a>
+  </div>
+</li>
