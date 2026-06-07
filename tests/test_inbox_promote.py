@@ -147,12 +147,13 @@ async def test_promote_modal_highlights_missing_fields(cookie_client, session, p
 
 
 @pytest.mark.anyio
-async def test_promote_modal_no_preview_hook_when_endpoint_absent(cookie_client, session, profile):
-    """The execution-context preview is an optional hook; with no endpoint
-    mounted (this branch) the section must not render."""
+async def test_promote_modal_shows_execution_context_preview(cookie_client, session, profile):
+    """With the execution-context branch merged the promote modal includes
+    the effective-config preview section so the user can see what the ticket
+    will run with before promoting."""
     t = _inbox(session, profile, complete=True)
     r = await cookie_client.get(f"/inbox/tickets/{t.id}/promote-modal")
-    assert "data-effective-preview-section" not in r.text
+    assert "data-effective-preview-section" in r.text
 
 
 @pytest.mark.anyio
