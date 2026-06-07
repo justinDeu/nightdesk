@@ -147,6 +147,72 @@
         </div>
       {% endif %}
 
+      {# --- Effective execution context (read-only) ----------------------- #
+       # The merged run context with provenance chips, resolved by the shared
+       # effective-config resolver and rendered with the same partial used on
+       # the ticket detail page and in the create/edit preview. Lazily loaded
+       # so the merge only runs when a ticket is actually selected. #}
+      <div class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Execution context</span>
+        <div hx-get="/tickets/{{ ticket.id }}/effective-config"
+             hx-trigger="load"
+             hx-swap="innerHTML"
+             data-sidebar-effective-config>
+          <div class="text-xs text-fg-muted italic">Resolving execution context…</div>
+        </div>
+      </div>
+
+      {# Toolchain summary — compact provenance display for the sidebar view.
+         Shows which toolchain presets are active (inherited from project or
+         explicitly enabled/disabled on the ticket). Edit the ticket to change. #}
+      {% set _tc_overrides = ticket.toolchain_overrides if is_edit and ticket.toolchain_overrides else {} %}
+      {% set _tc_en = _tc_overrides.get('enable') or [] %}
+      {% set _tc_dis = _tc_overrides.get('disable') or [] %}
+      {% set _tc_extra = _tc_overrides.get('extra_paths') or [] %}
+      {% set _tc_proj_defaults = ticket.project.default_toolchains if is_edit and ticket.project and ticket.project.default_toolchains else [] %}
+      {% if _tc_en or _tc_dis or _tc_extra or _tc_proj_defaults %}
+        <div class="flex flex-col gap-1">
+          <span class="text-fg-muted text-xs uppercase tracking-wide">Toolchain</span>
+          <div class="space-y-1">
+            {% for name in _tc_en %}
+              {% if name in _tc_proj_defaults %}
+                <div class="flex items-center gap-1.5 text-xs">
+                  <span class="rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">Inherited</span>
+                  <code class="font-mono text-fg">{{ name }}</code>
+                </div>
+              {% else %}
+                <div class="flex items-center gap-1.5 text-xs">
+                  <span class="rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn">Enabled</span>
+                  <code class="font-mono text-fg">{{ name }}</code>
+                </div>
+              {% endif %}
+            {% endfor %}
+            {% for name in _tc_dis %}
+              <div class="flex items-center gap-1.5 text-xs">
+                <span class="rounded border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger">Disabled</span>
+                <code class="font-mono text-fg-muted">{{ name }}</code>
+              </div>
+            {% endfor %}
+            {% for p in _tc_extra %}
+              <div class="flex items-center gap-1.5 text-xs">
+                <span class="rounded border border-border bg-bg-elev-2 px-1.5 py-0.5 text-[10px] font-medium text-fg-muted">Path</span>
+                <code class="font-mono text-fg">{{ p }}</code>
+              </div>
+            {% endfor %}
+            {# Project defaults that are not in the ticket's overrides at all
+               (neither enabled nor disabled) — they still apply at run time. #}
+            {% for name in _tc_proj_defaults %}
+              {% if name not in _tc_en and name not in _tc_dis %}
+                <div class="flex items-center gap-1.5 text-xs">
+                  <span class="rounded border border-border bg-bg-elev-2 px-1.5 py-0.5 text-[10px] font-medium text-fg-muted italic">Project default</span>
+                  <code class="font-mono text-fg-muted">{{ name }}</code>
+                </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
       {# --- Dependencies section ------------------------------------------- #}
       <div id="dependency-section">
         {% if is_edit %}

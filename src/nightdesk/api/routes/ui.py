@@ -21,6 +21,7 @@ from nightdesk.domain.projects import (
     archive_project,
     create_project,
     list_projects,
+    preview_defaults,
     update_project,
 )
 from nightdesk.domain.toolchains import (
@@ -135,6 +136,11 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "toolchain_names": toolchain_names(cfg),
             "toolchain_options": toolchain_options(cfg),
             "projects": list_projects(session, include_archived=True),
+            "project_previews": {
+                p.id: preview_defaults(session, p)
+                for p in list_projects(session, include_archived=True)
+                if not p.archived_at
+            },
         }
 
     def _render_settings(request: Request, session: Session, *, category: str, saved: bool):

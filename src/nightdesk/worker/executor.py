@@ -50,6 +50,30 @@ class DummyExecutor:
         return ExecutionResult(exit_status="success", final_summary="dummy run complete")
 
 
+class OmpRpcExecutor:
+    """Placeholder executor for the ``omp_rpc`` backend.
+
+    The OMP/RPC backend's *configuration surface* is fully modelled (profile
+    editor, capability descriptors, effective-config preview) ahead of its
+    runtime wiring. Dispatching a run against it before that wiring lands
+    fails loudly with the resolved endpoint, rather than silently reporting a
+    fake success. The connection settings live in the encrypted env blob
+    (``OMP_RPC_ENDPOINT`` / ``OMP_RPC_AUTH_TOKEN`` / ``OMP_RPC_MODEL``), so the
+    message can name the endpoint the user configured.
+    """
+
+    async def run(self, req: ExecutionRequest) -> ExecutionResult:
+        if req.cancel_event.is_set():
+            return ExecutionResult(exit_status="cancelled")
+        env = req.permission_spec.custom_env or {}
+        endpoint = env.get("OMP_RPC_ENDPOINT") or req.env.get("OMP_RPC_ENDPOINT")
+        req.transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        detail = f" (endpoint: {endpoint})" if endpoint else " (no endpoint configured)"
+        msg = "omp_rpc backend is not yet wired for execution" + detail
+        req.transcript_path.write_text(f"[omp_rpc executor]\n{msg}\n")
+        return ExecutionResult(exit_status="failed", error_summary=msg)
+
+
 class ShellExecutor:
     async def run(self, req: ExecutionRequest) -> ExecutionResult:
         req.transcript_path.parent.mkdir(parents=True, exist_ok=True)

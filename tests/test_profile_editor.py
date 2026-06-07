@@ -301,17 +301,18 @@ async def test_html_list_page_renders_two_pane_with_default_selection(
     assert 'href="/profiles/' in body and '/edit"' in body
 
 
-async def test_html_edit_form_includes_disabled_backend_choices(
+async def test_html_edit_form_lists_capability_backend_choices(
     cookie_client, fresh_engine,
 ):
-    """v1 ships one backend; the dropdown should list claude_sdk and nothing
-    else (no 'coming soon' vaporware entries)."""
+    """The dropdown is driven by the capability descriptors: the two wired
+    backends (claude_sdk, omp_rpc) appear and no vaporware entries do."""
     seed_default_profiles(fresh_engine)
     with Session(fresh_engine) as s:
         pid = next(p.id for p in list_profiles(s) if p.name == "Read only")
     r = await cookie_client.get(f"/profiles/{pid}/edit")
     body = r.text
     assert 'value="claude_sdk"' in body
+    assert 'value="omp_rpc"' in body
     assert "coming soon" not in body.lower()
     assert 'value="codex_cli"' not in body
     assert 'value="openai_responses"' not in body
@@ -942,3 +943,238 @@ async def test_profiles_page_offers_cc_import_affordance(cookie_client):
     assert r.status_code == 200
     assert 'action="/profiles/import-cc"' in r.text
     assert "Import from Claude Code settings.json" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Backend-aware profile forms. The editor renders per-backend field groups via
+# the capability descriptors: shared sandbox/runtime fields always show, while
+# Claude- and OMP/RPC-specific sections are gated by the selected backend.
+# ---------------------------------------------------------------------------
+
+
+async def test_new_form_renders_both_backend_sections_and_toggle(cookie_client):
+    """Both backend-specific sections are present in the markup (so the JS can
+    flip between them) and the toggle wiring ships with the form."""
+    r = await cookie_client.get("/profiles/new")
+    body = r.text
+    # Claude section appears twice (auth/binary/permission, then models/behavior),
+    # OMP once.
+    assert body.count('data-backend-section="claude_sdk"') == 2
+    assert body.count('data-backend-section="omp_rpc"') == 1
+    # OMP-specific inputs live in the OMP section, stored in the env blob.
+    assert 'name="promoted_omp_endpoint"' in body
+    assert 'name="promoted_omp_auth_token"' in body
+    assert 'name="promoted_omp_model"' in body
+    # The toggle JS and its entrypoint are present.
+    assert "ndApplyBackend" in body
+    assert 'select[name="backend"]' in body
+
+
+async def test_new_form_hides_omp_section_by_default(cookie_client):
+    """A new profile defaults to claude_sdk: the OMP section ships hidden and
+    the Claude sections visible (initial server render avoids a flash)."""
+    r = await cookie_client.get("/profiles/new")
+    body = r.text
+    # The omp section wrapper carries the hidden class on initial render.
+    omp_idx = body.index('data-backend-section="omp_rpc"')
+    # Grab the opening tag of that wrapper.
+    tag = body[omp_idx - 40:body.index(">", omp_idx)]
+    assert "hidden" in tag
+    # The claude wrapper is NOT hidden by default.
+    claude_idx = body.index('data-backend-section="claude_sdk"')
+    claude_tag = body[claude_idx - 40:body.index(">", claude_idx)]
+    assert "hidden" not in claude_tag
+
+
+async def test_omp_profile_edit_shows_omp_section_visible(
+    cookie_client, fresh_client, fresh_engine,
+):
+    """Editing an omp_rpc profile renders the OMP section visible and the
+    Claude sections hidden on the server side."""
+    r = await fresh_client.post("/api/v1/profiles", json={
+        "name": "omp-edit", "backend": "omp_rpc",
+        "claude_credentials": {"source": "inherit"},
+    })
+    pid = r.json()["id"]
+    r = await cookie_client.get(f"/profiles/{pid}/edit")
+    body = r.text
+    # OMP wrapper visible, claude wrapper hidden.
+    omp_idx = body.index('data-backend-section="omp_rpc"')
+    omp_tag = body[omp_idx - 40:body.index(">", omp_idx)]
+    assert "hidden" not in omp_tag
+    claude_idx = body.index('data-backend-section="claude_sdk"')
+    claude_tag = body[claude_idx - 40:body.index(">", claude_idx)]
+    assert "hidden" in claude_tag
+    # The backend dropdown has omp_rpc selected.
+    assert 'value="omp_rpc"' in body
+
+
+async def test_create_omp_profile_persists_connection_to_env(
+    cookie_client, fresh_engine,
+):
+    """Posting the OMP fieldset writes endpoint/model/token into the encrypted
+    env blob and keeps the token out of plaintext."""
+    from nightdesk.domain.profile_secrets import ProfileSecretBox
+
+    r = await cookie_client.post(
+        "/profiles",
+        data={
+            "name": "omp-create",
+            "backend": "omp_rpc",
+            "network_mode": "on",
+            "promoted_env_submitted": "1",
+            "promoted_omp_endpoint": "https://omp.example/rpc",
+            "promoted_omp_auth_token": "rpc-secret-789",
+            "promoted_omp_model": "gpt-oss-120b",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    pid = r.headers["location"].rsplit("/", 1)[-1]
+    box = ProfileSecretBox("t")
+    with Session(fresh_engine) as s:
+        p = s.get(Profile, pid)
+        assert p.backend == "omp_rpc"
+        decoded = box.decrypt(p.env)
+        assert decoded["OMP_RPC_ENDPOINT"] == "https://omp.example/rpc"
+        assert decoded["OMP_RPC_MODEL"] == "gpt-oss-120b"
+        assert decoded["OMP_RPC_AUTH_TOKEN"] == "rpc-secret-789"
+        # Secret never lands in plaintext on the row.
+        assert "rpc-secret-789" not in (p.env or "")
+
+
+async def test_omp_blank_token_keeps_existing(cookie_client, fresh_engine):
+    """Saving the OMP form with a blank token preserves the stored value
+    (mirrors the credential 'leave blank to keep' contract)."""
+    from nightdesk.domain.profile_secrets import ProfileSecretBox
+
+    r = await cookie_client.post(
+        "/profiles",
+        data={
+            "name": "omp-keep-token", "backend": "omp_rpc", "network_mode": "on",
+            "promoted_env_submitted": "1",
+            "promoted_omp_endpoint": "https://e/rpc",
+            "promoted_omp_auth_token": "tok-orig",
+            "promoted_omp_model": "m",
+        },
+        follow_redirects=False,
+    )
+    pid = r.headers["location"].rsplit("/", 1)[-1]
+    # Re-save with the token blank but the endpoint changed.
+    r = await cookie_client.post(
+        f"/profiles/{pid}",
+        data={
+            "name": "omp-keep-token", "backend": "omp_rpc", "network_mode": "on",
+            "promoted_env_submitted": "1",
+            "promoted_omp_endpoint": "https://e2/rpc",
+            "promoted_omp_auth_token": "",
+            "promoted_omp_model": "m",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    box = ProfileSecretBox("t")
+    with Session(fresh_engine) as s:
+        decoded = box.decrypt(s.get(Profile, pid).env)
+    assert decoded["OMP_RPC_AUTH_TOKEN"] == "tok-orig"
+    assert decoded["OMP_RPC_ENDPOINT"] == "https://e2/rpc"
+
+
+async def test_switching_backend_preserves_other_backend_keys(
+    cookie_client, fresh_engine,
+):
+    """Switching an OMP profile to claude_sdk and saving must not wipe the OMP
+    connection keys: the inactive backend's promoted keys are preserved so a
+    user inspecting under another backend doesn't lose config."""
+    from nightdesk.domain.profile_secrets import ProfileSecretBox
+
+    r = await cookie_client.post(
+        "/profiles",
+        data={
+            "name": "omp-switch", "backend": "omp_rpc", "network_mode": "on",
+            "promoted_env_submitted": "1",
+            "promoted_omp_endpoint": "https://e/rpc",
+            "promoted_omp_auth_token": "tok-X",
+            "promoted_omp_model": "m1",
+        },
+        follow_redirects=False,
+    )
+    pid = r.headers["location"].rsplit("/", 1)[-1]
+    # Save as claude_sdk with a claude model set; OMP fields are absent (their
+    # fieldset is disabled on the client when claude is selected).
+    r = await cookie_client.post(
+        f"/profiles/{pid}",
+        data={
+            "name": "omp-switch", "backend": "claude_sdk", "network_mode": "on",
+            "permission_mode": "default",
+            "credentials_field_submitted": "1", "credentials_source": "inherit",
+            "promoted_env_submitted": "1",
+            "promoted_model_ANTHROPIC_MODEL": "claude-opus-4-5",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    box = ProfileSecretBox("t")
+    with Session(fresh_engine) as s:
+        decoded = box.decrypt(s.get(Profile, pid).env)
+    assert decoded["ANTHROPIC_MODEL"] == "claude-opus-4-5"
+    assert decoded["OMP_RPC_AUTH_TOKEN"] == "tok-X"
+    assert decoded["OMP_RPC_ENDPOINT"] == "https://e/rpc"
+
+
+async def test_view_preview_shows_backend_capabilities_for_claude(
+    cookie_client, fresh_engine,
+):
+    """The effective-config preview lists shared/specific/inert capability
+    groups. For Claude, OMP connection shows up as inert."""
+    seed_default_profiles(fresh_engine)
+    with Session(fresh_engine) as s:
+        pid = next(p.id for p in list_profiles(s) if p.name == "Read only")
+    r = await cookie_client.get(f"/profiles/{pid}")
+    body = r.text
+    assert "Backend capabilities" in body
+    assert "Not used (inert)" in body
+    # Claude-specific groups render under the "<label>-specific" column.
+    assert "Claude Code-specific" in body
+    # OMP connection is the inert group for a Claude profile.
+    assert "OMP / RPC connection" in body
+
+
+async def test_view_preview_for_omp_redacts_token_and_hides_claude_rows(
+    cookie_client, fresh_client, fresh_engine,
+):
+    """The OMP preview surfaces endpoint/model + 'value set' for the token (no
+    plaintext), and the Claude-only rows (Credentials/Permission mode) are
+    absent because they're inert for this backend."""
+    r = await fresh_client.post("/api/v1/profiles", json={
+        "name": "omp-view", "backend": "omp_rpc",
+        "claude_credentials": {"source": "inherit"},
+        "env": {
+            "OMP_RPC_ENDPOINT": "https://omp.view/rpc",
+            "OMP_RPC_MODEL": "gpt-oss-120b",
+            "OMP_RPC_AUTH_TOKEN": "view-token-leak",
+        },
+    })
+    pid = r.json()["id"]
+    r = await cookie_client.get(f"/profiles/{pid}")
+    body = r.text
+    # Endpoint + model visible; token redacted.
+    assert "https://omp.view/rpc" in body
+    assert "gpt-oss-120b" in body
+    assert "view-token-leak" not in body
+    # Claude-only effective-config rows do not appear for an OMP profile.
+    assert "Credentials" not in body
+    # Capability panel marks OMP/RPC connection as the active backend-specific
+    # group, and Claude groups as inert.
+    assert "OMP / RPC-specific" in body
+    assert "Authentication" in body  # listed as an inert group
+
+
+async def test_form_create_accepts_omp_backend(cookie_client, fresh_engine):
+    """omp_rpc is a wired backend now, so the form POST accepts it."""
+    r = await cookie_client.post(
+        "/profiles",
+        data={"name": "omp-ok", "backend": "omp_rpc", "network_mode": "on"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text

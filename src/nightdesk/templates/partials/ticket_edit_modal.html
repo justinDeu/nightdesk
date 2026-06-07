@@ -40,6 +40,11 @@
 {% set _tc_enabled = _toolchains.get('enable') or [] %}
 {% set _tc_disabled = _toolchains.get('disable') or [] %}
 {% set _tc_extra_paths = _toolchains.get('extra_paths') or [] %}
+{# Project default toolchains for provenance distinction in the picker.
+   Edit mode: ticket.project carries the relationship. Create mode:
+   _selected_project is pre-filled from the board query filter. #}
+{% set _tc_project = ticket.project if _is_edit and ticket.project_id else _selected_project %}
+{% set _project_default_toolchains = _tc_project.default_toolchains if _tc_project and _tc_project.default_toolchains else [] %}
 
 <dialog id="{{ _mid }}"
         class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[820px] max-w-[calc(100vw-2rem)]"
@@ -210,7 +215,17 @@
           <div class="mb-1 text-fg-muted text-[11px] uppercase tracking-wide">Toolchain presets</div>
           {% if _toolchain_options %}
             <ul class="divide-y divide-border rounded border border-border bg-bg">
+              {#- Each row is one known preset. The provenance badge distinguishes:
+                    Inherited  — preset came from the project's default_toolchains
+                    Enabled    — explicitly enabled on this ticket
+                    Disabled   — explicitly disabled (opts out of a project default)
+                    —          — neither selected nor inherited
+                  Enable and Disable are mutually exclusive checkboxes. Unchecking
+                  both removes the preset from the ticket's overrides entirely. #}
               {% for opt in _toolchain_options %}
+                {% set _is_inherited = (opt.name in _project_default_toolchains) %}
+                {% set _is_explicitly_enabled = (opt.name in _tc_enabled and not _is_inherited) %}
+                {% set _is_disabled = (opt.name in _tc_disabled) %}
                 <li class="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-1.5" data-toolchain-row>
                   <div class="min-w-0 flex-1">
                     <div class="flex items-baseline gap-2">
@@ -219,6 +234,14 @@
                     </div>
                     {% if opt.paths %}<code class="block truncate text-[10px] text-fg-muted">{{ opt.paths | join(', ') }}</code>{% endif %}
                   </div>
+                  {# Provenance badge — shown when the preset has a relevant state #}
+                  {% if _is_inherited and opt.name in _tc_enabled %}
+                    <span class="rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent" title="Inherited from project {{ _tc_project.name | default('') }}">Inherited</span>
+                  {% elif _is_explicitly_enabled %}
+                    <span class="rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn" title="Explicitly enabled on this ticket">Enabled</span>
+                  {% elif _is_disabled %}
+                    <span class="rounded border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger" title="Disabled on this ticket — opts out of project default">Disabled</span>
+                  {% endif %}
                   <label class="flex items-center gap-1 text-[11px] text-fg-muted">
                     <input type="checkbox" name="toolchain_enable" value="{{ opt.name }}"
                            data-toolchain-enable
@@ -241,7 +264,8 @@
           {% endif %}
           {# Any enabled/disabled names that are no longer known presets (e.g. a
              deleted custom preset). Surfaced read-only so they aren't silently
-             dropped; clearing them removes the stale override. #}
+             dropped; clearing them removes the stale override. Stale references
+             that also appear in project defaults get an extra note. #}
           {% set _known_names = _toolchain_options | map(attribute='name') | list %}
           {% set _stale_enabled = _tc_enabled | reject('in', _known_names) | list %}
           {% set _stale_disabled = _tc_disabled | reject('in', _known_names) | list %}
@@ -251,13 +275,13 @@
               {% for name in _stale_enabled %}
                 <label class="mt-1 flex items-center gap-1">
                   <input type="checkbox" name="toolchain_enable" value="{{ name }}" checked />
-                  enable <code>{{ name }}</code> (no longer a known preset)
+                  enable <code>{{ name }}</code> (no longer a known preset{% if name in _project_default_toolchains %}; was a project default{% endif %})
                 </label>
               {% endfor %}
               {% for name in _stale_disabled %}
                 <label class="mt-1 flex items-center gap-1">
                   <input type="checkbox" name="toolchain_disable" value="{{ name }}" checked />
-                  disable <code>{{ name }}</code> (no longer a known preset)
+                  disable <code>{{ name }}</code> (no longer a known preset{% if name in _project_default_toolchains %}; was a project default{% endif %})
                 </label>
               {% endfor %}
             </div>
@@ -543,30 +567,29 @@
         </div>
       </section>
 
-      {# --- Execution context preview (optional hook) -------------------- #
-       # Rendered only when an execution-context preview endpoint is mounted
-       # (the route passes effective_preview_url then). When absent the hook
-       # stays dormant — no dangling markup, no dead request — so this flow
-       # lights up automatically once the execution-context work lands. The
-       # whole form is posted via hx-include so the preview reflects exactly
-       # what promotion would persist.
+      {# --- Execution context preview ----------------------------------- #
+       # A compact, read-only summary of how project + profile + ticket
+       # overrides merge into the actual run context, with provenance chips.
+       # Lives on the same reusable partial as the ticket-detail / sidebar
+       # previews. It refreshes (debounced) whenever a project / profile /
+       # workspace / toolchain field changes — the listener and the
+       # nd-config-refresh dispatch live in ticket_form.js. The whole form is
+       # posted via hx-include so the preview reflects exactly what would be
+       # persisted, including toolchain overrides and linked workspaces.
        #}
-      {% set _preview_url = effective_preview_url if effective_preview_url is defined else none %}
-      {% if _preview_url %}
       <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm" data-effective-preview-section>
         <div class="mb-2">
           <h3 class="text-sm font-medium text-fg">Execution context preview</h3>
-          <p class="mt-0.5 text-xs leading-snug text-fg-muted">How project, profile, and overrides merge into what this ticket will actually run with.</p>
+          <p class="mt-0.5 text-xs leading-snug text-fg-muted">How project, profile, and overrides merge into what this ticket will actually run with. Updates as you edit — not a prediction of run success.</p>
         </div>
         <div data-effective-preview
-             hx-post="{{ _preview_url }}"
+             hx-post="/effective-config/preview"
              hx-trigger="load, nd-config-refresh"
              hx-include="closest form"
              hx-swap="innerHTML">
           <div class="text-xs italic text-fg-muted" data-effective-preview-placeholder>Resolving execution context…</div>
         </div>
       </section>
-      {% endif %}
 
     </div>
 

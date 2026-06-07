@@ -351,6 +351,36 @@
     );
   };
 
+  // --- Effective execution-context preview -------------------------------
+  //
+  // Debounced refresh of the shared effective-config partial inside the
+  // ticket create/edit modal. The actual request + swap is htmx's job (the
+  // [data-effective-preview] element carries hx-post / hx-include / hx-swap);
+  // we only fire the nd-config-refresh trigger so the panel reflects the
+  // latest project / profile / workspace / toolchain selection.
+  window.ndScheduleEffectiveConfigPreview = function (delay = 350, scope) {
+    const root = (scope && scope.closest && scope.closest('[data-ticket-form]'))
+      || (scope || document);
+    clearTimeout(root.__ndEffConfigTimer);
+    root.__ndEffConfigTimer = setTimeout(() => {
+      const target = (root.querySelector && root.querySelector('[data-effective-preview]'))
+        || document.querySelector('[data-effective-preview]');
+      if (target && window.htmx) window.htmx.trigger(target, 'nd-config-refresh');
+    }, delay);
+  };
+
+  // Fields whose changes should NOT refresh the execution-context preview
+  // (they don't affect the merged run context). Everything else does.
+  function _cfgIrrelevant(target) {
+    if (!target) return true;
+    const name = target.name || '';
+    if (name === 'title' || name === 'prompt') return true;
+    // Dependency search box and its hidden depends_on_id rows don't change
+    // the execution context either.
+    if (target.matches && target.matches('[data-dep-search], [name="depends_on_id"]')) return true;
+    return false;
+  }
+
   window.ndSetWorktreePreview = function (pathText, sourceText = '', scope) {
     const root = scope || document;
     const preview = root.querySelector('[data-worktree-path-preview]');
@@ -781,6 +811,22 @@
     } else {
       window.ndSyncWorktreeFields(root);
       window.ndScheduleWorktreePreview(0, root);
+    }
+
+    // Execution-context preview: refresh when any config-bearing field
+    // changes. A single delegated listener (bound once) covers fields that
+    // exist now and ones added later (linked workspaces, extra paths).
+    const previewHost = root.querySelector('[data-effective-preview]');
+    if (previewHost && !root.__ndEffConfigBound) {
+      root.__ndEffConfigBound = true;
+      const onChange = (e) => {
+        if (_cfgIrrelevant(e.target)) return;
+        window.ndScheduleEffectiveConfigPreview(400, root);
+      };
+      root.addEventListener('change', onChange);
+      root.addEventListener('input', onChange);
+      // Initial render once the form has settled (project defaults applied).
+      window.ndScheduleEffectiveConfigPreview(120, root);
     }
   }
 
