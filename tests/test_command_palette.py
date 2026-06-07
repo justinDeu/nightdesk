@@ -237,12 +237,24 @@ async def test_primary_nav_collapses_to_ia_groups(cookie_client):
     summary_labels = re.findall(r"<summary[^>]*>\s*<span>([^<]+)</span>", nav_html, re.S)
     assert summary_labels == ["Work", "Insights", "Setup"]
     assert ">Board<" in nav_html
+    assert ">Projects<" in nav_html
     assert ">Inbox<" in nav_html
     assert ">Scheduled<" in nav_html
     assert ">Analytics<" in nav_html
     assert ">Profiles<" in nav_html
-    assert ">External tools<" in nav_html
+    assert ">Toolsets<" in nav_html
+    assert ">External tools<" not in nav_html
+    assert nav_html.index(">Projects<") < nav_html.index(">List<")
     assert '<button type="button"' in nav_html
+
+
+async def test_primary_nav_uses_hover_open_menus(cookie_client):
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    assert "pointerenter" in r.text
+    assert "openMenu(menu)" in r.text
+    assert "ev.preventDefault()" in r.text
+    assert "1700" not in r.text
 
 
 async def test_primary_nav_does_not_expose_legacy_labels_as_top_level(cookie_client):

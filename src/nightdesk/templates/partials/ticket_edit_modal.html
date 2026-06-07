@@ -55,14 +55,14 @@
         {% if _promote %}
         hx-target="#inbox-list"
         hx-swap="outerHTML"
-        hx-on::after-request="window.ndPromoteAfterRequest && window.ndPromoteAfterRequest(event, '{{ _mid }}')"
+        hx-on::after-request="if (event.target !== event.currentTarget) return; window.ndPromoteAfterRequest && window.ndPromoteAfterRequest(event, '{{ _mid }}')"
         {% elif _is_edit %}
         hx-target="#sidebar"
         hx-swap="outerHTML"
-        hx-on::after-request="if (event.detail.successful) { var d=document.getElementById('{{ _mid }}'); if(d) d.close(); var p=document.getElementById('board-columns-poll'); if(p&&typeof htmx!=='undefined') htmx.trigger(p,'poll'); }"
+        hx-on::after-request="if (event.target !== event.currentTarget) return; if (event.detail.successful) { var d=document.getElementById('{{ _mid }}'); if(d) d.close(); var p=document.getElementById('board-columns-poll'); if(p&&typeof htmx!=='undefined') htmx.trigger(p,'poll'); }"
         {% else %}
         hx-swap="none"
-        hx-on::after-request="if (event.detail.successful) { document.getElementById('{{ _mid }}').close(); window.location.reload(); }"
+        hx-on::after-request="if (event.target !== event.currentTarget) return; if (event.detail.successful) { document.getElementById('{{ _mid }}').close(); window.location.reload(); }"
         {% endif %}
         data-ticket-form
         data-ticket-mode="{{ 'promote' if _promote else ('edit' if _is_edit else 'create') }}"
@@ -260,7 +260,7 @@
               {% endfor %}
             </ul>
           {% else %}
-            <p class="rounded border border-border bg-bg px-2 py-1.5 text-[11px] italic text-fg-muted">No toolchain presets defined. Add presets under Settings → External tools.</p>
+            <p class="rounded border border-border bg-bg px-2 py-1.5 text-[11px] italic text-fg-muted">No toolchain presets defined. Add presets under Setup → Toolsets.</p>
           {% endif %}
           {# Any enabled/disabled names that are no longer known presets (e.g. a
              deleted custom preset). Surfaced read-only so they aren't silently
@@ -586,6 +586,7 @@
              hx-post="/effective-config/preview"
              hx-trigger="load, nd-config-refresh"
              hx-include="closest form"
+             hx-target="this"
              hx-swap="innerHTML">
           <div class="text-xs italic text-fg-muted" data-effective-preview-placeholder>Resolving execution context…</div>
         </div>

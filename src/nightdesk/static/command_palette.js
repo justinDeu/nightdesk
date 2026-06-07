@@ -489,15 +489,18 @@
   // inline (the board), pop it directly. Otherwise lazy-load the partial into
   // #create-modal-host via HTMX (which runs the partial's own init script),
   // then open it. Falls back to navigating to the board if HTMX is missing.
-  function openCreateTicket() {
+  function openCreateTicket(opts) {
+    opts = opts || {};
     if (openModalEl(document.getElementById("ticket-create-modal"))) return;
     var host = document.getElementById("create-modal-host");
     if (!host || typeof window.htmx === "undefined") {
-      location.href = "/?new=1";
+      location.href = opts.project ? "/?project=" + encodeURIComponent(opts.project) + "&new=1" : "/?new=1";
       return;
     }
+    var url = "/board/new-ticket-modal";
+    if (opts.project) url += "?project=" + encodeURIComponent(opts.project);
     window.htmx
-      .ajax("GET", "/board/new-ticket-modal", { target: "#create-modal-host", swap: "innerHTML" })
+      .ajax("GET", url, { target: "#create-modal-host", swap: "innerHTML" })
       .then(function () {
         openModalEl(document.getElementById("ticket-create-modal"));
       });
@@ -837,6 +840,10 @@
       run: function () { location.href = "/analytics"; } });
     cmds.push({ label: "Go to Setup", shortcut: "g s", hint: "Settings", section: "Navigation",
       run: function () { location.href = "/settings"; } });
+    cmds.push({ label: "Go to Projects", shortcut: "", hint: "Setup", section: "Navigation",
+      run: function () { location.href = "/projects"; } });
+    cmds.push({ label: "Go to Toolsets", shortcut: "", hint: "Setup", section: "Navigation",
+      run: function () { location.href = "/toolsets"; } });
     cmds.push({ label: "Show keyboard shortcuts", shortcut: "?", hint: "", section: "Navigation",
       run: openCheatSheet });
     cmds.push({ label: "Go to Work: board", shortcut: "g b", hint: "display mode", section: "Work views",

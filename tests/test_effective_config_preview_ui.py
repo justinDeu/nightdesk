@@ -27,6 +27,15 @@ def _fields(body):
     return {f["key"]: f for g in body["groups"] for f in g["fields"]}
 
 
+def _field_html(body, key):
+    marker = f'data-config-field="{key}"'
+    start = body.index(marker)
+    next_field = body.find('data-config-field="', start + len(marker))
+    if next_field == -1:
+        return body[start:]
+    return body[start:next_field]
+
+
 # --- live form-post preview: structured fields ------------------------------
 
 
@@ -175,6 +184,28 @@ async def test_provenance_chips_span_layers(client, session):
     assert 'data-provenance="project"' in body
 
 
+async def test_empty_derived_rows_are_quiet(client, session):
+    """Empty/default rows should say what the effective value is without
+    presenting derived emptiness as meaningful configuration."""
+    p = _profile(session, secret_keys=[])
+    proj = create_project(session, name="Proj", source_path="/tmp/proj")
+    t = create_ticket(
+        session, title="T", prompt="x", profile_id=p.id, project_id=proj.id,
+        source_path="/tmp/proj",
+    )
+    r = await client.get(f"/tickets/{t.id}/effective-config")
+    assert r.status_code == 200
+    body = r.text
+    secret_keys = _field_html(body, "secret_keys")
+    git_worktree = _field_html(body, "git_worktree")
+    assert "data-config-empty" in secret_keys
+    assert "Not set" in secret_keys
+    assert 'data-provenance="derived"' not in secret_keys
+    assert "data-config-empty" in git_worktree
+    assert "Not used" in git_worktree
+    assert 'data-provenance="derived"' not in git_worktree
+
+
 # --- preview is mounted on every editing surface ----------------------------
 
 
@@ -217,7 +248,9 @@ async def test_sidebar_includes_readonly_preview(client, session):
     assert r.status_code == 200
     body = r.text
     assert "data-sidebar-effective-config" in body
-    assert f'hx-get="/tickets/{t.id}/effective-config"' in body
+    assert "data-effective-config" in body
+    assert f'hx-get="/tickets/{t.id}/effective-config"' not in body
+    assert 'hx-target="this"' in body
 
 
 async def test_sidebar_create_mode_has_no_preview(client, session):

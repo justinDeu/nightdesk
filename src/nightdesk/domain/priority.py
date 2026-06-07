@@ -85,9 +85,14 @@ def resolve_priority(value: str) -> Optional[int]:
         return None
     if PRIORITY_MIN <= num <= PRIORITY_MAX:
         return num
-    # Allow any integer for numeric comparisons (e.g. priority>=3 could match
-    # out-of-range values stored by older clients).
-    return num
+    return None
+
+
+def validate_priority(value: int) -> int:
+    """Return *value* when it is inside the supported priority scale."""
+    if not isinstance(value, int) or not (PRIORITY_MIN <= value <= PRIORITY_MAX):
+        raise ValueError(f"priority must be between {PRIORITY_MIN} and {PRIORITY_MAX}")
+    return value
 
 
 def is_priority_name(value: str) -> bool:

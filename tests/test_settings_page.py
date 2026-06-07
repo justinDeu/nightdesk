@@ -362,11 +362,12 @@ async def test_worktrees_pane_has_no_toolchain_section(cookie_client, session):
     r = await cookie_client.get("/settings/worktrees")
     assert r.status_code == 200
     body = r.text
-    # The pane itself must not render the presets form; the side-nav link to
-    # the new External tools page is allowed.
+    # Toolsets are a first-class Setup page, not a Worktrees subsection.
     assert 'data-preset-card' not in body
     assert 'name="preset_name"' not in body
     assert 'name="preset_paths_json"' not in body
+    assert 'href="/settings/external-tools"' not in body
+    assert 'Host bin directory presets for the sandbox PATH' not in body
 
 
 async def test_worktrees_post_does_not_clear_toolchain_presets(cookie_client, session):
@@ -386,7 +387,7 @@ async def test_worktrees_post_does_not_clear_toolchain_presets(cookie_client, se
     assert cfg.toolchain_presets == {"go-user-tools": ["~/go/bin"]}
 
 
-async def test_external_tools_pane_renders_preset_cards(cookie_client, session):
+async def test_toolsets_page_renders_preset_cards(cookie_client, session):
     session.add(ConfigRow(
         id=1,
         worktree_root="/tmp/w",
@@ -395,7 +396,7 @@ async def test_external_tools_pane_renders_preset_cards(cookie_client, session):
     ))
     session.commit()
 
-    r = await cookie_client.get("/settings/external-tools")
+    r = await cookie_client.get("/toolsets")
     assert r.status_code == 200
     body = r.text
     assert 'data-preset-card' in body
@@ -406,11 +407,20 @@ async def test_external_tools_pane_renders_preset_cards(cookie_client, session):
     assert '/opt/go/bin' in body
 
 
-async def test_external_tools_pane_lists_builtin_presets(cookie_client, session):
+async def test_settings_external_tools_redirects_to_toolsets(cookie_client, session):
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
     r = await cookie_client.get("/settings/external-tools")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/toolsets"
+
+
+async def test_toolsets_page_lists_builtin_presets(cookie_client, session):
+    session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
+    session.commit()
+
+    r = await cookie_client.get("/toolsets")
     assert r.status_code == 200
     body = r.text
     assert "Built-in presets" in body
@@ -420,14 +430,14 @@ async def test_external_tools_pane_lists_builtin_presets(cookie_client, session)
     assert "~/.cargo/bin" in body
 
 
-async def test_external_tools_post_persists_presets_from_card_form(cookie_client, session):
+async def test_toolsets_post_persists_presets_from_card_form(cookie_client, session):
     import json
 
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
     r = await cookie_client.post(
-        "/settings/external-tools",
+        "/toolsets",
         data={
             "preset_name": ["go-user-tools", "node-user-tools"],
             "preset_paths_json": [
@@ -445,19 +455,19 @@ async def test_external_tools_post_persists_presets_from_card_form(cookie_client
     }
 
     # Submitting with no preset cards clears the dict.
-    r = await cookie_client.post("/settings/external-tools", data={})
+    r = await cookie_client.post("/toolsets", data={})
     assert r.status_code == 200
     session.expire_all()
     cfg = session.get(ConfigRow, 1)
     assert cfg.toolchain_presets == {}
 
 
-async def test_external_tools_post_rejects_invalid_preset_paths_json(cookie_client, session):
+async def test_toolsets_post_rejects_invalid_preset_paths_json(cookie_client, session):
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
     r = await cookie_client.post(
-        "/settings/external-tools",
+        "/toolsets",
         data={
             "preset_name": ["broken"],
             "preset_paths_json": ["{not json"],
@@ -468,7 +478,7 @@ async def test_external_tools_post_rejects_invalid_preset_paths_json(cookie_clie
 
     # Non-list payload is also rejected.
     r = await cookie_client.post(
-        "/settings/external-tools",
+        "/toolsets",
         data={
             "preset_name": ["shape"],
             "preset_paths_json": ['"a string"'],
@@ -477,7 +487,7 @@ async def test_external_tools_post_rejects_invalid_preset_paths_json(cookie_clie
     assert r.status_code == 422
 
 
-async def test_external_tools_pane_path_inputs_use_path_search(cookie_client, session):
+async def test_toolsets_page_path_inputs_use_path_search(cookie_client, session):
     session.add(ConfigRow(
         id=1,
         worktree_root="/tmp/w",
@@ -486,7 +496,7 @@ async def test_external_tools_pane_path_inputs_use_path_search(cookie_client, se
     ))
     session.commit()
 
-    r = await cookie_client.get("/settings/external-tools")
+    r = await cookie_client.get("/toolsets")
     assert r.status_code == 200
     body = r.text
     # Preset path inputs reuse the existing path-search component (Issue C).
@@ -495,14 +505,14 @@ async def test_external_tools_pane_path_inputs_use_path_search(cookie_client, se
     assert "data-preset-path" in body
 
 
-async def test_external_tools_post_rejects_builtin_preset_name(cookie_client, session):
+async def test_toolsets_post_rejects_builtin_preset_name(cookie_client, session):
     import json
 
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
     r = await cookie_client.post(
-        "/settings/external-tools",
+        "/toolsets",
         data={
             "preset_name": ["user-python-tools"],
             "preset_paths_json": [json.dumps(["~/x/bin"])],
@@ -512,14 +522,14 @@ async def test_external_tools_post_rejects_builtin_preset_name(cookie_client, se
     assert "reserved" in r.text
 
 
-async def test_external_tools_post_rejects_duplicate_preset_name(cookie_client, session):
+async def test_toolsets_post_rejects_duplicate_preset_name(cookie_client, session):
     import json
 
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
     r = await cookie_client.post(
-        "/settings/external-tools",
+        "/toolsets",
         data={
             "preset_name": ["dupe", "dupe"],
             "preset_paths_json": [json.dumps(["~/a/bin"]), json.dumps(["~/b/bin"])],
@@ -529,7 +539,7 @@ async def test_external_tools_post_rejects_duplicate_preset_name(cookie_client, 
     assert "duplicate" in r.text
 
 
-async def test_external_tools_post_rejects_protected_path(cookie_client, session):
+async def test_toolsets_post_rejects_protected_path(cookie_client, session):
     import json
     import os
 
@@ -538,7 +548,7 @@ async def test_external_tools_post_rejects_protected_path(cookie_client, session
 
     protected = os.path.expanduser("~/.claude")
     r = await cookie_client.post(
-        "/settings/external-tools",
+        "/toolsets",
         data={
             "preset_name": ["snoop"],
             "preset_paths_json": [json.dumps([protected])],
@@ -547,7 +557,7 @@ async def test_external_tools_post_rejects_protected_path(cookie_client, session
     assert r.status_code == 422
 
 
-async def test_external_tools_post_skips_unnamed_preset_cards(cookie_client, session):
+async def test_toolsets_post_skips_unnamed_preset_cards(cookie_client, session):
     import json
 
     session.add(ConfigRow(
@@ -559,7 +569,7 @@ async def test_external_tools_post_skips_unnamed_preset_cards(cookie_client, ses
     session.commit()
 
     r = await cookie_client.post(
-        "/settings/external-tools",
+        "/toolsets",
         data={
             "preset_name": ["", "kept"],
             "preset_paths_json": [
@@ -572,4 +582,3 @@ async def test_external_tools_post_skips_unnamed_preset_cards(cookie_client, ses
     session.expire_all()
     cfg = session.get(ConfigRow, 1)
     assert cfg.toolchain_presets == {"kept": ["~/kept/bin"]}
-

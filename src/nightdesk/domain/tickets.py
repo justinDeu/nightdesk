@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Ticket, TicketDependency, TicketWorkspace
 from nightdesk.domain.projects import apply_project_defaults, get_project
+from nightdesk.domain.priority import validate_priority
 from nightdesk.domain.toolchains import (
     assert_known_toolchains,
     assert_paths_not_excluded,
@@ -224,6 +225,8 @@ def create_ticket(session: Session, **fields) -> Ticket:
     status = fields.get("status")
     if status not in _ALL_STATUSES:
         raise InvalidTransition(f"unknown status {status!r}")
+    if "priority" in fields:
+        fields["priority"] = validate_priority(fields["priority"])
 
     if not workspace_specs and source_path:
         workspace_specs = [{
@@ -308,6 +311,8 @@ def update_ticket(session: Session, ticket_id: str, **fields) -> Ticket:
         assert_known_toolchains(toolchains.get("enable", []), config=current_config(session))
     if fields.get("project_id") is not None:
         get_project(session, fields["project_id"])
+    if "priority" in fields:
+        fields["priority"] = validate_priority(fields["priority"])
     for k, v in fields.items():
         setattr(t, k, v)
     if workspace_specs is None and any(v is not None for v in (source_path, workspace_mode, worktree_name, worktree_path)):
@@ -829,11 +834,8 @@ def _is_dependency_satisfied(session: Session, upstream: Ticket) -> tuple[bool, 
 
 def update_ticket_priority(session: Session, ticket_id: str,
                            priority: int) -> Ticket:
-    """Set the priority on a ticket.  ``priority`` must be a non-negative
-    integer; the UI maps named levels (critical / high / medium / low) to
-    concrete values before calling this."""
-    if not isinstance(priority, int) or priority < 0:
-        raise ValueError("priority must be a non-negative integer")
+    """Set the priority on a ticket using the fixed 0..4 metadata scale."""
+    priority = validate_priority(priority)
     t = get_ticket(session, ticket_id)
     t.priority = priority
     t.updated_at = datetime.now(timezone.utc)
@@ -879,8 +881,7 @@ def bulk_update_priority(
 ) -> tuple[list[Ticket], list[dict]]:
     """Bulk priority update.  Returns ``(updated, skipped)`` where each
     skipped entry is ``{"ticket_id": ..., "reason": ...}``."""
-    if not isinstance(priority, int) or priority < 0:
-        raise ValueError("priority must be a non-negative integer")
+    priority = validate_priority(priority)
     updated: list[Ticket] = []
     skipped: list[dict] = []
     for tid in ticket_ids:

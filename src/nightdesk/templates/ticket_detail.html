@@ -270,6 +270,7 @@
       <p class="text-[11px] text-fg-muted mb-3">Merged run context with provenance. Not a prediction of run success.</p>
       <div hx-get="/tickets/{{ ticket.id }}/effective-config"
            hx-trigger="load"
+           hx-target="this"
            hx-swap="innerHTML">
         <div class="text-xs text-fg-muted italic">Resolving effective config…</div>
       </div>

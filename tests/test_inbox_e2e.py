@@ -74,7 +74,7 @@ def _promote_modal_form(**overrides):
         "prompt": "Now it has a real prompt and a workspace.",
         "source_path": "/tmp/e2e-project",
         "primary_kind": "directory",
-        "priority": "7",
+        "priority": "4",
         "target": "queued",
         "project": "",
     }
@@ -110,9 +110,9 @@ async def test_capture_triage_promote_lifecycle(cookie_client, client, session, 
     assert pick_eligible(session, now=datetime.now(timezone.utc), total_running=0) == []
 
     # 2. TRIAGE — edit priority via the shared board metadata route (JSON API).
-    r = await client.patch(f"/api/v1/tickets/{tid}/priority", json={"priority": 5})
+    r = await client.patch(f"/api/v1/tickets/{tid}/priority", json={"priority": 4})
     assert r.status_code == 200
-    assert r.json()["priority"] == 5
+    assert r.json()["priority"] == 4
     session.expire_all()
     assert get_ticket(session, tid).status == "inbox"  # triage never leaves the inbox
 

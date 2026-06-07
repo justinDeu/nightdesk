@@ -24,9 +24,9 @@
 <aside
   id="sidebar"
   {% if is_edit %}data-selected-ticket-id="{{ ticket.id }}"{% endif %}
-  class="flex flex-col h-full min-h-0 rounded-md border border-border bg-bg-elev p-4 gap-4 overflow-y-auto overflow-x-hidden"
+  class="flex flex-col h-full min-h-0 rounded-md border border-border bg-bg-elev p-4 gap-4 overflow-hidden"
 >
-  <header class="flex items-center justify-between gap-2">
+  <header class="flex shrink-0 items-center justify-between gap-2">
     <h2 class="text-sm font-semibold text-fg">
       {% if is_edit %}Ticket{% else %}New ticket{% endif %}
     </h2>
@@ -42,8 +42,50 @@
   </header>
 
   {% if is_edit %}
+    <div class="shrink-0 rounded-lg border border-border bg-bg-elev-2/60 p-2">
+      <div class="mb-2 flex min-w-0 items-center gap-2 border-b border-border pb-2">
+        <span class="min-w-0 flex-1 truncate text-xs font-medium text-fg" title="{{ ticket.title }}">{{ ticket.title }}</span>
+        <span class="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] text-fg-muted">{{ ticket.status }}</span>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onclick="document.getElementById('ticket-edit-modal').showModal()"
+          class="px-3 py-1.5 rounded bg-accent text-bg font-medium hover:brightness-110 text-sm"
+        >Edit</button>
+        {% if ticket.status in ('draft', 'queued', 'review', 'archived') %}
+          <button
+            type="button"
+            data-run-now-btn
+            hx-post="/tickets/{{ ticket.id }}/run-now"
+            hx-swap="none"
+            hx-on::after-request="window.ndRunNowFeedback && window.ndRunNowFeedback(this, event)"
+            class="px-3 py-1.5 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-sm font-medium"
+          >Run now</button>
+        {% endif %}
+        {% if ticket.status == 'review' %}
+          <button
+            type="button"
+            data-archive-btn
+            hx-post="/board/tickets/{{ ticket.id }}/archive"
+            hx-target="#sidebar"
+            hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded border border-border text-fg-muted hover:border-accent hover:text-accent text-sm font-medium"
+          >Archive</button>
+        {% endif %}
+        <button
+          type="button"
+          hx-delete="/board/tickets/{{ ticket.id }}"
+          hx-confirm="Delete this ticket?"
+          hx-target="body"
+          hx-swap="none"
+          class="ml-auto px-3 py-1.5 rounded border border-danger text-danger hover:bg-danger hover:text-bg text-sm font-medium"
+        >Delete</button>
+      </div>
+    </div>
+
     {# --- View pane: nicely-formatted readonly display. ------------------ #}
-    <section class="flex flex-col gap-4 text-sm">
+    <section class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden pr-1 text-sm">
       <div class="flex flex-col gap-2">
         <h3 class="text-base font-semibold text-fg break-words">{{ ticket.title }}</h3>
         <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -154,11 +196,8 @@
        # so the merge only runs when a ticket is actually selected. #}
       <div class="flex flex-col gap-1">
         <span class="text-fg-muted text-xs uppercase tracking-wide">Execution context</span>
-        <div hx-get="/tickets/{{ ticket.id }}/effective-config"
-             hx-trigger="load"
-             hx-swap="innerHTML"
-             data-sidebar-effective-config>
-          <div class="text-xs text-fg-muted italic">Resolving execution context…</div>
+        <div data-sidebar-effective-config>
+          {% include "partials/effective_config.html" %}
         </div>
       </div>
 
@@ -271,41 +310,6 @@
         {% endif %}
       </div>
 
-      <div class="flex flex-wrap items-center gap-2 pt-1">
-        <button
-          type="button"
-          onclick="document.getElementById('ticket-edit-modal').showModal()"
-          class="px-3 py-1.5 rounded bg-accent text-bg font-medium hover:brightness-110 text-sm"
-        >Edit</button>
-        {% if ticket.status in ('draft', 'queued', 'review', 'archived') %}
-          <button
-            type="button"
-            data-run-now-btn
-            hx-post="/tickets/{{ ticket.id }}/run-now"
-            hx-swap="none"
-            hx-on::after-request="window.ndRunNowFeedback && window.ndRunNowFeedback(this, event)"
-            class="px-3 py-1.5 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-sm font-medium"
-          >Run now</button>
-        {% endif %}
-        {% if ticket.status == 'review' %}
-          <button
-            type="button"
-            data-archive-btn
-            hx-post="/board/tickets/{{ ticket.id }}/archive"
-            hx-target="#sidebar"
-            hx-swap="outerHTML"
-            class="px-3 py-1.5 rounded border border-border text-fg-muted hover:border-accent hover:text-accent text-sm font-medium"
-          >Archive</button>
-        {% endif %}
-        <button
-          type="button"
-          hx-delete="/board/tickets/{{ ticket.id }}"
-          hx-confirm="Delete this ticket?"
-          hx-target="body"
-          hx-swap="none"
-          class="px-3 py-1.5 rounded border border-danger text-danger hover:bg-danger hover:text-bg text-sm font-medium ml-auto"
-        >Delete</button>
-      </div>
     </section>
   {% else %}
     {# --- Create mode: actionable empty state. The CTA is a real <button>

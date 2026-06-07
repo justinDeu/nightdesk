@@ -296,6 +296,13 @@ class TicketCreate(BaseModel):
     def _source_path_abs(cls, v):
         return _normalize_source_path_optional(v)
 
+    @field_validator("priority")
+    @classmethod
+    def _valid_priority(cls, v: int) -> int:
+        if v < 0 or v > 4:
+            raise ValueError("priority must be between 0 and 4")
+        return v
+
 
 
 class TicketUpdate(BaseModel):
@@ -319,6 +326,13 @@ class TicketUpdate(BaseModel):
     @classmethod
     def _source_path_abs(cls, v):
         return _normalize_source_path_optional(v)
+
+    @field_validator("priority")
+    @classmethod
+    def _valid_priority(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and (v < 0 or v > 4):
+            raise ValueError("priority must be between 0 and 4")
+        return v
 
 
 
@@ -645,16 +659,15 @@ class DependencyCreate(BaseModel):
 
 
 class TicketPriorityUpdate(BaseModel):
-    """Sparse priority update.  Accepts any non-negative integer; the UI maps
-    named levels (critical / high / medium / low) to concrete values."""
+    """Sparse priority update using the fixed 0..4 metadata scale."""
 
     priority: int
 
     @field_validator("priority")
     @classmethod
-    def _non_negative(cls, v: int) -> int:
-        if v < 0:
-            raise ValueError("priority must be >= 0")
+    def _valid_priority(cls, v: int) -> int:
+        if v < 0 or v > 4:
+            raise ValueError("priority must be between 0 and 4")
         return v
 
 
@@ -692,9 +705,9 @@ class BulkPriorityUpdate(BaseModel):
 
     @field_validator("priority")
     @classmethod
-    def _non_negative(cls, v: int) -> int:
-        if v < 0:
-            raise ValueError("priority must be >= 0")
+    def _valid_priority(cls, v: int) -> int:
+        if v < 0 or v > 4:
+            raise ValueError("priority must be between 0 and 4")
         return v
 
 
@@ -763,6 +776,13 @@ class CronJobCreate(BaseModel):
     def _source_path_abs(cls, v):
         return _normalize_source_path(v)
 
+    @field_validator("priority")
+    @classmethod
+    def _valid_priority(cls, v: int) -> int:
+        if v < 0 or v > 4:
+            raise ValueError("priority must be between 0 and 4")
+        return v
+
 
 class CronJobUpdate(BaseModel):
     title: Optional[str] = None
@@ -783,6 +803,13 @@ class CronJobUpdate(BaseModel):
     @classmethod
     def _source_path_abs(cls, v):
         return _normalize_source_path_optional(v)
+
+    @field_validator("priority")
+    @classmethod
+    def _valid_priority(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and (v < 0 or v > 4):
+            raise ValueError("priority must be between 0 and 4")
+        return v
 
 
 class CronJobOut(BaseModel):

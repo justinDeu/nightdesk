@@ -16,7 +16,7 @@ from nightdesk.domain.priority import (
     resolve_priority,
 )
 from nightdesk.domain.profiles import create_profile
-from nightdesk.domain.tickets import create_ticket
+from nightdesk.domain.tickets import create_ticket, update_ticket_priority
 
 
 # --------------------------------------------------------------------------- #
@@ -111,15 +111,32 @@ class TestResolvePriority:
     def test_valid(self, value, expected):
         assert resolve_priority(value) == expected
 
-    def test_out_of_range_int_still_resolves(self):
-        # Out-of-range ints are returned for numeric comparisons.
-        assert resolve_priority("99") == 99
+    def test_out_of_range_int_returns_none(self):
+        assert resolve_priority("99") is None
+
+    def test_negative_int_returns_none(self):
+        assert resolve_priority("-1") is None
 
     def test_garbage_returns_none(self):
         assert resolve_priority("banana") is None
 
     def test_empty_returns_none(self):
         assert resolve_priority("") is None
+
+
+class TestPriorityValidation:
+    @pytest.mark.parametrize("value", [-1, 5, 99])
+    def test_create_ticket_rejects_out_of_range_priority(self, session, _profile, value):
+        with pytest.raises(ValueError, match="priority must be between 0 and 4"):
+            create_ticket(session, title="bad", prompt="", profile_id=_profile.id,
+                          status="draft", source_path="/tmp", priority=value)
+
+    @pytest.mark.parametrize("value", [-1, 5, 99])
+    def test_update_ticket_priority_rejects_out_of_range_priority(self, session, _profile, value):
+        t = create_ticket(session, title="ok", prompt="", profile_id=_profile.id,
+                          status="draft", source_path="/tmp", priority=0)
+        with pytest.raises(ValueError, match="priority must be between 0 and 4"):
+            update_ticket_priority(session, t.id, value)
 
 
 class TestIsPriorityName:
@@ -295,6 +312,28 @@ class TestPriorityUpdateRoute:
         r = await prio_client.post(
             f"/board/tickets/{t.id}/priority",
             json={"priority": "banana"},
+        )
+        assert r.status_code == 422
+
+    async def test_out_of_range_priority_returns_422(self, prio_client, session, _profile):
+        t = create_ticket(session, title="bad-prio-range", prompt="",
+                          profile_id=_profile.id, status="draft",
+                          source_path="/tmp", priority=0)
+        r = await prio_client.post(
+            f"/board/tickets/{t.id}/priority",
+            json={"priority": "99"},
+        )
+        assert r.status_code == 422
+
+    async def test_create_ticket_out_of_range_priority_returns_422(self, prio_client, _profile):
+        r = await prio_client.post(
+            "/board/tickets",
+            data={
+                "title": "bad-prio-create",
+                "profile_id": _profile.id,
+                "source_path": "/tmp",
+                "priority": "99",
+            },
         )
         assert r.status_code == 422
 

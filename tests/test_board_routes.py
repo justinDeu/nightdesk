@@ -1143,11 +1143,13 @@ async def test_sidebar_shows_effective_context_and_toolchain_together(
     assert r.status_code == 200
     body = r.text
 
-    # Effective-config execution-context block: lazily loaded from the shared
-    # resolver endpoint via the same partial used on the ticket detail page.
+    # Effective-config execution-context block: rendered inline so the edit
+    # modal's live preview cannot inherit the card's #sidebar target and replace
+    # the whole sidebar after click.
     assert "Execution context" in body
     assert "data-sidebar-effective-config" in body
-    assert f"/tickets/{t.id}/effective-config" in body
+    assert "data-effective-config" in body
+    assert f"/tickets/{t.id}/effective-config" not in body
 
     # Toolchain provenance summary coexists, showing the project-inherited preset.
     assert "Toolchain" in body

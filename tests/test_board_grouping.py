@@ -178,24 +178,32 @@ async def test_group_by_project_columns(cookie_client, session, profile):
 # --- priority grouping -------------------------------------------------------
 
 
-async def test_group_by_priority_buckets_and_empty_state(cookie_client, session, profile):
-    high = create_ticket(session, title="urgent", prompt="x", profile_id=profile.id,
-                         status="draft", source_path="/tmp", priority=2)
-    low = create_ticket(session, title="whenever", prompt="x", profile_id=profile.id,
-                        status="draft", source_path="/tmp", priority=0)
+async def test_group_by_priority_buckets_labels_and_order(cookie_client, session, profile):
+    urgent = create_ticket(session, title="urgent", prompt="x", profile_id=profile.id,
+                           status="draft", source_path="/tmp", priority=4)
+    medium = create_ticket(session, title="medium", prompt="x", profile_id=profile.id,
+                           status="draft", source_path="/tmp", priority=2)
+    none = create_ticket(session, title="whenever", prompt="x", profile_id=profile.id,
+                         status="draft", source_path="/tmp", priority=0)
     session.commit()
 
     body = (await cookie_client.get("/?group=priority")).text
-    # The base 0..2 scale always renders, highest first, so the empty middle
-    # bucket is visible with an empty-state.
-    assert "High" in _section_html(body, "priority-2")
-    assert "Medium" in _section_html(body, "priority-1")
-    assert "Low" in _section_html(body, "priority-0")
-    assert f'data-ticket-id="{high.id}"' in _section_html(body, "priority-2")
-    assert f'data-ticket-id="{low.id}"' in _section_html(body, "priority-0")
-    # Priority 1 has no tickets -> empty-state.
-    assert "board-empty" in _section_html(body, "priority-1")
-    assert 'data-droppable="0"' in _section_html(body, "priority-2")
+    urgent_section = _section_html(body, "priority-4")
+    medium_section = _section_html(body, "priority-2")
+    none_section = _section_html(body, "priority-0")
+
+    assert "Urgent" in urgent_section
+    assert "Medium" in medium_section
+    assert "No priority" in none_section
+    assert f'data-ticket-id="{urgent.id}"' in urgent_section
+    assert f'data-ticket-id="{medium.id}"' in medium_section
+    assert f'data-ticket-id="{none.id}"' in none_section
+    assert body.find('id="board-col-priority-4"') < body.find('id="board-col-priority-2"')
+    assert body.find('id="board-col-priority-2"') < body.find('id="board-col-priority-0"')
+    assert 'id="board-col-priority-3"' not in body
+    assert 'id="board-col-priority-1"' not in body
+    assert "text-danger border-danger/40" in urgent_section
+    assert 'data-droppable="0"' in urgent_section
 
 
 # --- polled OOB fragment honours the grouping --------------------------------

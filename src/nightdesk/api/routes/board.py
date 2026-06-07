@@ -15,13 +15,20 @@ from sqlalchemy.orm import Session
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow
 from nightdesk.domain.projects import ProjectNotFound, get_project_by_slug, list_projects
+from nightdesk.domain.effective_config import resolve_for_ticket
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.labels import list_labels
 from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.toolchains import current_config, toolchain_options
 from nightdesk.domain.priority import (
-    resolve_priority, PRIORITY_MIN, PRIORITY_MAX, PRIORITY_SCALE,
+    priority_css,
+    priority_label,
+    resolve_priority,
+    PRIORITY_MIN,
+    PRIORITY_MAX,
+    PRIORITY_SCALE,
+    validate_priority,
 )
 from nightdesk.domain.properties import (
     PROPERTY_REGISTRY,
@@ -69,16 +76,6 @@ _COLUMNS = [
 # same cards by the chosen property; they are read-only groupings that must not
 # imply status drag (see the Sortable wiring in board.html).
 _GROUPABLE = ("status", "label", "project", "priority")
-
-# Human-friendly labels for the small integer priority scale. Higher = more
-# important (Ticket.priority is ordered ``priority.desc()`` everywhere). Values
-# outside the named range fall back to ``Priority N``.
-_PRIORITY_LABELS = {2: "High", 1: "Medium", 0: "Low"}
-
-
-def _priority_label(n: int) -> str:
-    return _PRIORITY_LABELS.get(n, f"Priority {n}")
-
 
 def _normalize_group(raw: Optional[str]) -> str:
     """Coerce a ``group`` query value to a supported grouping (default status)."""
@@ -172,22 +169,35 @@ def _group_by_project(projects: list, tickets: list) -> list[dict]:
     return cols
 
 
+def _canonical_priority_value(value: object) -> int:
+    raw = int(value or 0)
+    return raw if PRIORITY_MIN <= raw <= PRIORITY_MAX else 0
+
+
 def _group_by_priority(tickets: list) -> list[dict]:
-    """One column per priority value, highest first. Always shows the 0..2 base
-    scale so the buckets (and their empty-states) are stable. Read-only."""
-    present = {int(getattr(t, "priority", 0) or 0) for t in tickets}
-    values = sorted(present | {0, 1, 2}, reverse=True)
+    """One column per occupied priority value, highest first.
+
+    Priority is metadata for triage and grouping. Queue position still controls
+    execution order; priority only breaks ties inside the same position. Any
+    stale out-of-range values are treated as No priority until migration cleans
+    them up.
+    """
+    present = {_canonical_priority_value(getattr(t, "priority", 0)) for t in tickets}
+    values = sorted((v for v in present if v != 0), reverse=True)
+    if 0 in present:
+        values.append(0)
     buckets: dict[int, list] = {v: [] for v in values}
     for t in tickets:
-        buckets[int(getattr(t, "priority", 0) or 0)].append(t)
+        buckets[_canonical_priority_value(getattr(t, "priority", 0))].append(t)
     return [
         {
             "key": f"priority-{v}",
             "status": None,
-            "label": _priority_label(v),
+            "label": priority_label(v),
             "tickets": buckets[v],
             "count": len(buckets[v]),
             "color": None,
+            "css": priority_css(v),
             "droppable": False,
         }
         for v in values
@@ -357,7 +367,10 @@ def ticket_fields_from_form(form) -> dict:
     if "project_id" in form:
         fields["project_id"] = (form.get("project_id") or "").strip() or None
     if "priority" in form:
-        fields["priority"] = int(form.get("priority") or 0)
+        try:
+            fields["priority"] = validate_priority(int(form.get("priority") or 0))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
     if "source_path" in form or "primary_source_path" in form:
         if form.get("workspace_form") == "1":
             _mode, _wt_name, _wt_path, workspaces = _workspace_payload_from_form(form)
@@ -998,6 +1011,7 @@ def build_router(
         runs: list = []
         deps_upstreams: list = []
         deps_downstreams: list = []
+        effective = None
         if ticket_id:
             try:
                 ticket = get_ticket(session, ticket_id)
@@ -1007,6 +1021,7 @@ def build_router(
             runs = list_runs(session, ticket_id=ticket_id)
             deps_upstreams = list_dependencies(session, ticket_id)
             deps_downstreams = list_dependents(session, ticket_id)
+            effective = resolve_for_ticket(session, ticket)
         return templates.TemplateResponse(
             request,
             "partials/sidebar.html",
@@ -1017,6 +1032,7 @@ def build_router(
                 "runs": runs,
                 "deps_upstreams": deps_upstreams,
                 "deps_downstreams": deps_downstreams,
+                "effective": effective,
                 "dep_all": list_tickets(session, limit=500),
                 "projects": list_projects(session),
                 "toolchain_options": _toolchain_options(session),
@@ -1133,8 +1149,10 @@ def build_router(
             priority = int(form.get("priority", 0))
         except (TypeError, ValueError):
             raise HTTPException(422, "priority must be an integer")
-        if priority < 0:
-            raise HTTPException(422, "priority must be >= 0")
+        try:
+            priority = validate_priority(priority)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
         # Capture prior priorities so the action bar can offer an Undo.
         prior = {tid: get_ticket(session, tid).priority
                  for tid in ticket_ids if _ticket_exists(session, tid)}
@@ -1394,6 +1412,7 @@ def build_router(
              "runs": list_runs(session, ticket_id=tid),
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
+             "effective": resolve_for_ticket(session, ticket),
              "dep_all": list_tickets(session, limit=500),
              "projects": list_projects(session),
              "toolchain_options": _toolchain_options(session),
@@ -1428,6 +1447,7 @@ def build_router(
              "runs": list_runs(session, ticket_id=tid),
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
+             "effective": resolve_for_ticket(session, ticket),
              "dep_all": list_tickets(session, limit=500),
              "projects": list_projects(session),
              "toolchain_options": _toolchain_options(session),
@@ -1660,11 +1680,6 @@ def build_router(
         (``{priority, label}``) is preserved.
         """
         raw = (await _read_property_value(request, "priority", "value")).strip()
-        # The focused priority route is a write surface, so it rejects negative
-        # numeric priorities (the named scale starts at 0). The picker route
-        # only ever submits named levels, so this guard is harmless there.
-        if raw.lstrip("-").isdigit() and int(raw) < 0:
-            raise HTTPException(422, f"priority must be >= 0: {raw!r}")
         try:
             ticket = get_property("priority").apply(session, tid, raw)
         except TicketNotFound:

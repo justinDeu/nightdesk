@@ -87,7 +87,8 @@ def pick_eligible(
        the one dragged highest in the Settings editor). With no matching window,
        capacity is 0 and no normal jobs dispatch.
     3. Fill remaining ``capacity = max(0, max_parallel - total_running)`` slots
-       from ``status='queued' AND run_now=false``, ordered by
+       from ``status='queued' AND run_now=false``. Queue position is the primary
+       run order; priority is only a tie-breaker for equal positions:
        ``(position ASC, priority DESC, created_at ASC)``.
 
     Tickets with unsatisfied dependencies are skipped in both passes.

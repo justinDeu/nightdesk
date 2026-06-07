@@ -27,8 +27,12 @@
 >
   <header class="px-3 py-2 border-b border-border flex items-center justify-between">
     <h2 class="text-sm font-semibold text-fg flex items-center gap-1.5 min-w-0">
+      {% if _col.css %}
+      <span class="rounded-full border px-2 py-0.5 text-[11px] bg-bg-elev {{ _col.css }} truncate">{{ _col.label }}</span>
+      {% else %}
       {% if _col.color %}<span class="shrink-0" style="color: {{ _col.color }}">●</span>{% endif %}
       <span class="truncate">{{ _col.label }}</span>
+      {% endif %}
       <span class="ml-1 shrink-0 text-fg-muted font-normal">&middot; {{ _col.count }}</span>
     </h2>
   </header>

@@ -114,17 +114,17 @@ class TestPriorityUpdate:
         t = _make_ticket(session, profile, priority=0)
         r = await client.patch(
             f"/api/v1/tickets/{t.id}/priority",
-            json={"priority": 5},
+            json={"priority": 4},
         )
         assert r.status_code == 200
         body = r.json()
-        assert body["priority"] == 5
+        assert body["priority"] == 4
         assert body["id"] == t.id
         # Only priority changed, not title or anything else.
         assert body["title"] == "test"
         # Persisted.
         session.expire_all()
-        assert get_ticket(session, t.id).priority == 5
+        assert get_ticket(session, t.id).priority == 4
 
     async def test_rejects_negative(self, client, session, profile):
         t = _make_ticket(session, profile)
@@ -141,14 +141,13 @@ class TestPriorityUpdate:
         )
         assert r.status_code == 404
 
-    async def test_high_priority_value(self, client, session, profile):
+    async def test_rejects_out_of_range(self, client, session, profile):
         t = _make_ticket(session, profile, priority=0)
         r = await client.patch(
             f"/api/v1/tickets/{t.id}/priority",
             json={"priority": 99},
         )
-        assert r.status_code == 200
-        assert r.json()["priority"] == 99
+        assert r.status_code == 422
 
 
 class TestStatusUpdate:
@@ -298,14 +297,22 @@ class TestBulkPriorityUpdate:
         b = _make_ticket(session, profile, title="b", priority=1)
         r = await client.patch(
             "/api/v1/tickets/bulk/priority",
-            json={"ticket_ids": [a.id, b.id], "priority": 7},
+            json={"ticket_ids": [a.id, b.id], "priority": 4},
         )
         assert r.status_code == 200
         body = r.json()
         assert len(body["updated"]) == 2
         assert len(body["skipped"]) == 0
         for t in body["updated"]:
-            assert t["priority"] == 7
+            assert t["priority"] == 4
+
+    async def test_rejects_out_of_range_priority(self, client, session, profile):
+        a = _make_ticket(session, profile, title="a")
+        r = await client.patch(
+            "/api/v1/tickets/bulk/priority",
+            json={"ticket_ids": [a.id], "priority": 7},
+        )
+        assert r.status_code == 422
 
     async def test_skips_missing_tickets(self, client, session, profile):
         a = _make_ticket(session, profile, title="a")
@@ -438,19 +445,27 @@ class TestHTMXPriorityUpdate:
         t = _make_ticket(session, profile, priority=0)
         r = await cookie_client.post(
             f"/board/tickets/{t.id}/priority",
-            data={"priority": "8"},
+            data={"priority": "4"},
         )
         assert r.status_code == 200
         body = r.json()
-        assert body["priority"] == 8
+        assert body["priority"] == 4
         session.expire_all()
-        assert get_ticket(session, t.id).priority == 8
+        assert get_ticket(session, t.id).priority == 4
 
     async def test_rejects_negative(self, cookie_client, session, profile):
         t = _make_ticket(session, profile)
         r = await cookie_client.post(
             f"/board/tickets/{t.id}/priority",
             data={"priority": "-1"},
+        )
+        assert r.status_code == 422
+
+    async def test_rejects_out_of_range(self, cookie_client, session, profile):
+        t = _make_ticket(session, profile)
+        r = await cookie_client.post(
+            f"/board/tickets/{t.id}/priority",
+            data={"priority": "5"},
         )
         assert r.status_code == 422
 
@@ -556,12 +571,20 @@ class TestHTMXBulkPriority:
         b = _make_ticket(session, profile, title="b", priority=1)
         r = await cookie_client.post(
             "/board/tickets/bulk/priority",
-            data={"ticket_ids": f"{a.id},{b.id}", "priority": "5"},
+            data={"ticket_ids": f"{a.id},{b.id}", "priority": "4"},
         )
         assert r.status_code == 200
         body = r.json()
         assert len(body["updated"]) == 2
         assert len(body["skipped"]) == 0
+
+    async def test_rejects_out_of_range_bulk_priority(self, cookie_client, session, profile):
+        a = _make_ticket(session, profile, title="a")
+        r = await cookie_client.post(
+            "/board/tickets/bulk/priority",
+            data={"ticket_ids": a.id, "priority": "5"},
+        )
+        assert r.status_code == 422
 
     async def test_skips_missing(self, cookie_client, session, profile):
         a = _make_ticket(session, profile, title="a")
@@ -680,12 +703,12 @@ class TestExistingPatchPreserved:
         # Full PATCH with multiple fields.
         r = await client.patch(f"/api/v1/tickets/{tid}", json={
             "title": "renamed",
-            "priority": 5,
+            "priority": 4,
         })
         assert r.status_code == 200
         body = r.json()
         assert body["title"] == "renamed"
-        assert body["priority"] == 5
+        assert body["priority"] == 4
 
     async def test_focused_route_coexists_with_patch(self, client, session,
                                                       profile):
@@ -704,14 +727,14 @@ class TestExistingPatchPreserved:
         # Focused route overrides it.
         r = await client.patch(
             f"/api/v1/tickets/{tid}/priority",
-            json={"priority": 7},
+            json={"priority": 4},
         )
-        assert r.json()["priority"] == 7
+        assert r.json()["priority"] == 4
 
         # Full PATCH can still change other fields.
         r = await client.patch(f"/api/v1/tickets/{tid}", json={"title": "new"})
         assert r.json()["title"] == "new"
-        assert r.json()["priority"] == 7  # untouched
+        assert r.json()["priority"] == 4  # untouched
 
 
 # ===========================================================================

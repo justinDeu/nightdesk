@@ -34,6 +34,7 @@ from nightdesk.domain.priority import (
     priority_css,
     priority_label,
     resolve_priority,
+    validate_priority,
 )
 from nightdesk.domain.profiles import ProfileNotFound, get_profile, list_profiles
 from nightdesk.domain.projects import get_project, list_projects
@@ -177,6 +178,7 @@ def _priority_apply(session: Session, ticket_id: str, value: str) -> Any:
     resolved = resolve_priority((value or "").strip())
     if resolved is None:
         raise ValueError(f"invalid priority value: {value!r}")
+    resolved = validate_priority(resolved)
     return update_ticket(session, ticket_id, priority=resolved)
 
 

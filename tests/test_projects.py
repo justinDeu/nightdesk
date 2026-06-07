@@ -345,11 +345,11 @@ async def test_ticket_api_rejects_unknown_project_id(app):
         assert update_response.status_code == 404
 
 
-async def test_settings_projects_ui_creates_project(app, session):
+async def test_projects_page_creates_project(app, session):
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         assert page.status_code == 200
-        assert 'href="/settings/projects"' in page.text
+        assert 'href="/projects"' in page.text
         assert 'name="name"' in page.text
         assert 'name="source_path"' in page.text
         assert 'name="slug"' not in page.text
@@ -365,7 +365,7 @@ async def test_settings_projects_ui_creates_project(app, session):
         assert "Any user-installed executables" in page.text
         assert "Cargo-installed tools" in page.text
         assert "Tools installed by cargo install" in page.text
-        assert "External tools" in page.text
+        assert "Toolsets" in page.text
         assert "Project Python venv" not in page.text
         assert "Project Node tools" not in page.text
         assert "project-create-modal-source-path-suggest" in page.text
@@ -377,7 +377,7 @@ async def test_settings_projects_ui_creates_project(app, session):
         assert "Create project" in page.text
         assert "showModal()" in page.text
 
-        created = await client.post("/settings/projects", data={
+        created = await client.post("/projects", data={
             "name": "Night Desk",
             "source_path": "/tmp/nightdesk",
             "default_workspace_mode": "git_worktree",
@@ -409,7 +409,71 @@ async def test_settings_projects_ui_creates_project(app, session):
     ]
 
 
-async def test_settings_projects_ui_edits_existing_project(app, session):
+async def test_settings_projects_redirects_to_projects(app):
+    async with await _cookie_client(app) as client:
+        response = await client.get("/settings/projects")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/projects"
+
+
+async def test_projects_page_renders_operational_workspace(app, session):
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.projects import create_project
+
+    profile = create_profile(
+        session,
+        name="project-workspace-profile",
+        fs_read=[],
+        fs_write=[],
+        allowed_tools=[],
+        denied_tools=[],
+        network_mode="off",
+        network_allowlist=[],
+        secret_keys=[],
+        default_model=None,
+    )
+    project = create_project(
+        session,
+        name="Nightdesk Workspace",
+        source_path="/tmp/nightdesk-workspace",
+        default_workspace_mode="git_worktree",
+        default_base_ref="main",
+        default_toolchains=["user-python-tools"],
+    )
+    for status in ("inbox", "draft", "queued", "running", "review"):
+        create_ticket(
+            session,
+            title=f"workspace-{status}",
+            prompt="x",
+            profile_id=profile.id,
+            project_id=project.id,
+            status=status,
+            source_path="/tmp/nightdesk-workspace",
+        )
+
+    async with await _cookie_client(app) as client:
+        page = await client.get("/projects")
+    assert page.status_code == 200
+    body = page.text
+    assert 'data-project-workspace="' + project.id + '"' in body
+    assert "Work scope" in body
+    assert "Project board" in body
+    assert "Project inbox" in body
+    assert "Recent active work" in body
+    assert "workspace-inbox" in body
+    assert "workspace-draft" in body
+    assert "workspace-queued" in body
+    assert "workspace-running" in body
+    assert "workspace-review" in body
+    assert f'/?project={project.slug}' in body
+    assert f'/?project={project.slug}&group=label' in body
+    assert f'/list?project={project.slug}' in body
+    assert f'/inbox?project={project.slug}' in body
+    assert f'/archive?project={project.slug}' in body
+    assert "Project settings" in body
+
+
+async def test_projects_page_edits_existing_project(app, session):
     from nightdesk.domain.projects import create_project, list_projects
 
     project = create_project(
@@ -420,12 +484,12 @@ async def test_settings_projects_ui_edits_existing_project(app, session):
     )
 
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         assert page.status_code == 200
         assert f"project-edit-modal-{project.id}" in page.text
         assert "Edit" in page.text
 
-        updated = await client.post(f"/settings/projects/{project.id}", data={
+        updated = await client.post(f"/projects/{project.id}", data={
             "name": "Night Desk Updated",
             "source_path": "/tmp/nightdesk-updated",
             "default_workspace_mode": "git_worktree",
@@ -550,12 +614,13 @@ async def test_archive_and_header_search_project_filters(app, session, sample_pr
 
 async def test_settings_projects_empty_state_uses_simple_help_text(app):
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         assert page.status_code == 200
         assert 'data-projects-empty-state' in page.text
         assert "No projects yet." in page.text
         assert "Use Create project to add one." in page.text
-        assert "Create your first project" not in page.text
+        assert "Create your first project" in page.text
+        assert "Projects hold source paths, workspace defaults, linked repositories, and toolsets" in page.text
 
 def test_toolchain_columns_are_registered():
     projects = Base.metadata.tables["projects"]
@@ -909,7 +974,7 @@ async def test_settings_projects_page_shows_preview_for_active_project(app, sess
     )
 
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         assert page.status_code == 200
 
         text = page.text
@@ -948,7 +1013,7 @@ async def test_settings_projects_page_no_preview_for_archived_project(app, sessi
     archive_project(session, project.id)
 
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         assert page.status_code == 200
 
         # Archived project should show in the list but NOT have a preview
@@ -966,7 +1031,7 @@ async def test_settings_projects_preview_shows_directory_mode_for_default(app, s
     )
 
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         assert page.status_code == 200
 
         pid = project.id
@@ -986,7 +1051,7 @@ async def test_settings_projects_preview_no_worktree_fields_in_directory_mode(ap
     )
 
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         text = page.text
 
         pid = project.id
@@ -998,7 +1063,7 @@ async def test_settings_projects_preview_no_worktree_fields_in_directory_mode(ap
 
 async def test_settings_projects_preview_appears_after_create(app, session):
     async with await _cookie_client(app) as client:
-        created = await client.post("/settings/projects", data={
+        created = await client.post("/projects", data={
             "name": "Created Preview",
             "source_path": "/tmp/created-preview",
             "default_workspace_mode": "git_worktree",
@@ -1027,7 +1092,7 @@ async def test_settings_projects_preview_updates_after_edit(app, session):
     )
 
     async with await _cookie_client(app) as client:
-        updated = await client.post(f"/settings/projects/{project.id}", data={
+        updated = await client.post(f"/projects/{project.id}", data={
             "name": "Edit Preview Updated",
             "source_path": "/tmp/edit-preview-v2",
             "default_workspace_mode": "git_worktree",

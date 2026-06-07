@@ -68,6 +68,7 @@
         {% set nav_groups = [
           ('work', 'Work', '/', [
             ('/', 'Board'),
+            ('/projects', 'Projects'),
             ('/list', 'List'),
             ('/inbox', 'Inbox'),
             ('/archive', 'Archive'),
@@ -79,14 +80,14 @@
           ('setup', 'Setup', '/settings', [
             ('/profiles', 'Profiles'),
             ('/settings/scheduling', 'Settings'),
-            ('/settings/external-tools', 'External tools'),
+            ('/toolsets', 'Toolsets'),
             ('/cron', 'Cron configuration'),
           ]),
         ] %}
         {% set active_groups = {
-          'work': ['', 'board', 'tickets', 'list', 'inbox', 'archive', 'cron'],
+          'work': ['', 'board', 'tickets', 'projects', 'list', 'inbox', 'archive', 'cron'],
           'insights': ['analytics'],
-          'setup': ['profiles', 'settings'],
+          'setup': ['profiles', 'settings', 'toolsets'],
         } %}
         {% for group_key, label, href, children in nav_groups %}
           {% set is_active = active_page in active_groups[group_key] %}
@@ -146,37 +147,52 @@
             if (closeTimer) window.clearTimeout(closeTimer);
             closeTimer = null;
           }
-          function scheduleClose(menu) {
+          function openMenu(menu) {
+            if (!menu) return;
+            clearCloseTimer();
+            closeMenus(menu);
+            menu.open = true;
+            menu.classList.remove('is-closing');
+          }
+          function closeMenu(menu) {
+            if (!menu || !menu.open) return;
+            menu.classList.add('is-closing');
+            window.setTimeout(function () {
+              menu.open = false;
+              menu.classList.remove('is-closing');
+            }, 140);
+          }
+          function scheduleClose(menu, delay) {
             clearCloseTimer();
             closeTimer = window.setTimeout(function () {
-              if (!menu || !menu.open) return;
-              var popover = menu.querySelector('.nd-nav-popover');
-              if (popover && popover.contains(document.activeElement)) return;
-              menu.classList.add('is-closing');
-              window.setTimeout(function () {
-                menu.open = false;
-                menu.classList.remove('is-closing');
-              }, 140);
-            }, 1700);
+              if (!menu || !menu.open || menu.matches(':hover')) return;
+              closeMenu(menu);
+            }, delay || 160);
           }
           function closeMenus(except) {
             clearCloseTimer();
             document.querySelectorAll('.nd-nav-menu[open]').forEach(function (menu) {
-              if (menu !== except) menu.open = false;
+              if (menu !== except) closeMenu(menu);
             });
           }
-          document.addEventListener('toggle', function (ev) {
-            var menu = ev.target;
-            if (!menu || !menu.classList || !menu.classList.contains('nd-nav-menu') || !menu.open) return;
-            closeMenus(menu);
-            scheduleClose(menu);
-          }, true);
           document.querySelectorAll('.nd-nav-menu').forEach(function (menu) {
+            var summary = menu.querySelector('summary');
+            if (summary) {
+              summary.addEventListener('click', function (ev) {
+                ev.preventDefault();
+                if (menu.open) closeMenu(menu);
+                else openMenu(menu);
+              });
+            }
+            menu.addEventListener('pointerenter', function () { openMenu(menu); });
+            menu.addEventListener('focusin', clearCloseTimer);
             menu.addEventListener('pointerleave', function () {
               if (menu.open) scheduleClose(menu);
             });
             menu.addEventListener('focusout', function () {
-              if (menu.open) scheduleClose(menu);
+              window.setTimeout(function () {
+                if (menu.open && !menu.contains(document.activeElement)) scheduleClose(menu, 0);
+              }, 0);
             });
           });
           document.addEventListener('click', function (ev) {

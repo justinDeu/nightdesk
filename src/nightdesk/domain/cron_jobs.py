@@ -36,6 +36,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import CronJob, CronJobFire, Ticket
+from nightdesk.domain.priority import validate_priority
 from nightdesk.domain.tickets import create_ticket
 
 
@@ -169,6 +170,10 @@ def create_cron_job(
     schedule = validate_schedule(schedule)
     tz = validate_timezone(timezone)
     workspace_mode = validate_workspace_mode(workspace_mode)
+    try:
+        priority = validate_priority(priority)
+    except ValueError as e:
+        raise InvalidCronJob(str(e))
     additional_dirs = _validate_additional_dirs(additional_dirs)
     if misfire_policy not in _MISFIRE_POLICIES:
         raise InvalidCronJob(f"misfire_policy must be one of {_MISFIRE_POLICIES}")
@@ -233,6 +238,11 @@ def update_cron_job(
         schedule_changed = schedule_changed or fields["timezone"] != job.timezone
     if "workspace_mode" in fields:
         fields["workspace_mode"] = validate_workspace_mode(fields["workspace_mode"])
+    if "priority" in fields:
+        try:
+            fields["priority"] = validate_priority(fields["priority"])
+        except ValueError as e:
+            raise InvalidCronJob(str(e))
     if "additional_dirs" in fields:
         fields["additional_dirs"] = _validate_additional_dirs(fields["additional_dirs"])
     if "misfire_policy" in fields and fields["misfire_policy"] not in _MISFIRE_POLICIES:
