@@ -15,6 +15,7 @@ Additional coverage for this ticket (palette context + shortcut hints):
 from __future__ import annotations
 
 import shutil
+import re
 from pathlib import Path
 
 import pytest
@@ -77,8 +78,10 @@ async def test_base_includes_cheatsheet_dialog(cookie_client):
     assert r.status_code == 200
     assert 'id="nd-shortcuts-cheatsheet"' in r.text
     # The cheat sheet documents the global shortcuts.
-    assert "Go to board" in r.text
-    assert "Go to archive" in r.text
+    assert "Go to Work" in r.text
+    assert "Go to Insights" in r.text
+    assert "Go to Setup" in r.text
+    assert "Go to Work: board" in r.text
     # JS-free fallback note must be present.
     assert "reachable by mouse" in r.text
 
@@ -114,7 +117,9 @@ async def test_palette_js_command_model_has_shortcut_field(cookie_client):
     # Commands have shortcut fields alongside label/hint/run.
     # Check that the command model builds objects with "shortcut:" keys.
     assert 'shortcut: "c"' in r.text or "shortcut: 'c'" in r.text
-    assert 'shortcut: "g b"' in r.text or "shortcut: 'g b'" in r.text
+    assert 'shortcut: "g w"' in r.text or "shortcut: 'g w'" in r.text
+    assert 'shortcut: "g i"' in r.text or "shortcut: 'g i'" in r.text
+    assert 'shortcut: "g s"' in r.text or "shortcut: 'g s'" in r.text
     assert 'shortcut: "?"' in r.text or 'shortcut: \'?\'' in r.text
 
 
@@ -166,6 +171,7 @@ async def test_palette_js_has_section_headers(cookie_client):
     assert "Ticket actions" in r.text
     assert "Properties" in r.text
     assert "Navigation" in r.text
+    assert "Work views" in r.text
     assert "View" in r.text
     # Section headers are rendered as non-selectable list items via setAttribute.
     assert '"presentation"' in r.text or "'presentation'" in r.text
@@ -218,6 +224,34 @@ async def test_cheatsheet_includes_view_section(cookie_client):
     r = await cookie_client.get("/profiles")
     assert r.status_code == 200
     assert "View" in r.text or "Display" in r.text or "view" in r.text
+
+
+async def test_primary_nav_collapses_to_ia_groups(cookie_client):
+    """The header exposes Work, Insights, and Setup as top-level nav."""
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+
+    nav_html = r.text.split('<nav class="flex items-center gap-1 text-sm" aria-label="Primary">', 1)[1]
+    nav_html = nav_html.split("</nav>", 1)[0]
+
+    summary_labels = re.findall(r"<summary[^>]*>\s*<span>([^<]+)</span>", nav_html, re.S)
+    assert summary_labels == ["Work", "Insights", "Setup"]
+    assert ">Board<" in nav_html
+    assert ">Inbox<" in nav_html
+    assert ">Scheduled<" in nav_html
+    assert ">Analytics<" in nav_html
+    assert ">Profiles<" in nav_html
+    assert ">External tools<" in nav_html
+    assert '<button type="button"' in nav_html
+
+
+async def test_primary_nav_does_not_expose_legacy_labels_as_top_level(cookie_client):
+    """Legacy destinations stay in groups, not as first-level header links."""
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+
+    summaries = re.findall(r"<summary[^>]*>\s*<span>([^<]+)</span>", r.text, re.S)
+    assert summaries == ["Work", "Insights", "Setup"]
 
 
 async def test_cheatsheet_includes_focus_search(cookie_client):

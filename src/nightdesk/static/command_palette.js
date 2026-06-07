@@ -831,14 +831,22 @@
     // --- Navigation & general commands ---
     cmds.push({ label: "New ticket", shortcut: "c", hint: "", section: "Navigation",
       run: openCreateTicket });
-    cmds.push({ label: "Go to board", shortcut: "g b", hint: "", section: "Navigation",
+    cmds.push({ label: "Go to Work", shortcut: "g w", hint: "Board", section: "Navigation",
       run: function () { location.href = "/"; } });
-    cmds.push({ label: "Go to inbox", shortcut: "g i", hint: "", section: "Navigation",
-      run: function () { location.href = "/inbox"; } });
-    cmds.push({ label: "Go to archive", shortcut: "g a", hint: "", section: "Navigation",
-      run: function () { location.href = "/archive"; } });
+    cmds.push({ label: "Go to Insights", shortcut: "g i", hint: "Analytics", section: "Navigation",
+      run: function () { location.href = "/analytics"; } });
+    cmds.push({ label: "Go to Setup", shortcut: "g s", hint: "Settings", section: "Navigation",
+      run: function () { location.href = "/settings"; } });
     cmds.push({ label: "Show keyboard shortcuts", shortcut: "?", hint: "", section: "Navigation",
       run: openCheatSheet });
+    cmds.push({ label: "Go to Work: board", shortcut: "g b", hint: "display mode", section: "Work views",
+      run: function () { location.href = "/"; } });
+    cmds.push({ label: "Go to Work: inbox", shortcut: "", hint: "view", section: "Work views",
+      run: function () { location.href = "/inbox"; } });
+    cmds.push({ label: "Go to Work: archive", shortcut: "g a", hint: "view", section: "Work views",
+      run: function () { location.href = "/archive"; } });
+    cmds.push({ label: "Go to Work: scheduled", shortcut: "", hint: "Cron", section: "Work views",
+      run: function () { location.href = "/cron"; } });
 
     return cmds;
   }
@@ -1139,14 +1147,20 @@
     var now = Date.now();
     var hadG = now - lastG < 800;
 
+    if (hadG && (key === "w" || key === "W")) {
+      e.preventDefault(); lastG = 0; location.href = "/"; return;
+    }
+    if (hadG && (key === "i" || key === "I")) {
+      e.preventDefault(); lastG = 0; location.href = "/analytics"; return;
+    }
+    if (hadG && (key === "s" || key === "S")) {
+      e.preventDefault(); lastG = 0; location.href = "/settings"; return;
+    }
     if (hadG && (key === "b" || key === "B")) {
       e.preventDefault(); lastG = 0; location.href = "/"; return;
     }
     if (hadG && (key === "a" || key === "A")) {
       e.preventDefault(); lastG = 0; location.href = "/archive"; return;
-    }
-    if (hadG && (key === "i" || key === "I")) {
-      e.preventDefault(); lastG = 0; location.href = "/inbox"; return;
     }
     lastG = 0;
 

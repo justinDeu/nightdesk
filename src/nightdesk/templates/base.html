@@ -64,24 +64,46 @@
         <div id="search-results"
              class="absolute mt-1 w-72 bg-bg-elev border border-border rounded shadow z-50 hidden"></div>
       </div>
-      <nav class="flex items-center gap-1 text-sm">
-        {% set nav_items = [
-          ('board', '/', 'Board'),
-          ('inbox', '/inbox', 'Inbox'),
-          ('list', '/list', 'List'),
-          ('archive', '/archive', 'Archive'),
-          ('cron', '/cron', 'Cron'),
-          ('analytics', '/analytics', 'Analytics'),
-          ('profiles', '/profiles', 'Profiles'),
-          ('settings', '/settings', 'Settings'),
+      <nav class="flex items-center gap-1 text-sm" aria-label="Primary">
+        {% set nav_groups = [
+          ('work', 'Work', '/', [
+            ('/', 'Board'),
+            ('/list', 'List'),
+            ('/inbox', 'Inbox'),
+            ('/archive', 'Archive'),
+            ('/cron', 'Scheduled'),
+          ]),
+          ('insights', 'Insights', '/analytics', [
+            ('/analytics', 'Analytics'),
+          ]),
+          ('setup', 'Setup', '/settings', [
+            ('/profiles', 'Profiles'),
+            ('/settings/scheduling', 'Settings'),
+            ('/settings/external-tools', 'External tools'),
+            ('/cron', 'Cron configuration'),
+          ]),
         ] %}
-        {% for key, href, label in nav_items %}
-          {% set is_active = (active_page == key) %}
-          <a href="{{ href }}"
-             class="px-3 py-1 border-b-2 transition-colors
-                    {% if is_active %}border-accent text-fg{% else %}border-transparent text-fg-muted hover:text-fg hover:border-border{% endif %}">
-            {{ label }}
-          </a>
+        {% set active_groups = {
+          'work': ['', 'board', 'tickets', 'list', 'inbox', 'archive', 'cron'],
+          'insights': ['analytics'],
+          'setup': ['profiles', 'settings'],
+        } %}
+        {% for group_key, label, href, children in nav_groups %}
+          {% set is_active = active_page in active_groups[group_key] %}
+          <details class="nd-nav-menu relative">
+            <summary class="nd-nav-trigger {% if is_active %}is-active{% endif %}">
+              <span>{{ label }}</span>
+              <span class="nd-nav-chevron" aria-hidden="true"></span>
+            </summary>
+            <div class="nd-nav-popover">
+              {% for child_href, child_label in children %}
+                {% set child_active = (request.url.path == child_href) if request is defined else false %}
+                <a href="{{ child_href }}" class="nd-nav-item {% if child_active %}is-active{% endif %}">
+                  <span class="nd-nav-item-label">{{ child_label }}</span>
+                </a>
+              {% endfor %}
+            </div>
+          </details>
         {% endfor %}
         {# Works on every page: ndOpenCreateTicket pops the inline modal when
            the page already has one (the board), otherwise lazy-loads it into
@@ -116,7 +138,56 @@
            class="relative group text-sm text-fg-muted font-mono"
            hx-get="/header/worker-pill"
            hx-trigger="load, every 3s"
-           hx-swap="innerHTML">·</div>
+            hx-swap="innerHTML">·</div>
+      <script>
+        (function () {
+          var closeTimer = null;
+          function clearCloseTimer() {
+            if (closeTimer) window.clearTimeout(closeTimer);
+            closeTimer = null;
+          }
+          function scheduleClose(menu) {
+            clearCloseTimer();
+            closeTimer = window.setTimeout(function () {
+              if (!menu || !menu.open) return;
+              var popover = menu.querySelector('.nd-nav-popover');
+              if (popover && popover.contains(document.activeElement)) return;
+              menu.classList.add('is-closing');
+              window.setTimeout(function () {
+                menu.open = false;
+                menu.classList.remove('is-closing');
+              }, 140);
+            }, 1700);
+          }
+          function closeMenus(except) {
+            clearCloseTimer();
+            document.querySelectorAll('.nd-nav-menu[open]').forEach(function (menu) {
+              if (menu !== except) menu.open = false;
+            });
+          }
+          document.addEventListener('toggle', function (ev) {
+            var menu = ev.target;
+            if (!menu || !menu.classList || !menu.classList.contains('nd-nav-menu') || !menu.open) return;
+            closeMenus(menu);
+            scheduleClose(menu);
+          }, true);
+          document.querySelectorAll('.nd-nav-menu').forEach(function (menu) {
+            menu.addEventListener('pointerleave', function () {
+              if (menu.open) scheduleClose(menu);
+            });
+            menu.addEventListener('focusout', function () {
+              if (menu.open) scheduleClose(menu);
+            });
+          });
+          document.addEventListener('click', function (ev) {
+            if (ev.target.closest && ev.target.closest('.nd-nav-menu')) return;
+            closeMenus(null);
+          });
+          document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') closeMenus(null);
+          });
+        })();
+      </script>
     </header>
     <main class="w-full px-6 py-4">
       {% block body %}{% endblock %}

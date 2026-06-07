@@ -11,8 +11,8 @@
   control here is a real <button>, so the palette is keyboard- and
   screen-reader-friendly. Keyboard shortcuts are a progressive enhancement:
   if JS is disabled these dialogs simply never open and every action they
-  expose (new ticket, search, run-now, archive, requeue, open detail, board,
-  archive nav) stays reachable by mouse through the header and board UI.
+  expose (new ticket, search, run-now, archive, requeue, open detail, Work,
+  Insights, and Setup nav) stays reachable by mouse through the header and UI.
 #}
 
 {# --- Command palette ---------------------------------------------------- #}
@@ -64,8 +64,10 @@
       ('Ctrl / Cmd + K', 'Open the command palette'),
       ('c', 'New ticket'),
       ('/', 'Focus search'),
-      ('g then b', 'Go to board'),
-      ('g then i', 'Go to inbox'),
+      ('g then w', 'Go to Work'),
+      ('g then i', 'Go to Insights'),
+      ('g then s', 'Go to Setup'),
+      ('g then b', 'Go to Work: board'),
       ('g then a', 'Go to archive'),
       ('?', 'Show this cheat sheet'),
       ('Esc', 'Close palette or dialog'),
@@ -121,7 +123,7 @@
         <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
       </div>
     {% endfor %}
-    <p class="text-[11px] text-fg-muted mt-1">Use the command palette to toggle board/runs view.</p>
+    <p class="text-[11px] text-fg-muted mt-1">Use Work for Board/List display modes plus Inbox, Archive, and Scheduled views.</p>
     {% endif %}
     {% if _inbox_shortcuts %}
     <h3 class="pt-3 mt-3 border-t border-border text-xs font-semibold uppercase tracking-wide text-fg-muted">Inbox triage</h3>
