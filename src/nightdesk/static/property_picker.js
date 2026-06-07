@@ -169,6 +169,12 @@
       if (poll && window.htmx) {
         try { window.htmx.trigger(poll, "poll"); } catch (e) {}
       }
+      // Dispatch a custom event so the list view can refresh its rows.
+      // The list page listens for this to trigger a list-rows refresh
+      // (mirroring the board's column poll).
+      try {
+        document.dispatchEvent(new CustomEvent("nd:property-changed"));
+      } catch (e) {}
       return;
     }
     if (!menu) return;
