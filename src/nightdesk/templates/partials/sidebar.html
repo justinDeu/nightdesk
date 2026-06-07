@@ -47,7 +47,17 @@
       <div class="flex flex-col gap-2">
         <h3 class="text-base font-semibold text-fg break-words">{{ ticket.title }}</h3>
         <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
-          <span class="rounded-full border px-2 py-0.5 uppercase tracking-wide {{ status_chip_class.get(ticket.status, 'border-border text-fg-muted') }}">{{ ticket.status }}</span>
+          {# Shared property pickers: status, priority, project. All commit via
+             focused metadata routes and swap the chip in place. #}
+          {% with tid=ticket.id, prop='status', chip=property_chip('status', ticket) %}
+            {% include "partials/property_picker.html" %}
+          {% endwith %}
+          {% with tid=ticket.id, prop='priority', chip=property_chip('priority', ticket) %}
+            {% include "partials/property_picker.html" %}
+          {% endwith %}
+          {% with tid=ticket.id, prop='project', chip=property_chip('project', ticket) %}
+            {% include "partials/property_picker.html" %}
+          {% endwith %}
           {% if ticket_profile %}
             <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">{{ ticket_profile.name }}</span>
           {% endif %}
@@ -55,6 +65,14 @@
             <span class="rounded-full border border-accent/40 bg-bg-elev-2 px-2 py-0.5 text-accent">git worktree</span>
           {% else %}
             <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">in directory</span>
+          {% endif %}
+          {% if ticket.labels %}
+            {% for label in ticket.labels %}
+              <span
+                class="rounded-full px-2 py-0.5 text-[10px] font-medium border"
+                style="{% if label.color %}background-color: {{ label.color }}22; border-color: {{ label.color }}66; color: {{ label.color }};{% else %}background-color: var(--color-bg-elev-2); border-color: var(--color-border); color: var(--color-fg-muted);{% endif %}"
+              >{{ label.name }}</span>
+            {% endfor %}
           {% endif %}
         </div>
       </div>

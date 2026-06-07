@@ -19,8 +19,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Ticket, WorkerHeartbeat
+from nightdesk.domain.labels import LabelNameTaken, create_label, list_labels
 from nightdesk.db.session import make_engine, session_factory
 from nightdesk.domain.profiles import seed_default_profiles
+from nightdesk.domain.projects import ProjectNameTaken, create_project
 from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import create_ticket
 from nightdesk.transcript import now_iso, write_event
@@ -42,6 +44,39 @@ DEFAULT_TRANSCRIPT_ROOT = DEFAULT_DEMO_DIR / "transcripts"
 # ---------------------------------------------------------------------------
 
 _TICKET_SPECS: list[dict] = [
+    # --- Inbox (under-specified triage items) ---
+    # "incomplete": True items are captured with NO workspace, so they cannot be
+    # promoted until fleshed out — they exercise the validation boundary in the
+    # Inbox surface. Items without the flag are complete and promotable.
+    {
+        "title": "Investigate flaky integration test",
+        "prompt": (
+            "Someone mentioned test_worker_picks_eligible flakes in CI. "
+            "Need to reproduce and narrow down before this becomes a ticket."
+        ),
+        "status": "inbox",
+        "priority": 3,
+        "labels": ["bug"],
+        "incomplete": True,
+    },
+    {
+        "title": "Idea: keyboard-only ticket triage mode",
+        "prompt": "",
+        "status": "inbox",
+        "priority": 0,
+        "labels": ["ui/ux"],
+        "incomplete": True,
+    },
+    {
+        "title": "Add OpenAPI examples to ticket endpoints",
+        "prompt": (
+            "Flesh out request/response examples in the generated openapi.json "
+            "so the docs surface is usable. Workspace is known; ready to promote."
+        ),
+        "status": "inbox",
+        "priority": 1,
+        "labels": ["docs"],
+    },
     # --- Draft ---
     {
         "title": "Add dark mode toggle",
@@ -52,6 +87,8 @@ _TICKET_SPECS: list[dict] = [
             "variants kick in automatically."
         ),
         "status": "draft",
+        "priority": 2,
+        "labels": ["ui/ux"],
     },
     {
         "title": "Write onboarding guide",
@@ -61,6 +98,8 @@ _TICKET_SPECS: list[dict] = [
             "your first ticket. Keep it under 200 words."
         ),
         "status": "draft",
+        "priority": 0,
+        "labels": ["docs"],
     },
     # --- Queued ---
     {
@@ -71,6 +110,8 @@ _TICKET_SPECS: list[dict] = [
             "Reproduce with > 200 archived tickets and fix the cursor encoding."
         ),
         "status": "queued",
+        "priority": 3,
+        "labels": ["backend", "cleanup"],
     },
     {
         "title": "Add rate-limit banner component",
@@ -80,6 +121,8 @@ _TICKET_SPECS: list[dict] = [
             "endpoint. Show utilization percentage and time until reset."
         ),
         "status": "queued",
+        "priority": 1,
+        "labels": ["ui/ux", "backend"],
     },
     # --- Running ---
     {
@@ -92,6 +135,8 @@ _TICKET_SPECS: list[dict] = [
             "bearer-token flow."
         ),
         "status": "running",
+        "priority": 4,
+        "labels": ["backend", "infra"],
         "run": {
             "intent": "first_run",
             "exit_status": None,
@@ -107,6 +152,8 @@ _TICKET_SPECS: list[dict] = [
             "run count. Use streaming response so large exports don't OOM."
         ),
         "status": "review",
+        "priority": 2,
+        "labels": ["backend"],
         "run": {
             "intent": "first_run",
             "exit_status": "success",
@@ -121,6 +168,8 @@ _TICKET_SPECS: list[dict] = [
             "with model_validator. Run the test suite and fix any breakage."
         ),
         "status": "review",
+        "priority": 3,
+        "labels": ["backend", "cleanup"],
         "run": {
             "intent": "first_run",
             "exit_status": "failed",
@@ -136,6 +185,8 @@ _TICKET_SPECS: list[dict] = [
             "Keep the existing sync session paths working."
         ),
         "status": "review",
+        "priority": 1,
+        "labels": ["backend", "infra"],
         "run": {
             "intent": "retry",
             "exit_status": "cancelled",
@@ -152,6 +203,8 @@ _TICKET_SPECS: list[dict] = [
             "deprecation warnings."
         ),
         "status": "archived",
+        "priority": 0,
+        "labels": ["cleanup"],
         "run": {
             "intent": "first_run",
             "exit_status": "success",
@@ -165,12 +218,28 @@ _TICKET_SPECS: list[dict] = [
             "Include DB connectivity check. Document in the API reference."
         ),
         "status": "archived",
+        "priority": 1,
+        "labels": ["backend", "docs"],
         "run": {
             "intent": "first_run",
             "exit_status": "success",
             "transcript": "archived_success_short",
         },
     },
+]
+
+
+# ---------------------------------------------------------------------------
+# Label specifications
+# ---------------------------------------------------------------------------
+
+_LABEL_SPECS: list[dict] = [
+    {"name": "backend",  "color": "#3b82f6"},  # blue
+    {"name": "ui/ux",    "color": "#8b5cf6"},  # violet
+    {"name": "research", "color": "#f59e0b"},  # amber
+    {"name": "infra",    "color": "#ef4444"},  # red
+    {"name": "docs",     "color": "#10b981"},  # emerald
+    {"name": "cleanup",  "color": "#6b7280"},  # gray
 ]
 
 
@@ -496,22 +565,80 @@ def seed(
             print("No profiles found after seeding.", file=sys.stderr)
             return
 
+        # Demo projects so the shared property picker's project option has real
+        # data to pick from. Idempotent: tolerate re-seeding onto an existing DB.
+        project_ids: list[str] = []
+        for name, color, src in (
+            ("Nightdesk", "#34d399", source_path),
+            ("Docs site", "#60a5fa", source_path),
+        ):
+            try:
+                proj = create_project(session, name=name, color=color, source_path=src)
+                project_ids.append(proj.id)
+            except ProjectNameTaken:
+                existing = session.execute(
+                    text("SELECT id FROM projects WHERE name = :n"), {"n": name}
+                ).fetchone()
+                if existing:
+                    project_ids.append(existing[0])
+        # --- Seed labels ---
+        # Idempotent: tolerate re-seeding onto an existing DB by reusing any
+        # label that already exists under the same name.
+        label_by_name: dict[str, object] = {}
+        for spec in _LABEL_SPECS:
+            try:
+                lbl = create_label(session, name=spec["name"], color=spec["color"])
+            except LabelNameTaken:
+                lbl = next(
+                    (l for l in list_labels(session) if l.name == spec["name"]),
+                    None,
+                )
+                if lbl is None:
+                    continue
+            label_by_name[lbl.name] = lbl
+
         tickets_by_status: dict[str, list[Ticket]] = {}
 
         for idx, raw_spec in enumerate(_TICKET_SPECS):
             spec = dict(raw_spec)  # copy to avoid mutating the module-level list
             run_spec = spec.pop("run", None)
+            label_names = spec.pop("labels", [])
+            # Under-specified inbox items are captured without a workspace so the
+            # Inbox surface can demo the "flesh out before promoting" boundary.
+            incomplete = spec.pop("incomplete", False)
             profile_id = profile_ids[idx % len(profile_ids)]
+            # Spread tickets across the demo projects (leaving every third one
+            # unassigned so "No project" is represented too).
+            project_id = None
+            if project_ids and idx % 3 != 2:
+                project_id = project_ids[idx % len(project_ids)]
+            # Assigning a project injects that project's default workspace, which
+            # would make an "incomplete" inbox item complete. Keep these
+            # project-less so they stay genuinely under-specified for the demo.
+            if incomplete:
+                project_id = None
 
-            ticket = create_ticket(
-                session,
+            create_kwargs = dict(
                 title=spec["title"],
                 prompt=spec["prompt"],
                 status=spec["status"],
                 profile_id=profile_id,
-                source_path=source_path,
-                priority=idx % 3,
+                project_id=project_id,
+                priority=spec.get("priority", idx % 3),
             )
+            if not incomplete:
+                create_kwargs["source_path"] = source_path
+            ticket = create_ticket(session, **create_kwargs)
+
+            # Assign labels to the ticket.
+            if label_names and label_by_name:
+                from nightdesk.domain.labels import set_ticket_labels
+                label_ids = [
+                    label_by_name[n].id for n in label_names
+                    if n in label_by_name
+                ]
+                if label_ids:
+                    set_ticket_labels(session, ticket.id, label_ids)
 
             tickets_by_status.setdefault(ticket.status, []).append(ticket)
 

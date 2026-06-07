@@ -1206,3 +1206,65 @@ dialog button[aria-label="Close"]:focus-visible {
     background: var(--color-accent);
   }
 }
+
+/* ---- Shared property picker (nd-prop-*) ---------------------------------
+   Anchored chip + popover for the one reusable property-picker primitive
+   (templates/partials/property_picker*.html + static/property_picker.js).
+   Authored as plain CSS keyed off the theme variables so the picker renders
+   correctly even without a Tailwind rebuild. Lives outside @layer so it sits
+   above utility classes for the popover's own structural styles, while the
+   chip/option text colours stay driven by utility classes from the registry
+   (domain.properties). */
+.nd-prop-anchor { position: relative; display: inline-block; vertical-align: middle; }
+.nd-prop-chip { display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer; }
+.nd-prop-chip:hover { filter: brightness(1.2); }
+.nd-prop-chip-dot { width: 0.5rem; height: 0.5rem; border-radius: 9999px; flex: 0 0 auto; }
+.nd-prop-menu {
+  position: absolute; left: 0; top: 100%; margin-top: 0.25rem; z-index: 50;
+  min-width: 180px; max-width: 280px;
+  background: var(--color-bg-elev);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  padding: 0.25rem 0;
+}
+.nd-prop-menu.hidden { display: none; }
+.nd-prop-search-wrap { padding: 0 0.5rem 0.25rem; }
+.nd-prop-search {
+  width: 100%; box-sizing: border-box;
+  background: var(--color-bg-elev-2);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  padding: 0.25rem 0.5rem; font-size: 0.75rem; color: var(--color-fg);
+}
+.nd-prop-search::placeholder { color: var(--color-fg-muted); }
+.nd-prop-search:focus { outline: none; border-color: var(--color-accent); }
+.nd-prop-options { max-height: 15rem; overflow-y: auto; }
+.nd-prop-option {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  padding: 0.375rem 0.75rem; font-size: 0.75rem; text-align: left;
+  background: transparent; border: 0; cursor: pointer; color: var(--color-fg);
+}
+.nd-prop-option:hover,
+.nd-prop-option:focus,
+.nd-prop-option.nd-opt-active { background: rgba(52, 211, 153, .12); outline: none; }
+.nd-prop-option[hidden] { display: none; }
+.nd-prop-current { font-weight: 500; }
+.nd-prop-swatch { width: 0.75rem; height: 0.75rem; flex: 0 0 auto; border-radius: 9999px; }
+.nd-prop-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nd-prop-check { margin-left: auto; color: var(--color-accent); }
+.nd-prop-msg { padding: 0.5rem 0.75rem; font-size: 0.75rem; color: var(--color-fg-muted); }
+
+/* ---- Keyboard cursor highlight (nd-cursor-active) -----------------------
+   The H/J/K/L board/list/inbox cursor (static/command_palette.js) toggles this
+   class on the focused ticket/inbox row. Authored as plain CSS keyed off the
+   theme variables and kept in the source bundle so a Tailwind rebuild can no
+   longer drop it (it was previously hand-injected into the built artifact only,
+   and a rebuild on the promote branch silently removed it). Lives outside
+   @layer so the outline/background sit above the utility classes. */
+.nd-cursor-active {
+  outline: 2px solid var(--color-info);
+  outline-offset: -1px;
+  background: color-mix(in oklab, var(--color-info) 6%, var(--color-bg-elev-2)) !important;
+  transition: outline .1s, background .1s;
+}

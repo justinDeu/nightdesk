@@ -1,0 +1,44 @@
+{#
+  Single property chip — the clickable anchor for the shared property picker.
+
+  This partial is the ONE place a metadata chip is rendered. It is used both
+  inline (inside partials/property_picker.html) and as the HTMX swap response
+  from POST /board/tickets/{id}/property/{prop}, so a committed change replaces
+  just the chip in place.
+
+  Expects:
+    tid          - ticket id
+    prop         - property key ("priority" | "status" | "project" | ...)
+    chip         - dict {label, css, swatch_color, title} (see domain.properties)
+    interactive  - bool, default true. When false renders a plain, non-clickable
+                   chip.
+
+  Contract: the outer element carries data-property-chip="{tid}:{prop}" and is
+  the hx-target for option commits. The shared property_picker.js binds clicks
+  via event delegation, so a freshly-swapped chip stays interactive with no
+  re-init. Popover styling lives in app.css (.nd-prop-* classes) so the chip
+  only needs utility classes already shipped in the stylesheet.
+#}
+{% set _interactive = interactive if interactive is defined else true %}
+{% if _interactive %}
+<button
+  type="button"
+  data-property-chip="{{ tid }}:{{ prop }}"
+  data-tid="{{ tid }}"
+  data-prop="{{ prop }}"
+  class="nd-prop-chip rounded-full border px-2 py-0.5 text-[11px] {{ chip.css }} transition-colors"
+  title="{{ chip.title or chip.label }}"
+  aria-haspopup="listbox"
+  aria-expanded="false"
+>
+  {% if chip.swatch_color %}<span class="nd-prop-chip-dot" style="background: {{ chip.swatch_color }}"></span>{% endif %}{{ chip.label }}
+</button>
+{% else %}
+<span
+  data-property-chip="{{ tid }}:{{ prop }}"
+  class="rounded-full border px-2 py-0.5 text-[11px] {{ chip.css }}"
+  title="{{ chip.title or chip.label }}"
+>
+  {% if chip.swatch_color %}<span class="nd-prop-chip-dot" style="background: {{ chip.swatch_color }}"></span>{% endif %}{{ chip.label }}
+</span>
+{% endif %}

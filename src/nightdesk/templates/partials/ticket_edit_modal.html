@@ -18,6 +18,13 @@
 #}
 {% set _mid = modal_id or 'ticket-edit-modal' %}
 {% set _is_edit = ticket is defined and ticket %}
+{# Promote mode: the same modal, used by the Inbox to flesh out + accept an
+   under-specified item in one step. Pre-filled from the inbox item, with the
+   required execution fields that are still missing highlighted, and a footer
+   that promotes to draft or queued instead of a plain Save. #}
+{% set _promote = (promote is defined and promote) %}
+{% set _missing = (inbox_missing_fields(ticket) if (_promote and _is_edit) else []) %}
+{% set _project_filter = project_filter if project_filter is defined else '' %}
 {% set _projects = projects if projects is defined else [] %}
 {% set _selected_project = selected_project if selected_project is defined else none %}
 {% set _create_linked_workspaces = ((_selected_project.default_linked_workspaces or []) if (not _is_edit and _selected_project and _selected_project.default_linked_workspaces) else []) %}
@@ -27,7 +34,7 @@
 {% set _create_mode = (_selected_project.default_workspace_mode if _selected_project and _selected_project.default_workspace_mode else 'directory') %}
 {% set _create_use_worktree = _create_mode in ['git_worktree', 'worktree'] %}
 {% set _use_worktree = ((_primary_ws.kind in ['git_worktree', 'worktree']) if _primary_ws else _create_use_worktree) %}
-{% set _form_action = ('/board/tickets/' ~ ticket.id) if _is_edit else '/board/tickets' %}
+{% set _form_action = ('/inbox/tickets/' ~ ticket.id ~ '/promote') if _promote else (('/board/tickets/' ~ ticket.id) if _is_edit else '/board/tickets') %}
 {% set _toolchains = ticket.toolchain_overrides if _is_edit and ticket.toolchain_overrides else {} %}
 {% set _toolchain_options = toolchain_options if toolchain_options is defined else [] %}
 {% set _tc_enabled = _toolchains.get('enable') or [] %}
@@ -45,7 +52,11 @@
   <form method="post"
         action="{{ _form_action }}"
         hx-post="{{ _form_action }}"
-        {% if _is_edit %}
+        {% if _promote %}
+        hx-target="#inbox-list"
+        hx-swap="outerHTML"
+        hx-on::after-request="window.ndPromoteAfterRequest && window.ndPromoteAfterRequest(event, '{{ _mid }}')"
+        {% elif _is_edit %}
         hx-target="#sidebar"
         hx-swap="outerHTML"
         hx-on::after-request="if (event.detail.successful) { var d=document.getElementById('{{ _mid }}'); if(d) d.close(); var p=document.getElementById('board-columns-poll'); if(p&&typeof htmx!=='undefined') htmx.trigger(p,'poll'); }"
@@ -54,14 +65,20 @@
         hx-on::after-request="if (event.detail.successful) { document.getElementById('{{ _mid }}').close(); window.location.reload(); }"
         {% endif %}
         data-ticket-form
-        data-ticket-mode="{{ 'edit' if _is_edit else 'create' }}"
+        data-ticket-mode="{{ 'promote' if _promote else ('edit' if _is_edit else 'create') }}"
         class="flex flex-col max-h-[92vh]">
+    {% if _promote %}
+    {# Carry the active project filter so the inbox list refresh after promotion
+       stays scoped to the surface the user is looking at. (The deps/labels
+       sections already emit their own *_form markers.) #}
+    <input type="hidden" name="project" value="{{ _project_filter }}" />
+    {% endif %}
 
     {# Sticky header so Save / Cancel stay visible while scrolling. #}
     <div class="flex items-center justify-between px-5 py-3 border-b border-border bg-bg-elev sticky top-0 z-10">
       <div>
-        <h2 class="text-base font-semibold">{% if _is_edit %}Edit ticket{% else %}New ticket{% endif %}</h2>
-        <p class="text-[11px] text-fg-muted">Title, prompt, profile, workspace — all in one place.</p>
+        <h2 class="text-base font-semibold">{% if _promote %}Promote to the board{% elif _is_edit %}Edit ticket{% else %}New ticket{% endif %}</h2>
+        <p class="text-[11px] text-fg-muted">{% if _promote %}Fill in the required execution fields, then accept as a draft or queue it.{% else %}Title, prompt, profile, workspace — all in one place.{% endif %}</p>
       </div>
       <button type="button"
               onclick="document.getElementById('{{ _mid }}').close()"
@@ -74,11 +91,31 @@
 
       <input type="hidden" name="workspace_form" value="1" />
 
+      {% if _promote %}
+      {# Required-field guidance + server-side rejection surface. The banner
+         lists what is still missing on open; ndPromoteAfterRequest fills the
+         error box from a rejected (422) promotion so the user sees exactly why
+         a queue attempt was blocked without losing their edits. #}
+      {% if _missing %}
+      <div data-promote-missing
+           class="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+        <span class="font-medium">Required before promoting:</span>
+        {% if 'title' in _missing %}a title{% if _missing | length > 1 %}, {% endif %}{% endif %}
+        {% if 'profile' in _missing %}a profile{% if 'workspace' in _missing %}, {% endif %}{% endif %}
+        {% if 'workspace' in _missing %}a workspace source path{% endif %}.
+        Queuing stays disabled until these are filled in.
+      </div>
+      {% endif %}
+      <div data-promote-error
+           class="hidden rounded-md border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger"
+           role="alert"></div>
+      {% endif %}
+
       <label class="flex flex-col gap-1 text-sm">
-        <span class="text-fg-muted text-xs uppercase tracking-wide">Title</span>
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Title{% if 'title' in _missing %} <span class="text-warn">• required</span>{% endif %}</span>
         <input name="title" required value="{{ ticket.title if _is_edit else '' }}"
                data-title-input
-               class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none" />
+               class="bg-bg-elev-2 border rounded px-2 py-1 text-fg focus:border-accent outline-none {% if 'title' in _missing %}border-warn ring-1 ring-warn/40{% else %}border-border{% endif %}" />
       </label>
 
       <label class="flex flex-col gap-1 text-sm">
@@ -88,9 +125,9 @@
       </label>
 
       <label class="flex flex-col gap-1 text-sm">
-        <span class="text-fg-muted text-xs uppercase tracking-wide">Profile</span>
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Profile{% if 'profile' in _missing %} <span class="text-warn">• required</span>{% endif %}</span>
         <select name="profile_id" required
-                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
+                class="bg-bg-elev-2 border rounded px-2 py-1 text-fg focus:border-accent outline-none {% if 'profile' in _missing %}border-warn ring-1 ring-warn/40{% else %}border-border{% endif %}">
           {% if not _is_edit %}<option value="">-- select --</option>{% endif %}
           {% for p in profiles %}
             <option value="{{ p.id }}" {% if _is_edit and ticket.profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
@@ -136,6 +173,27 @@
           {% endfor %}
         }</script>
       </label>
+
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Priority</span>
+        <select name="priority"
+                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
+          {% for level in PRIORITY_SCALE %}
+            <option value="{{ level.value }}" {% if _is_edit and ticket.priority == level.value %}selected{% elif not _is_edit and level.value == 0 %}selected{% endif %}>{{ level.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      {# --- Labels --------------------------------------------------------- #}
+      {% set _all_labels = all_labels if all_labels is defined else [] %}
+      {% set _label_ticket = ticket if _is_edit else none %}
+      <section class="rounded-lg border border-border bg-bg-elev-2 p-3 shadow-sm" data-label-section>
+        <div class="mb-2">
+          <h3 class="text-sm font-medium text-fg">Labels</h3>
+          <p class="mt-0.5 text-xs leading-snug text-fg-muted">Tag tickets for categorisation and filtering.</p>
+        </div>
+        {% include "partials/label_picker.html" %}
+      </section>
 
       {# --- External tool overrides ------------------------------------- #
        # Project external tools apply automatically. This section only adds
@@ -328,6 +386,7 @@
         <div class="rounded-md border border-accent/40 bg-bg-elev-2 p-2 space-y-2 mb-2">
           <div class="flex items-center justify-between gap-2">
             <span class="rounded-full border border-accent/40 bg-accent/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">primary · agent runs here</span>
+            {% if 'workspace' in _missing %}<span class="text-[10px] font-medium uppercase tracking-wide text-warn">• required</span>{% endif %}
           </div>
           <div class="relative">
             <input id="{{ _mid }}-source-path"
@@ -342,7 +401,7 @@
                    onfocus="window.ndPathSuggest(this, '{{ _mid }}-source-path-suggest')"
                    onblur="window.ndPathSuggestClose('{{ _mid }}-source-path-suggest')"
                    onkeydown="window.ndPathSuggestKey(event, this, '{{ _mid }}-source-path-suggest')"
-                   class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                   class="w-full rounded border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 {% if 'workspace' in _missing %}border-warn ring-1 ring-warn/40{% else %}border-border{% endif %}" />
             <div id="{{ _mid }}-source-path-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
@@ -525,7 +584,7 @@
         </div>
         <div data-effective-preview
              hx-post="/effective-config/preview"
-             hx-trigger="nd-config-refresh"
+             hx-trigger="load, nd-config-refresh"
              hx-include="closest form"
              hx-swap="innerHTML">
           <div class="text-xs italic text-fg-muted" data-effective-preview-placeholder>Resolving execution context…</div>
@@ -541,10 +600,28 @@
               class="border border-border text-fg-muted hover:text-fg px-3 py-1.5 rounded text-sm">
         Cancel
       </button>
+      {% if _promote %}
+      {# Two promote actions. Each is a submit button whose name/value sets the
+         target, so the clicked button decides draft vs queued. Draft accepts
+         onto the board for later; queue hands it straight to the scheduler.
+         The completeness boundary is enforced server-side — a queue attempt
+         with required fields still missing is rejected (422) and surfaced in
+         the error banner without losing the user's edits. #}
+      <button type="submit" name="target" value="draft"
+              class="border border-border text-fg hover:text-accent hover:border-accent px-3 py-1.5 rounded text-sm font-medium">
+        Promote to draft
+      </button>
+      <button type="submit" name="target" value="queued"
+              data-promote-queue
+              class="bg-accent text-bg font-medium px-3 py-1.5 rounded text-sm hover:brightness-110">
+        Accept &amp; queue
+      </button>
+      {% else %}
       <button type="submit"
               class="bg-accent text-bg font-medium px-3 py-1.5 rounded text-sm hover:brightness-110">
         Save
       </button>
+      {% endif %}
     </div>
   </form>
 </dialog>
