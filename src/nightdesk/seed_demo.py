@@ -226,6 +226,40 @@ _TICKET_SPECS: list[dict] = [
             "transcript": "archived_success_short",
         },
     },
+    # --- Additional tickets for richer grouping/filtering demos ---
+    {
+        "title": "Add webhook delivery retry logic",
+        "prompt": (
+            "When a notify webhook returns 5xx, retry up to 3 times with "
+            "exponential backoff. Log each attempt to the run transcript."
+        ),
+        "status": "queued",
+        "priority": 2,
+        "labels": ["backend", "infra"],
+    },
+    {
+        "title": "Research: evaluate SQLite FTS5 vs tantivy for search",
+        "prompt": (
+            "Benchmark the current FTS5 search against a tantivy-based "
+            "approach. Compare index size, query latency, and incremental "
+            "update cost with ~10k tickets."
+        ),
+        "status": "draft",
+        "priority": 1,
+        "labels": ["research"],
+    },
+    {
+        "title": "Design token audit for accessibility",
+        "prompt": (
+            "Audit all CSS custom properties (colors, contrast ratios) against "
+            "WCAG 2.1 AA. Generate a report of failing tokens and suggest "
+            "alternatives."
+        ),
+        "status": "inbox",
+        "priority": 2,
+        "labels": ["ui/ux", "feature"],
+        "incomplete": True,
+    },
 ]
 
 
@@ -236,18 +270,32 @@ _TICKET_SPECS: list[dict] = [
 _LABEL_SPECS: list[dict] = [
     {"name": "backend",  "color": "#3b82f6"},  # blue
     {"name": "ui/ux",    "color": "#8b5cf6"},  # violet
+    {"name": "bug",      "color": "#ef4444"},  # red
     {"name": "research", "color": "#f59e0b"},  # amber
-    {"name": "infra",    "color": "#ef4444"},  # red
+    {"name": "infra",    "color": "#dc2626"},  # darker red
     {"name": "docs",     "color": "#10b981"},  # emerald
     {"name": "cleanup",  "color": "#6b7280"},  # gray
+    {"name": "feature",  "color": "#06b6d4"},  # cyan
 ]
 
 
 # Demo projects so the board's group-by-project view has content. Tickets are
 # assigned to these round-robin in the seeder (with some left unassigned).
 _PROJECT_SPECS: list[dict] = [
-    {"name": "Web App",   "slug": "web-app",  "color": "#2563eb"},
-    {"name": "Platform",  "slug": "platform", "color": "#db2777"},
+    {
+        "name": "Web App",
+        "slug": "web-app",
+        "color": "#2563eb",
+        "default_workspace_mode": "git_worktree",
+        "default_base_ref": "main",
+        "default_toolchains": ["user-python-tools"],
+    },
+    {
+        "name": "Platform",
+        "slug": "platform",
+        "color": "#db2777",
+        "default_workspace_mode": "directory",
+    },
 ]
 
 
@@ -599,13 +647,40 @@ def seed(
         for spec in _PROJECT_SPECS:
             existing = project_by_slug.get(spec["slug"])
             if existing is None:
-                existing = _create_project(
-                    session,
+                create_kwargs = dict(
                     name=spec["name"],
                     slug=spec["slug"],
                     source_path=source_path,
                     color=spec.get("color"),
                 )
+                # Project workspace defaults (mode, base_ref) are always safe.
+                if spec.get("default_workspace_mode"):
+                    create_kwargs["default_workspace_mode"] = spec["default_workspace_mode"]
+                if spec.get("default_base_ref"):
+                    create_kwargs["default_base_ref"] = spec["default_base_ref"]
+                # Toolchain defaults require the preset to be registered; skip
+                # if the config has none (e.g. first seed in a fresh DB).
+                tc = spec.get("default_toolchains")
+                if tc:
+                    try:
+                        from nightdesk.config import load_config
+                        cfg = load_config()
+                        known = set((cfg.toolchain_presets or {}).keys())
+                        if known and all(t in known for t in tc):
+                            create_kwargs["default_toolchains"] = tc
+                    except Exception:
+                        pass  # demo seeding is best-effort
+                try:
+                    existing = _create_project(session, **create_kwargs)
+                except Exception:
+                    # Fall back to a minimal project (no toolchains/workspace mode)
+                    existing = _create_project(
+                        session,
+                        name=spec["name"],
+                        slug=spec["slug"],
+                        source_path=source_path,
+                        color=spec.get("color"),
+                    )
                 project_by_slug[existing.slug] = existing
             seeded_projects.append(existing)
 
