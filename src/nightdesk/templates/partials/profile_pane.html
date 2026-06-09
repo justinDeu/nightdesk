@@ -84,6 +84,16 @@
       </div>
     </div>
 
+    {# Non-executable backend warning. Shown when the profile's backend is
+       described but not yet wired for real runs — driven by the capability
+       descriptor's executable flag, not a hardcoded string match. #}
+    {% if backend_capability and not backend_capability.executable %}
+      <div class="mx-4 mt-3 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+           data-tooltip="This backend's executor always returns a failure. Runs dispatched against this profile will immediately fail.">
+        This backend is not yet executable — runs will fail.
+      </div>
+    {% endif %}
+
     {# Body: two columns of dl rows for fast scanning. Backend-specific rows
        only render for the backend that consumes them; this is the effective
        config the run will actually see, so an inert Claude credential never
@@ -433,6 +443,15 @@
       <div class="px-4 py-2 bg-bg-elev-2/40 text-xs text-fg-muted uppercase tracking-wide">
         OMP / RPC configuration
       </div>
+      {# Warn that this backend is not yet wired for execution. Driven by
+         non_executable_backends from the capability registry; no hardcoded
+         backend-name check in markup. #}
+      {% if 'omp_rpc' in non_executable_backends %}
+        <div class="mx-4 mt-3 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+             data-tooltip="Runs dispatched against an OMP/RPC profile will immediately fail until the executor is wired.">
+          This backend is not yet executable — runs will fail.
+        </div>
+      {% endif %}
       <fieldset class="px-4 pt-5 pb-4 space-y-3">
         <legend class="text-fg-muted text-xs uppercase tracking-wide mb-2"
                 title="Remote Open-Model-Protocol endpoint this profile dispatches runs to.">
@@ -532,6 +551,22 @@
                     class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ fs_write_text }}</textarea>
         </label>
       </div>
+    </div>
+
+    {# Secret keys (shared sandbox/runtime surface) --------------------- #}
+    <div class="px-4 py-3">
+      <label class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide"
+              data-tooltip="Names of env variables whose values must not appear in logs or transcripts. One per line or comma-separated.">
+          Secret keys
+        </span>
+        <textarea name="secret_keys" rows="2"
+                  placeholder="MY_TOKEN, DB_PASSWORD (one per line)"
+                  class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ secret_keys_text }}</textarea>
+        <span class="text-[10px] text-fg-muted">
+          Env variable names whose values are secrets — never echoed in logs or transcripts.
+        </span>
+      </label>
     </div>
 
     {# System prompt (collapsed by default to keep the form tight) ------- #}

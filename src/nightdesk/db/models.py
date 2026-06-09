@@ -5,7 +5,7 @@ from typing import Optional
 import uuid
 
 from sqlalchemy import (
-    Column, String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, Time,
+    Column, Index, String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, Time,
     Table, UniqueConstraint,
 )
 from sqlalchemy import Float as sa_Float
@@ -32,6 +32,7 @@ ticket_labels = Table(
     Base.metadata,
     Column("ticket_id", ForeignKey("tickets.id", ondelete="CASCADE"), primary_key=True),
     Column("label_id", ForeignKey("labels.id", ondelete="CASCADE"), primary_key=True),
+    Index("ix_ticket_labels_label_id", "label_id"),
 )
 
 
@@ -76,7 +77,7 @@ class Label(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     tickets: Mapped[list["Ticket"]] = relationship(
-        secondary=ticket_labels, back_populates="labels", lazy="dynamic",
+        secondary=ticket_labels, back_populates="labels",
     )
 
 

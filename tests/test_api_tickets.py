@@ -26,8 +26,12 @@ async def test_full_ticket_lifecycle(client):
     assert r.status_code == 200
     assert any(t["id"] == tid for t in r.json())
 
+    # Priority uses the named 0-4 scale; out-of-range values are rejected.
     r = await client.patch(f"/api/v1/tickets/{tid}", json={"priority": 9})
-    assert r.json()["priority"] == 9
+    assert r.status_code == 422
+
+    r = await client.patch(f"/api/v1/tickets/{tid}", json={"priority": 4})
+    assert r.json()["priority"] == 4
 
     # Run-now on a draft ticket must do BOTH: set the flag AND transition
     # to queued. The scheduler's WHERE status='queued' clause would

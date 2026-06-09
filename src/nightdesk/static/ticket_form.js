@@ -243,6 +243,69 @@
     window.ndRenumberLinkedWorkspaceRows(root);
   }
 
+  // Sync toolchain-picker badge spans to reflect a new project's default_toolchains.
+  // Called after a project change so the "Inherited" badge stays accurate without
+  // a full page reload. Only the inherited-vs-none state is dynamic; explicit
+  // enabled/disabled states come from the checkbox values and don't change.
+  function _syncToolchainBadges(root, projectDefaults) {
+    if (!root) return;
+    const inherited = new Set(Array.isArray(projectDefaults) ? projectDefaults : []);
+    root.querySelectorAll('[data-toolchain-row]').forEach((row) => {
+      const enableInput = row.querySelector('[data-toolchain-enable]');
+      const disableInput = row.querySelector('[data-toolchain-disable]');
+      if (!enableInput) return;
+      const name = enableInput.value;
+      const isInherited = inherited.has(name);
+      const isDisabled = !!(disableInput && disableInput.checked);
+      const isExplicit = enableInput.checked && !isInherited;
+      // Determine the desired badge state.
+      let wantState;
+      if (isInherited && !isDisabled) {
+        wantState = 'inherited';
+      } else if (isExplicit) {
+        wantState = 'enabled';
+      } else if (isDisabled) {
+        wantState = 'disabled';
+      } else {
+        wantState = 'none';
+      }
+      // Find existing badge (server-rendered or previously injected).
+      const existing = row.querySelector('[data-toolchain-badge]');
+      const currentState = existing ? (existing.getAttribute('data-toolchain-badge') || 'none') : 'none';
+      if (currentState === wantState) return;
+      // Remove stale badge.
+      if (existing) existing.remove();
+      if (wantState === 'none') return;
+      // Create replacement badge.
+      const badge = document.createElement('span');
+      badge.setAttribute('data-toolchain-badge', wantState);
+      badge.className = (
+        wantState === 'inherited'
+          ? 'rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent'
+          : wantState === 'enabled'
+          ? 'rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn'
+          : 'rounded border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger'
+      );
+      badge.setAttribute('data-tooltip',
+        wantState === 'inherited' ? 'Inherited from project — active unless disabled'
+          : wantState === 'enabled' ? 'Explicitly enabled on this ticket'
+          : 'Disabled on this ticket — opts out of project default'
+      );
+      badge.textContent = (
+        wantState === 'inherited' ? 'Inherited'
+          : wantState === 'enabled' ? 'Enabled'
+          : 'Disabled'
+      );
+      // Insert before the Enable label so badge appears in the same visual slot.
+      const enableLabel = enableInput.closest('label');
+      if (enableLabel) {
+        row.insertBefore(badge, enableLabel);
+      } else {
+        row.appendChild(badge);
+      }
+    });
+  }
+
   function _applyProjectWorkspaceDefaults(root, projectId, force = false) {
     if (!root) return;
     // Auto-apply (force=false) is create-only and respects the dirty guard so
@@ -265,6 +328,8 @@
     const baseRefInput = root.querySelector('[data-base-ref-input]');
     if (baseRefInput) baseRefInput.value = project && project.default_base_ref ? project.default_base_ref : '';
     _setLinkedWorkspaceRows(root, project && project.default_linked_workspaces ? project.default_linked_workspaces : []);
+    // Refresh toolchain-picker badge states to reflect the new project's defaults.
+    _syncToolchainBadges(root, project ? (project.default_toolchains || []) : []);
     root.__ndApplyingProjectDefaults = false;
     window.ndSyncWorktreeFields(root);
     window.ndScheduleWorktreePreview(0, root);
@@ -375,9 +440,15 @@
     if (!target) return true;
     const name = target.name || '';
     if (name === 'title' || name === 'prompt') return true;
+    // Priority and label fields are purely organisational — they don't affect
+    // the sandbox, toolchain, or permission resolution.
+    if (name === 'priority') return true;
+    if (name === 'label_ids' || name === 'labels_form') return true;
     // Dependency search box and its hidden depends_on_id rows don't change
     // the execution context either.
-    if (target.matches && target.matches('[data-dep-search], [name="depends_on_id"]')) return true;
+    if (target.matches && target.matches(
+      '[data-dep-search], [name="depends_on_id"], [name="deps_form"]'
+    )) return true;
     return false;
   }
 

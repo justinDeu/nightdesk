@@ -1,10 +1,11 @@
 """JSON API routes for labels CRUD and ticket-label association."""
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
@@ -24,14 +25,35 @@ from nightdesk.domain.labels import (
 # Schemas
 # ---------------------------------------------------------------------------
 
+_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{3,8}$')
+
+
+def _check_color(v: Optional[str]) -> Optional[str]:
+    if v and not _COLOR_RE.match(v):
+        raise ValueError(
+            f"color must be empty or match #[0-9a-fA-F]{{3,8}}, got: {v!r}"
+        )
+    return v
+
+
 class LabelCreate(BaseModel):
     name: str
     color: str = ""
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, v: str) -> str:
+        return _check_color(v) or ""
 
 
 class LabelUpdate(BaseModel):
     name: Optional[str] = None
     color: Optional[str] = None
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, v: Optional[str]) -> Optional[str]:
+        return _check_color(v)
 
 
 class TicketLabelsUpdate(BaseModel):

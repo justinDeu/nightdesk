@@ -57,7 +57,8 @@ class ClaudeExecutor:
                     disallowed.append(rule)
         model = spec.default_model or self.model
         permission_mode = getattr(spec, "permission_mode", None)  # None -> SDK default
-        return {
+        system_prompt = getattr(spec, "system_prompt", None)
+        d: dict[str, Any] = {
             "prompt": req.prompt,
             "working_dir": str(req.working_dir),
             "allowed_tools": allowed,
@@ -68,6 +69,9 @@ class ClaudeExecutor:
             # inside the sandbox (see worker.sandbox.build_bwrap_argv).
             "cli_path": SANDBOX_CLAUDE_BIN,
         }
+        if system_prompt:
+            d["system_prompt"] = system_prompt
+        return d
 
     async def run(self, req: ExecutionRequest) -> ExecutionResult:
         req.transcript_path.parent.mkdir(parents=True, exist_ok=True)

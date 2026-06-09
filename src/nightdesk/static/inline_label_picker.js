@@ -152,6 +152,20 @@
     setActive(menu, visibleOptions(menu)[0]);
   }
 
+  // ---- programmatic entry point (command palette / keyboard shortcuts) ----
+  //
+  // Opens the inline label picker for a given ticket by locating its anchor
+  // in the current DOM (board card or list row).  Returns true if an anchor
+  // was found.  This lets the command palette and keyboard shortcuts reuse
+  // the one picker primitive instead of shipping a separate UI.
+  window.ndOpenLabelPicker = function (ticketId) {
+    var anchor = document.querySelector('[data-label-picker="' + ticketId + '"]');
+    if (!anchor) return false;
+    try { anchor.scrollIntoView({ block: "nearest" }); } catch (e) {}
+    openPicker(anchor);
+    return true;
+  };
+
   // ---- commit feedback (called from toggle buttons' hx-on::after-request) --
 
   window.ndInlineLabelCommitted = function (btn, ev) {

@@ -756,13 +756,10 @@
       flashStatus("Label picker: select a ticket first");
       return;
     }
-    // Labels may not be registered in the property picker yet. Check for the
-    // "labels" property in the registry; if absent, flash a message and leave
-    // a clear hook for the future implementation.
-    var ok = window.ndOpenPropertyPicker &&
-      window.ndOpenPropertyPicker(ctx.id, "labels");
+    // Delegate to the inline label picker exposed by inline_label_picker.js.
+    var ok = window.ndOpenLabelPicker && window.ndOpenLabelPicker(ctx.id);
     if (!ok) {
-      flashStatus("Label picker: select a ticket first, or labels not yet configured");
+      flashStatus("Label picker: select a ticket first");
     }
   }
 

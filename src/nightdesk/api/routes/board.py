@@ -84,6 +84,19 @@ def _normalize_group(raw: Optional[str]) -> str:
     return g if g in _GROUPABLE else "status"
 
 
+def _dep_candidates(session: Session, project_id: Optional[str] = None) -> list:
+    """Tickets offered in the "Depends on" picker.
+
+    Inbox items are excluded: they are under-specified and unpromotable, so a
+    dependency on one silently blocks the dependent ticket forever.
+    """
+    return [
+        t
+        for t in list_tickets(session, project_id=project_id, limit=500)
+        if t.status != "inbox"
+    ]
+
+
 def _status_column(status: str, label: str, tickets: list) -> dict:
     """A real status column: keyed by status, droppable (status-changing drag)."""
     return {
@@ -725,13 +738,12 @@ def _gather_board(session: Session, *, q: str = "", group: str = "status"):
         "projects_by_id": projects_by_id,
         "selected_project": selected_project,
         "query": q,
-        # Every ticket, for the modal's "Depends on" picker (all statuses). When
+        # Every non-inbox ticket, for the modal's "Depends on" picker. When
         # the query is a single project, scope the picker to it (as the old
         # project filter did); richer queries leave the picker unscoped.
-        "dep_all": list_tickets(
+        "dep_all": _dep_candidates(
             session,
             project_id=selected_project.id if selected_project else None,
-            limit=500,
         ),
         "toolchain_options": _toolchain_options(session),
         "all_labels": all_labels,
@@ -1034,7 +1046,7 @@ def build_router(
                 "deps_upstreams": deps_upstreams,
                 "deps_downstreams": deps_downstreams,
                 "effective": effective,
-                "dep_all": list_tickets(session, limit=500),
+                "dep_all": _dep_candidates(session),
                 "projects": list_projects(session),
                 "toolchain_options": _toolchain_options(session),
                 "all_labels": _list_labels_sidebar(session),
@@ -1057,7 +1069,7 @@ def build_router(
                 "profiles": list_profiles(session),
                 "ticket": None,
                 "modal_id": "ticket-create-modal",
-                "dep_all": list_tickets(session, limit=500),
+                "dep_all": _dep_candidates(session),
                 "projects": list_projects(session),
                 "selected_project": _project_filter(session, project)[1],
                 "toolchain_options": _toolchain_options(session),
@@ -1444,7 +1456,7 @@ def build_router(
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
              "effective": resolve_for_ticket(session, ticket),
-             "dep_all": list_tickets(session, limit=500),
+             "dep_all": _dep_candidates(session),
              "projects": list_projects(session),
              "toolchain_options": _toolchain_options(session),
              "all_labels": _list_labels_sidebar(session)},
@@ -1479,7 +1491,7 @@ def build_router(
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
              "effective": resolve_for_ticket(session, ticket),
-             "dep_all": list_tickets(session, limit=500),
+             "dep_all": _dep_candidates(session),
              "projects": list_projects(session),
              "toolchain_options": _toolchain_options(session),
              "all_labels": _list_labels_sidebar(session)},

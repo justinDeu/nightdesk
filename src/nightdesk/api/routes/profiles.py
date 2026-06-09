@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from nightdesk.api.auth import require_bearer, require_token_cookie_or_bearer
 from nightdesk.api.schemas import ProfileCreate, ProfileOut, ProfileUpdate
 from nightdesk.domain.backend_capabilities import (
+    CAPABILITIES,
     DEFAULT_BACKEND,
     FIELD_GROUPS,
     SHARED_GROUP_KEYS,
@@ -339,7 +340,14 @@ def _build_json_router(get_session, bearer_token: str) -> APIRouter:
         fields = payload.model_dump()
         creds_in = fields.pop("claude_credentials", None)
         env_in = fields.pop("env", None)
-        fields["claude_credentials"] = _encrypt_credentials_in(box, creds_in, None)
+        # Only require / encrypt credentials for backends that actually use them
+        # (those consuming the claude_auth field group). omp_rpc and any future
+        # non-Claude backend must be creatable without supplying credentials.
+        backend = fields.get("backend", DEFAULT_BACKEND)
+        if capability_or_default(backend).consumes("claude_auth"):
+            fields["claude_credentials"] = _encrypt_credentials_in(box, creds_in, None)
+        else:
+            fields.pop("claude_credentials", None)
         env_token = _encrypt_env_in(box, env_in)
         fields["env"] = None if env_token == "__UNCHANGED__" else env_token
         _validate_paths(fields.get("fs_read") or [], field="fs_read")
@@ -564,6 +572,12 @@ def _capability_context(selected_backend: str | None) -> dict:
         "backend_shared_groups": [FIELD_GROUPS[k] for k in SHARED_GROUP_KEYS],
         "backend_specific_groups": cap.specific_groups,
         "backend_inert_groups": cap.inert_groups,
+        # Set of backend codes that are not yet fully wired for execution.
+        # Templates use this to show a "runs will fail" warning without
+        # hardcoding a backend name in markup.
+        "non_executable_backends": frozenset(
+            code for code, bc in CAPABILITIES.items() if not bc.executable
+        ),
     }
 
 
@@ -650,6 +664,8 @@ def _view_context(profile, box: Optional[ProfileSecretBox]) -> dict:
             continue  # already surfaced under model_overrides
         if key in _OMP_KEYS:
             continue  # surfaced in the OMP connection block (token redacted)
+        if not is_claude and key in _BEHAVIOR_TOGGLE_KEYS + _BEHAVIOR_NUMERIC_KEYS:
+            continue  # claude-only knobs: data preserved, not shown on other backends
         known = env_lookup(key)
         is_secret = bool(known and known.secret)
         env_entries.append({

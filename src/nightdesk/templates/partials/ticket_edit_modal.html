@@ -168,7 +168,8 @@
             "default_workspace_mode": {{ p.default_workspace_mode | tojson }},
             "default_worktree_name_template": {{ p.default_worktree_name_template | tojson }},
             "default_base_ref": {{ p.default_base_ref | tojson }},
-            "default_linked_workspaces": {{ (p.default_linked_workspaces or []) | tojson }}
+            "default_linked_workspaces": {{ (p.default_linked_workspaces or []) | tojson }},
+            "default_toolchains": {{ (p.default_toolchains or []) | tojson }}
           }{{ "," if not loop.last }}
           {% endfor %}
         }</script>
@@ -234,13 +235,18 @@
                     </div>
                     {% if opt.paths %}<code class="block truncate text-[10px] text-fg-muted">{{ opt.paths | join(', ') }}</code>{% endif %}
                   </div>
-                  {# Provenance badge — shown when the preset has a relevant state #}
-                  {% if _is_inherited and opt.name in _tc_enabled %}
-                    <span class="rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent" title="Inherited from project {{ _tc_project.name | default('') }}">Inherited</span>
+                  {# Provenance badge — shown when the preset has a relevant state.
+                     Inherited: in project defaults, not explicitly disabled — active at
+                     runtime whether or not it appears in the ticket's explicit enable list.
+                     Enabled: explicitly added on this ticket (not a project default).
+                     Disabled: explicitly opted out on this ticket.
+                     data-toolchain-badge marks the span so JS can refresh it on project change. #}
+                  {% if _is_inherited and not _is_disabled %}
+                    <span class="rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent" data-toolchain-badge="inherited" data-tooltip="Inherited from project {{ _tc_project.name | default('') }} — active unless disabled">Inherited</span>
                   {% elif _is_explicitly_enabled %}
-                    <span class="rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn" title="Explicitly enabled on this ticket">Enabled</span>
+                    <span class="rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn" data-toolchain-badge="enabled" data-tooltip="Explicitly enabled on this ticket">Enabled</span>
                   {% elif _is_disabled %}
-                    <span class="rounded border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger" title="Disabled on this ticket — opts out of project default">Disabled</span>
+                    <span class="rounded border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger" data-toolchain-badge="disabled" data-tooltip="Disabled on this ticket — opts out of project default">Disabled</span>
                   {% endif %}
                   <label class="flex items-center gap-1 text-[11px] text-fg-muted">
                     <input type="checkbox" name="toolchain_enable" value="{{ opt.name }}"

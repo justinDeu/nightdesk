@@ -668,6 +668,36 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         ctx["labels"] = list_labels(session)
         return templates.TemplateResponse(request, "settings_shell.html", ctx)
 
+    @router.post("/settings/labels/{label_id}", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_labels_update(
+        request: Request,
+        label_id: str,
+        session: Session = Depends(get_session),
+        name: str = Form(""),
+        color: str = Form(""),
+    ):
+        from nightdesk.domain.labels import (
+            update_label, list_labels, LabelNotFound, LabelNameTaken,
+        )
+        name_clean = (name or "").strip()
+        if not name_clean:
+            raise HTTPException(422, "label name is required")
+        try:
+            update_label(
+                session, label_id,
+                name=name_clean,
+                color=(color or "").strip(),
+            )
+        except LabelNotFound:
+            raise HTTPException(404, "label not found")
+        except LabelNameTaken as e:
+            raise HTTPException(409, f"label name already taken: {e}")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        ctx = _settings_context(session, category="labels", saved=True)
+        ctx["labels"] = list_labels(session)
+        return templates.TemplateResponse(request, "settings_shell.html", ctx)
+
     @router.post("/settings/labels/{label_id}/delete", response_class=HTMLResponse, dependencies=[auth])
     async def settings_labels_delete(
         request: Request,

@@ -32,6 +32,7 @@ only. This resolver never claims to predict whether a run will succeed.
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -374,6 +375,44 @@ def _workspace_reach(inp: ResolveInput) -> tuple[list[str], list[str]]:
     return writes, reads
 
 
+def _git_meta_derived_writes(inp: ResolveInput) -> list[str]:
+    """Best-effort git metadata dirs bound rw for git_worktree workspaces.
+
+    Mirrors ``run_one._git_metadata_dirs``: for each git_worktree workspace,
+    we run ``git rev-parse --git-common-dir`` against the source path to
+    discover the repo's common git directory (covers both regular and
+    bare/.bare layouts). Falls back gracefully when git is unavailable or
+    the path is not a git repo.
+    """
+    dirs: list[str] = []
+    seen: set[str] = set()
+    for w in inp.workspaces:
+        if w.get("kind") not in ("git_worktree", "worktree"):
+            continue
+        source = w.get("source_path")
+        if not isinstance(source, str) or not source:
+            continue
+        try:
+            r = subprocess.run(
+                ["git", "-C", source, "rev-parse", "--git-common-dir"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode != 0:
+                continue
+            gcd = r.stdout.strip()
+            if not gcd:
+                continue
+            if not os.path.isabs(gcd):
+                gcd = str(Path(source) / gcd)
+            resolved = str(Path(gcd).resolve())
+            if resolved not in seen:
+                seen.add(resolved)
+                dirs.append(resolved)
+        except Exception:
+            pass
+    return dirs
+
+
 def _additional_dir_items(inp: ResolveInput, mode: str) -> list[str]:
     out: list[str] = []
     for entry in inp.additional_dirs:
@@ -466,6 +505,38 @@ def _collect_issues(inp: ResolveInput, spec: PermissionSpec) -> list[str]:
     for name in referenced:
         if name not in known:
             issues.append(f"Unknown toolchain preset {name!r}.")
+
+    # Credentials structure check (best-effort; blob is Fernet-encrypted in
+    # production, so json.loads raises ValueError and we skip silently).
+    _profile = inp.profile
+    if _profile and getattr(_profile, "claude_credentials", None):
+        import json as _json
+        blob = _profile.claude_credentials
+        try:
+            creds_dict = _json.loads(blob) if isinstance(blob, str) else blob
+            if isinstance(creds_dict, dict):
+                cred_source = creds_dict.get("source")
+                if not cred_source:
+                    issues.append(
+                        "Profile credentials blob is missing a 'source' field."
+                    )
+                elif cred_source in ("api_key", "auth_token"):
+                    value = creds_dict.get("value")
+                    if not value or (isinstance(value, str) and not value.strip()):
+                        issues.append(
+                            f"Profile credentials source={cred_source!r} has an empty value."
+                        )
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    # Blank entries in secret_keys are noise and likely misconfiguration.
+    # Check raw lists (not cleaned) so blanks that survived storage are caught.
+    raw_profile_keys = list(_profile.secret_keys or []) if _profile else []
+    if any(isinstance(k, str) and not k.strip() for k in raw_profile_keys):
+        issues.append("Profile secret_keys contains a blank entry.")
+    raw_ovr_keys = list((inp.permission_overrides or {}).get("secret_keys") or [])
+    if any(isinstance(k, str) and not k.strip() for k in raw_ovr_keys):
+        issues.append("Ticket secret_keys override contains a blank entry.")
 
     # Path references overlapping protected nightdesk dirs.
     for label, paths in (
@@ -626,6 +697,12 @@ def resolve_effective_config(inp: ResolveInput) -> EffectiveConfig:
         )
 
     # --- group: Execution backend -----------------------------------------
+    profile_field = ConfigField(
+        key="profile",
+        label="Profile",
+        source=TICKET if profile else DERIVED,
+        value=(profile.name if profile else "(none)"),
+    )
     backend_field = _replace_field("backend", "Backend", base.backend, overrides)
     model_field = _replace_field(
         "default_model", "Model", base.default_model, overrides,
@@ -654,7 +731,7 @@ def resolve_effective_config(inp: ResolveInput) -> EffectiveConfig:
     )
     backend_group = ConfigGroup(
         title="Execution backend",
-        fields=(backend_field, model_field, permission_mode_field,
+        fields=(profile_field, backend_field, model_field, permission_mode_field,
                 claude_bin_field, credentials_field),
     )
 
@@ -669,6 +746,7 @@ def resolve_effective_config(inp: ResolveInput) -> EffectiveConfig:
             (DERIVED, ws_reads),
         ),
     )
+    git_meta_writes = _git_meta_derived_writes(inp)
     fs_write_field = ConfigField(
         key="fs_write", label="Filesystem write",
         source=PROFILE if profile_fs_write else DERIVED,
@@ -677,6 +755,11 @@ def resolve_effective_config(inp: ResolveInput) -> EffectiveConfig:
             (TICKET, _clean_list(ovr.get("fs_write"))),
             (TICKET, _additional_dir_items(inp, "rw")),
             (DERIVED, ws_writes),
+            (DERIVED, git_meta_writes),
+        ),
+        note=(
+            "Git common dir additionally mounted read-write for worktree operations."
+            if git_meta_writes else None
         ),
     )
     fs_group = ConfigGroup(
@@ -716,8 +799,24 @@ def resolve_effective_config(inp: ResolveInput) -> EffectiveConfig:
     )
 
     # --- group: Network & secrets -----------------------------------------
-    network_mode_field = _replace_field(
+    _nm_field = _replace_field(
         "network_mode", "Network mode", base.network_mode, overrides,
+    )
+    _effective_nm = _nm_field.value
+    network_mode_field = (
+        ConfigField(
+            key=_nm_field.key,
+            label=_nm_field.label,
+            source=_nm_field.source,
+            value=_nm_field.value,
+            note=(
+                "Enforced via tool deny rules (Bash/WebFetch denied), not "
+                "OS-level network isolation — the sandbox shares the host "
+                "network namespace so inference can reach the Anthropic API."
+            ),
+        )
+        if _effective_nm == "off"
+        else _nm_field
     )
     network_allow_field = ConfigField(
         key="network_allowlist", label="Network allowlist",
@@ -772,7 +871,11 @@ def resolve_effective_config(inp: ResolveInput) -> EffectiveConfig:
         key="resolved_tool_paths", label="Resolved PATH dirs",
         source=DERIVED,
         items=tuple(Contribution(value=p, source=DERIVED) for p in resolved_paths),
-        note="presets expanded and relative paths resolved against the workspace.",
+        note=(
+            "Presets expanded and relative paths resolved against the workspace. "
+            "Symlinked tool runtimes (e.g. pipx/cargo shims) are additionally "
+            "mounted read-only at run time."
+        ),
     )
     toolchain_group = ConfigGroup(
         title="Toolchain & PATH",

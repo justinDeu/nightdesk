@@ -124,6 +124,20 @@ async def test_property_picker_js_exposes_entry_point(cookie_client):
     assert "ndOpenPropertyPicker" in r.text
 
 
+async def test_inline_label_picker_js_exposes_entry_point(cookie_client):
+    """The inline label picker JS must expose ndOpenLabelPicker for shortcuts."""
+    r = await cookie_client.get("/static/inline_label_picker.js")
+    assert r.status_code == 200
+    assert "ndOpenLabelPicker" in r.text
+
+
+async def test_command_palette_uses_ndOpenLabelPicker(cookie_client):
+    """The command palette must call ndOpenLabelPicker (not ndOpenPropertyPicker for labels)."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    assert "ndOpenLabelPicker" in r.text
+
+
 async def test_command_palette_js_has_shortcut_keys(cookie_client):
     """The command palette JS must wire all focused-ticket shortcut keys."""
     r = await cookie_client.get("/static/command_palette.js")

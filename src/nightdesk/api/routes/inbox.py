@@ -181,7 +181,13 @@ def build_router(
                 "profiles": list_profiles(session),
                 "projects": list_projects(session),
                 "all_labels": list_labels(session),
-                "dep_all": list_tickets(session, limit=500),
+                # Inbox items are excluded: an unpromotable dependency would
+                # silently block the dependent ticket forever.
+                "dep_all": [
+                    t
+                    for t in list_tickets(session, limit=500)
+                    if t.status != "inbox"
+                ],
                 "toolchain_options": toolchain_options(current_config(session)),
                 # Optional execution-context preview hook — only set when the
                 # endpoint is mounted (see _preview_url / _PREVIEW_PATH).

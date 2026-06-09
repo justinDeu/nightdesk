@@ -42,8 +42,10 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("ticket_id", "label_id"),
     )
+    op.create_index("ix_ticket_labels_label_id", "ticket_labels", ["label_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_ticket_labels_label_id", table_name="ticket_labels")
     op.drop_table("ticket_labels")
     op.drop_table("labels")

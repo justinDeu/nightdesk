@@ -150,6 +150,11 @@ class BackendCapability:
     # Selectable in the editor dropdown. A described-but-disabled backend
     # shows up greyed out rather than vanishing, so the roadmap is visible.
     enabled: bool = True
+    # Whether the backend's executor is fully wired and can actually run tickets.
+    # False means the executor returns a "not yet wired" failure immediately, so
+    # the editor and view pane can surface a clear warning rather than letting
+    # users dispatch runs that silently fail.
+    executable: bool = True
 
     def consumes(self, group_key: str) -> bool:
         return group_key in self.group_keys
@@ -214,6 +219,7 @@ OMP_RPC = BackendCapability(
         *_SHARED_TAIL,
     ),
     enabled=True,
+    executable=False,
 )
 
 

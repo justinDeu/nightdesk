@@ -21,8 +21,9 @@ def test_known_backends_are_described_and_enabled():
 
 def test_shared_groups_are_common_to_every_backend():
     shared = set(bc.SHARED_GROUP_KEYS)
-    # The sandbox/runtime surface the ticket calls out as common.
-    assert {"filesystem", "tools", "network", "env", "system_prompt"} <= shared
+    # Exact shared surface: silent additions (e.g. a new group accidentally
+    # marked shared=True) must fail this test rather than pass silently.
+    assert shared == {"filesystem", "tools", "network", "env", "system_prompt", "run_token_scopes"}
     for cap in bc.all_capabilities():
         assert shared <= set(cap.group_keys), cap.code
         # Shared groups are never reported as backend-specific or inert.

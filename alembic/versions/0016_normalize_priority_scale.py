@@ -23,5 +23,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Legacy rank values cannot be reconstructed.
+    # Intentional no-op: legacy priority rank values cannot be reconstructed
+    # once they have been clamped to the 0..4 scale.  Downgrading this revision
+    # leaves the data as-is — tickets retain their (now normalised) 0..4 values
+    # rather than regaining meaningless large integers.
     pass

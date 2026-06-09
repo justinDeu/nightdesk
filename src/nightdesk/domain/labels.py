@@ -7,6 +7,7 @@ join table, managed via ``set_ticket_labels``.
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from sqlalchemy import select
@@ -28,11 +29,27 @@ class LabelNameTaken(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Color validation
+# ---------------------------------------------------------------------------
+
+_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{3,8}$')
+
+
+def _validate_color(color: str) -> None:
+    """Raise ``ValueError`` if *color* is non-empty and not a valid hex color."""
+    if color and not _COLOR_RE.match(color):
+        raise ValueError(
+            f"invalid color {color!r}; must be empty or match #[0-9a-fA-F]{{3,8}}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Label CRUD
 # ---------------------------------------------------------------------------
 
 def create_label(session: Session, *, name: str, color: str = "") -> Label:
     """Create a new label.  Raises ``LabelNameTaken`` on duplicate name."""
+    _validate_color(color)
     existing = session.scalar(select(Label).where(Label.name == name))
     if existing is not None:
         raise LabelNameTaken(name)
@@ -69,6 +86,7 @@ def update_label(
             raise LabelNameTaken(name)
         label.name = name
     if color is not None:
+        _validate_color(color)
         label.color = color
     session.commit()
     session.refresh(label)

@@ -171,6 +171,27 @@ class TestLabelDomain:
         refreshed = get_ticket(session, ticket.id)
         assert len(refreshed.labels) == 0
 
+    def test_create_label_invalid_color(self, session):
+        with pytest.raises(ValueError, match="invalid color"):
+            create_label(session, name="bad-color", color="not-a-color")
+
+    def test_create_label_color_no_hash(self, session):
+        with pytest.raises(ValueError, match="invalid color"):
+            create_label(session, name="bad-hash", color="3b82f6")
+
+    def test_create_label_empty_color_ok(self, session):
+        label = create_label(session, name="no-color", color="")
+        assert label.color == ""
+
+    def test_create_label_valid_short_hex(self, session):
+        label = create_label(session, name="short-hex", color="#abc")
+        assert label.color == "#abc"
+
+    def test_update_label_invalid_color(self, session):
+        label = create_label(session, name="to-update")
+        with pytest.raises(ValueError, match="invalid color"):
+            update_label(session, label.id, color="badcolor")
+
 
 # ---------------------------------------------------------------------------
 # JSON API tests
@@ -234,6 +255,20 @@ class TestLabelsAPI:
         assert len(r.json()) == 1
         assert r.json()[0]["name"] == "backend"
 
+    async def test_create_label_invalid_color_api(self, cookie_client):
+        r = await cookie_client.post("/api/v1/labels", json={
+            "name": "badcolor", "color": "not-hex",
+        })
+        assert r.status_code == 422
+
+    async def test_update_label_invalid_color_api(self, cookie_client):
+        create_r = await cookie_client.post("/api/v1/labels", json={"name": "valid"})
+        label_id = create_r.json()["id"]
+        r = await cookie_client.patch(f"/api/v1/labels/{label_id}", json={
+            "color": "bad",
+        })
+        assert r.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # Settings page tests
@@ -275,6 +310,32 @@ class TestLabelsSettingsPage:
         assert r.status_code == 200
         assert "to-remove" not in r.text
 
+    async def test_labels_settings_pane_has_edit_button(self, cookie_client, session):
+        """Each label row must have an edit affordance."""
+        create_label(session, name="editable", color="#3b82f6")
+        r = await cookie_client.get("/settings/labels")
+        assert r.status_code == 200
+        assert "nd-label-edit-form" in r.text
+
+    async def test_labels_settings_inline_update(self, cookie_client, session):
+        """POST /settings/labels/{id} renames and recolors a label."""
+        label = create_label(session, name="old-name", color="#000000")
+        r = await cookie_client.post(
+            f"/settings/labels/{label.id}",
+            data={"name": "new-name", "color": "#ffffff"},
+        )
+        assert r.status_code == 200
+        assert "new-name" in r.text
+        assert "old-name" not in r.text
+
+    async def test_labels_settings_inline_update_invalid_color(self, cookie_client, session):
+        label = create_label(session, name="color-guard")
+        r = await cookie_client.post(
+            f"/settings/labels/{label.id}",
+            data={"name": "color-guard", "color": "notacolor"},
+        )
+        assert r.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # Rendering tests
@@ -292,6 +353,29 @@ class TestLabelRendering:
         assert r.status_code == 200
         assert "backend" in r.text
 
+    async def test_board_card_has_inline_label_anchor(self, cookie_client, session, profile):
+        """Board card label area must render with data-label-picker for inline editing."""
+        ticket = create_ticket(
+            session, title="anchor-test", prompt="x",
+            profile_id=profile.id, source_path="/tmp",
+        )
+        r = await cookie_client.get("/")
+        assert r.status_code == 200
+        assert f'data-label-picker="{ticket.id}"' in r.text
+
+    async def test_inline_label_picker_route(self, cookie_client, session, profile):
+        """GET /board/tickets/{tid}/inline-labels returns the popover body."""
+        label = create_label(session, name="infra-inline", color="#ef4444")
+        ticket = create_ticket(
+            session, title="inline-picker-test", prompt="x",
+            profile_id=profile.id, source_path="/tmp",
+        )
+        set_ticket_labels(session, ticket.id, [label.id])
+        r = await cookie_client.get(f"/board/tickets/{ticket.id}/inline-labels")
+        assert r.status_code == 200
+        assert "infra-inline" in r.text
+        assert "data-inline-label-option" in r.text
+
     async def test_label_chips_on_sidebar(self, cookie_client, session, profile):
         label = create_label(session, name="ui/ux", color="#8b5cf6")
         ticket = create_ticket(
@@ -302,6 +386,16 @@ class TestLabelRendering:
         r = await cookie_client.get(f"/board/sidebar?ticket_id={ticket.id}")
         assert r.status_code == 200
         assert "ui/ux" in r.text
+
+    async def test_sidebar_label_area_is_clickable(self, cookie_client, session, profile):
+        """Sidebar labels must have ndOpenLabelPicker wiring for keyboard/click access."""
+        ticket = create_ticket(
+            session, title="sidebar-click-test", prompt="x",
+            profile_id=profile.id, source_path="/tmp",
+        )
+        r = await cookie_client.get(f"/board/sidebar?ticket_id={ticket.id}")
+        assert r.status_code == 200
+        assert "ndOpenLabelPicker" in r.text
 
     async def test_label_in_ticket_detail(self, cookie_client, session, profile):
         label = create_label(session, name="infra", color="#ef4444")
@@ -322,14 +416,10 @@ class TestLabelRendering:
 class TestLabelSeedData:
     def test_label_specs_exist(self):
         from nightdesk.seed_demo import _LABEL_SPECS
-        assert len(_LABEL_SPECS) >= 6
+        # Exact count — add a new entry here if the seeder grows.
+        assert len(_LABEL_SPECS) == 8
         names = {s["name"] for s in _LABEL_SPECS}
-        assert "backend" in names
-        assert "ui/ux" in names
-        assert "research" in names
-        assert "infra" in names
-        assert "docs" in names
-        assert "cleanup" in names
+        assert names == {"backend", "ui/ux", "bug", "research", "infra", "docs", "cleanup", "feature"}
 
     def test_ticket_specs_have_labels(self):
         from nightdesk.seed_demo import _TICKET_SPECS

@@ -108,7 +108,15 @@
           {% else %}
             <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">in directory</span>
           {% endif %}
-          {% if ticket.labels %}
+          {# Labels — clickable to open the card's inline label picker. #}
+          <span
+            role="button"
+            tabindex="0"
+            onclick="event.stopPropagation(); window.ndOpenLabelPicker && window.ndOpenLabelPicker('{{ ticket.id }}')"
+            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.ndOpenLabelPicker&&window.ndOpenLabelPicker('{{ ticket.id }}')}"
+            data-tooltip="Edit labels"
+            class="nd-label-anchor"
+          >
             {% for label in ticket.labels %}
               <span
                 data-label-id="{{ label.id }}"
@@ -116,7 +124,10 @@
                 style="{% if label.color %}background-color: {{ label.color }}22; border-color: {{ label.color }}66; color: {{ label.color }};{% else %}background-color: var(--color-bg-elev-2); border-color: var(--color-border); color: var(--color-fg-muted);{% endif %}"
               >{{ label.name }}</span>
             {% endfor %}
-          {% endif %}
+            {% if not ticket.labels %}
+              <span class="text-[10px] text-fg-muted/50 nd-label-placeholder">—</span>
+            {% endif %}
+          </span>
         </div>
       </div>
 

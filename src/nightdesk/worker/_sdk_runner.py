@@ -421,6 +421,17 @@ async def _run_query(spec: dict[str, Any], emit: Any) -> int:
         opts_kwargs["permission_mode"] = spec["permission_mode"]
     if spec.get("cli_path"):
         opts_kwargs["cli_path"] = spec["cli_path"]
+    if spec.get("system_prompt"):
+        # Append to the default Claude Code system prompt rather than replacing
+        # it. A plain string value for system_prompt would substitute the entire
+        # default prompt, stripping all of Claude Code's built-in instructions
+        # and degrading worker behaviour. The preset+append shape keeps the
+        # standard prompt intact and appends the profile's text after it.
+        opts_kwargs["system_prompt"] = {
+            "type": "preset",
+            "preset": "claude_code",
+            "append": spec["system_prompt"],
+        }
     # Isolate the worker from the user's global Claude Code config. Without
     # this, ~/.claude/settings.json + plugins (e.g. superpowers SessionStart
     # hooks, the brainstorming skill) get auto-loaded and push the agent into

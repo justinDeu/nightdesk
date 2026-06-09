@@ -2,6 +2,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from nightdesk.api.app import create_app
+from nightdesk.domain.labels import create_label, set_ticket_labels
 from nightdesk.domain.profiles import create_profile
 from nightdesk.domain.projects import create_project
 from nightdesk.domain.tickets import (
@@ -1155,3 +1156,79 @@ async def test_sidebar_shows_effective_context_and_toolchain_together(
     assert "Toolchain" in body
     assert "Inherited" in body
     assert "user-python-tools" in body
+
+
+@pytest.mark.anyio
+async def test_dep_picker_excludes_inbox_items(cookie_client, session, profile):
+    """Inbox tickets must not appear in the edit modal's dep candidate list.
+
+    A dependency on an inbox item permanently blocks the dependent because
+    ``_is_dependency_satisfied`` returns False for inbox status.  The picker
+    must filter them out so users can never accidentally create that trap.
+    """
+    inbox_t = create_ticket(
+        session,
+        title="INBOX-CANDIDATE",
+        prompt="",
+        profile_id=profile.id,
+        status="inbox",
+    )
+    draft_t = create_ticket(
+        session,
+        title="DRAFT-CANDIDATE",
+        prompt="p",
+        profile_id=profile.id,
+        status="draft",
+        source_path="/tmp",
+    )
+    other_t = create_ticket(
+        session,
+        title="OTHER-CANDIDATE",
+        prompt="p",
+        profile_id=profile.id,
+        status="queued",
+        source_path="/tmp",
+    )
+
+    # The sidebar edit modal is the canonical dep-picker surface.
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={draft_t.id}")
+    assert r.status_code == 200
+    body = r.text
+
+    # The data-dep-candidates JSON blob is embedded in the modal.
+    assert "data-dep-candidates" in body
+    # Non-inbox tickets appear in the picker JSON (tojson wraps in double-quotes).
+    assert '"OTHER-CANDIDATE"' in body
+    # Inbox items are excluded entirely — not anywhere in the rendered page.
+    assert "INBOX-CANDIDATE" not in body
+
+
+async def test_board_card_label_anchor_renders(cookie_client, session, profile):
+    """Every board card must render with data-label-picker so the inline picker
+    and keyboard shortcut (L) can find it by ticket id."""
+    label = create_label(session, name="card-anchor-label", color="#3b82f6")
+    ticket = create_ticket(
+        session, title="anchor-card", prompt="x",
+        profile_id=profile.id, source_path="/tmp",
+    )
+    set_ticket_labels(session, ticket.id, [label.id])
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    assert f'data-label-picker="{ticket.id}"' in r.text
+    # Chips inside the anchor carry data-label-id for bulk selection JS.
+    assert f'data-label-id="{label.id}"' in r.text
+
+
+async def test_inline_label_picker_route_returns_options(cookie_client, session, profile):
+    """GET /board/tickets/{tid}/inline-labels returns the toggle option list."""
+    label = create_label(session, name="route-test-label", color="#ef4444")
+    ticket = create_ticket(
+        session, title="inline-route-test", prompt="x",
+        profile_id=profile.id, source_path="/tmp",
+    )
+    set_ticket_labels(session, ticket.id, [label.id])
+    r = await cookie_client.get(f"/board/tickets/{ticket.id}/inline-labels")
+    assert r.status_code == 200
+    assert "route-test-label" in r.text
+    assert "data-inline-label-option" in r.text
+    assert "aria-selected=\"true\"" in r.text  # current label is checked

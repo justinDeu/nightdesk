@@ -5,7 +5,7 @@
 #}
 {% set fields = namespace(
   project=none, source_path=none, workspace_mode=none, base_ref=none, git_worktree=none,
-  backend=none, default_model=none, permission_mode=none, claude_binary_path=none, credentials=none,
+  profile=none, backend=none, default_model=none, permission_mode=none, claude_binary_path=none, credentials=none,
   fs_read=none, fs_write=none, allowed_tools=none, denied_tools=none,
   network_mode=none, network_allowlist=none, secret_keys=none,
   toolchains=none, extra_paths=none, resolved_tool_paths=none
@@ -17,6 +17,7 @@
     {% if field.key == 'workspace_mode' %}{% set fields.workspace_mode = field %}{% endif %}
     {% if field.key == 'base_ref' %}{% set fields.base_ref = field %}{% endif %}
     {% if field.key == 'git_worktree' %}{% set fields.git_worktree = field %}{% endif %}
+    {% if field.key == 'profile' %}{% set fields.profile = field %}{% endif %}
     {% if field.key == 'backend' %}{% set fields.backend = field %}{% endif %}
     {% if field.key == 'default_model' %}{% set fields.default_model = field %}{% endif %}
     {% if field.key == 'permission_mode' %}{% set fields.permission_mode = field %}{% endif %}
@@ -154,6 +155,7 @@
   <div class="rounded-lg border border-border bg-bg px-3 py-2" data-config-field="{{ field.key }}">
     <div class="text-[10px] font-semibold uppercase tracking-wide text-fg-muted">{{ label }}</div>
     <div class="mt-1 text-xs">{{ scalar_value(field) }}</div>
+    {% if field and field.note %}<p class="mt-1 text-[11px] leading-snug text-fg-muted">{{ field.note }}</p>{% endif %}
   </div>
 {% endmacro %}
 
@@ -195,6 +197,7 @@
   </section>
 
   <section class="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2" data-config-group="Execution backend">
+    {% if fields.profile %}{{ mini_stat('Profile', fields.profile) }}{% endif %}
     {{ mini_stat('Backend', fields.backend) }}
     {{ mini_stat('Model', fields.default_model) }}
     {{ mini_stat('Permission mode', fields.permission_mode) }}

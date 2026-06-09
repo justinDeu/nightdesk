@@ -465,8 +465,6 @@ async def test_promoted_model_persists_into_env_blob(
             "network_mode": "on",
             "promoted_env_submitted": "1",
             "promoted_model_ANTHROPIC_MODEL": "claude-opus-4-5",
-            "promoted_routing_base_url": "",
-            "promoted_routing_auth_token": "",
             "promoted_max_thinking_tokens": "",
         },
         follow_redirects=False,
@@ -504,8 +502,6 @@ async def test_promoted_behavior_toggle_round_trip(
             "network_mode": "on",
             "promoted_env_submitted": "1",
             "promoted_behavior_DISABLE_TELEMETRY": "1",
-            "promoted_routing_base_url": "",
-            "promoted_routing_auth_token": "",
             "promoted_max_thinking_tokens": "",
         },
         follow_redirects=False,
@@ -525,8 +521,6 @@ async def test_promoted_behavior_toggle_round_trip(
             "permission_mode": "default",
             "network_mode": "on",
             "promoted_env_submitted": "1",
-            "promoted_routing_base_url": "",
-            "promoted_routing_auth_token": "",
             "promoted_max_thinking_tokens": "",
         },
         follow_redirects=False,
@@ -1178,3 +1172,109 @@ async def test_form_create_accepts_omp_backend(cookie_client, fresh_engine):
         follow_redirects=False,
     )
     assert r.status_code == 303, r.text
+
+
+# ---------------------------------------------------------------------------
+# JSON API: backend-conditional credentials (Finding 2).
+# ---------------------------------------------------------------------------
+
+
+async def test_json_create_omp_rpc_without_credentials_succeeds(fresh_client):
+    """omp_rpc profiles do not use Claude credentials, so creating one without
+    claude_credentials must return 201 rather than a 400 validation error."""
+    r = await fresh_client.post("/api/v1/profiles", json={
+        "name": "omp-no-creds",
+        "backend": "omp_rpc",
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["backend"] == "omp_rpc"
+
+
+async def test_json_create_claude_sdk_without_credentials_400s(fresh_client):
+    """claude_sdk profiles still require claude_credentials; omitting them
+    must 400 as before."""
+    r = await fresh_client.post("/api/v1/profiles", json={
+        "name": "sdk-no-creds",
+        "backend": "claude_sdk",
+    })
+    assert r.status_code == 400, r.text
+    assert "claude_credentials" in r.json().get("detail", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# omp_rpc not-executable warning (Finding 3).
+# ---------------------------------------------------------------------------
+
+
+async def test_view_omp_profile_shows_not_executable_warning(
+    cookie_client, fresh_client, fresh_engine,
+):
+    """The view pane for an omp_rpc profile must show a clear warning that
+    runs will fail, driven by the backend_capability.executable flag."""
+    r = await fresh_client.post("/api/v1/profiles", json={
+        "name": "omp-exec-warn", "backend": "omp_rpc",
+    })
+    pid = r.json()["id"]
+    r = await cookie_client.get(f"/profiles/{pid}")
+    assert r.status_code == 200
+    assert "not yet executable" in r.text.lower()
+    assert "runs will fail" in r.text.lower()
+
+
+async def test_form_omp_section_shows_not_executable_warning(cookie_client):
+    """The edit form's OMP/RPC section carries the not-executable warning so
+    it appears when the user switches to omp_rpc, driven by the capability
+    registry rather than a hardcoded backend-name check in the template."""
+    r = await cookie_client.get("/profiles/new")
+    assert r.status_code == 200
+    body = r.text
+    # Warning text must be in the page (inside the omp_rpc section).
+    assert "not yet executable" in body.lower()
+    assert "runs will fail" in body.lower()
+
+
+async def test_claude_profile_has_no_not_executable_warning(
+    cookie_client, fresh_engine,
+):
+    """A claude_sdk profile must not show the not-executable warning."""
+    seed_default_profiles(fresh_engine)
+    with Session(fresh_engine) as s:
+        pid = next(p.id for p in list_profiles(s) if p.name == "Read only")
+    r = await cookie_client.get(f"/profiles/{pid}")
+    assert r.status_code == 200
+    # The warning div must not appear for an executable backend.
+    assert "not yet executable" not in r.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# secret_keys form field (Finding 4).
+# ---------------------------------------------------------------------------
+
+
+async def test_form_renders_secret_keys_field(cookie_client):
+    """The edit form must expose a secret_keys textarea so users can mark
+    env variables as secrets that should never appear in logs."""
+    r = await cookie_client.get("/profiles/new")
+    assert r.status_code == 200
+    assert 'name="secret_keys"' in r.text
+
+
+async def test_secret_keys_persists_through_form(
+    cookie_client, fresh_engine,
+):
+    """Submitting secret_keys via the form persists them to Profile.secret_keys."""
+    r = await cookie_client.post(
+        "/profiles",
+        data={
+            "name": "sk-test",
+            "backend": "claude_sdk",
+            "network_mode": "on",
+            "secret_keys": "MY_TOKEN\nDB_PASS",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    pid = r.headers["location"].rsplit("/", 1)[-1]
+    with Session(fresh_engine) as s:
+        p = s.get(Profile, pid)
+    assert set(p.secret_keys) == {"MY_TOKEN", "DB_PASS"}
