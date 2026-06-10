@@ -10,13 +10,18 @@
   editor; the ↗ link opens the full ticket detail page.
 
   Expects: t (Ticket-like), profiles_by_id, projects_by_id,
-           run_outcomes (ticket_id -> last-run status), dep_titles.
+           run_outcomes (ticket_id -> last-run status), dep_titles,
+           show_props (frozenset of visible property keys; absent = all
+           shown). Cells gated on show_props must mirror the header cells in
+           list_groups.html so columns stay aligned. Status + Title always
+           render.
 #}
 {% set profile = profiles_by_id.get(t.profile_id) if profiles_by_id else None %}
 {% set project = projects_by_id.get(t.project_id) if projects_by_id and t.project_id else None %}
 {% set outcome = run_outcomes.get(t.id) if run_outcomes else None %}
 {% set blocked_by = dep_titles.get(t.id) if dep_titles else None %}
 {% set ticket_labels = t.labels if t.labels is defined and t.labels else [] %}
+{% set _sp = show_props if show_props is defined else none %}
 <li
   data-ticket-id="{{ t.id }}"
   class="nd-list-row group flex items-center gap-3 px-3 py-1.5 border-b border-border/60 hover:bg-bg-elev cursor-pointer text-sm"
@@ -36,34 +41,43 @@
   <div class="flex-1 min-w-0 truncate font-medium text-fg" title="{{ t.title }}">{{ t.title }}</div>
 
   {# Priority — shared property picker (always editable here, unlike the card). #}
+  {% if _sp is none or 'priority' in _sp %}
   <div class="shrink-0 w-24">
     {% with tid=t.id, prop='priority', chip=property_chip('priority', t) %}
       {% include "partials/property_picker.html" %}
     {% endwith %}
   </div>
+  {% endif %}
 
   {# Project — shared property picker (assign / reassign / clear inline). #}
+  {% if _sp is none or 'project' in _sp %}
   <div class="shrink-0 w-32 truncate">
     {% with tid=t.id, prop='project', chip=property_chip('project', t, project) %}
       {% include "partials/property_picker.html" %}
     {% endwith %}
   </div>
+  {% endif %}
 
   {# Labels — clickable to open inline label picker popover. #}
+  {% if _sp is none or 'labels' in _sp %}
   <div class="shrink-0 w-48 hidden md:flex flex-wrap items-center gap-1 overflow-hidden">
     {% with tid=t.id, ticket_labels=ticket_labels %}
       {% include "partials/inline_label_anchor.html" %}
     {% endwith %}
   </div>
+  {% endif %}
 
   {# Profile — shared property picker (reassign inline). #}
+  {% if _sp is none or 'profile' in _sp %}
   <div class="shrink-0 w-24 truncate">
     {% with tid=t.id, prop='profile', chip=property_chip('profile', t, profile) %}
       {% include "partials/property_picker.html" %}
     {% endwith %}
   </div>
+  {% endif %}
 
   {# Last run status (where available). #}
+  {% if _sp is none or 'last_run' in _sp %}
   <div class="shrink-0 w-20 text-xs">
     {% if outcome %}
       {% set oc = 'text-fg-muted border-border' %}
@@ -76,11 +90,14 @@
       <span class="text-fg-muted/60">—</span>
     {% endif %}
   </div>
+  {% endif %}
 
   {# Updated time (localized client-side from the UTC iso). #}
+  {% if _sp is none or 'updated' in _sp %}
   <div class="shrink-0 w-28 text-fg-muted font-mono text-xs">
     <span data-ts="{{ iso_utc(t.updated_at) }}">{{ t.updated_at }}</span>
   </div>
+  {% endif %}
 
   {# Blocked indicator + open-detail link. #}
   <div class="shrink-0 w-12 flex items-center justify-end gap-1">

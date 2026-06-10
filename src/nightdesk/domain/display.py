@@ -47,6 +47,32 @@ LIST_ORDER_OPTIONS: list[tuple[str, str]] = [
     ("title", "Title"),
 ]
 
+# The board offers the same within-column ordering keys as the list, so one
+# Display popover model serves both surfaces.
+BOARD_ORDER_OPTIONS: list[tuple[str, str]] = LIST_ORDER_OPTIONS
+
+# Show/hide-able properties per surface (key, human label). The list view's
+# Status + Title columns and the card's title/status affordances are always
+# shown, so they are deliberately absent from these tables.
+LIST_PROPERTY_OPTIONS: list[tuple[str, str]] = [
+    ("priority", "Priority"),
+    ("project", "Project"),
+    ("labels", "Labels"),
+    ("profile", "Profile"),
+    ("last_run", "Last run"),
+    ("updated", "Updated"),
+]
+
+CARD_PROPERTY_OPTIONS: list[tuple[str, str]] = [
+    ("priority", "Priority"),
+    ("project", "Project"),
+    ("labels", "Labels"),
+    ("profile", "Profile"),
+]
+
+ALL_LIST_PROPS: frozenset[str] = frozenset(k for k, _ in LIST_PROPERTY_OPTIONS)
+ALL_CARD_PROPS: frozenset[str] = frozenset(k for k, _ in CARD_PROPERTY_OPTIONS)
+
 _GROUP_KEYS = {k for k, _ in LIST_GROUP_OPTIONS}
 _ORDER_KEYS = {k for k, _ in LIST_ORDER_OPTIONS}
 
@@ -64,6 +90,21 @@ def normalize_order(value: Optional[str]) -> str:
     """Coerce *value* to a known ordering key, defaulting to ``manual``."""
     v = (value or "").strip().lower()
     return v if v in _ORDER_KEYS else DEFAULT_ORDER
+
+
+def normalize_props(value: Optional[str], available: frozenset) -> frozenset:
+    """Parse a comma-separated ``props`` string into a frozenset of valid keys.
+
+    ``None`` or empty string returns *available* (all properties shown — the
+    default).  Invalid keys are silently dropped.  If every listed key is
+    invalid, returns *available* (fail-open so a malformed URL never hides
+    everything).
+    """
+    if not value or not value.strip():
+        return available
+    parts = {p.strip() for p in value.split(",") if p.strip()}
+    valid = frozenset(parts & available)
+    return valid if valid else available
 
 
 # ---------------------------------------------------------------------------

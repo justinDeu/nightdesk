@@ -424,3 +424,71 @@ def test_group_by_label_unlabeled_last():
         [t1, t2], group="label", order="manual", labels=[la]
     )
     assert groups[-1]["key"] == "label:__none__"
+
+
+# --------------------------------------------------------------------------- #
+# Display options: props param
+# --------------------------------------------------------------------------- #
+
+
+async def test_list_default_shows_all_headers(cookie_client, session, profile):
+    """No ?props= param: every column header is present (today's behavior)."""
+    _mk(session, profile, "props-default")
+    r = await cookie_client.get("/list")
+    assert r.status_code == 200
+    for header in ("Priority", "Project", "Labels", "Profile", "Last run", "Updated"):
+        assert header in r.text, f"missing header: {header}"
+
+
+async def test_list_props_hides_priority_column(cookie_client, session, profile):
+    """props without 'priority': the Priority header cell disappears."""
+    _mk(session, profile, "props-hide-prio")
+    r = await cookie_client.get(
+        "/list?props=project%2Clabels%2Cprofile%2Clast_run%2Cupdated"
+    )
+    assert r.status_code == 200
+    assert 'w-24">Priority</div>' not in r.text
+    # Other headers survive.
+    assert 'w-32">Project</div>' in r.text
+
+
+async def test_list_props_only_labels(cookie_client, session, profile):
+    """props=labels: only Status, Title, and Labels remain in the header row."""
+    _mk(session, profile, "props-only-labels")
+    r = await cookie_client.get("/list?props=labels")
+    assert r.status_code == 200
+    assert 'w-24">Priority</div>' not in r.text
+    assert 'w-32">Project</div>' not in r.text
+    assert 'w-24">Profile</div>' not in r.text
+    assert 'w-20">Last run</div>' not in r.text
+    assert 'w-28">Updated</div>' not in r.text
+    assert ">Labels</div>" in r.text
+    assert 'w-28">Status</div>' in r.text
+
+
+async def test_list_rows_fragment_respects_props(cookie_client, session, profile):
+    """GET /board/list-rows?props=priority hides the other columns in the fragment."""
+    t = _mk(session, profile, "fragment-props")
+    r = await cookie_client.get("/board/list-rows?props=priority")
+    assert r.status_code == 200
+    assert t.id in r.text
+    assert 'w-24">Priority</div>' in r.text
+    assert 'w-32">Project</div>' not in r.text
+
+
+async def test_list_props_invalid_falls_back_to_all(cookie_client, session, profile):
+    """A garbage props value shows everything rather than hiding everything."""
+    _mk(session, profile, "props-garbage")
+    r = await cookie_client.get("/list?props=bogus%2Cnothing")
+    assert r.status_code == 200
+    for header in ("Priority", "Project", "Labels", "Profile", "Last run", "Updated"):
+        assert header in r.text
+
+
+async def test_list_props_membership_unchanged(cookie_client, session, profile):
+    """props only hides columns; the same tickets render regardless."""
+    t = _mk(session, profile, "props-membership")
+    r_all = await cookie_client.get("/list")
+    r_min = await cookie_client.get("/list?props=priority")
+    assert t.id in _row_ids(r_all.text)
+    assert t.id in _row_ids(r_min.text)

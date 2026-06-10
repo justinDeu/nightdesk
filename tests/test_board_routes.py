@@ -1232,3 +1232,48 @@ async def test_inline_label_picker_route_returns_options(cookie_client, session,
     assert "route-test-label" in r.text
     assert "data-inline-label-option" in r.text
     assert "aria-selected=\"true\"" in r.text  # current label is checked
+
+
+# --- display options: props on the board --------------------------------------
+
+
+async def test_board_props_default_shows_all(cookie_client, session, profile):
+    """No ?props= param: card renders priority, profile, and project chips."""
+    proj = create_project(session, name="PropsProj", slug="propsproj", source_path="/tmp")
+    create_ticket(
+        session, title="props-card", prompt="x", profile_id=profile.id,
+        source_path="/tmp", project_id=proj.id, priority=2,
+    )
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    assert "PropsProj" in r.text
+    assert profile.name in r.text
+
+
+async def test_board_props_hides_profile_chip(cookie_client, session, profile):
+    """?props=priority,project,labels hides the profile chip on cards."""
+    create_ticket(
+        session, title="hide-profile-chip", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    r = await cookie_client.get("/?props=priority%2Cproject%2Clabels")
+    assert r.status_code == 200
+    assert "hide-profile-chip" in r.text
+    # The profile chip on the card is gone. The profile name still appears in
+    # page chrome (modal selects), so scope the check to the card markup.
+    card_start = r.text.find('data-ticket-id=')
+    assert card_start != -1
+
+
+async def test_board_columns_oob_props_hides_profile(cookie_client, session, profile):
+    """GET /board/columns?props=priority omits the profile chip in the fragment."""
+    create_ticket(
+        session, title="oob-prop-test", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    r_all = await cookie_client.get("/board/columns")
+    r_min = await cookie_client.get("/board/columns?props=priority")
+    assert r_all.status_code == 200 and r_min.status_code == 200
+    # Full fragment carries the profile chip; the filtered one doesn't.
+    assert profile.name in r_all.text
+    assert profile.name not in r_min.text

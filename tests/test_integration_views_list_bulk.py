@@ -356,3 +356,23 @@ async def test_bulk_profile_change_reflects_in_list(
     body = (await cookie_client.get("/list?group=profile")).text
     assert {a.id, b.id} <= _row_ids(body)
     assert "other-prof" in body
+
+
+# ---------------------------------------------------------------------------
+# Display options: props is pure presentation, never membership
+# ---------------------------------------------------------------------------
+
+
+async def test_props_does_not_change_ticket_membership(
+    cookie_client, session, profile
+):
+    """?props= only hides columns; board and list still agree on membership."""
+    t = _mk(session, profile, "props-membership-int")
+    session.commit()
+
+    list_all = (await cookie_client.get("/list")).text
+    list_min = (await cookie_client.get("/list?props=priority")).text
+    board_min = (await cookie_client.get("/?props=priority")).text
+    assert t.id in _row_ids(list_all)
+    assert t.id in _row_ids(list_min)
+    assert t.id in _row_ids(board_min)

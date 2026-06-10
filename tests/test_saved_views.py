@@ -204,7 +204,7 @@ def test_list_surface_valid(session):
 
 def test_board_unknown_param_rejected(session):
     with pytest.raises(ValueError, match="unknown params"):
-        create_saved_view(session, name="X", surface="board", params={"order": "priority"})
+        create_saved_view(session, name="X", surface="board", params={"bogus": "priority"})
 
 
 def test_list_unknown_param_rejected(session):
@@ -222,10 +222,12 @@ def test_surface_allowed_params_coverage():
     assert "list" in SURFACE_ALLOWED_PARAMS
     assert "q" in SURFACE_ALLOWED_PARAMS["board"]
     assert "group" in SURFACE_ALLOWED_PARAMS["board"]
-    assert "order" not in SURFACE_ALLOWED_PARAMS["board"]
+    assert "order" in SURFACE_ALLOWED_PARAMS["board"]
+    assert "props" in SURFACE_ALLOWED_PARAMS["board"]
     assert "q" in SURFACE_ALLOWED_PARAMS["list"]
     assert "group" in SURFACE_ALLOWED_PARAMS["list"]
     assert "order" in SURFACE_ALLOWED_PARAMS["list"]
+    assert "props" in SURFACE_ALLOWED_PARAMS["list"]
 
 
 def test_valid_surfaces_constant():
@@ -351,7 +353,7 @@ async def test_save_view_invalid_surface_422(client):
 async def test_save_view_unknown_param_422(client):
     r = await client.post(
         "/views",
-        json={"name": "Bad", "surface": "board", "params": {"order": "priority"}},
+        json={"name": "Bad", "surface": "board", "params": {"bogus": "priority"}},
     )
     assert r.status_code == 422
 
@@ -705,3 +707,54 @@ async def test_e2e_api_round_trip(bearer_client, session):
     assert url.startswith("/?") or url.startswith("/")
     assert "group=priority" in url
     assert "project" in url
+
+
+# ---------------------------------------------------------------------------
+# Display options: props + order in allowed params
+# ---------------------------------------------------------------------------
+
+
+def test_board_allows_order_param(session):
+    v = create_saved_view(
+        session, name="board-order", surface="board",
+        params={"q": "test", "order": "priority"},
+    )
+    assert v.params["order"] == "priority"
+
+
+def test_board_allows_props_param(session):
+    v = create_saved_view(
+        session, name="board-props", surface="board",
+        params={"props": "priority,labels"},
+    )
+    assert v.params["props"] == "priority,labels"
+
+
+def test_list_allows_order_and_props(session):
+    v = create_saved_view(
+        session, name="list-full", surface="list",
+        params={"order": "updated", "props": "labels,profile"},
+    )
+    assert v.params["order"] == "updated"
+    assert v.params["props"] == "labels,profile"
+
+
+def test_view_url_includes_props_and_order(session):
+    """A saved list view with props + order composes the right URL."""
+    v = create_saved_view(
+        session, name="with-props", surface="list",
+        params={"q": "alpha", "order": "priority", "props": "labels"},
+    )
+    url = view_url(v)
+    assert url.startswith("/list?")
+    assert "q=alpha" in url
+    assert "order=priority" in url
+    assert "props=labels" in url
+
+
+def test_unknown_param_still_raises(session):
+    with pytest.raises(ValueError, match="unknown params"):
+        create_saved_view(
+            session, name="bad", surface="board",
+            params={"unknown_param": "foo"},
+        )

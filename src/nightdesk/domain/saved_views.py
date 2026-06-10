@@ -25,8 +25,8 @@ VALID_SURFACES: frozenset[str] = frozenset(["board", "list"])
 
 # Allowed URL params per surface.  All values must be non-empty strings.
 SURFACE_ALLOWED_PARAMS: dict[str, frozenset[str]] = {
-    "board": frozenset(["q", "group"]),
-    "list": frozenset(["q", "group", "order"]),
+    "board": frozenset(["q", "group", "order", "props"]),
+    "list": frozenset(["q", "group", "order", "props"]),
 }
 
 _SURFACE_PATHS: dict[str, str] = {
@@ -35,7 +35,7 @@ _SURFACE_PATHS: dict[str, str] = {
 }
 
 # Stable emission order so URLs are deterministic.
-_PARAM_ORDER = ("q", "group", "order")
+_PARAM_ORDER = ("q", "group", "order", "props")
 
 
 # ---------------------------------------------------------------------------

@@ -589,14 +589,16 @@ def _list_run_outcomes(session: Session, tickets: list) -> dict[str, str]:
     return out
 
 
-def _gather_list(session: Session, *, q: str = "", group: str = "status", order: str = "manual"):
+def _gather_list(session: Session, *, q: str = "", group: str = "status", order: str = "manual",
+                 props: str = ""):
     """Assemble the list-view context.
 
     Reuses ``_gather_board`` for the *exact same* filtered, status-bucketed
     ticket set as the board (including the run-now visual reshuffle), then
     regroups/reorders per the display settings. Building on the board's columns
     is what guarantees query/display parity: the list can never show a ticket
-    the board wouldn't, or vice versa.
+    the board wouldn't, or vice versa. The board's own ``order`` stays "manual"
+    here; this function applies the list's ordering per group itself.
     """
     from nightdesk.domain import display
 
@@ -629,6 +631,7 @@ def _gather_list(session: Session, *, q: str = "", group: str = "status", order:
             labels=ctx["all_labels"],
         )
 
+    show_props = display.normalize_props(props, display.ALL_LIST_PROPS)
     return {
         **ctx,
         "groups": groups,
@@ -638,6 +641,9 @@ def _gather_list(session: Session, *, q: str = "", group: str = "status", order:
         "order_options": display.LIST_ORDER_OPTIONS,
         "list_run_outcomes": _list_run_outcomes(session, all_tickets),
         "list_count": len(all_tickets),
+        "props": props,
+        "show_props": show_props,
+        "list_property_options": display.LIST_PROPERTY_OPTIONS,
     }
 
 
@@ -666,7 +672,7 @@ def _restore_undo(label: str, prop: str, prior: dict) -> Optional[dict]:
     }
 
 
-def _gather_board(session: Session, *, q: str = "", group: str = "status"):
+def _gather_board(session: Session, *, q: str = "", group: str = "status", order: str = "manual"):
     group = _normalize_group(group)
     ast = parse_query(q)
     selected_project = _sole_project(session, ast)
@@ -728,9 +734,20 @@ def _gather_board(session: Session, *, q: str = "", group: str = "status"):
             for status, label in _COLUMNS
         ]
 
+    # Within-column ordering. Applied after grouping so every grouping gets
+    # it; "manual" (the default) keeps the DB order (position/priority/created)
+    # untouched, which also keeps the status kanban's drag-reorder meaningful.
+    from nightdesk.domain import display as _display
+    _order = _display.normalize_order(order)
+    if _order != "manual":
+        for col in columns:
+            col["tickets"] = _display.order_tickets(col["tickets"], _order)
+            col["count"] = len(col["tickets"])
+
     return {
         "columns": columns,
         "group": group,
+        "order": _order,
         "profiles": profiles,
         "profiles_by_id": profiles_by_id,
         "run_outcomes": review_run_outcomes,
@@ -848,11 +865,14 @@ def build_router(
         project: str = Query(default=""),
         view: str = Query(default="tickets"),
         group: str = Query(default="status"),
+        order: str = Query(default="manual"),
+        props: str = Query(default=""),
         session: Session = Depends(get_session),
     ):
+        from nightdesk.domain import display as _display
         query = _board_query(q, project)
         view = "runs" if view == "runs" else "tickets"
-        ctx = _gather_board(session, q=query, group=group)
+        ctx = _gather_board(session, q=query, group=group, order=order)
         return templates.TemplateResponse(
             request,
             "board.html",
@@ -861,6 +881,11 @@ def build_router(
                 "columns": ctx["columns"],
                 "group": ctx["group"],
                 "groupable": _GROUPABLE,
+                "order": ctx["order"],
+                "props": props,
+                "show_props": _display.normalize_props(props, _display.ALL_CARD_PROPS),
+                "order_options": _display.BOARD_ORDER_OPTIONS,
+                "card_property_options": _display.CARD_PROPERTY_OPTIONS,
                 "profiles": ctx["profiles"],
                 "profiles_by_id": ctx["profiles_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
@@ -889,6 +914,8 @@ def build_router(
         q: str = Query(default=""),
         project: str = Query(default=""),
         group: str = Query(default="status"),
+        order: str = Query(default="manual"),
+        props: str = Query(default=""),
         session: Session = Depends(get_session),
     ):
         """Polled fragment returning the grouped column sections as OOB swaps.
@@ -902,7 +929,8 @@ def build_router(
         sidebar is outside those ids and is never touched, so unsaved edits in
         the editor survive every poll cycle.
         """
-        ctx = _gather_board(session, q=_board_query(q, project), group=group)
+        from nightdesk.domain import display as _display
+        ctx = _gather_board(session, q=_board_query(q, project), group=group, order=order)
         return templates.TemplateResponse(
             request,
             "partials/board_columns_oob.html",
@@ -914,6 +942,7 @@ def build_router(
                 "run_outcomes": ctx["run_outcomes"],
                 "dep_titles": ctx["dep_titles"],
                 "all_labels": ctx["all_labels"],
+                "show_props": _display.normalize_props(props, _display.ALL_CARD_PROPS),
             },
         )
 
@@ -924,6 +953,7 @@ def build_router(
         project: str = Query(default=""),
         group: str = Query(default="status"),
         order: str = Query(default="manual"),
+        props: str = Query(default=""),
         session: Session = Depends(get_session),
     ):
         """First-class list/table surface for ticket management.
@@ -936,7 +966,7 @@ def build_router(
         drives them unchanged).
         """
         query = _board_query(q, project)
-        ctx = _gather_list(session, q=query, group=group, order=order)
+        ctx = _gather_list(session, q=query, group=group, order=order, props=props)
         return templates.TemplateResponse(
             request,
             "list.html",
@@ -947,6 +977,9 @@ def build_router(
                 "order": ctx["order"],
                 "group_options": ctx["group_options"],
                 "order_options": ctx["order_options"],
+                "props": ctx["props"],
+                "show_props": ctx["show_props"],
+                "list_property_options": ctx["list_property_options"],
                 "list_count": ctx["list_count"],
                 "profiles": ctx["profiles"],
                 "profiles_by_id": ctx["profiles_by_id"],
@@ -974,6 +1007,7 @@ def build_router(
         project: str = Query(default=""),
         group: str = Query(default="status"),
         order: str = Query(default="manual"),
+        props: str = Query(default=""),
         session: Session = Depends(get_session),
     ):
         """Grouped list rows as a swappable fragment.
@@ -983,7 +1017,8 @@ def build_router(
         sidebar's in-progress edit survives every refresh, exactly like the
         board's column poll.
         """
-        ctx = _gather_list(session, q=_board_query(q, project), group=group, order=order)
+        ctx = _gather_list(session, q=_board_query(q, project), group=group, order=order,
+                           props=props)
         return templates.TemplateResponse(
             request,
             "partials/list_groups.html",
@@ -996,6 +1031,7 @@ def build_router(
                 "dep_titles": ctx["dep_titles"],
                 "query": ctx["query"],
                 "list_count": ctx["list_count"],
+                "show_props": ctx["show_props"],
             },
         )
 

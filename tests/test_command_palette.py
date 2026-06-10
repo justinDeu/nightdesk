@@ -571,3 +571,80 @@ async def test_send_draft_to_inbox_via_property_status_route(
 # 8. The "Focus search" command focuses the header search input.
 # 9. "Jump to saved view" only appears when ndSavedViews is defined.
 # 10. Search results from /header/search appear under "Search results" header.
+
+
+# ---------------------------------------------------------------------------
+# Display options popover (Shift+V)
+# ---------------------------------------------------------------------------
+
+
+async def test_cheatsheet_documents_shift_v(cookie_client):
+    """The cheatsheet lists Shift + V for Display options."""
+    r = await cookie_client.get("/profiles")
+    assert r.status_code == 200
+    assert "Shift + V" in r.text
+    assert "Display options" in r.text
+
+
+def test_command_palette_js_wires_shift_v():
+    """command_palette.js toggles ndDisplayPopover on Shift+V and slots it
+    into the Esc chain before selection clear."""
+    content = (_SRC_STATIC / "command_palette.js").read_text()
+    assert "ndDisplayPopover" in content
+    assert "ndDisplayPopover.toggle" in content
+    # Esc closes the popover before clearing the bulk selection.
+    esc_close = content.find("ndDisplayPopover.isOpen")
+    bulk_clear = content.find("ndBulkSelect.clear")
+    assert esc_close != -1 and bulk_clear != -1
+    assert esc_close < bulk_clear
+
+
+def test_command_palette_js_has_display_options_command():
+    """The palette offers a 'Display options' entry with the Shift V hint."""
+    content = (_SRC_STATIC / "command_palette.js").read_text()
+    assert '"Display options"' in content
+    assert '"Shift V"' in content
+
+
+def test_command_palette_js_ctrlb_carries_display_params():
+    """Ctrl/Cmd+B preserves order and props alongside q and group."""
+    content = (_SRC_STATIC / "command_palette.js").read_text()
+    assert '["q", "group", "order", "props"]' in content
+
+
+def test_display_options_js_exists_and_exposes_api():
+    """display_options.js ships the popover API used by the shortcut."""
+    js = (_SRC_STATIC / "display_options.js").read_text()
+    assert "ndDisplayPopover" in js
+    for fn in ("open", "close", "isOpen", "toggle"):
+        assert fn in js
+
+
+async def test_board_has_display_button_and_popover(cookie_client):
+    """The board toolbar renders the Display button + popover with controls."""
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    assert 'id="nd-display-btn"' in r.text
+    assert 'id="nd-display-popover"' in r.text
+    assert 'id="nd-board-order"' in r.text
+    assert 'name="card-prop"' in r.text
+    # No native title= tooltips on the new button (data-tooltip primitive).
+    assert 'data-tooltip="Display options (Shift+V)"' in r.text
+
+
+async def test_list_has_display_button_and_popover(cookie_client):
+    """The list toolbar renders the Display button + popover with controls."""
+    r = await cookie_client.get("/list")
+    assert r.status_code == 200
+    assert 'id="nd-display-btn"' in r.text
+    assert 'id="nd-display-popover"' in r.text
+    assert 'id="list-group"' in r.text
+    assert 'id="list-order"' in r.text
+    assert 'name="list-prop"' in r.text
+
+
+async def test_saved_views_js_captures_props():
+    """saved_views.js captures order + props from location.search."""
+    js = (_SRC_STATIC / "saved_views.js").read_text()
+    assert '"props"' in js
+    assert '"order"' in js

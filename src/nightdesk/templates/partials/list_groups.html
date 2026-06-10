@@ -9,19 +9,23 @@
 
   Expects: groups (list of {key, label, swatch_color, count, tickets}),
            group (active grouping key), profiles_by_id, projects_by_id,
-           run_outcomes, dep_titles, query, list_count.
+           run_outcomes, dep_titles, query, list_count,
+           show_props (frozenset of visible property keys; absent = all shown).
+           Header cells here must stay in sync with the row cells in
+           list_row.html — both gate on the same show_props keys.
 #}
+{% set _sp = show_props if show_props is defined else none %}
 <div data-list-root>
   {# Column header — aligned to the row column widths in list_row.html. #}
   <div class="sticky top-0 z-10 flex items-center gap-3 px-3 py-2 bg-bg-elev border-b border-border text-[11px] uppercase tracking-wide text-fg-muted">
     <div class="shrink-0 w-28">Status</div>
     <div class="flex-1 min-w-0">Title</div>
-    <div class="shrink-0 w-24">Priority</div>
-    <div class="shrink-0 w-32">Project</div>
-    <div class="shrink-0 w-48 hidden md:block">Labels</div>
-    <div class="shrink-0 w-24">Profile</div>
-    <div class="shrink-0 w-20">Last run</div>
-    <div class="shrink-0 w-28">Updated</div>
+    {% if _sp is none or 'priority' in _sp %}<div class="shrink-0 w-24">Priority</div>{% endif %}
+    {% if _sp is none or 'project' in _sp %}<div class="shrink-0 w-32">Project</div>{% endif %}
+    {% if _sp is none or 'labels' in _sp %}<div class="shrink-0 w-48 hidden md:block">Labels</div>{% endif %}
+    {% if _sp is none or 'profile' in _sp %}<div class="shrink-0 w-24">Profile</div>{% endif %}
+    {% if _sp is none or 'last_run' in _sp %}<div class="shrink-0 w-20">Last run</div>{% endif %}
+    {% if _sp is none or 'updated' in _sp %}<div class="shrink-0 w-28">Updated</div>{% endif %}
     <div class="shrink-0 w-12"></div>
   </div>
 

@@ -12,17 +12,47 @@
     {% include "partials/search_bar.html" %}
   {% endwith %}
 
-  {# Group-by selector. Switching grouping reloads the board: both the grid
-     template and the column set change, so a fragment swap can't express it.
-     Hidden in the runs view (grouping applies to the kanban only). #}
-  <div id="board-group-bar" class="flex items-center gap-2 text-xs"
+  {# Display toolbar: one Display button opening the consolidated popover
+     (group-by buttons, within-column ordering, show/hide card properties).
+     Switching grouping still reloads the board grid: both the grid template
+     and the column set change, so a fragment swap can't express it. Hidden in
+     the runs view (display options apply to the kanban only). #}
+  <div id="board-display-toolbar" class="flex items-center gap-2 text-xs"
        {% if _view == 'runs' %}hidden{% endif %}>
-    <span class="text-fg-muted">Group by</span>
-    <div class="nd-view-toggle" role="tablist" aria-label="Group board by">
-      {% for g in _groupable %}
-        <button type="button" class="nd-view-btn" data-board-group="{{ g }}"
-                aria-pressed="{{ 'true' if _group == g else 'false' }}">{{ g | capitalize }}</button>
-      {% endfor %}
+    <div class="relative">
+      <button type="button" id="nd-display-btn"
+              class="px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
+              aria-expanded="false" aria-haspopup="true"
+              data-tooltip="Display options (Shift+V)">
+        Display
+      </button>
+      <div id="nd-display-popover" class="nd-display-popover" hidden>
+        <div class="nd-display-section">Group by</div>
+        <div class="px-2 pb-1">
+          <div id="board-group-bar" class="nd-view-toggle" role="tablist" aria-label="Group board by">
+            {% for g in _groupable %}
+              <button type="button" class="nd-view-btn" data-board-group="{{ g }}"
+                      aria-pressed="{{ 'true' if _group == g else 'false' }}">{{ g | capitalize }}</button>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="nd-display-section">Order by</div>
+        <div class="nd-display-select-row">
+          <select id="nd-board-order" aria-label="Order cards within columns by">
+            {% for val, label in (order_options if order_options is defined else [('manual', 'Manual')]) %}
+              <option value="{{ val }}" {% if val == (order | default('manual')) %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="nd-display-section">Show on cards</div>
+        {% for key, label in (card_property_options if card_property_options is defined else []) %}
+          <label class="nd-display-prop-row">
+            <input type="checkbox" name="card-prop" value="{{ key }}"
+                   {% if show_props is not defined or key in show_props %}checked{% endif %}>
+            {{ label }}
+          </label>
+        {% endfor %}
+      </div>
     </div>
     <button type="button"
             class="ml-auto px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
@@ -300,9 +330,12 @@
     var grid = document.getElementById('board-grid');
     var runs = document.getElementById('board-runs');
     var groupBar = document.getElementById('board-group-bar');
+    var displayToolbar = document.getElementById('board-display-toolbar');
     var poll = document.getElementById('board-columns-poll');
     var view = {{ ('runs' if _view == 'runs' else 'tickets') | tojson }};
     var boardGroup = {{ _group | tojson }};
+    var boardOrder = {{ (order | default('manual')) | tojson }};
+    var boardProps = {{ (props | default('')) | tojson }};
     var currentQuery = {{ (query or '') | tojson }};
     var runsTimer = null;
 
@@ -319,9 +352,13 @@
       if (params && typeof params.set === 'function') {
         params.set('q', currentQuery);
         params.set('group', boardGroup);
+        params.set('order', boardOrder);
+        params.set('props', boardProps);
       } else if (params) {
         params.q = currentQuery;
         params.group = boardGroup;
+        params.order = boardOrder;
+        params.props = boardProps;
       }
     });
 
@@ -330,9 +367,25 @@
       if (q) params.set('q', q);
       if (view === 'runs') params.set('view', 'runs');
       if (boardGroup && boardGroup !== 'status') params.set('group', boardGroup);
+      if (boardOrder && boardOrder !== 'manual') params.set('order', boardOrder);
+      if (boardProps) params.set('props', boardProps);
       var qs = params.toString();
       history.replaceState(null, '', qs ? ('/?' + qs) : '/');
     }
+
+    // Display popover setters (wired by static/display_options.js). The URL
+    // stays the single source of truth: update it, then force a columns poll
+    // so the OOB fragments re-render with the new order/props.
+    window.ndBoardSetOrder = function (o) {
+      boardOrder = o || 'manual';
+      syncUrl(bar.dataset.query || currentQuery || '');
+      if (poll && typeof htmx !== 'undefined') htmx.trigger(poll, 'poll');
+    };
+    window.ndBoardSetProps = function (p) {
+      boardProps = p || '';
+      syncUrl(bar.dataset.query || currentQuery || '');
+      if (poll && typeof htmx !== 'undefined') htmx.trigger(poll, 'poll');
+    };
 
     function refreshTickets(q) {
       currentQuery = q || '';
@@ -374,14 +427,15 @@
       if (view === 'runs') {
         grid.hidden = true;
         runs.hidden = false;
-        if (groupBar) groupBar.hidden = true;
+        if (displayToolbar) displayToolbar.hidden = true;
+        if (window.ndDisplayPopover) window.ndDisplayPopover.close();
         loadRuns(q);
         startRunsTimer();
       } else {
         stopRunsTimer();
         runs.hidden = true;
         grid.hidden = false;
-        if (groupBar) groupBar.hidden = false;
+        if (displayToolbar) displayToolbar.hidden = false;
         refreshTickets(q);
       }
       syncUrl(q);
@@ -436,6 +490,8 @@
         var params = new URLSearchParams();
         if (q) params.set('q', q);
         if (g && g !== 'status') params.set('group', g);
+        if (boardOrder && boardOrder !== 'manual') params.set('order', boardOrder);
+        if (boardProps) params.set('props', boardProps);
         var qs = params.toString();
         replaceBoardGridFrom(qs ? ('/?' + qs) : '/', g);
       });

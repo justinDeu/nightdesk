@@ -1078,15 +1078,26 @@
       section: "View",
       run: function () {
         var sp2 = new URLSearchParams(location.search);
-        var tq = sp2.get("q") || "";
-        var tg = sp2.get("group") || "";
         var tp = [];
-        if (tq) tp.push("q=" + encodeURIComponent(tq));
-        if (tg) tp.push("group=" + encodeURIComponent(tg));
+        ["q", "group", "order", "props"].forEach(function (k) {
+          var v = sp2.get(k) || "";
+          if (v) tp.push(k + "=" + encodeURIComponent(v));
+        });
         var tqs = tp.length ? "?" + tp.join("&") : "";
         location.href = isListPage ? ("/" + tqs) : ("/list" + tqs);
       },
     });
+    if (document.getElementById("nd-display-btn")) {
+      cmds.push({
+        label: "Display options",
+        shortcut: "Shift V",
+        hint: "group · order · properties",
+        section: "View",
+        run: function () {
+          if (window.ndDisplayPopover) window.ndDisplayPopover.open();
+        },
+      });
+    }
     cmds.push({
       label: "Focus search", shortcut: "/", hint: "",
       section: "View",
@@ -1433,15 +1444,16 @@
       return;
     }
 
-    // Ctrl/Cmd+B: toggle between board (/) and list (/list), preserving ?q= and ?group=.
+    // Ctrl/Cmd+B: toggle between board (/) and list (/list), carrying the
+    // query and the display params (?group=, ?order=, ?props=).
     if ((e.metaKey || e.ctrlKey) && (key === "b" || key === "B")) {
       e.preventDefault();
       var sp = new URLSearchParams(location.search);
-      var bq = sp.get("q") || "";
-      var bg = sp.get("group") || "";
       var parts = [];
-      if (bq) parts.push("q=" + encodeURIComponent(bq));
-      if (bg) parts.push("group=" + encodeURIComponent(bg));
+      ["q", "group", "order", "props"].forEach(function (k) {
+        var v = sp.get(k) || "";
+        if (v) parts.push(k + "=" + encodeURIComponent(v));
+      });
       var bqs = parts.length ? "?" + parts.join("&") : "";
       location.href = (location.pathname === "/list") ? ("/" + bqs) : ("/list" + bqs);
       return;
@@ -1462,11 +1474,25 @@
     if (document.querySelector("[data-property-menu]:not(.hidden)")) return;
     if (document.querySelector("[data-nd-bulk-menu]:not([hidden])")) return;
 
-    // Esc priority: selection clear → board cursor clear.
-    // (Bulk-menu close is handled in bulk_select.js regardless of focus;
-    //  palette/cheatsheet/property-picker close is handled by their own guards
-    //  above or native <dialog> behavior.)
+    // Shift+V: toggle the Display options popover (board + list toolbars).
+    if (e.shiftKey && (key === "v" || key === "V")) {
+      if (window.ndDisplayPopover && document.getElementById("nd-display-btn")) {
+        e.preventDefault();
+        window.ndDisplayPopover.toggle();
+      }
+      return;
+    }
+
+    // Esc priority: display popover close → selection clear → board cursor
+    // clear. (Bulk-menu close is handled in bulk_select.js regardless of
+    // focus; palette/cheatsheet/property-picker close is handled by their own
+    // guards above or native <dialog> behavior.)
     if (key === "Escape" || key === "Esc") {
+      if (window.ndDisplayPopover && window.ndDisplayPopover.isOpen()) {
+        e.preventDefault();
+        window.ndDisplayPopover.close();
+        return;
+      }
       if (window.ndBulkSelect && window.ndBulkSelect.count() > 0) {
         e.preventDefault();
         window.ndBulkSelect.clear();

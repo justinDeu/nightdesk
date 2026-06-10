@@ -280,3 +280,90 @@ async def test_empty_board_grouped_shows_empty_states(cookie_client, session, pr
     body = (await cookie_client.get("/?group=label")).text
     # The defined label column and the Unlabeled bucket both render empty-states.
     assert "board-empty" in _section_html(body, "label-none")
+
+
+# --- board within-column ordering --------------------------------------------
+
+
+async def test_board_order_priority_sorts_within_column(
+    cookie_client, session, profile
+):
+    """?order=priority: higher-priority tickets appear earlier in the column."""
+    from nightdesk.domain.tickets import update_ticket_priority
+    t_low = create_ticket(
+        session, title="low-prio", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    t_high = create_ticket(
+        session, title="high-prio", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    update_ticket_priority(session, t_low.id, 1)
+    update_ticket_priority(session, t_high.id, 3)
+    r = await cookie_client.get("/?order=priority")
+    assert r.status_code == 200
+    section = _section_html(r.text, "draft")
+    pos_low = section.find(t_low.id)
+    pos_high = section.find(t_high.id)
+    assert pos_high != -1 and pos_low != -1
+    assert pos_high < pos_low, "high-priority ticket should render first"
+
+
+async def test_board_columns_oob_respects_order(cookie_client, session, profile):
+    """GET /board/columns?order=priority returns an OOB fragment with sorted cards."""
+    from nightdesk.domain.tickets import update_ticket_priority
+    t_low = create_ticket(
+        session, title="z-low", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    t_high = create_ticket(
+        session, title="z-high", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    update_ticket_priority(session, t_low.id, 1)
+    update_ticket_priority(session, t_high.id, 3)
+    r = await cookie_client.get("/board/columns?order=priority")
+    assert r.status_code == 200
+    pos_low = r.text.find(t_low.id)
+    pos_high = r.text.find(t_high.id)
+    assert pos_high != -1 and pos_low != -1
+    assert pos_high < pos_low
+
+
+async def test_board_order_manual_default(cookie_client, session, profile):
+    """No ?order= param keeps the DB (manual) order untouched."""
+    a = create_ticket(
+        session, title="first-made", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    b = create_ticket(
+        session, title="second-made", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    section = _section_html(r.text, "draft")
+    assert section.find(a.id) < section.find(b.id)
+
+
+async def test_board_order_applies_to_property_grouping(
+    cookie_client, session, profile
+):
+    """Ordering applies after grouping, so non-status groupings get it too."""
+    from nightdesk.domain.tickets import update_ticket_priority
+    proj = create_project(session, name="OrderProj", slug="orderproj", source_path="/tmp")
+    t_low = create_ticket(
+        session, title="g-low", prompt="x", profile_id=profile.id,
+        source_path="/tmp", project_id=proj.id,
+    )
+    t_high = create_ticket(
+        session, title="g-high", prompt="x", profile_id=profile.id,
+        source_path="/tmp", project_id=proj.id,
+    )
+    update_ticket_priority(session, t_low.id, 1)
+    update_ticket_priority(session, t_high.id, 3)
+    r = await cookie_client.get("/?group=project&order=priority")
+    assert r.status_code == 200
+    section = _section_html(r.text, f"project-{proj.id}")
+    assert section, "missing project column"
+    assert section.find(t_high.id) < section.find(t_low.id)

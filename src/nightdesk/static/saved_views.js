@@ -81,17 +81,15 @@
         return;
       }
 
-      // Collect current URL params for the surface.
+      // Collect current URL params for the surface. Both surfaces accept the
+      // full display set (q/group/order/props) — keep this aligned with
+      // SURFACE_ALLOWED_PARAMS in domain/saved_views.py.
       var sp = new URLSearchParams(location.search);
       var params = {};
-      var qVal = sp.get("q");
-      if (qVal) params.q = qVal;
-      var groupVal = sp.get("group");
-      if (groupVal) params.group = groupVal;
-      if (surface === "list") {
-        var orderVal = sp.get("order");
-        if (orderVal) params.order = orderVal;
-      }
+      ["q", "group", "order", "props"].forEach(function (k) {
+        var v = sp.get(k);
+        if (v) params[k] = v;
+      });
 
       var submitBtn = form.querySelector('[type="submit"]');
       if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Saving…"; }
