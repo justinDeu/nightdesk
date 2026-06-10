@@ -24,6 +24,12 @@
                 aria-pressed="{{ 'true' if _group == g else 'false' }}">{{ g | capitalize }}</button>
       {% endfor %}
     </div>
+    <button type="button"
+            class="ml-auto px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
+            onclick="window.ndOpenSaveViewDialog && window.ndOpenSaveViewDialog('board')"
+            data-tooltip="Save current filters as a named view">
+      Save view
+    </button>
   </div>
 
   {% if _group == 'status' %}

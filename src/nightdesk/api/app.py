@@ -29,6 +29,7 @@ from nightdesk.api.routes import search as search_routes
 from nightdesk.api.routes import ticket_page as ticket_page_routes
 from nightdesk.api.routes import tickets as tickets_routes
 from nightdesk.api.routes import transcript as transcript_routes
+from nightdesk.api.routes import saved_views as saved_views_routes
 from nightdesk.api.routes import ui as ui_routes
 
 
@@ -65,6 +66,7 @@ def create_app(
     app.include_router(labels_routes.build_router(get_session, bearer_token))
     app.include_router(transcript_routes.build_router(get_session, bearer_token))
     app.include_router(cron_jobs_routes.build_router(get_session, bearer_token))
+    app.include_router(saved_views_routes.build_api_router(get_session, bearer_token))
 
     templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
     # Expose the transcript-renderer helpers so the Jinja macros can compute
@@ -102,6 +104,9 @@ def create_app(
     # Inbox triage helper: returns the list of reasons an under-specified inbox
     # ticket is not yet promotable (empty list == complete). The inbox row uses
     # it to gate the promote actions behind the completeness boundary.
+    from nightdesk.domain.saved_views import view_url as _view_url
+    templates.env.globals["view_url"] = _view_url
+
     from nightdesk.domain.tickets import ticket_completeness as _ticket_completeness
     from nightdesk.domain.tickets import ticket_missing_fields as _ticket_missing_fields
     templates.env.globals["inbox_blockers"] = _ticket_completeness
@@ -135,6 +140,7 @@ def create_app(
     app.include_router(ticket_page_routes.build_router(get_session, bearer_token, templates))
     app.include_router(effective_config_routes.build_router(get_session, bearer_token, templates))
     app.include_router(cron_page_routes.build_router(get_session, bearer_token, templates))
+    app.include_router(saved_views_routes.build_router(get_session, bearer_token, templates))
     app.include_router(header_routes.build_router(
         get_session, bearer_token, templates,
         worktree_root=str(worktree_root), transcript_root=str(transcript_root),

@@ -27,6 +27,12 @@
       </select>
     </label>
     <span class="ml-auto" data-list-count>{{ list_count }} ticket{{ '' if list_count == 1 else 's' }}</span>
+    <button type="button"
+            class="px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
+            onclick="window.ndOpenSaveViewDialog && window.ndOpenSaveViewDialog('list')"
+            data-tooltip="Save current filters and display settings as a named view">
+      Save view
+    </button>
   </div>
 
   {# #board-grid is the gate command_palette.js checks for the keyboard cursor;

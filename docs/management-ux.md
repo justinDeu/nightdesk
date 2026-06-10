@@ -112,19 +112,49 @@ rows instead of columns. Features:
 ## Display Settings
 
 Display settings (group + order) are URL query-param backed. There is no
-server-side persistence for display state — the URL IS the display config:
+server-side rendering state — the URL IS the display config:
 
 ```
 /list?group=priority&order=title
-/board?group=label
+/?group=label&q=project=backend
 ```
 
-This means:
+Sharing a URL shares the exact view configuration.
 
-- Sharing a URL shares the exact view configuration.
-- Bookmarks serve as "saved views" without a dedicated model.
-- The command palette includes a dormant `ndSavedViews` hook for future
-  named-view persistence.
+---
+
+## Saved Views
+
+Saved views let you name and recall recurring slices of your work. Examples:
+all UI/UX tickets in review, queued/running work for tonight, research tickets
+across projects.
+
+### Saving a view
+
+Click **Save view** in the board or list toolbar (near the group-by / order
+controls). Name the view and submit. The current `q=`, `group=`, and (for list)
+`order=` params are captured at save time.
+
+Supported surfaces:
+
+- **board** — captures `q` and `group`
+- **list** — captures `q`, `group`, and `order`
+
+### Accessing saved views
+
+- **Views dropdown** in the top nav — lists all saved views as links;
+  click any to navigate. Per-view delete appears on hover.
+- **Command palette** (Ctrl/Cmd K) — each saved view is a "View: &lt;name&gt;"
+  command that navigates on selection.
+- **g v keyboard chord** — opens the command palette pre-filtered to saved
+  views. With one view saved, press Enter immediately to jump to it.
+
+### Managing views
+
+- Delete: hover the view name in the Views dropdown and click the × button.
+- Rename: `POST /views/{id}/rename` with `name=...` (form field).
+
+Views are global (single-user app). There is no per-project scoping.
 
 ---
 

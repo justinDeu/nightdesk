@@ -433,3 +433,24 @@ class CronJobFire(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
 
     cron_job: Mapped["CronJob"] = relationship(back_populates="fires")
+
+
+class SavedView(Base):
+    """A named, bookmarkable slice of the board or list surface.
+
+    Stores the URL params (q, group, order) for a surface so the user can
+    navigate back to a recurring query with one click.  Applying a view is
+    pure client-side navigation to the composed URL — no server-side state.
+    """
+
+    __tablename__ = "saved_views"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    # "board" | "list"
+    surface: Mapped[str] = mapped_column(String, nullable=False)
+    # Dict of URL params: q, group, (order for list).  All values are strings.
+    params: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

@@ -267,7 +267,7 @@ async def test_primary_nav_collapses_to_ia_groups(cookie_client):
     nav_html = nav_html.split("</nav>", 1)[0]
 
     summary_labels = re.findall(r"<summary[^>]*>\s*<span>([^<]+)</span>", nav_html, re.S)
-    assert summary_labels == ["Work", "Insights", "Setup"]
+    assert summary_labels == ["Work", "Insights", "Setup", "Views"]
     assert ">Board<" in nav_html
     assert ">Projects<" in nav_html
     assert ">Inbox<" in nav_html
@@ -295,7 +295,7 @@ async def test_primary_nav_does_not_expose_legacy_labels_as_top_level(cookie_cli
     assert r.status_code == 200
 
     summaries = re.findall(r"<summary[^>]*>\s*<span>([^<]+)</span>", r.text, re.S)
-    assert summaries == ["Work", "Insights", "Setup"]
+    assert summaries == ["Work", "Insights", "Setup", "Views"]
 
 
 async def test_cheatsheet_includes_focus_search(cookie_client):

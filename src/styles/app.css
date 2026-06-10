@@ -129,6 +129,53 @@ li[data-ticket-id][data-selected] {
 }
 .nd-nav-item.is-active .nd-nav-item-label { padding-left: .45rem; }
 
+/* ---- Saved-view nav items --------------------------------------------------
+   Each saved view is a row with a link + a delete button that reveals on hover.
+   The delete button is hidden by default and appears when the row is hovered. */
+
+.nd-nav-view-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.nd-nav-view-item .nd-nav-item {
+  flex: 1;
+  padding-right: 1.75rem;
+  min-width: 0;
+}
+
+.nd-view-delete-btn {
+  position: absolute;
+  right: .35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: .25rem;
+  background: transparent;
+  border: none;
+  color: var(--color-fg-muted);
+  font-size: .875rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .1s ease, background .1s ease;
+}
+
+.nd-nav-view-item:hover .nd-view-delete-btn,
+.nd-nav-view-item:focus-within .nd-view-delete-btn {
+  opacity: 1;
+}
+
+.nd-view-delete-btn:hover {
+  background: color-mix(in oklab, var(--color-danger, #ef4444) 15%, transparent);
+  color: var(--color-fg);
+}
+
 /* (The keyboard cursor highlight rule `.nd-cursor-active` lives further down,
    defined once as a general selector so it covers board cards, list rows, and
    inbox rows alike — see "Keyboard cursor highlight" below.) */

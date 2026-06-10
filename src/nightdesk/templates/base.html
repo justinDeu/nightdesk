@@ -44,6 +44,9 @@
        Reuses command_palette.js's cursor (window.ndBoardCursor); no new
        picker/cursor logic. #}
     <script src="{{ static_v('bulk_select.js') }}" defer></script>
+    {# saved_views.js: ndSavedViews() — fetches and caches saved views for the
+       command palette and save-view form; defines window.ndOpenSaveViewDialog. #}
+    <script src="{{ static_v('saved_views.js') }}" defer></script>
   </head>
   <body class="bg-bg text-fg min-h-screen">
     <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">
@@ -106,6 +109,21 @@
             </div>
           </details>
         {% endfor %}
+        {# Saved Views dropdown — content loaded via HTMX on page load so views
+           are always current without coupling to individual route handlers. #}
+        <details class="nd-nav-menu relative">
+          <summary class="nd-nav-trigger">
+            <span>Views</span>
+            <span class="nd-nav-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="nd-nav-popover"
+               id="nd-views-nav-popover"
+               hx-get="/views/menu"
+               hx-trigger="load"
+               hx-swap="innerHTML">
+            <span class="px-3 py-2 text-xs text-fg-muted block">Loading&#x2026;</span>
+          </div>
+        </details>
         {# Works on every page: ndOpenCreateTicket pops the inline modal when
            the page already has one (the board), otherwise lazy-loads it into
            #create-modal-host below. #}
@@ -217,6 +235,45 @@
     {# Lazy-load target for the Inbox promote modal (the shared edit modal in
        promote mode). Filled by ndOpenPromoteTicket. #}
     <div id="promote-modal-host"></div>
+    {# Save-view dialog: opened by ndOpenSaveViewDialog(surface) from board/list
+       toolbars.  The JS collects current URL params at submit time. #}
+    <dialog id="nd-save-view-dialog"
+            aria-label="Save view"
+            class="bg-bg-elev border border-border rounded-lg shadow-xl backdrop:bg-black/50 text-fg p-0 w-80"
+            style="margin: auto;">
+      <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+        <h2 class="text-sm font-semibold">Save current view</h2>
+        <button type="button"
+                onclick="document.getElementById('nd-save-view-dialog').close()"
+                class="text-fg-muted hover:text-fg text-xl leading-none px-1"
+                aria-label="Close">&times;</button>
+      </div>
+      <form id="nd-save-view-form" class="px-4 py-3 flex flex-col gap-3" novalidate>
+        <input type="hidden" id="nd-save-view-surface" name="surface" value="">
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-fg-muted">View name</span>
+          <input type="text"
+                 id="nd-save-view-name"
+                 name="name"
+                 placeholder="e.g. Active backend work"
+                 autocomplete="off"
+                 required
+                 class="px-2 py-1.5 text-sm bg-bg-elev-2 border border-border rounded focus:outline-none focus:border-accent" />
+        </label>
+        <p id="nd-save-view-error" class="text-xs text-red-400 hidden"></p>
+        <div class="flex justify-end gap-2">
+          <button type="button"
+                  onclick="document.getElementById('nd-save-view-dialog').close()"
+                  class="px-3 py-1.5 text-xs rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted transition-colors">
+            Cancel
+          </button>
+          <button type="submit"
+                  class="px-3 py-1.5 text-xs rounded bg-accent text-bg hover:opacity-90 font-medium transition-opacity">
+            Save view
+          </button>
+        </div>
+      </form>
+    </dialog>
     <script>
       // Shared feedback for Run-now buttons (board sidebar + ticket detail).
       // The endpoint returns 204 on success (HTMX) or 409 if the ticket is

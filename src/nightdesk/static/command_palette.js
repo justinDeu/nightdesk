@@ -1095,13 +1095,26 @@
         if (search) { search.focus(); search.select(); }
       },
     });
-    // Saved views placeholder — active once the saved-views surface exists.
+    // Saved views — ndSavedViews() returns a [{name,surface,url}] array.
     if (typeof window.ndSavedViews === "function") {
-      cmds.push({
-        label: "Jump to saved view…", shortcut: "g v", hint: "",
-        section: "View",
-        run: function () { window.ndSavedViews(); },
-      });
+      var savedViews = window.ndSavedViews();
+      if (savedViews && savedViews.length) {
+        savedViews.forEach(function (sv) {
+          cmds.push({
+            label: "View: " + sv.name,
+            shortcut: "",
+            hint: sv.surface,
+            section: "Saved views",
+            run: (function (url) { return function () { location.href = url; }; })(sv.url),
+          });
+        });
+      } else {
+        cmds.push({
+          label: "Jump to saved view…", shortcut: "g v", hint: "no views saved",
+          section: "View",
+          run: function () { openPaletteFiltered("View:"); },
+        });
+      }
     }
 
     // --- Navigation & general commands ---
@@ -1347,6 +1360,24 @@
     inp.select();
   }
 
+  function openPaletteFiltered(filter) {
+    // Open the palette with a pre-set filter string so the user lands directly
+    // on a filtered command set (e.g. "View:" to browse saved views).
+    var dlg = palette();
+    if (!dlg) return;
+    if (cheatsheet() && cheatsheet().open) cheatsheet().close();
+    if (!dlg.open) {
+      try { dlg.showModal(); } catch (e) { return; }
+    }
+    var inp = input();
+    inp.value = filter || "";
+    state.active = 0;
+    refresh();
+    inp.focus();
+    var len = inp.value.length;
+    inp.setSelectionRange(len, len);
+  }
+
   function closePalette() {
     var dlg = palette();
     if (dlg && dlg.open) dlg.close();
@@ -1470,6 +1501,10 @@
     }
     if (hadG && (key === "a" || key === "A")) {
       e.preventDefault(); lastG = 0; location.href = "/archive"; return;
+    }
+    if (hadG && (key === "v" || key === "V")) {
+      // g v: open the command palette pre-filtered to saved views.
+      e.preventDefault(); lastG = 0; openPaletteFiltered("View:"); return;
     }
     lastG = 0;
 
