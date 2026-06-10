@@ -113,7 +113,7 @@ async def test_display_changes_never_change_membership(cookie_client, session, p
     session.commit()
 
     baseline = None
-    for group in ("status", "project", "priority", "profile", "none"):
+    for group in ("status", "project", "priority", "label", "profile", "none"):
         for order in ("manual", "priority", "updated", "created", "title"):
             body = (
                 await cookie_client.get(f"/list?group={group}&order={order}")
@@ -282,3 +282,77 @@ async def test_bulk_project_assignment_scopes_subsequent_views(
     scoped = _row_ids((await cookie_client.get(f"/list?project={proj.slug}")).text)
     assert {a.id, b.id} <= scoped
     assert c.id not in scoped
+
+
+# --------------------------------------------------------------------------- #
+# List group-by-label: membership, multi-label, Unlabeled
+# --------------------------------------------------------------------------- #
+
+
+async def test_list_group_by_label_membership_and_multi_label(
+    cookie_client, session, profile
+):
+    """The list group-by-label arranges tickets without changing membership.
+
+    A multi-label ticket appears in each label group; unlabeled tickets land
+    in the Unlabeled bucket; the full membership equals the non-grouped list.
+    """
+    bug = create_label(session, name="bug", color="#ff0000")
+    feat = create_label(session, name="feature", color="#00ff00")
+    t_bug = _mk(session, profile, "only-bug")
+    t_multi = _mk(session, profile, "bug-and-feature")
+    t_none = _mk(session, profile, "no-label")
+    set_ticket_labels(session, t_bug.id, [bug.id])
+    set_ticket_labels(session, t_multi.id, [bug.id, feat.id])
+    session.commit()
+
+    body = (await cookie_client.get("/list?group=label")).text
+
+    # All three tickets appear somewhere.
+    assert t_bug.id in body
+    assert t_multi.id in body
+    assert t_none.id in body
+
+    # t_multi has two labels so its id appears at least twice.
+    assert body.count(f'data-ticket-id="{t_multi.id}"') >= 2
+
+    # The unlabeled ticket lands in the Unlabeled group.
+    assert "Unlabeled" in body
+
+    # Group label headers appear.
+    assert "bug" in body
+    assert "feature" in body
+
+    # Membership is identical to the flat (group=none) list.
+    flat = _row_ids((await cookie_client.get("/list?group=none")).text)
+    labeled = _row_ids(body)
+    assert flat == labeled
+
+
+async def test_bulk_profile_change_reflects_in_list(
+    cookie_client, session, profile
+):
+    """A bulk profile update via POST /board/tickets/bulk/profile is reflected
+    in the list view — bulk mutations and list display compose correctly."""
+    from nightdesk.domain.profiles import create_profile as _cp
+    other = _cp(
+        session, name="other-prof", fs_read=[], fs_write=[],
+        allowed_tools=[], denied_tools=[], network_mode="off",
+        network_allowlist=[], secret_keys=[], default_model=None,
+    )
+    a = _mk(session, profile, "prof-change-a")
+    b = _mk(session, profile, "prof-change-b")
+    session.commit()
+
+    resp = await cookie_client.post(
+        "/board/tickets/bulk/profile",
+        data={"ticket_ids": f"{a.id},{b.id}", "profile_id": other.id},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert {u["id"] for u in payload["updated"]} == {a.id, b.id}
+
+    # Both tickets now render under the new profile in the list grouped by profile.
+    body = (await cookie_client.get("/list?group=profile")).text
+    assert {a.id, b.id} <= _row_ids(body)
+    assert "other-prof" in body

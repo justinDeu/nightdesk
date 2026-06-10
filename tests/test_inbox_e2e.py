@@ -130,11 +130,13 @@ async def test_capture_triage_promote_lifecycle(cookie_client, client, session, 
     session.expire_all()
     assert get_ticket(session, tid).status == "inbox"
 
-    # 4. FLESH OUT + PROMOTE — the modal posts the full edit form (workspace
-    #    included) and crosses the completeness boundary in one step.
+    # 4. FLESH OUT + PROMOTE — the modal posts the full edit form (workspace +
+    #    profile included) and crosses the completeness boundary in one step.
+    #    Since capture now sets profile_id=None, the profile must be supplied
+    #    in the promote form to satisfy the completeness boundary.
     r = await cookie_client.post(
         f"/inbox/tickets/{tid}/promote",
-        data=_promote_modal_form(title="ETETITLE now runnable"),
+        data=_promote_modal_form(title="ETETITLE now runnable", profile_id=profile.id),
         headers={"HX-Request": "true"},
     )
     assert r.status_code == 200
@@ -230,12 +232,24 @@ async def test_project_scoped_capture_view_and_promote(cookie_client, session, p
     loose = await cookie_client.get("/inbox?project=none")
     assert "LOOSEITEM" in loose.text and "SCOPEDITEM" not in loose.text
 
-    # The scoped item inherits the project's workspace, so it is already
-    # complete and can be promoted straight from its scoped view.
+    # The scoped item inherits the project's workspace.  Capture now sets
+    # profile_id=None, so the promote call must supply a profile to satisfy
+    # the completeness boundary.  Use the full-form path (workspace_form=1)
+    # so the route persists the profile before promoting.
     scoped_id = next(t.id for t in list_inbox(session, project_id=project.id))
     r = await cookie_client.post(
         f"/inbox/tickets/{scoped_id}/promote",
-        data={"target": "draft", "project": project.slug},
+        data={
+            "workspace_form": "1",
+            "title": "SCOPEDITEM",
+            "prompt": "",
+            "source_path": "/tmp/scoped",
+            "primary_kind": "directory",
+            "priority": "0",
+            "target": "draft",
+            "project": project.slug,
+            "profile_id": profile.id,
+        },
         headers={"HX-Request": "true"},
     )
     assert r.status_code == 200

@@ -54,6 +54,18 @@ async def cookie_client(app):
         yield ac
 
 
+@pytest.fixture
+def _profile(session):
+    from nightdesk.domain.profiles import create_profile
+    return create_profile(
+        session,
+        name="cp-test",
+        fs_read=[], fs_write=[], allowed_tools=[], denied_tools=[],
+        network_mode="off", network_allowlist=[], secret_keys=[],
+        default_model=None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Baseline: palette + cheatsheet markup present on every page
 # ---------------------------------------------------------------------------
@@ -78,10 +90,10 @@ async def test_base_includes_cheatsheet_dialog(cookie_client):
     assert r.status_code == 200
     assert 'id="nd-shortcuts-cheatsheet"' in r.text
     # The cheat sheet documents the global shortcuts.
-    assert "Go to Work" in r.text
+    assert "Go to board" in r.text
+    assert "Go to list" in r.text
     assert "Go to Insights" in r.text
     assert "Go to Setup" in r.text
-    assert "Go to Work: board" in r.text
     # JS-free fallback note must be present.
     assert "reachable by mouse" in r.text
 
@@ -117,7 +129,8 @@ async def test_palette_js_command_model_has_shortcut_field(cookie_client):
     # Commands have shortcut fields alongside label/hint/run.
     # Check that the command model builds objects with "shortcut:" keys.
     assert 'shortcut: "c"' in r.text or "shortcut: 'c'" in r.text
-    assert 'shortcut: "g w"' in r.text or "shortcut: 'g w'" in r.text
+    assert 'shortcut: "g b"' in r.text or "shortcut: 'g b'" in r.text
+    assert 'shortcut: "g l"' in r.text or "shortcut: 'g l'" in r.text
     assert 'shortcut: "g i"' in r.text or "shortcut: 'g i'" in r.text
     assert 'shortcut: "g s"' in r.text or "shortcut: 'g s'" in r.text
     assert 'shortcut: "?"' in r.text or 'shortcut: \'?\'' in r.text
@@ -317,6 +330,228 @@ async def test_palette_js_search_results_section(cookie_client):
     r = await cookie_client.get("/static/command_palette.js")
     assert r.status_code == 200
     assert "Search results" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Fix #1: Enter on board opens ticket detail
+# ---------------------------------------------------------------------------
+
+
+async def test_palette_js_enter_opens_board_ticket(cookie_client):
+    """Enter on the board must navigate to /tickets/{id} for the focused ticket."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    js = r.text
+    assert 'key === "Enter"' in js
+    assert "board-grid" in js
+    # Navigates to the ticket detail page.
+    assert "/tickets/" in js
+
+
+# ---------------------------------------------------------------------------
+# Fix #2: Space opens sidebar (not a dead ndPeekTicket call)
+# ---------------------------------------------------------------------------
+
+
+async def test_palette_js_space_loads_sidebar(cookie_client):
+    """Space must trigger the board sidebar swap for the focused ticket."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "openPeek" in js
+    # Sidebar swap path is present in openPeek.
+    assert "/board/sidebar?ticket_id=" in js
+    assert "desiredBoardSidebarTicketId = ctx.id" in js
+
+
+# ---------------------------------------------------------------------------
+# Fix #3: Cmd/Ctrl+B toggles board / list
+# ---------------------------------------------------------------------------
+
+
+async def test_palette_js_ctrlb_toggles_view(cookie_client):
+    """Cmd/Ctrl+B must toggle between / and /list preserving query params."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    js = r.text
+    assert '(e.metaKey || e.ctrlKey) && (key === "b" || key === "B")' in js
+    assert '"/list"' in js
+
+
+async def test_palette_js_ctrlb_command_in_view_section(cookie_client):
+    """The palette must expose a board/list toggle command with Ctrl/Cmd B shortcut."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    assert "Switch to board view" in r.text
+    assert "Switch to list view" in r.text
+    assert 'shortcut: "Ctrl/Cmd B"' in r.text
+
+
+async def test_cheatsheet_documents_ctrlb(cookie_client):
+    """The cheatsheet must document Ctrl/Cmd+B as the board/list toggle."""
+    r = await cookie_client.get("/profiles")
+    assert r.status_code == 200
+    assert "Ctrl / Cmd + B" in r.text
+    assert "Toggle board / list view" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Fix #4: G chords — g b board, g l list, no g w
+# ---------------------------------------------------------------------------
+
+
+async def test_palette_js_g_b_goes_to_board(cookie_client):
+    """g b chord must navigate to / (board)."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    assert 'shortcut: "g b"' in r.text
+
+
+async def test_palette_js_g_l_goes_to_list(cookie_client):
+    """g l chord must navigate to /list."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    assert 'shortcut: "g l"' in r.text
+    assert "Go to Work: list" in r.text
+
+
+async def test_palette_js_g_w_shortcut_removed(cookie_client):
+    """g w must no longer appear as a keyboard shortcut in the palette."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    assert 'shortcut: "g w"' not in r.text
+
+
+async def test_cheatsheet_documents_g_b_and_g_l_not_g_w(cookie_client):
+    """Cheatsheet must teach g b and g l but not g w."""
+    r = await cookie_client.get("/profiles")
+    assert r.status_code == 200
+    assert "g then b" in r.text
+    assert "g then l" in r.text
+    assert "g then w" not in r.text
+
+
+# ---------------------------------------------------------------------------
+# Fix #5: L CapsLock normalized
+# ---------------------------------------------------------------------------
+
+
+async def test_palette_js_l_capslock_normalized(cookie_client):
+    """Both column-nav L and label-picker Shift+L must use key.toLowerCase()."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    js = r.text
+    assert 'key.toLowerCase() === "l" && !e.shiftKey' in js
+    assert 'key.toLowerCase() === "l" && e.shiftKey' in js
+
+
+# ---------------------------------------------------------------------------
+# Fix #6: Esc layering
+# ---------------------------------------------------------------------------
+
+
+async def test_bulk_select_js_esc_closes_menu_without_focus(cookie_client):
+    """Esc must close an open bulk menu even when focus is outside the menu."""
+    r = await cookie_client.get("/static/bulk_select.js")
+    assert r.status_code == 200
+    assert 'querySelector("[data-nd-bulk-menu]:not([hidden])")' in r.text
+
+
+async def test_palette_js_esc_clears_board_cursor(cookie_client):
+    """After selection is cleared, a further Esc must clear the board cursor."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "clearBoardCursor()" in js
+    assert "paintBoardSelectedCard(null)" in js
+
+
+# ---------------------------------------------------------------------------
+# Fix #7: View toggle label uses active tab detection
+# ---------------------------------------------------------------------------
+
+
+async def test_palette_js_view_toggle_uses_aria_pressed(cookie_client):
+    """The palette must detect the active view via aria-pressed, not a dead attribute."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    js = r.text
+    assert 'aria-pressed="true"' in js
+    assert "data-sb-view" in js
+    # The old non-existent selector must be gone.
+    assert "data-board-view='runs'" not in js
+
+
+# ---------------------------------------------------------------------------
+# Fix #8: I sends draft ticket to inbox
+# ---------------------------------------------------------------------------
+
+
+async def test_palette_js_i_key_sends_to_inbox(cookie_client):
+    """I on the board must send the focused draft ticket to Inbox."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    js = r.text
+    assert 'key === "i" || key === "I"' in js
+    assert "value=inbox" in js
+    assert "Sent to Inbox" in js
+
+
+async def test_palette_js_inbox_command_in_draft_order(cookie_client):
+    """The inbox command must appear in the palette for draft tickets."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    assert '"inbox"' in r.text
+    assert 'shortcut: "I"' in r.text
+    assert "Send to Inbox" in r.text
+
+
+async def test_cheatsheet_documents_i_send_to_inbox(cookie_client):
+    """The cheatsheet must document I as Send to Inbox."""
+    r = await cookie_client.get("/profiles")
+    assert r.status_code == 200
+    assert "Send to Inbox" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Fix #9: Stale comment corrected
+# ---------------------------------------------------------------------------
+
+
+async def test_palette_js_inbox_comment_is_accurate(cookie_client):
+    """The inbox triage comment must not say 'draft if not' (old/incorrect)."""
+    r = await cookie_client.get("/static/command_palette.js")
+    assert r.status_code == 200
+    assert "draft if not" not in r.text
+
+
+# ---------------------------------------------------------------------------
+# Route-level: draft→inbox via property/status route
+# ---------------------------------------------------------------------------
+
+
+async def test_send_draft_to_inbox_via_property_status_route(
+    cookie_client, session, _profile
+):
+    """POST /board/tickets/{id}/property/status with value=inbox must work for draft."""
+    from nightdesk.domain.tickets import create_ticket, get_ticket
+
+    t = create_ticket(
+        session,
+        title="to-inbox-test",
+        prompt="x",
+        profile_id=_profile.id,
+        status="draft",
+        source_path="/tmp",
+    )
+    r = await cookie_client.post(
+        f"/board/tickets/{t.id}/property/status",
+        data={"value": "inbox"},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    assert get_ticket(session, t.id).status == "inbox"
 
 
 # ---------------------------------------------------------------------------

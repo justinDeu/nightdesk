@@ -65,12 +65,13 @@
   <div class="overflow-y-auto px-5 py-4 text-sm">
     {% set _shortcuts = [
       ('Ctrl / Cmd + K', 'Open the command palette'),
+      ('Ctrl / Cmd + B', 'Toggle board / list view'),
       ('c', 'New ticket'),
       ('/', 'Focus search'),
-      ('g then w', 'Go to Work'),
+      ('g then b', 'Go to board'),
+      ('g then l', 'Go to list'),
       ('g then i', 'Go to Insights'),
       ('g then s', 'Go to Setup'),
-      ('g then b', 'Go to Work: board'),
       ('g then a', 'Go to archive'),
       ('?', 'Show this cheat sheet'),
       ('Esc', 'Close palette or dialog'),
@@ -78,12 +79,14 @@
     {% set _nav_shortcuts = [
       ('J / K', 'Next / previous ticket on board'),
       ('H / L', 'Previous / next column'),
+      ('Enter', 'Open ticket detail (board)'),
       ('X', 'Select / deselect focused ticket'),
       ('Shift + J / K', 'Extend selection down / up'),
-      ('Esc', 'Clear selection'),
+      ('Esc', 'Clear selection / cursor'),
     ] %}
     {% set _view_shortcuts = [
       ('/', 'Focus search / filter bar'),
+      ('Ctrl / Cmd + B', 'Toggle board / list view'),
     ] %}
     {% set _ticket_shortcuts = [
       ('E', 'Edit focused ticket'),
@@ -93,14 +96,15 @@
       ('Shift + L', 'Set labels'),
       ('A', 'Archive'),
       ('R', 'Run now / Requeue'),
-      ('Space', 'Peek ticket'),
+      ('I', 'Send to Inbox (draft only)'),
+      ('Space', 'Open sidebar / peek'),
     ] %}
     {% set _inbox_shortcuts = [
       ('J / K', 'Next / previous inbox item'),
-      ('Enter', 'Open focused item'),
+      ('Enter', 'Open detail'),
       ('A', 'Accept / promote'),
       ('D', 'Decline / archive'),
-      ('E', 'Edit details'),
+      ('E', 'Flesh out / promote…'),
       ('L', 'Set labels'),
       ('P', 'Set project'),
       ('Shift + P', 'Set priority'),

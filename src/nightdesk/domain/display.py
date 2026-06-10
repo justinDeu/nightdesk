@@ -34,6 +34,7 @@ LIST_GROUP_OPTIONS: list[tuple[str, str]] = [
     ("status", "Status"),
     ("project", "Project"),
     ("priority", "Priority"),
+    ("label", "Label"),
     ("profile", "Profile"),
     ("none", "None"),
 ]
@@ -100,6 +101,47 @@ def order_tickets(tickets: list[Any], order: str) -> list[Any]:
 # ---------------------------------------------------------------------------
 
 
+def _group_by_label_for_list(
+    tickets: list[Any], labels: list[Any], order: str
+) -> list[dict]:
+    """Label grouping for the list view.
+
+    Multi-membership: a ticket with several labels appears under each of them.
+    Tickets with no labels go into the trailing "Unlabeled" bucket.
+    Groups follow the label list order (alphabetical by name, matching
+    ``list_labels``), with swatch_color populated from ``label.color``.
+    """
+    buckets: dict[str, list] = {f"label:{l.id}": [] for l in labels}
+    unlabeled: list = []
+    for t in tickets:
+        tl = list(getattr(t, "labels", None) or [])
+        if not tl:
+            unlabeled.append(t)
+        else:
+            for l in tl:
+                key = f"label:{l.id}"
+                buckets.setdefault(key, []).append(t)
+    groups: list[dict] = []
+    for l in labels:
+        key = f"label:{l.id}"
+        ts = buckets.get(key, [])
+        groups.append({
+            "key": key,
+            "label": l.name,
+            "swatch_color": (l.color or None),
+            "count": len(ts),
+            "tickets": order_tickets(ts, order),
+        })
+    groups.append({
+        "key": "label:__none__",
+        "label": "Unlabeled",
+        "swatch_color": None,
+        "count": len(unlabeled),
+        "tickets": order_tickets(unlabeled, order),
+    })
+    return groups
+
+
 def group_tickets(
     tickets: list[Any],
     *,
@@ -107,6 +149,7 @@ def group_tickets(
     order: str,
     projects_by_id: Optional[dict] = None,
     profiles_by_id: Optional[dict] = None,
+    labels: Optional[list] = None,
 ) -> list[dict]:
     """Bucket *tickets* by the grouping key into ordered groups.
 
@@ -119,6 +162,10 @@ def group_tickets(
     g = normalize_group(group)
     projects_by_id = projects_by_id or {}
     profiles_by_id = profiles_by_id or {}
+
+    # Label grouping requires multi-membership so it runs a separate path.
+    if g == "label":
+        return _group_by_label_for_list(tickets, labels=labels or [], order=order)
 
     # key -> (sort_key tuple, label, swatch_color, [tickets])
     buckets: dict[str, list] = {}

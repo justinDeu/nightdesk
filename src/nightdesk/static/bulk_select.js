@@ -185,6 +185,9 @@
   function refreshBoardSurfaces() {
     pollColumnsNow();
     refreshSidebarNow();
+    // The list page has no board-columns-poll element; it listens for this
+    // event instead and calls its own refreshList().
+    document.body.dispatchEvent(new CustomEvent("nd:bulk-applied"));
   }
 
   function toast(text, undo) {
@@ -229,6 +232,7 @@
     status:   { url: "/board/tickets/bulk/status",   field: "status" },
     project:  { url: "/board/tickets/bulk/project",  field: "project_id" },
     labels:   { url: "/board/tickets/bulk/labels",   field: "label_ids" },
+    profile:  { url: "/board/tickets/bulk/profile",  field: "profile_id" },
   };
 
   function closeMenus() {
@@ -321,7 +325,27 @@
 
   function describe(prop) {
     return { priority: "priority", status: "status", project: "project",
-             labels: "labels" }[prop] || prop;
+             labels: "labels", profile: "profile" }[prop] || prop;
+  }
+
+  // Build a " · N skipped — reason1; reason2" suffix from the skipped array.
+  // Reasons are deduped and capped at 3. Uses only string values so it is safe
+  // to feed into textContent (no innerHTML injection risk).
+  function skipReasonsSuffix(skippedItems) {
+    var items = skippedItems || [];
+    if (!items.length) return "";
+    var reasons = [];
+    var seen = {};
+    items.forEach(function (s) {
+      var r = (s && s.reason) ? String(s.reason) : "";
+      if (r && !seen[r]) {
+        seen[r] = true;
+        if (reasons.length < 3) reasons.push(r);
+      }
+    });
+    var text = " · " + items.length + " skipped";
+    if (reasons.length) text += " — " + reasons.join("; ");
+    return text;
   }
 
   function addLabelOption(label) {
@@ -435,10 +459,9 @@
       }
       return r.json().then(function (body) {
         var n = (body.updated || []).length;
-        var skipped = (body.skipped || []).length;
         var text = "Updated " + describe(prop) + " on " + n + " ticket" +
                    (n === 1 ? "" : "s");
-        if (skipped) text += " · " + skipped + " skipped";
+        text += skipReasonsSuffix(body.skipped);
         if (prop === "labels") addLabelOption(body.label);
         refreshBoardSurfaces();
         updateLabelMarkers(bar() && bar().querySelector('[data-nd-bulk-menu="labels"]'));
@@ -457,9 +480,8 @@
         if (!r.ok) { toast("Couldn't archive (" + r.status + ")"); return; }
         return r.json().then(function (body) {
           var n = (body.updated || []).length;
-          var skipped = (body.skipped || []).length;
           var text = "Archived " + n + " ticket" + (n === 1 ? "" : "s");
-          if (skipped) text += " · " + skipped + " skipped (only review tickets archive)";
+          text += skipReasonsSuffix(body.skipped);
           // Archived tickets leave the visible columns; drop them from the set.
           (body.updated || []).forEach(function (u) { selected.delete(u.id); });
           sync();
@@ -557,13 +579,19 @@
       setActive(menu, visibleOptions(menu)[0]);
     });
     document.addEventListener("keydown", function (e) {
+      // Close the bulk menu on Esc regardless of where focus is. Without this
+      // guard, Esc only fired when focus was already inside the menu element;
+      // clicking a card then pressing Esc left the menu stranded open.
+      if (e.key === "Escape" || e.key === "Esc") {
+        var openBulkMenu = document.querySelector("[data-nd-bulk-menu]:not([hidden])");
+        if (openBulkMenu) {
+          e.preventDefault();
+          closeMenus();
+          return;
+        }
+      }
       var menu = e.target.closest("[data-nd-bulk-menu]");
       if (!menu || menu.hidden) return;
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeMenus();
-        return;
-      }
       if (e.key === "ArrowDown") {
         e.preventDefault();
         moveActive(menu, 1);

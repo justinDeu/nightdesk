@@ -3,11 +3,12 @@
   board; static/bulk_select.js shows it while a selection is active and wires
   every control to the cookie-auth /board/tickets/bulk/* routes.
 
-  Option sources come from the board context:
+  Option sources come from the board/list context:
     priority_scale  list[{value,name,label,css}]   (PRIORITY_SCALE)
     bulk_statuses   list[str]                       (valid status targets)
     projects        list[Project]
     all_labels      list[Label]
+    profiles        list[Profile]
 
   All menus are server-rendered so applying a bulk change is a single POST with
   no extra round-trip to fetch options. The bar lives OUTSIDE the polled column
@@ -101,6 +102,20 @@
       <button type="button" class="nd-bulk-opt hidden" role="option" data-nd-bulk-create-option>
         Create and apply <span data-nd-bulk-create-name></span>
       </button>
+    </div>
+  </div>
+
+  {# ---- Profile ---- #}
+  <div class="nd-bulk-group">
+    <button type="button" class="nd-bulk-btn" data-nd-bulk-toggle="profile"
+            aria-haspopup="true" aria-expanded="false">Profile ▾</button>
+    <div class="nd-bulk-menu" data-nd-bulk-menu="profile" hidden role="menu">
+      {% for prof in profiles %}
+        <button type="button" class="nd-bulk-opt" role="menuitem"
+                data-nd-bulk-apply="profile" data-value="{{ prof.id }}">
+          <span>{{ prof.name }}</span>
+        </button>
+      {% endfor %}
     </div>
   </div>
 

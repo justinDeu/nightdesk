@@ -423,3 +423,20 @@ async def test_list_rows_reflects_inline_label_change(
     body = (await cookie_client.get("/board/list-rows")).text
     assert "reconcile-lab" in body
     assert f'data-ticket-id="{t.id}"' in body
+
+
+async def test_list_rows_carry_data_label_id_for_bulk_markers(
+    cookie_client, session, profile
+):
+    """List rows render data-label-id on each label chip so bulk_select.js
+    labelSelectionCount() can detect which labels are on selected tickets."""
+    lab = create_label(session, name="marker-lab", color="#654321")
+    t = _mk(session, profile, "marker-t", "draft")
+    set_ticket_labels(session, t.id, [lab.id])
+
+    body = (await cookie_client.get("/board/list-rows")).text
+    # The label chip inside the list row must carry data-label-id so the JS
+    # selection-count helper works the same as on board cards.
+    assert f'data-label-id="{lab.id}"' in body
+    # Sanity: the row itself is still present.
+    assert f'data-ticket-id="{t.id}"' in body

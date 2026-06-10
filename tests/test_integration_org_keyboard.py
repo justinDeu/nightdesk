@@ -207,9 +207,9 @@ class TestKeyboardSpine:
         assert "moveCursor" in js
         assert "moveColumn" in js
         assert '"h"' in js or "'h'" in js
-        # Plain "l" is column navigation; labels moved to Shift+L.
-        assert 'key === "l" && !e.shiftKey' in js
-        assert 'key === "L" && e.shiftKey' in js
+        # Plain "l" is column navigation (CapsLock-normalized); labels on Shift+L.
+        assert 'key.toLowerCase() === "l" && !e.shiftKey' in js
+        assert 'key.toLowerCase() === "l" && e.shiftKey' in js
 
     async def test_cursor_survives_board_polling(self, cookie_client):
         """Board columns are OOB-swapped by the 3s poll; the cursor must be

@@ -276,17 +276,14 @@ def build_router(
     ):
         """Capture a new, possibly under-specified item straight into the inbox.
 
-        Only a title is required. A workspace is intentionally optional — that
-        is what makes the item "under-specified"; it must be fleshed out before
-        promotion. A profile is required by the data model, so we default to the
-        first available one when the capturer doesn't care yet.
+        Only a title is required. A workspace and a profile are both
+        intentionally optional at capture time — that is what makes the item
+        "under-specified". The item must be fleshed out (workspace + profile)
+        before it can be promoted onto the runnable board.
         """
         title = (title or "").strip()
         if not title:
             raise HTTPException(422, "a title is required")
-        profiles = list_profiles(session)
-        if not profiles:
-            raise HTTPException(422, "create a profile before capturing inbox items")
         proj_id = (project_id or "").strip() or None
         try:
             create_ticket(
@@ -294,7 +291,7 @@ def build_router(
                 title=title,
                 prompt=(prompt or "").strip(),
                 status="inbox",
-                profile_id=profiles[0].id,
+                profile_id=None,
                 project_id=proj_id,
             )
         except ValueError as e:

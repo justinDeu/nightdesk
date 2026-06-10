@@ -50,6 +50,11 @@
   {% include "partials/ticket_edit_modal.html" %}
 {% endwith %}
 
+{# Bulk action bar — lives outside the polled list body and the sidebar so
+   the 4s list poll never wipes it. Shown by static/bulk_select.js while a
+   selection is active. #}
+{% include "partials/bulk_action_bar.html" %}
+
 <script>
   (function () {
     var bar = document.getElementById('list-search');
@@ -88,11 +93,13 @@
     }
 
     // Don't yank the rows out from under an open property-picker popover, an
-    // inline label picker popover, or a text selection mid-edit.
+    // inline label picker popover, an open bulk menu, or a text selection
+    // mid-edit.
     function pickerOpen() {
       return !!(
         document.querySelector('[data-property-menu]:not(.hidden)') ||
-        document.querySelector('[data-inline-label-menu]:not(.hidden)')
+        document.querySelector('[data-inline-label-menu]:not(.hidden)') ||
+        document.querySelector('[data-nd-bulk-menu]:not([hidden])')
       );
     }
 
@@ -140,6 +147,12 @@
     // to a different group). Delay slightly so the chip swap completes first.
     document.addEventListener("nd:property-changed", function () {
       setTimeout(function () { if (!pickerOpen()) refreshList(); }, 150);
+    });
+
+    // Bulk action bar dispatches nd:bulk-applied after every bulk mutation so
+    // the list rows reflect the change (board uses its own poll trigger).
+    document.body.addEventListener("nd:bulk-applied", function () {
+      setTimeout(function () { refreshList(); }, 150);
     });
   })();
 </script>

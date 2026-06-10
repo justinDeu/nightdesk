@@ -115,7 +115,7 @@ class Ticket(Base):
     priority: Mapped[int] = mapped_column(Integer, default=0, index=True)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     project_id: Mapped[Optional[str]] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
-    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"))
+    profile_id: Mapped[Optional[str]] = mapped_column(ForeignKey("profiles.id"), nullable=True)
     permission_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     toolchain_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
@@ -128,7 +128,7 @@ class Ticket(Base):
     next_run_context_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     project: Mapped[Optional["Project"]] = relationship(back_populates="tickets")
-    profile: Mapped["Profile"] = relationship(lazy="joined")
+    profile: Mapped[Optional["Profile"]] = relationship(lazy="joined")
     runs: Mapped[list["Run"]] = relationship(back_populates="ticket", foreign_keys="Run.ticket_id")
     workspaces: Mapped[list["TicketWorkspace"]] = relationship(
         back_populates="ticket",

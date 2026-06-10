@@ -626,6 +626,7 @@ def _gather_list(session: Session, *, q: str = "", group: str = "status", order:
             order=o,
             projects_by_id=ctx["projects_by_id"],
             profiles_by_id=ctx["profiles_by_id"],
+            labels=ctx["all_labels"],
         )
 
     return {
@@ -958,6 +959,9 @@ def build_router(
                 "toolchain_options": ctx["toolchain_options"],
                 "all_labels": ctx["all_labels"],
                 "query": ctx["query"],
+                # Bulk action bar option sources (same as the board route).
+                "priority_scale": PRIORITY_SCALE,
+                "bulk_statuses": ["draft", "queued", "review", "archived"],
                 "mode": "create",
                 "ticket": None,
             },

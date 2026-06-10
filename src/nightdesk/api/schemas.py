@@ -344,7 +344,7 @@ class TicketOut(BaseModel):
     priority: int
     position: int
     project_id: Optional[str] = None
-    profile_id: str
+    profile_id: Optional[str] = None
     permission_overrides: Optional[dict] = None
     toolchain_overrides: Optional[dict] = None
     additional_dirs: list[AdditionalDir] = []

@@ -441,3 +441,102 @@ class TestActionBarRendering:
         r = await cookie_client.get("/")
         for label in ("No priority", "Low", "Medium", "High", "Urgent"):
             assert label in r.text
+
+    async def test_list_renders_action_bar(self, cookie_client, session, profile):
+        """The bulk action bar is also rendered on the /list page."""
+        proj = create_project(session, name="bproj", source_path="/tmp/bp")
+        create_label(session, name="blabel", color="#123456")
+        _make_ticket(session, profile, title="list-bar-t", project_id=proj.id)
+        r = await cookie_client.get("/list")
+        assert r.status_code == 200
+        html = r.text
+        assert 'id="nd-bulk-bar"' in html
+        assert 'data-nd-bulk-toggle="priority"' in html
+        assert 'data-nd-bulk-toggle="status"' in html
+        assert 'data-nd-bulk-toggle="project"' in html
+        assert 'data-nd-bulk-toggle="labels"' in html
+        assert 'data-nd-bulk-toggle="profile"' in html
+        assert "data-nd-bulk-archive" in html
+        # Option sources present.
+        assert "Urgent" in html
+        assert "bproj" in html
+        assert "blabel" in html
+        assert profile.name in html
+
+    async def test_list_bar_has_profile_menu(self, cookie_client, session, profile):
+        """The Profile menu in the bulk bar lists all profiles on /list."""
+        r = await cookie_client.get("/list")
+        html = r.text
+        assert 'data-nd-bulk-toggle="profile"' in html
+        assert f'data-nd-bulk-apply="profile"' in html
+        assert profile.name in html
+
+
+# ===========================================================================
+# Bulk profile route
+# ===========================================================================
+
+
+class TestBulkProfile:
+    """POST /board/tickets/bulk/profile"""
+
+    async def test_reassigns_profile(self, cookie_client, session, profile, profile_b):
+        a = _make_ticket(session, profile, title="a")
+        r = await cookie_client.post(
+            "/board/tickets/bulk/profile",
+            data={"ticket_ids": a.id, "profile_id": profile_b.id},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["updated"]) == 1
+        assert body["updated"][0]["profile_id"] == profile_b.id
+
+    async def test_returns_undo_payload(self, cookie_client, session, profile,
+                                        profile_b):
+        a = _make_ticket(session, profile, title="a")
+        r = await cookie_client.post(
+            "/board/tickets/bulk/profile",
+            data={"ticket_ids": a.id, "profile_id": profile_b.id},
+        )
+        undo = r.json()["undo"]
+        assert undo["route"] == "/board/tickets/bulk/restore"
+        assert undo["json"] is True
+        assert undo["payload"]["prop"] == "profile"
+        assert undo["payload"]["values"][a.id] == profile.id
+        # Applying the undo restores the original profile.
+        r2 = await cookie_client.post(undo["route"], json=undo["payload"])
+        assert r2.status_code == 200
+        from nightdesk.domain.tickets import get_ticket
+        session.expire_all()
+        assert get_ticket(session, a.id).profile_id == profile.id
+
+    async def test_rejects_empty_ticket_ids(self, cookie_client, session, profile):
+        r = await cookie_client.post(
+            "/board/tickets/bulk/profile",
+            data={"ticket_ids": "", "profile_id": profile.id},
+        )
+        assert r.status_code == 422
+
+    async def test_rejects_empty_profile_id(self, cookie_client, session, profile):
+        a = _make_ticket(session, profile, title="a")
+        r = await cookie_client.post(
+            "/board/tickets/bulk/profile",
+            data={"ticket_ids": a.id, "profile_id": ""},
+        )
+        assert r.status_code == 422
+
+    async def test_rejects_unknown_profile(self, cookie_client, session, profile):
+        a = _make_ticket(session, profile, title="a")
+        r = await cookie_client.post(
+            "/board/tickets/bulk/profile",
+            data={"ticket_ids": a.id, "profile_id": "no-such-profile"},
+        )
+        assert r.status_code == 404
+
+    async def test_profile_in_routes_map_of_bulk_select_js(self):
+        """bulk_select.js must declare a 'profile' route entry."""
+        import pathlib
+        js = pathlib.Path(__file__).parent.parent / "src" / "nightdesk" / "static" / "bulk_select.js"
+        src = js.read_text()
+        assert 'profile:' in src
+        assert '/board/tickets/bulk/profile' in src

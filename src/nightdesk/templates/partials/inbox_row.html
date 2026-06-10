@@ -118,8 +118,8 @@
               hx-post="/inbox/tickets/{{ t.id }}/decline"
               hx-vals='{"project": {{ (project_filter or "") | tojson }}}'
               hx-target="#inbox-list" hx-swap="outerHTML"
-              hx-confirm="Decline (archive) this item?"
-              title="Decline and archive">
+              hx-on::after-request="if(event.detail.successful && window.ndFlashStatus){window.ndFlashStatus('Declined — moved to Archive');}"
+              data-tooltip="Decline and move to Archive">
         Decline
       </button>
     </div>

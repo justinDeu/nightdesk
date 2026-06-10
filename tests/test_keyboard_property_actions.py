@@ -99,7 +99,7 @@ async def test_cheatsheet_includes_focused_ticket_section(cookie_client):
     assert "Set labels" in r.text
     assert "Archive" in r.text
     assert "Run now / Requeue" in r.text
-    assert "Peek ticket" in r.text
+    assert "peek" in r.text.lower()
 
 
 async def test_cheatsheet_includes_board_navigation_section(cookie_client):

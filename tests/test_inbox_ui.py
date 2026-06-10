@@ -176,6 +176,56 @@ async def test_capture_requires_title(cookie_client, session, profile):
 
 
 @pytest.mark.anyio
+async def test_capture_succeeds_with_zero_profiles(cookie_client, session):
+    """Capture must not require any profiles to exist.
+
+    The inbox is a capture queue; requiring a profile before an item can even
+    be created contradicts the "jot it down, triage later" intent. The profile
+    requirement is enforced at promotion time, not capture time.
+    """
+    # No profile fixture — the session has no profiles at all.
+    r = await cookie_client.post(
+        "/inbox/capture",
+        data={"title": "No-profile capture", "prompt": "triage me later"},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    items = list_inbox(session)
+    assert len(items) == 1
+    assert items[0].title == "No-profile capture"
+    assert items[0].profile_id is None
+
+
+@pytest.mark.anyio
+async def test_promote_without_profile_is_422(cookie_client, session):
+    """Promoting an inbox item that has no profile must return 422.
+
+    capture -> profile_id=None -> try promote -> IncompleteTicket (profile missing).
+    The item must stay in the inbox until a profile is set.
+    """
+    r = await cookie_client.post(
+        "/inbox/capture",
+        data={"title": "Needs a profile"},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    items = list_inbox(session)
+    assert len(items) == 1
+    tid = items[0].id
+
+    # Try to promote without giving it a workspace or profile.
+    r = await cookie_client.post(
+        f"/inbox/tickets/{tid}/promote",
+        data={"target": "queued"},
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 422
+    session.expire_all()
+    assert get_ticket(session, tid).status == "inbox"
+    assert "profile" in r.text.lower()
+
+
+@pytest.mark.anyio
 async def test_promote_route_blocks_incomplete(cookie_client, session, profile):
     t = _inbox(session, profile)
     r = await cookie_client.post(

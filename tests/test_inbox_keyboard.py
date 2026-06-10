@@ -240,6 +240,32 @@ async def test_inbox_promote_route_works_for_complete(cookie_client, session, pr
 
 
 @pytest.mark.anyio
+async def test_promote_form_urlencoded_target_queued_lands_queued(cookie_client, session, profile):
+    """POST /promote with target=queued as a raw form-urlencoded body must land
+    the ticket in queued, not draft.
+
+    This is the exact encoding inboxPromote() uses: it sends
+    'target=queued' as the request body with Content-Type
+    application/x-www-form-urlencoded. Previously inboxPromote sent no body
+    at all, so the route defaulted to 'draft' silently.
+    """
+    t = _inbox(session, profile, complete=True, title="Form-body target test")
+    r = await cookie_client.post(
+        f"/inbox/tickets/{t.id}/promote",
+        content="target=queued",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "HX-Request": "true",
+        },
+    )
+    assert r.status_code == 200
+    session.expire_all()
+    assert get_ticket(session, t.id).status == "queued", (
+        "inboxPromote sends target=queued as form body; route must land in queued, not draft"
+    )
+
+
+@pytest.mark.anyio
 async def test_inbox_promote_route_blocks_incomplete(cookie_client, session, profile):
     """Promote should fail (422) for an incomplete item."""
     t = _inbox(session, profile, title="Incomplete")
@@ -351,8 +377,8 @@ async def test_js_current_ticket_checks_inbox_cursor(cookie_client):
 #
 # INBOX TRIAGE SHORTCUTS
 # 4. A promotes the focused item (queued if complete, 422 feedback if not).
-# 5. D declines (archives) the focused item with a confirmation toast.
-# 6. Enter and E both navigate to the focused item's ticket detail page.
+# 5. D declines (archives) the focused item; a toast says "Declined — moved to Archive".
+# 6. Enter navigates to the ticket detail page. E opens the promote/flesh-out modal.
 # 7. P opens the priority picker for the focused item.
 # 8. L opens the label picker for the focused item (no Shift needed).
 # 9. S does nothing on the inbox page (reserved for future snooze).
