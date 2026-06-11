@@ -69,6 +69,131 @@ def test_profiles_seeded(demo_engine, demo_session, demo_transcript_root, tmp_pa
     assert "Full workspace" in names
 
 
+def test_project_context_seeded(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    project = demo_session.execute(
+        text(
+            "SELECT id, default_workspace_mode, default_worktree_name_template "
+            "FROM projects WHERE slug = 'nightdesk'"
+        )
+    ).first()
+    assert project is not None
+    project_id, mode, name_template = project
+    assert mode == "git_worktree"
+    assert name_template == "nd-{slug}"
+
+    project_ticket_count = demo_session.execute(
+        text("SELECT count(*) FROM tickets WHERE project_id = :project_id"),
+        {"project_id": project_id},
+    ).scalar_one()
+    assert project_ticket_count >= 1
+
+    linked_workspace_count = demo_session.execute(
+        text(
+            "SELECT count(*) FROM ticket_workspaces "
+            "WHERE role = 'linked' AND label = 'docs' AND access = 'read_only'"
+        )
+    ).scalar_one()
+    assert linked_workspace_count >= 1
+
+
+def test_config_paths_are_demo_safe(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path="/demo/nightdesk",
+    )
+    cfg = demo_session.execute(
+        text(
+            "SELECT worktree_root, transcript_root, worktree_base_ref, claude_binary_path "
+            "FROM config WHERE id = 1"
+        )
+    ).one()
+    assert cfg == (
+        "/demo/nightdesk-worktrees",
+        "/demo/nightdesk/transcripts",
+        "main",
+        "/usr/local/bin/claude",
+    )
+
+
+def test_profile_paths_are_demo_safe(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path="/demo/nightdesk",
+    )
+    rows = demo_session.execute(
+        text("SELECT fs_read, fs_write, claude_binary_path FROM profiles")
+    ).fetchall()
+    assert rows
+    for fs_read, fs_write, claude_binary_path in rows:
+        assert "/demo/nightdesk" in fs_read
+        assert "/tmp/" not in str(fs_read)
+        assert "/home/" not in str(fs_read)
+        assert "/tmp/" not in str(fs_write)
+        assert "/home/" not in str(fs_write)
+        assert claude_binary_path is None
+
+
+def test_dependencies_seeded(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    dependency_count = demo_session.execute(
+        text("SELECT count(*) FROM ticket_dependencies")
+    ).scalar_one()
+    assert dependency_count >= 2
+
+
+def test_usage_history_seeded_for_analytics(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    history = demo_session.execute(
+        text(
+            "SELECT count(*), count(DISTINCT model_used), sum(cost_usd), "
+            "count(DISTINCT tickets.title) "
+            "FROM runs JOIN tickets ON runs.ticket_id = tickets.id "
+            "WHERE transcript_path LIKE '%history-%'"
+        )
+    ).one()
+    count, model_count, cost, title_count = history
+    assert count == 28
+    assert model_count >= 3
+    assert cost > 0
+    assert title_count == count
+
+
+def test_usage_history_has_non_cyclic_daily_shape(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    totals = [
+        row[0] for row in demo_session.execute(
+            text(
+                "SELECT input_tokens + output_tokens + cache_read_tokens + cache_write_tokens AS total "
+                "FROM runs WHERE transcript_path LIKE '%history-%' ORDER BY started_at DESC"
+            )
+        ).fetchall()
+    ]
+    assert len(totals) == 28
+    assert len(set(totals)) == len(totals)
+    first_half_deltas = [b - a for a, b in zip(totals[:13], totals[1:14])]
+    second_half_deltas = [b - a for a, b in zip(totals[14:27], totals[15:28])]
+    assert first_half_deltas != second_half_deltas
+
+
 def test_running_ticket_has_unfinished_run(demo_engine, demo_session, demo_transcript_root, tmp_path):
     seed_demo(
         db_path=Path(demo_engine.url.database),
@@ -99,10 +224,10 @@ def test_worker_heartbeat_for_running_ticket(demo_engine, demo_session, demo_tra
         transcript_root=demo_transcript_root,
         source_path=str(tmp_path),
     )
-    heartbeats = demo_session.execute(
-        text("SELECT id FROM worker_heartbeat")
-    ).scalars().all()
-    assert len(heartbeats) >= 1
+    heartbeat = demo_session.execute(
+        text("SELECT id, host FROM worker_heartbeat WHERE id = 1")
+    ).one()
+    assert heartbeat == (1, "demo-host")
 
 
 def test_transcripts_written_and_parseable(demo_engine, demo_session, demo_transcript_root, tmp_path):

@@ -12,6 +12,36 @@ Local-first work queue for LLM agents. Schedule a Claude Code run against a dire
 - Profiles control what the agent can do (allowed tools, network, filesystem, credentials).
 - Per-run scoped tokens let the agent call back into nightdesk (post comments, spawn child tickets) without exposing your admin bearer token.
 
+## A look at Nightdesk
+
+![Nightdesk board showing lifecycle columns and selected ticket sidebar](docs/screenshots/board-kanban.png)
+
+Track work from draft to review, inspect running jobs, and open a ticket without losing board context.
+
+![Ticket detail page showing prompt, workspace access, dependencies, and transcript events](docs/screenshots/ticket-transcript.png)
+
+Review prompts, filesystem scope, dependency chains, run history, and transcript events in one place.
+
+![Run history table with outcomes, models, token usage, and costs](docs/screenshots/runs-table.png)
+
+Search across runs, compare outcomes, and keep an eye on model usage and spend.
+
+![Archive filters and completed ticket history](docs/screenshots/archive.png)
+
+Filter completed work by outcome, project, profile, date, or text search.
+
+![Token and usage analytics dashboard](docs/screenshots/analytics.png)
+
+See token mix, cache behavior, model usage, run outcomes, durations, and cost trends.
+
+![Profile editor for sandbox permissions, tools, network, and credentials](docs/screenshots/profiles.png)
+
+Define profiles for sandbox permissions, credentials, allowed tools, models, and environment.
+
+![Scheduling settings for worker windows and concurrency](docs/screenshots/settings.png)
+
+Control work windows, worker cadence, and dispatch limits from the UI.
+
 ## Install
 
 Requires Linux + bubblewrap + Claude Code 2.1.80 or newer.
@@ -131,6 +161,8 @@ python3.12 -m venv .venv
 
 `nightdesk-migrate` exposes Alembic subcommands (`up`, `down`, `current`,
 `history`, `heads`, `stamp`).
+
+To refresh the documentation screenshots, seed the demo database and capture the UI with Playwright. See `docs/screenshots.md`.
 
 ## Troubleshooting
 
