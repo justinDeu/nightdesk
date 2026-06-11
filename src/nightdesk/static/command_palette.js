@@ -1112,9 +1112,15 @@
       },
     });
     // Saved views — ndSavedViews() returns a [{name,surface,url}] array.
+    // "Jump to saved view…" always appears so g v stays discoverable.
     if (typeof window.ndSavedViews === "function") {
       var savedViews = window.ndSavedViews();
       if (savedViews && savedViews.length) {
+        cmds.push({
+          label: "Jump to saved view…", shortcut: "g v", hint: "",
+          section: "View",
+          run: function () { openPaletteFiltered("View:"); },
+        });
         savedViews.forEach(function (sv) {
           cmds.push({
             label: "View: " + sv.name,
@@ -1792,13 +1798,26 @@
     }
   }
 
+  // ---- header-search arrow-key helper ------------------------------------
+
+  function setSearchActive(anchors, idx) {
+    anchors.forEach(function (a) {
+      a.classList.remove("nd-opt-active", "bg-bg-elev-2");
+    });
+    if (idx >= 0 && idx < anchors.length) {
+      anchors[idx].classList.add("nd-opt-active", "bg-bg-elev-2");
+      anchors[idx].scrollIntoView({ block: "nearest" });
+    }
+  }
+
   // ---- init --------------------------------------------------------------
 
   function init() {
     wirePaletteInput();
     document.addEventListener("keydown", onKeydown, true);
 
-    // Esc blurs the header search box. Without this the global onKeydown
+    // Esc blurs the header search box; ArrowDown/Up move the result highlight;
+    // Enter follows the active result. Without this the global onKeydown
     // early-returns inside typing targets, so Esc would never unfocus it.
     var headerSearch = document.querySelector('#header-search input[name="q"]');
     if (headerSearch && !headerSearch.__ndEscWired) {
@@ -1808,6 +1827,28 @@
           e.preventDefault();
           e.stopPropagation();
           headerSearch.blur();
+          return;
+        }
+        var anchors = Array.prototype.slice.call(
+          document.querySelectorAll('#search-results a')
+        );
+        if (!anchors.length) return;
+        var activeEl = document.querySelector('#search-results a.nd-opt-active');
+        var idx = activeEl ? anchors.indexOf(activeEl) : -1;
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSearchActive(anchors, (idx + 1) % anchors.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSearchActive(anchors, (idx - 1 + anchors.length) % anchors.length);
+          return;
+        }
+        if (e.key === "Enter" && activeEl) {
+          e.preventDefault();
+          location.href = activeEl.href;
+          return;
         }
       });
     }
@@ -1825,7 +1866,13 @@
     }
 
     // Restore cursor highlight after HTMX column swaps on the board or inbox.
-    document.body.addEventListener("htmx:afterSwap", function () {
+    // Also reset the header-search highlight when results are refreshed.
+    document.body.addEventListener("htmx:afterSwap", function (ev) {
+      if (ev.detail && ev.detail.target && ev.detail.target.id === "search-results") {
+        document.querySelectorAll('#search-results a.nd-opt-active').forEach(function (a) {
+          a.classList.remove("nd-opt-active", "bg-bg-elev-2");
+        });
+      }
       restoreCursor();
       restoreInboxCursor();
     });

@@ -23,9 +23,6 @@
     {# search_bar.js: unified query/filter bar (board + Ctrl-K). Owns the query
        string, facet dropdowns, autocomplete, and chips. #}
     <script src="{{ static_v('search_bar.js') }}" defer></script>
-    {# command_palette.js: Ctrl/Cmd+K palette + global keyboard shortcuts.
-       Progressive enhancement — every action stays reachable by mouse. #}
-    <script src="{{ static_v('command_palette.js') }}" defer></script>
     {# display_options.js: the Display popover (group/order/property toggles)
        on the board + list toolbars. Opened by the Display button or Shift+V. #}
     <script src="{{ static_v('display_options.js') }}" defer></script>
@@ -50,6 +47,10 @@
     {# saved_views.js: ndSavedViews() — fetches and caches saved views for the
        command palette and save-view form; defines window.ndOpenSaveViewDialog. #}
     <script src="{{ static_v('saved_views.js') }}" defer></script>
+    {# command_palette.js: Ctrl/Cmd+K palette + global keyboard shortcuts.
+       Loads last so window globals from the scripts above are defined first.
+       Progressive enhancement — every action stays reachable by mouse. #}
+    <script src="{{ static_v('command_palette.js') }}" defer></script>
   </head>
   <body class="bg-bg text-fg min-h-screen">
     <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">
@@ -59,6 +60,9 @@
                name="q"
                placeholder="Search… project=nd status=review"
                autocomplete="off"
+               role="combobox"
+               aria-controls="search-results"
+               aria-autocomplete="list"
                hx-get="/header/search"
                hx-trigger="keyup changed delay:200ms, focus"
                hx-target="#search-results"

@@ -281,7 +281,13 @@
     menu.querySelectorAll(".nd-opt-active").forEach(function (opt) {
       opt.classList.remove("nd-opt-active");
     });
-    menu.removeAttribute("aria-activedescendant");
+    var search = menu.querySelector("[data-nd-bulk-label-search]");
+    if (search) {
+      search.removeAttribute("aria-activedescendant");
+    } else {
+      // Non-label menus move real DOM focus to options; remove any stale attribute.
+      menu.removeAttribute("aria-activedescendant");
+    }
   }
 
   function setActive(menu, opt) {
@@ -294,7 +300,14 @@
       var idx = Array.prototype.indexOf.call(allOpts, opt);
       opt.id = "nd-bulk-opt-" + menuName + "-" + (idx >= 0 ? idx : Date.now());
     }
-    menu.setAttribute("aria-activedescendant", opt.id);
+    // Labels menu: focus stays on the search input (role="combobox"), so
+    // aria-activedescendant belongs on that input, not the menu container.
+    // Other menus: moveActive moves real DOM focus to the option button,
+    // so aria-activedescendant is not needed.
+    var search = menu.querySelector("[data-nd-bulk-label-search]");
+    if (search) {
+      search.setAttribute("aria-activedescendant", opt.id);
+    }
     try { opt.scrollIntoView({ block: "nearest" }); } catch (e) {}
   }
 
