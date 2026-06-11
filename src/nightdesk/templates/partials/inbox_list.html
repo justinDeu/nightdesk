@@ -2,13 +2,14 @@
   Inbox list fragment — swapped in place after capture / promote / decline.
 
   Root carries id="inbox-list" so actions can target it with
-  hx-target="#inbox-list" hx-swap="outerHTML". Expects the inbox context dict
-  from routes/inbox.py (tickets, count, projects_by_id, profiles_by_id,
-  all_labels, project_filter).
+  hx-target="#inbox-list" hx-swap="outerHTML". The count lives here (not in the
+  page header) so it stays live across triage swaps. Expects the inbox context
+  dict from routes/inbox.py (tickets, count, projects_by_id, profiles_by_id,
+  all_labels, project_filter, rel_time).
 #}
 <div id="inbox-list" class="space-y-2">
-  <div class="flex items-center gap-2 text-xs text-fg-muted">
-    <span class="font-medium text-fg">{{ count }}</span>
+  <div class="flex items-center gap-1.5 text-xs text-fg-muted px-1">
+    <span class="font-medium text-fg tabular-nums">{{ count }}</span>
     item{{ '' if count == 1 else 's' }} awaiting triage
   </div>
 
@@ -17,7 +18,7 @@
       Inbox zero. Captured but under-specified work shows up here for triage.
     </div>
   {% else %}
-    <ul class="space-y-2">
+    <ul class="divide-y divide-border/50 rounded-md border border-border bg-bg-elev-2/40">
       {% for t in tickets %}
         {% with t=t,
                 project=(projects_by_id.get(t.project_id) if t.project_id else none),
@@ -26,5 +27,22 @@
         {% endwith %}
       {% endfor %}
     </ul>
+
+    {# Discoverable keyboard hints — the inbox is keyboard-first. #}
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-1 pt-0.5 text-[11px] text-fg-muted/80">
+      <span><kbd class="font-mono text-fg-muted">j</kbd>/<kbd class="font-mono text-fg-muted">k</kbd> navigate</span>
+      <span class="text-fg-muted/40">·</span>
+      <span><kbd class="font-mono text-fg-muted">a</kbd> promote</span>
+      <span class="text-fg-muted/40">·</span>
+      <span><kbd class="font-mono text-fg-muted">d</kbd> decline</span>
+      <span class="text-fg-muted/40">·</span>
+      <span><kbd class="font-mono text-fg-muted">e</kbd> edit</span>
+      <span class="text-fg-muted/40">·</span>
+      <span><kbd class="font-mono text-fg-muted">l</kbd> labels</span>
+      <span class="text-fg-muted/40">·</span>
+      <span><kbd class="font-mono text-fg-muted">p</kbd> project</span>
+      <span class="text-fg-muted/40">·</span>
+      <span><kbd class="font-mono text-fg-muted">enter</kbd> open</span>
+    </div>
   {% endif %}
 </div>

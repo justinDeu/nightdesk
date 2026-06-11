@@ -11,6 +11,7 @@ import re
 from typing import Optional
 
 from sqlalchemy import select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, selectinload
 
 from nightdesk.db.models import Label, Ticket, ticket_labels
@@ -217,3 +218,39 @@ def bulk_remove_labels(
         for t in updated:
             session.refresh(t)
     return updated, skipped
+
+
+# ---------------------------------------------------------------------------
+# Default label seeding
+# ---------------------------------------------------------------------------
+
+_SEED_LABELS: tuple[dict, ...] = (
+    {"name": "bug",      "color": "#ef4444"},
+    {"name": "feature",  "color": "#22c55e"},
+    {"name": "chore",    "color": "#a3a3a3"},
+    {"name": "docs",     "color": "#3b82f6"},
+    {"name": "research", "color": "#a855f7"},
+    {"name": "idea",     "color": "#eab308"},
+)
+
+
+def seed_default_labels(engine: Engine) -> list[Label]:
+    """Insert the default agent-tracker labels if the table is empty.
+
+    Idempotent: if any label already exists the entire seed is skipped and an
+    empty list is returned.  This mirrors the all-or-nothing semantics of
+    ``seed_default_profiles``: rather than inserting only the missing defaults
+    (which would resurrect labels the user deliberately deleted on re-init),
+    the function treats a non-empty table as "user-managed" and leaves it
+    completely untouched.  The tradeoff is that a fresh install with even one
+    pre-existing custom label will not receive the defaults; in practice
+    ``nightdesk-init`` runs before any manual label creation.
+    """
+    with Session(engine) as session:
+        existing = session.scalar(select(Label.id).limit(1))
+        if existing is not None:
+            return []
+        created: list[Label] = []
+        for spec in _SEED_LABELS:
+            created.append(create_label(session, **spec))
+        return created

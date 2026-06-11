@@ -107,11 +107,15 @@
         e.preventDefault();
         window.ndPickerAdd(picker, item);
         input.value = "";
-        suggest.classList.add("hidden");
+        window.ndPickerSearch(input);
         input.focus();
       });
       suggest.appendChild(div);
     });
+    // Pre-highlight the top match so a bare Enter commits it — typing a
+    // label name and hitting Enter must Just Work without an ArrowDown.
+    var first = suggest.querySelector("[data-picker-candidate-id]");
+    if (first) first.classList.add("bg-bg-elev-2");
     suggest.classList.remove("hidden");
   };
 
@@ -142,7 +146,8 @@
       // Always prevent default so Enter never bubbles up and submits the
       // enclosing form while the picker input has focus.
       event.preventDefault();
-      var focused = suggest.querySelector(".bg-bg-elev-2");
+      var focused = suggest.querySelector(".bg-bg-elev-2") ||
+        suggest.querySelector("[data-picker-candidate-id]");
       if (focused) {
         focused.dispatchEvent(new Event("mousedown"));
       }

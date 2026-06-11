@@ -22,6 +22,7 @@ the promote/decline/capture actions.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -61,6 +62,43 @@ from nightdesk.domain.tickets import (
 # route is mounted and leaves the hook dormant when it is not — so the flow
 # lights up automatically once that work lands, with no inbox-side change.
 _PREVIEW_PATH = "/effective-config/preview"
+
+
+def _relative_age(dt) -> str:
+    """Compact relative age for inbox rows.
+
+    Renders a short token ("now", "5m", "2h", "3d", "4w", "5mo", "2y") for the
+    one-line triage rows. The absolute time still rides along in a data-ts-title
+    attribute so localize_time.js can set a full-precision hover tooltip.
+    """
+    if dt is None:
+        return ""
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt)
+        except ValueError:
+            return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+    if secs < 0:
+        return "now"
+    if secs < 60:
+        return "now"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}m"
+    hours = mins // 60
+    if hours < 24:
+        return f"{hours}h"
+    days = hours // 24
+    if days < 7:
+        return f"{days}d"
+    if days < 30:
+        return f"{days // 7}w"
+    if days < 365:
+        return f"{days // 30}mo"
+    return f"{days // 365}y"
 
 
 def build_router(
@@ -107,6 +145,8 @@ def build_router(
             "all_labels": list_labels(session),
             "selected_project": selected_project,
             "project_filter": project,
+            # Compact relative-age renderer for the one-line triage rows.
+            "rel_time": _relative_age,
         }
 
     def _list_response(request: Request, session: Session, *, project: str) -> HTMLResponse:
@@ -268,10 +308,6 @@ def build_router(
     @router.post("/inbox/capture", dependencies=[auth])
     async def capture(
         request: Request,
-        title: str = Form(...),
-        prompt: str = Form(""),
-        project_id: str = Form(""),
-        project: str = Form(""),
         session: Session = Depends(get_session),
     ):
         """Capture a new, possibly under-specified item straight into the inbox.
@@ -280,22 +316,30 @@ def build_router(
         intentionally optional at capture time — that is what makes the item
         "under-specified". The item must be fleshed out (workspace + profile)
         before it can be promoted onto the runnable board.
+
+        Labels can be attached at capture time via label_ids (repeated form
+        field, toggled by the shared label picker). The labels_form=1 sentinel
+        activates reconcile_labels_from_form after the ticket is created.
         """
-        title = (title or "").strip()
+        form = await request.form()
+        title = (form.get("title") or "").strip()
         if not title:
             raise HTTPException(422, "a title is required")
-        proj_id = (project_id or "").strip() or None
+        prompt = (form.get("prompt") or "").strip()
+        proj_id = (form.get("project_id") or "").strip() or None
+        project = form.get("project") or ""
         try:
-            create_ticket(
+            ticket = create_ticket(
                 session,
                 title=title,
-                prompt=(prompt or "").strip(),
+                prompt=prompt,
                 status="inbox",
                 profile_id=None,
                 project_id=proj_id,
             )
         except ValueError as e:
             raise HTTPException(422, str(e))
+        reconcile_labels_from_form(session, ticket.id, form)
         if request.headers.get("HX-Request") == "true":
             return _list_response(request, session, project=project)
         return RedirectResponse(url="/inbox", status_code=303)

@@ -145,8 +145,8 @@ async def test_inbox_page_renders(cookie_client, session, profile):
     assert r.status_code == 200
     assert "Triage me" in r.text
     assert "Inbox" in r.text  # heading + nav
-    # incomplete item shows the validation gate, not a promote button
-    assert "Needs:" in r.text
+    # incomplete item shows the validation gate, not a quick-queue button
+    assert "Needs " in r.text and "before promote" in r.text
 
 
 @pytest.mark.anyio

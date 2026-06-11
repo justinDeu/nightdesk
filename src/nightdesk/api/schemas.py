@@ -336,6 +336,12 @@ class TicketUpdate(BaseModel):
 
 
 
+class LabelOut(BaseModel):
+    id: str
+    name: str
+    color: str
+
+
 class TicketOut(BaseModel):
     id: str
     title: str
@@ -349,6 +355,7 @@ class TicketOut(BaseModel):
     toolchain_overrides: Optional[dict] = None
     additional_dirs: list[AdditionalDir] = []
     workspaces: list[TicketWorkspaceOut] = []
+    labels: list[LabelOut] = []
     run_now: bool
     scheduled_after: Optional[datetime] = None
     current_run_id: Optional[str] = None

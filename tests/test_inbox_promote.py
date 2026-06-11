@@ -306,4 +306,7 @@ async def test_inbox_row_exposes_promote_action(cookie_client, session, profile)
     _inbox(session, profile, title="needs-promoting")
     r = await cookie_client.get("/inbox")
     assert "ndOpenPromoteTicket" in r.text
-    assert "Promote…" in r.text
+    # Rows expose promote as a hover icon with a tooltip, split by readiness:
+    # quick-queue for complete items, edit-modal-first when fields are missing.
+    assert ("Promote to queued" in r.text
+            or "Flesh out the required fields, then promote" in r.text)

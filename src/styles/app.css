@@ -53,10 +53,19 @@ li[data-ticket-id][data-selected] {
   background: color-mix(in oklab, var(--color-bg-elev-2) 72%, transparent);
   border-color: var(--color-border);
 }
+/* Active nav: accent text + barely-there tint instead of a filled pill —
+   the quieter treatment keeps the header calm. Hover/open on an active item
+   deepens the tint rather than swapping back to the neutral hover look. */
 .nd-nav-trigger.is-active {
-  color: var(--color-fg);
-  background: color-mix(in oklab, var(--color-accent) 9%, transparent);
-  border-color: color-mix(in oklab, var(--color-accent) 36%, var(--color-border));
+  color: var(--color-accent);
+  background: color-mix(in oklab, var(--color-accent) 6%, transparent);
+  border-color: transparent;
+}
+.nd-nav-trigger.is-active:hover,
+.nd-nav-menu[open] .nd-nav-trigger.is-active {
+  color: var(--color-accent);
+  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+  border-color: color-mix(in oklab, var(--color-accent) 18%, transparent);
 }
 .nd-nav-chevron {
   width: .38rem;
@@ -1630,5 +1639,156 @@ dialog button[aria-label="Close"]:focus-visible {
 }
 
 .nd-display-select-row select:focus {
+  border-color: var(--color-accent);
+}
+
+/* ---- Inbox triage surface (dense one-line rows) -------------------------
+   The inbox is a keyboard-first, Linear-style triage list. Rows are one line
+   tall; the title toggles a <details> panel; metadata pickers stay inline. The
+   action icons live OUTSIDE the <summary> and are revealed on hover, focus, or
+   when the keyboard cursor (.nd-cursor-active) lands on the row — so they never
+   fight the disclosure toggle. Markup lives in partials/inbox_row.html. */
+
+/* Drop the native disclosure triangle; the whole title line is the affordance. */
+.nd-inbox-summary {
+  list-style: none;
+}
+.nd-inbox-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Subtle hover/cursor tint so the clickable row reads as interactive. */
+.nd-inbox-row:hover,
+.nd-inbox-row:focus-within {
+  background: color-mix(in oklab, var(--color-bg-elev-2) 45%, transparent);
+}
+.nd-inbox-disclosure[open] {
+  background: color-mix(in oklab, var(--color-bg-elev-2) 30%, transparent);
+}
+
+/* Hover/focus/cursor reveals the action icons and reflows the row so the age
+   and metadata slide clear of them (no overlap). */
+.nd-inbox-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .1s;
+}
+.nd-inbox-row:hover .nd-inbox-actions,
+.nd-inbox-row:focus-within .nd-inbox-actions,
+.nd-inbox-row.nd-cursor-active .nd-inbox-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.nd-inbox-row:hover .nd-inbox-summary,
+.nd-inbox-row:focus-within .nd-inbox-summary,
+.nd-inbox-row.nd-cursor-active .nd-inbox-summary {
+  padding-right: 116px;
+}
+
+/* Action icon buttons. */
+.nd-inbox-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 4px;
+  color: var(--color-fg-muted);
+  transition: color .1s, background .1s;
+}
+.nd-inbox-act:hover {
+  color: var(--color-accent);
+  background: color-mix(in oklab, var(--color-accent) 14%, transparent);
+}
+.nd-inbox-act-warn:hover {
+  color: var(--color-warn);
+  background: color-mix(in oklab, var(--color-warn) 16%, transparent);
+}
+.nd-inbox-act-danger:hover {
+  color: var(--color-danger);
+  background: color-mix(in oklab, var(--color-danger) 16%, transparent);
+}
+
+/* The "—" empty-label placeholder is noise on every row; show it only when the
+   row is hovered or holds the keyboard cursor (the anchor itself stays in the
+   DOM, so 'L' still opens the popover on an empty row). */
+.nd-inbox-row .nd-label-placeholder {
+  opacity: 0;
+  transition: opacity .1s;
+}
+.nd-inbox-row:hover .nd-label-placeholder,
+.nd-inbox-row:focus-within .nd-label-placeholder,
+.nd-inbox-row.nd-cursor-active .nd-label-placeholder {
+  opacity: 1;
+}
+
+/* ---- Inline capture ghost row -------------------------------------------
+   Always-visible title input; focusing the form reveals the second line
+   (notes / project / labels) and the Capture button. Markup lives in
+   inbox.html (.nd-capture).
+
+   The revealed section is an OVERLAY panel (absolute, hung below the title
+   row), not in-flow content. If it were in-flow, blurring the form would
+   collapse it and reflow the whole list between mousedown and mouseup of the
+   very click that took focus away — the click's targets diverge and row
+   actions silently never fire. Overlaying means the rows never move. */
+.nd-capture {
+  position: relative;
+}
+.nd-capture:focus-within {
+  border-color: color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
+  background: var(--color-bg-elev);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.nd-capture-more {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: -1px;
+  right: -1px;
+  z-index: 40;
+  background: var(--color-bg-elev);
+  border: 1px solid color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
+  border-top-width: 0;
+  border-radius: 0 0 0.375rem 0.375rem;
+  box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.55);
+}
+.nd-capture:focus-within .nd-capture-more {
+  display: flex;
+}
+.nd-capture-submit {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .1s;
+}
+.nd-capture:focus-within .nd-capture-submit {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Styled native <select> matching nightdesk's dark form controls — drops the
+   OS chevron (appearance:none) and paints a muted chevron that matches the
+   theme. Reusable wherever a compact select is needed. */
+.nd-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--color-bg-elev-2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%238b949e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right .5rem center;
+  border: 1px solid var(--color-border);
+  border-radius: .375rem;
+  padding: .3rem 1.6rem .3rem .5rem;
+  font-size: .75rem;
+  color: var(--color-fg);
+  cursor: pointer;
+  outline: none;
+  transition: border-color .1s;
+}
+.nd-select:hover {
+  border-color: color-mix(in oklab, var(--color-border) 60%, var(--color-fg-muted));
+}
+.nd-select:focus {
   border-color: var(--color-accent);
 }

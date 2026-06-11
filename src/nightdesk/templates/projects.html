@@ -2,8 +2,565 @@
 {% set title = "Projects" %}
 {% set active_page = "projects" %}
 
+{# Class strings used by the project form macro below and by JS-built rows. #}
+{% set input_class = "rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg placeholder:text-fg-muted caret-accent focus:border-accent focus:bg-bg-elev-2 focus:text-fg focus:outline-none focus:ring-2 focus:ring-accent/30" %}
+{% set mono_input_class = input_class ~ " font-mono text-xs" %}
+
+{# Status display metadata: label + Tailwind chip classes. Kept in sync with
+   domain/properties.py STATUS_META so pill colours match the board/list. #}
+{% set status_meta = {
+  'inbox':   {'label': 'Inbox',   'css': 'border-accent/40 text-accent'},
+  'draft':   {'label': 'Draft',   'css': 'border-border text-fg-muted'},
+  'queued':  {'label': 'Queued',  'css': 'border-info/40 text-info'},
+  'running': {'label': 'Running', 'css': 'border-accent text-accent'},
+  'review':  {'label': 'Review',  'css': 'border-warn/40 text-warn'},
+} %}
+
+{# project_form macro — identical to the one in settings_projects_pane.html so
+   the create / edit dialogs keep working without including the full partial. #}
+{% macro project_form(action, submit_label, project=None, dialog_id='') %}
+  {% set workspace_mode = project.default_workspace_mode if project else 'directory' %}
+  {% set linked = project.default_linked_workspaces if project and project.default_linked_workspaces else [] %}
+  <form method="post" action="{{ action }}" data-settings-form data-project-form class="space-y-3" style="color-scheme: dark;">
+    <label class="flex flex-col gap-1 text-sm">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Name</span>
+      <input name="name" required class="{{ input_class }}" placeholder="nightdesk" value="{{ project.name if project else '' }}" oninput="window.ndProjectSlugPreview && window.ndProjectSlugPreview(this.form)" />
+      <span class="text-[11px] text-fg-muted">Slug: <code data-slug-preview>{{ project.slug if project else 'project' }}</code></span>
+    </label>
+
+    <label class="flex flex-col gap-1 text-sm">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Project source path</span>
+      <div class="relative">
+        {% set source_path_id = (dialog_id ~ '-source-path') if dialog_id else 'project-source-path' %}
+        {% set suggest_id = source_path_id ~ '-suggest' %}
+        <input id="{{ source_path_id }}"
+               name="source_path"
+               required
+               class="{{ mono_input_class }}"
+               placeholder="/home/you/repo"
+               value="{{ project.source_path if project else '' }}"
+               oninput="window.ndPathSuggest && window.ndPathSuggest(this, '{{ suggest_id }}')"
+               onfocus="window.ndPathSuggest && window.ndPathSuggest(this, '{{ suggest_id }}')"
+               onblur="window.ndPathSuggestClose && window.ndPathSuggestClose('{{ suggest_id }}')"
+               onkeydown="window.ndPathSuggestKey && window.ndPathSuggestKey(event, this, '{{ suggest_id }}')" />
+        <div id="{{ suggest_id }}" class="nd-suggest-host fixed z-50 hidden"></div>
+      </div>
+    </label>
+
+    <label class="flex flex-col gap-1 text-sm">
+      <span class="text-fg-muted text-xs uppercase tracking-wide">Default workspace mode</span>
+      <select name="default_workspace_mode" class="{{ input_class }}" onchange="window.ndProjectModeChanged && window.ndProjectModeChanged(this.form)">
+        <option value="directory" {% if workspace_mode == 'directory' %}selected{% endif %}>Directory</option>
+        <option value="git_worktree" {% if workspace_mode == 'git_worktree' %}selected{% endif %}>Git worktree</option>
+      </select>
+    </label>
+
+    <div data-worktree-template-fields class="{% if workspace_mode != 'git_worktree' %}hidden {% endif %}space-y-3 rounded border border-border bg-bg-elev-2/40 p-2">
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Worktree name template</span>
+        <input name="default_worktree_name_template" class="{{ mono_input_class }}" placeholder="feat/{slug}" value="{{ project.default_worktree_name_template if project and project.default_worktree_name_template else '' }}" {% if workspace_mode != 'git_worktree' %}disabled{% endif %} />
+        <span class="text-[11px] text-fg-muted">Available token: <code>{slug}</code>, the ticket title slug.</span>
+      </label>
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Default base ref</span>
+        <input name="default_base_ref" class="{{ mono_input_class }}" placeholder="main" value="{{ project.default_base_ref if project and project.default_base_ref else '' }}" {% if workspace_mode != 'git_worktree' %}disabled{% endif %} />
+      </label>
+    </div>
+
+    <section class="rounded border border-border bg-bg-elev-2/40 p-2 space-y-3" data-toolchains>
+      <div class="flex items-center justify-between gap-2">
+        <div>
+          <h4 class="text-sm font-medium text-fg">Toolsets</h4>
+          <p class="text-[11px] text-fg-muted">Allow selected host-installed tools to be invoked by name. Project-local tools stay explicit, e.g. <code>./.venv/bin/pytest</code>.</p>
+        </div>
+      </div>
+      <div class="rounded border border-border bg-bg p-2">
+        <div class="mb-1 text-fg-muted text-xs uppercase tracking-wide">Toolset presets</div>
+        <div class="grid gap-1 sm:grid-cols-2" data-toolchain-rows>
+          {% set selected_toolchains = project.default_toolchains if project and project.default_toolchains else [] %}
+          {% for option in toolchain_options %}
+            <label class="flex items-start gap-2 rounded border border-border bg-bg-elev-2 px-2 py-2 text-sm">
+              <input type="checkbox" name="default_toolchain" value="{{ option.name }}" class="mt-0.5" {% if option.name in selected_toolchains %}checked{% endif %} />
+              <span class="min-w-0">
+                <span class="block text-fg">{{ option.label }}</span>
+                <code class="mt-0.5 block text-[11px] text-fg-muted">{{ option.paths | join(', ') }}</code>
+                <span class="mt-0.5 block text-[11px] text-fg-muted">{{ option.description }}</span>
+                <code class="mt-0.5 block text-[10px] text-fg-muted">key: {{ option.name }}</code>
+              </span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="rounded border border-border bg-bg p-2" data-tool-paths>
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <div class="text-fg-muted text-xs uppercase tracking-wide">Custom external tool paths</div>
+            <p class="text-[11px] text-fg-muted">Use this for host-installed bin directories outside the project workspace.</p>
+          </div>
+          <button type="button" onclick="window.ndProjectAddToolPathRow && window.ndProjectAddToolPathRow(this.form)" class="rounded border border-border px-2 py-1 text-xs text-accent hover:border-accent hover:bg-accent/10">+ Add</button>
+        </div>
+        <div class="mt-2 space-y-2" data-tool-path-rows>
+          {% set tool_paths = project.default_tool_paths if project and project.default_tool_paths else [''] %}
+          {% for path in tool_paths %}
+            <div class="flex items-center gap-2" data-tool-path-row>
+              <input name="default_tool_path" class="{{ mono_input_class }} flex-1" placeholder="./.venv/bin" value="{{ path }}" />
+              <button type="button" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" onclick="this.closest('[data-tool-path-row]').remove()">&times;</button>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <section class="rounded border border-border bg-bg-elev-2/40 p-2" data-linked-workspaces>
+      <div class="flex items-center justify-between gap-2">
+        <div>
+          <h4 class="text-sm font-medium text-fg">Default linked workspaces</h4>
+          <p class="text-[11px] text-fg-muted">Optional extra repos or directories to add when creating tickets.</p>
+        </div>
+        <button type="button" onclick="window.ndProjectAddWorkspaceRow && window.ndProjectAddWorkspaceRow(this.form)" class="rounded border border-border px-2 py-1 text-xs text-accent hover:border-accent hover:bg-accent/10">+ Add</button>
+      </div>
+      <div class="mt-2 space-y-2" data-linked-workspace-rows>
+        {% for ws in linked %}
+          {% set row_id = (dialog_id ~ '-linked-' ~ loop.index0) if dialog_id else ('project-linked-' ~ loop.index0) %}
+          <div class="rounded border border-border bg-bg p-2 space-y-2" data-linked-row="true">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium text-fg">Linked workspace</span>
+              <button type="button" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" onclick="this.closest('[data-linked-row]').remove()">&times;</button>
+            </div>
+            <div class="grid gap-2">
+              <div class="relative">
+                <input id="{{ row_id }}"
+                       name="linked_workspace_path"
+                       class="{{ mono_input_class }}"
+                       placeholder="/home/you/other-repo"
+                       value="{{ ws.source_path if ws.source_path else '' }}"
+                       oninput="window.ndPathSuggest&&window.ndPathSuggest(this,'{{ row_id }}-suggest')"
+                       onfocus="window.ndPathSuggest&&window.ndPathSuggest(this,'{{ row_id }}-suggest')"
+                       onblur="window.ndPathSuggestClose&&window.ndPathSuggestClose('{{ row_id }}-suggest')"
+                       onkeydown="window.ndPathSuggestKey&&window.ndPathSuggestKey(event,this,'{{ row_id }}-suggest')" />
+                <div id="{{ row_id }}-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <select name="linked_workspace_kind" class="{{ input_class }}">
+                  <option value="directory" {% if ws.kind == 'directory' %}selected{% endif %}>Directory</option>
+                  <option value="git_worktree" {% if ws.kind == 'git_worktree' %}selected{% endif %}>Git worktree</option>
+                </select>
+                <select name="linked_workspace_access" class="{{ input_class }}">
+                  <option value="read_only" {% if ws.access == 'read_only' %}selected{% endif %}>Read-only</option>
+                  <option value="read_write" {% if ws.access == 'read_write' %}selected{% endif %}>Read/write</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <div class="flex justify-end gap-2 pt-1">
+      {% if dialog_id %}
+        <button type="button" onclick="document.getElementById('{{ dialog_id }}').close()" class="rounded border border-border px-3 py-1.5 text-sm text-fg-muted hover:border-fg-muted/60 hover:text-fg">Cancel</button>
+      {% endif %}
+      <button type="submit" class="rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:brightness-110">{{ submit_label }}</button>
+    </div>
+  </form>
+{% endmacro %}
+
 {% block body %}
-<div class="mx-auto max-w-6xl">
-  {% include "partials/settings_projects_pane.html" %}
+{% set active_projects = projects | rejectattr('archived_at') | list %}
+{% set archived_projects = projects | selectattr('archived_at') | list %}
+
+{% if saved %}
+  <div class="mb-4 rounded border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-accent">Saved.</div>
+{% endif %}
+
+<div class="flex gap-0 min-h-[calc(100vh-6rem)]" data-projects-page>
+  {# ── Left rail: project list ─────────────────────────────────────────── #}
+  <aside class="w-64 shrink-0 border-r border-border flex flex-col">
+    <div class="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-border bg-bg-elev">
+      <div>
+        <h2 class="text-sm font-semibold text-fg">Projects</h2>
+        <p class="text-[11px] text-fg-muted">{{ active_projects | length }} active{% if archived_projects %} · {{ archived_projects | length }} archived{% endif %}</p>
+      </div>
+      <button type="button"
+              data-create-project-toggle
+              onclick="document.getElementById('project-create-modal').showModal()"
+              class="rounded bg-accent px-2 py-0.5 text-xs font-semibold text-bg hover:brightness-110">
+        + New
+      </button>
+    </div>
+
+    <nav class="flex-1 overflow-y-auto divide-y divide-border" id="project-list" aria-label="Projects">
+      {% for project in projects %}
+        <button type="button"
+                data-project-row="{{ project.id }}"
+                onclick="window.ndSelectProject && window.ndSelectProject('{{ project.id }}')"
+                class="flex w-full flex-col gap-0.5 px-3 py-2.5 text-left text-sm hover:bg-bg-elev-2 {% if loop.first %}bg-bg-elev-2{% endif %}"
+                {% if loop.first %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}>
+          <span class="flex min-w-0 items-center gap-2">
+            <span class="font-medium text-fg truncate">{{ project.name }}</span>
+            {% if project.archived_at %}<span class="rounded border border-border px-1 py-0.5 text-[10px] text-fg-muted shrink-0">archived</span>{% endif %}
+          </span>
+          <code class="text-[11px] text-fg-muted truncate">{{ project.slug }}</code>
+          <span class="text-[10px] text-fg-muted truncate">{{ project.default_workspace_mode or 'directory' }}</span>
+        </button>
+      {% else %}
+        <div data-projects-empty-state class="px-3 py-4 text-xs text-fg-muted">
+          <p><span class="text-fg">No projects yet.</span> Use + New to add one.</p>
+        </div>
+      {% endfor %}
+    </nav>
+  </aside>
+
+  {# ── Detail pane ─────────────────────────────────────────────────────── #}
+  <section class="flex-1 min-w-0 overflow-y-auto" id="project-pane">
+    {% if projects %}
+      {% for project in projects %}
+        {% set workspace = project_workspaces.get(project.id) if project_workspaces is defined else None %}
+        {% set preview = project_previews.get(project.id) %}
+        {% set recent_tickets = (workspace.inbox_items if workspace else []) + (workspace.recent_work if workspace else []) %}
+
+        <article data-project-detail="{{ project.id }}" class="{% if not loop.first %}hidden {% endif %}flex flex-col">
+
+          {# ── Project header ──────────────────────────────────────────── #}
+          <div class="border-b border-border bg-bg-elev px-6 py-4 shrink-0">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <h2 class="text-xl font-semibold text-fg">{{ project.name }}</h2>
+                  <code class="rounded border border-border bg-bg px-1.5 py-0.5 text-[11px] text-fg-muted">{{ project.slug }}</code>
+                  {% if project.archived_at %}<span class="rounded border border-border px-1.5 py-0.5 text-[11px] text-fg-muted">archived</span>{% endif %}
+                </div>
+                <code class="mt-1 block text-xs text-fg-muted">{{ project.source_path }}</code>
+              </div>
+              {% if not project.archived_at %}
+                <div class="flex flex-wrap items-center gap-2 shrink-0">
+                  <a href="/?project={{ project.slug | urlencode }}"
+                     class="rounded border border-border px-3 py-1.5 text-sm text-fg-muted hover:border-accent hover:text-accent">
+                    Open board
+                  </a>
+                  <button type="button"
+                          onclick="document.getElementById('project-edit-modal-{{ project.id }}').showModal()"
+                          class="rounded border border-accent/50 px-3 py-1.5 text-sm text-accent hover:border-accent hover:bg-accent/10">
+                    Project settings
+                  </button>
+                  <form method="post" action="/projects/{{ project.id }}/archive" class="inline">
+                    <button type="submit" class="rounded border border-border px-3 py-1.5 text-sm text-fg-muted hover:border-warn hover:text-warn">Archive</button>
+                  </form>
+                  <button type="button"
+                          onclick="window.ndOpenCreateTicket && window.ndOpenCreateTicket({project: '{{ project.slug }}'})"
+                          class="rounded bg-accent px-3 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
+                    + New ticket
+                  </button>
+                </div>
+              {% endif %}
+            </div>
+          </div>
+
+          {# ── Quick-nav tab bar ───────────────────────────────────────── #}
+          <div class="border-b border-border bg-bg shrink-0 px-6">
+            <div class="flex flex-wrap gap-1 py-2">
+              <a href="/?project={{ project.slug | urlencode }}" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">Board</a>
+              <a href="/list?project={{ project.slug | urlencode }}" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">List</a>
+              <a href="/inbox?project={{ project.slug | urlencode }}" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">Inbox</a>
+              <a href="/archive?project={{ project.slug | urlencode }}" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">Archive</a>
+              <a href="/?project={{ project.slug | urlencode }}&group=label" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">By label</a>
+            </div>
+          </div>
+
+          {# ── Status summary strip ────────────────────────────────────── #}
+          <div class="border-b border-border bg-bg-elev/50 px-6 py-3 shrink-0">
+            <div class="flex flex-wrap gap-2">
+              {% set status_links = [
+                ('inbox',   'Inbox',   '/inbox?project=' ~ (project.slug | urlencode)),
+                ('draft',   'Draft',   '/list?q=' ~ (('project=' ~ project.slug ~ ' status=draft') | urlencode)),
+                ('queued',  'Queued',  '/list?q=' ~ (('project=' ~ project.slug ~ ' status=queued') | urlencode)),
+                ('running', 'Running', '/list?q=' ~ (('project=' ~ project.slug ~ ' status=running') | urlencode)),
+                ('review',  'Review',  '/list?q=' ~ (('project=' ~ project.slug ~ ' status=review') | urlencode)),
+              ] %}
+              {% for status_key, status_label, status_href in status_links %}
+                {% set scount = workspace.counts[status_key] if workspace else 0 %}
+                {% set smeta = status_meta[status_key] %}
+                <a href="{{ status_href }}"
+                   class="flex items-center gap-1.5 rounded border px-3 py-1.5 text-sm hover:border-fg-muted/60 hover:bg-bg-elev-2 {{ smeta.css }}">
+                  <span class="font-semibold tabular-nums">{{ scount }}</span>
+                  <span class="text-xs">{{ status_label }}</span>
+                </a>
+              {% endfor %}
+            </div>
+          </div>
+
+          {# ── Main content grid ───────────────────────────────────────── #}
+          <div class="flex-1 grid gap-5 p-6 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_26rem] content-start">
+
+            {# Recent tickets list #}
+            <section class="rounded border border-border bg-bg overflow-hidden">
+              <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-border bg-bg-elev/50">
+                <h3 class="text-sm font-semibold text-fg">Recent tickets</h3>
+                <a href="/list?project={{ project.slug | urlencode }}" class="text-xs text-accent hover:text-accent/80">View all in list</a>
+              </div>
+              {% if recent_tickets %}
+                <div class="divide-y divide-border/50">
+                  {% for ticket in recent_tickets %}
+                    {% set smeta = status_meta.get(ticket.status, {'label': ticket.status, 'css': 'border-border text-fg-muted'}) %}
+                    <a href="/tickets/{{ ticket.id }}"
+                       class="flex items-center gap-3 px-4 py-2.5 hover:bg-bg-elev text-sm group">
+                      <span class="shrink-0 inline-block rounded border px-1.5 py-0.5 text-[10px] font-medium w-16 text-center {{ smeta.css }}">{{ smeta.label }}</span>
+                      <span class="flex-1 min-w-0 truncate text-fg group-hover:text-accent">{{ ticket.title }}</span>
+                      <span class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] {{ priority_css(ticket.priority) }}">{{ priority_label(ticket.priority) }}</span>
+                      {% if ticket.updated_at %}
+                        <span class="shrink-0 text-[11px] text-fg-muted font-mono hidden sm:block w-28 text-right">
+                          <span data-ts="{{ iso_utc(ticket.updated_at) }}">{{ ticket.updated_at }}</span>
+                        </span>
+                      {% endif %}
+                    </a>
+                  {% endfor %}
+                </div>
+                {% set total_active = (workspace.counts.values() | sum) if workspace else 0 %}
+                {% if total_active > recent_tickets | length %}
+                  <div class="px-4 py-2 border-t border-border bg-bg-elev/30 text-center">
+                    <a href="/list?project={{ project.slug | urlencode }}" class="text-xs text-accent hover:text-accent/80">
+                      + {{ total_active - (recent_tickets | length) }} more — open list view
+                    </a>
+                  </div>
+                {% endif %}
+              {% else %}
+                <div class="px-4 py-8 text-center">
+                  <p class="text-sm text-fg-muted">No active tickets for this project.</p>
+                  {% if not project.archived_at %}
+                    <button type="button"
+                            onclick="window.ndOpenCreateTicket && window.ndOpenCreateTicket({project: '{{ project.slug }}'})"
+                            class="mt-3 rounded border border-border px-3 py-1.5 text-sm text-accent hover:border-accent hover:bg-accent/10">
+                      Create first ticket
+                    </button>
+                  {% endif %}
+                </div>
+              {% endif %}
+            </section>
+
+            {# ── Right column: config cards ──────────────────────────── #}
+            <div class="space-y-4">
+
+              {# Execution defaults #}
+              <section class="rounded border border-border bg-bg p-4">
+                <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-fg-muted mb-3">Execution defaults</div>
+                <dl class="grid gap-2 text-sm">
+                  <div class="flex gap-3">
+                    <dt class="w-32 shrink-0 text-fg-muted text-xs">Workspace mode</dt>
+                    <dd><code class="text-xs">{{ project.default_workspace_mode or 'directory' }}</code></dd>
+                  </div>
+                  {% if project.default_base_ref %}
+                    <div class="flex gap-3">
+                      <dt class="w-32 shrink-0 text-fg-muted text-xs">Base ref</dt>
+                      <dd><code class="text-xs">{{ project.default_base_ref }}</code></dd>
+                    </div>
+                  {% endif %}
+                  {% if project.default_worktree_name_template %}
+                    <div class="flex gap-3">
+                      <dt class="w-32 shrink-0 text-fg-muted text-xs">Worktree template</dt>
+                      <dd><code class="text-xs">{{ project.default_worktree_name_template }}</code></dd>
+                    </div>
+                  {% endif %}
+                  {% if project.default_toolchains %}
+                    <div class="flex gap-3">
+                      <dt class="w-32 shrink-0 text-fg-muted text-xs">Toolsets</dt>
+                      <dd class="flex flex-wrap gap-1">
+                        {% for tc in project.default_toolchains %}
+                          <code class="rounded border border-border bg-bg-elev-2 px-1.5 py-0.5 text-[11px]">{{ tc }}</code>
+                        {% endfor %}
+                      </dd>
+                    </div>
+                  {% endif %}
+                  {% if project.default_tool_paths %}
+                    <div class="flex gap-3">
+                      <dt class="w-32 shrink-0 text-fg-muted text-xs">Tool paths</dt>
+                      <dd class="space-y-0.5">
+                        {% for path in project.default_tool_paths %}
+                          <div><code class="text-xs">{{ path }}</code></div>
+                        {% endfor %}
+                      </dd>
+                    </div>
+                  {% endif %}
+                </dl>
+              </section>
+
+              {# Linked workspaces (only when configured) #}
+              {% if project.default_linked_workspaces %}
+                <section class="rounded border border-border bg-bg p-4">
+                  <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-fg-muted mb-3">Linked workspaces</div>
+                  <div class="space-y-2">
+                    {% for ws in project.default_linked_workspaces %}
+                      <div class="rounded border border-border bg-bg-elev-2 px-3 py-2 text-sm">
+                        <code class="block truncate text-fg text-xs">{{ ws.source_path }}</code>
+                        <span class="text-[11px] text-fg-muted">{{ ws.kind }} · {{ ws.access }}</span>
+                      </div>
+                    {% endfor %}
+                  </div>
+                </section>
+              {% endif %}
+
+              {# Creation defaults preview — collapsible #}
+              {% if not project.archived_at and preview %}
+                <details class="rounded border border-border bg-bg group" data-project-defaults-preview="{{ project.id }}">
+                  <summary class="flex items-center justify-between px-4 py-3 cursor-pointer select-none hover:bg-bg-elev-2 rounded">
+                    <span class="text-[10px] font-semibold uppercase tracking-[0.18em] text-fg-muted">Creation defaults preview</span>
+                    <span class="text-fg-muted/50 text-xs group-open:rotate-90 transition-transform">&#x25B6;</span>
+                  </summary>
+                  <div class="px-4 pb-4 border-t border-border">
+                    <p class="mt-3 text-xs text-fg-muted">New tickets from this project use these defaults. Explicit ticket values take precedence.</p>
+                    <dl class="mt-3 grid gap-2 text-xs">
+                      <div class="flex gap-2"><dt class="w-28 shrink-0 text-fg-muted">Source path</dt><dd><code class="text-fg">{{ preview.source_path }}</code></dd></div>
+                      <div class="flex gap-2"><dt class="w-28 shrink-0 text-fg-muted">Workspace mode</dt><dd><code class="text-fg">{{ preview.workspace_mode }}</code></dd></div>
+                      {% if preview.base_ref %}<div class="flex gap-2"><dt class="w-28 shrink-0 text-fg-muted">Base ref</dt><dd><code class="text-fg">{{ preview.base_ref }}</code></dd></div>{% endif %}
+                      {% if preview.worktree_name_template %}<div class="flex gap-2"><dt class="w-28 shrink-0 text-fg-muted">Worktree</dt><dd><code class="text-fg">{{ preview.worktree_name_template }}</code><span class="text-fg-muted"> → </span><code class="text-fg-muted">{{ preview.worktree_name_resolved or '—' }}</code></dd></div>{% endif %}
+                      {% if preview.linked_workspaces %}<div class="flex gap-2"><dt class="w-28 shrink-0 text-fg-muted">Linked</dt><dd class="space-y-0.5">{% for ws in preview.linked_workspaces %}<div><code class="text-fg">{{ ws.source_path }}</code> <span class="text-fg-muted">({{ ws.kind }}, {{ ws.access }})</span></div>{% endfor %}</dd></div>{% endif %}
+                      {% if preview.toolchains %}<div class="flex gap-2"><dt class="w-28 shrink-0 text-fg-muted">Toolsets</dt><dd class="flex flex-wrap gap-1">{% for tc in preview.toolchains %}<code class="rounded border border-border bg-bg-elev-2 px-1.5 py-0.5 text-fg">{{ tc }}</code>{% endfor %}</dd></div>{% endif %}
+                      {% if preview.tool_paths %}<div class="flex gap-2"><dt class="w-28 shrink-0 text-fg-muted">Tool paths</dt><dd class="space-y-0.5">{% for path in preview.tool_paths %}<div><code class="text-fg">{{ path }}</code></div>{% endfor %}</dd></div>{% endif %}
+                      {% if preview.toolchain_overrides %}<div class="flex gap-2"><dt class="w-28 shrink-0 text-fg-muted">Applied as</dt><dd><code class="text-fg-muted">toolchain_overrides.enable = [{{ preview.toolchain_overrides.enable | join(', ') }}]</code></dd></div>{% endif %}
+                    </dl>
+                  </div>
+                </details>
+              {% endif %}
+            </div>
+          </div>
+
+        </article>
+      {% endfor %}
+    {% else %}
+      <div class="flex h-full items-center justify-center p-8 text-center">
+        <div>
+          <h2 class="text-lg font-semibold text-fg">Create your first project</h2>
+          <p class="mt-1 text-sm text-fg-muted">Projects hold source paths, workspace defaults, linked repos, and toolsets for repeat work.</p>
+          <button type="button" data-create-project-toggle onclick="document.getElementById('project-create-modal').showModal()" class="mt-4 rounded bg-accent px-3 py-1.5 text-sm font-semibold text-bg hover:brightness-110">Create project</button>
+        </div>
+      </div>
+    {% endif %}
+  </section>
 </div>
+
+{# ── Create project modal ────────────────────────────────────────────────── #}
+<dialog id="project-create-modal"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[620px] max-w-[calc(100vw-2rem)]"
+        style="margin:auto; max-height: 92vh;">
+  <div class="flex items-center justify-between px-5 py-3 border-b border-border bg-bg-elev sticky top-0 z-10">
+    <div>
+      <h3 class="text-base font-semibold">Create project</h3>
+      <p class="text-[11px] text-fg-muted">Saved work context for filtering and ticket defaults.</p>
+    </div>
+    <button type="button" onclick="document.getElementById('project-create-modal').close()" class="text-fg-muted hover:text-fg text-2xl leading-none px-2" aria-label="Close">&times;</button>
+  </div>
+  <div class="px-5 py-4 overflow-y-auto max-h-[calc(92vh-4rem)]">
+    {{ project_form('/projects', 'Create project', None, 'project-create-modal') }}
+  </div>
+</dialog>
+
+{# ── Per-project edit modals ─────────────────────────────────────────────── #}
+{% for project in projects %}
+  {% if not project.archived_at %}
+    <dialog id="project-edit-modal-{{ project.id }}"
+            class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[620px] max-w-[calc(100vw-2rem)]"
+            style="margin:auto; max-height: 92vh;">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-border bg-bg-elev sticky top-0 z-10">
+        <div>
+          <h3 class="text-base font-semibold">Edit project</h3>
+          <p class="text-[11px] text-fg-muted">Update project defaults and linked workspaces.</p>
+        </div>
+        <button type="button" onclick="document.getElementById('project-edit-modal-{{ project.id }}').close()" class="text-fg-muted hover:text-fg text-2xl leading-none px-2" aria-label="Close">&times;</button>
+      </div>
+      <div class="px-5 py-4 overflow-y-auto max-h-[calc(92vh-4rem)]">
+        {{ project_form('/projects/' ~ project.id, 'Save changes', project, 'project-edit-modal-' ~ project.id) }}
+      </div>
+    </dialog>
+  {% endif %}
+{% endfor %}
+
+<script>
+(function () {
+  function slugify(value) {
+    var slug = (value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return slug || 'project';
+  }
+  window.ndProjectSlugPreview = function (form) {
+    if (!form) return;
+    var name = form.querySelector('[name="name"]');
+    var preview = form.querySelector('[data-slug-preview]');
+    if (preview) preview.textContent = slugify(name && name.value);
+  };
+  window.ndProjectModeChanged = function (form) {
+    if (!form) return;
+    var mode = form.querySelector('[name="default_workspace_mode"]');
+    var box = form.querySelector('[data-worktree-template-fields]');
+    if (!mode || !box) return;
+    var enabled = mode.value === 'git_worktree';
+    box.classList.toggle('hidden', !enabled);
+    box.querySelectorAll('input').forEach(function (input) {
+      input.disabled = !enabled;
+      if (!enabled) input.value = '';
+    });
+  };
+  var linkedSeq = 0;
+  window.ndProjectAddWorkspaceRow = function (form) {
+    if (!form) return;
+    var host = form.querySelector('[data-linked-workspace-rows]');
+    if (!host) return;
+    linkedSeq += 1;
+    var rowId = 'project-linked-' + linkedSeq;
+    var row = document.createElement('div');
+    row.className = 'rounded border border-border bg-bg p-2 space-y-2';
+    row.setAttribute('data-linked-row', 'true');
+    row.innerHTML = '' +
+      '<div class="flex items-center justify-between gap-2">' +
+      '<span class="text-xs font-medium text-fg">Linked workspace</span>' +
+      '<button type="button" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" onclick="this.closest(\'[data-linked-row]\').remove()">&times;</button>' +
+      '</div>' +
+      '<div class="grid gap-2">' +
+      '<div class="relative">' +
+      '<input id="' + rowId + '" name="linked_workspace_path" class="rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg placeholder:text-fg-muted caret-accent focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 font-mono text-xs w-full" placeholder="/home/you/other-repo" ' +
+      'oninput="window.ndPathSuggest&&window.ndPathSuggest(this,\'' + rowId + '-suggest\')" ' +
+      'onfocus="window.ndPathSuggest&&window.ndPathSuggest(this,\'' + rowId + '-suggest\')" ' +
+      'onblur="window.ndPathSuggestClose&&window.ndPathSuggestClose(\'' + rowId + '-suggest\')" ' +
+      'onkeydown="window.ndPathSuggestKey&&window.ndPathSuggestKey(event,this,\'' + rowId + '-suggest\')" />' +
+      '<div id="' + rowId + '-suggest" class="nd-suggest-host fixed z-50 hidden"></div>' +
+      '</div>' +
+      '<div class="grid grid-cols-2 gap-2">' +
+      '<select name="linked_workspace_kind" class="rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg focus:border-accent focus:outline-none"><option value="directory">Directory</option><option value="git_worktree">Git worktree</option></select>' +
+      '<select name="linked_workspace_access" class="rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg focus:border-accent focus:outline-none"><option value="read_only">Read-only</option><option value="read_write">Read/write</option></select>' +
+      '</div>' +
+      '</div>';
+    host.appendChild(row);
+  };
+  var toolPathSeq = 0;
+  window.ndProjectAddToolPathRow = function (form) {
+    if (!form) return;
+    var host = form.querySelector('[data-tool-path-rows]');
+    if (!host) return;
+    toolPathSeq += 1;
+    var row = document.createElement('div');
+    row.className = 'flex items-center gap-2';
+    row.setAttribute('data-tool-path-row', 'true');
+    row.innerHTML = '' +
+      '<input name="default_tool_path" class="rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg placeholder:text-fg-muted caret-accent focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 font-mono text-xs flex-1" placeholder="./.venv/bin" />' +
+      '<button type="button" class="rounded px-2 py-0.5 text-xs text-fg-muted hover:text-danger" onclick="this.closest(&quot;[data-tool-path-row]&quot;).remove()">&times;</button>';
+    host.appendChild(row);
+  };
+  window.ndSelectProject = function (projectId) {
+    document.querySelectorAll('[data-project-row]').forEach(function (row) {
+      var selected = row.getAttribute('data-project-row') === projectId;
+      row.classList.toggle('bg-bg-elev-2', selected);
+      row.style.boxShadow = selected ? 'inset 2px 0 0 var(--color-accent)' : '';
+    });
+    document.querySelectorAll('[data-project-detail]').forEach(function (detail) {
+      detail.classList.toggle('hidden', detail.getAttribute('data-project-detail') !== projectId);
+    });
+  };
+  document.querySelectorAll('[data-project-form]').forEach(function (form) {
+    window.ndProjectSlugPreview(form);
+    window.ndProjectModeChanged(form);
+  });
+  document.querySelectorAll('dialog[id^="project-"]').forEach(function (dialog) {
+    dialog.addEventListener('click', function (event) {
+      if (event.target === dialog) dialog.close();
+    });
+  });
+})();
+</script>
 {% endblock %}

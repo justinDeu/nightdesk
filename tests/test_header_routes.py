@@ -113,12 +113,18 @@ async def test_header_search_requires_auth(app):
     assert r.status_code == 401
 
 
-async def test_base_template_includes_search_input(cookie_client):
+async def test_base_template_has_no_header_search_box(cookie_client):
+    """The header search box is retired; search lives in the command palette.
+
+    /header/search itself stays mounted (the palette queries it), but the
+    base template must no longer render the old input or results dropdown.
+    """
     r = await cookie_client.get("/profiles")
     assert r.status_code == 200
-    assert 'id="header-search"' in r.text
-    assert 'id="search-results"' in r.text
-    assert 'hx-get="/header/search"' in r.text
+    assert 'id="header-search"' not in r.text
+    assert 'id="search-results"' not in r.text
+    assert "command_palette.html" not in r.text  # include resolved, not leaked
+    assert 'id="nd-palette"' in r.text or "command_palette.js" in r.text
 
 
 async def test_worker_pill_offline_when_no_heartbeat(cookie_client):
@@ -301,18 +307,3 @@ async def test_base_template_includes_worker_pill_polling(cookie_client):
     assert r.status_code == 200
     assert 'id="worker-pill"' in r.text
     assert 'hx-get="/header/worker-pill"' in r.text
-
-
-async def test_search_box_precedes_nav_in_header_markup(cookie_client):
-    """Regression guard: #header-search must appear to the LEFT of the <nav>
-    links in the rendered HTML. If the order is ever swapped back the search
-    box will drift to the right side of the bar and this test will catch it."""
-    r = await cookie_client.get("/profiles")
-    assert r.status_code == 200
-    body = r.text
-    search_pos = body.index('id="header-search"')
-    nav_pos = body.index("<nav ")
-    assert search_pos < nav_pos, (
-        "#header-search must appear before <nav> in the header markup "
-        f"(search at {search_pos}, nav at {nav_pos})"
-    )

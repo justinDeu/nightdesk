@@ -83,16 +83,38 @@
         {% for group_key, label, href, children in nav_groups %}
           {% set is_active = active_page in active_groups[group_key] %}
           <details class="nd-nav-menu relative">
-            <summary class="nd-nav-trigger {% if is_active %}is-active{% endif %}">
+            <summary class="nd-nav-trigger {% if is_active %}is-active{% endif %}"
+                     {% if is_active %}aria-current="true"{% endif %}>
               <span>{{ label }}</span>
+              {# Piece 2: inbox dot on the Work trigger — visible without
+                 opening the dropdown; updated by the badge poll below. #}
+              {% if group_key == 'work' %}<span id="nd-inbox-dot-wrap"></span>{% endif %}
               <span class="nd-nav-chevron" aria-hidden="true"></span>
             </summary>
             <div class="nd-nav-popover">
               {% for child_href, child_label in children %}
                 {% set child_active = (request.url.path == child_href) if request is defined else false %}
-                <a href="{{ child_href }}" class="nd-nav-item {% if child_active %}is-active{% endif %}">
-                  <span class="nd-nav-item-label">{{ child_label }}</span>
-                </a>
+                {% if child_href == '/inbox' %}
+                  {# Inbox gets a count badge. flex layout puts the badge at the right edge. #}
+                  <a href="{{ child_href }}"
+                     class="nd-nav-item flex items-center {% if child_active %}is-active{% endif %}"
+                     {% if child_active %}aria-current="page"{% endif %}>
+                    <span class="nd-nav-item-label flex-1">{{ child_label }}</span>
+                    {# Piece 2: inbox badge chip — polls /header/inbox-badge every 15 s.
+                       OOB response also refreshes #nd-inbox-dot-wrap in the trigger. #}
+                    <span id="nd-inbox-badge-wrap"
+                          class="shrink-0 ml-1"
+                          hx-get="/header/inbox-badge"
+                          hx-trigger="load, every 15s"
+                          hx-swap="innerHTML"></span>
+                  </a>
+                {% else %}
+                  <a href="{{ child_href }}"
+                     class="nd-nav-item {% if child_active %}is-active{% endif %}"
+                     {% if child_active %}aria-current="page"{% endif %}>
+                    <span class="nd-nav-item-label">{{ child_label }}</span>
+                  </a>
+                {% endif %}
               {% endfor %}
             </div>
           </details>
@@ -262,6 +284,9 @@
         </div>
       </form>
     </dialog>
+    {# Piece 3: quick-capture dialog (Shift+C). Posts to the existing
+       /inbox/capture endpoint without navigating away. #}
+    {% include "partials/quick_capture.html" %}
     <script>
       // Shared feedback for Run-now buttons (board sidebar + ticket detail).
       // The endpoint returns 204 on success (HTMX) or 409 if the ticket is

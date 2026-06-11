@@ -99,10 +99,11 @@
       {% if _missing %}
       <div data-promote-missing
            class="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+        {%- set _missing_labels = {'title': 'a title', 'profile': 'a profile', 'workspace': 'a workspace source path'} -%}
+        {%- set _missing_parts = [] -%}
+        {%- for m in _missing %}{% if m in _missing_labels %}{% set _ = _missing_parts.append(_missing_labels[m]) %}{% endif %}{% endfor -%}
         <span class="font-medium">Required before promoting:</span>
-        {% if 'title' in _missing %}a title{% if _missing | length > 1 %}, {% endif %}{% endif %}
-        {% if 'profile' in _missing %}a profile{% if 'workspace' in _missing %}, {% endif %}{% endif %}
-        {% if 'workspace' in _missing %}a workspace source path{% endif %}.
+        {{ _missing_parts | join(', ') }}.
         Queuing stays disabled until these are filled in.
       </div>
       {% endif %}
@@ -124,16 +125,51 @@
                   class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none">{{ ticket.prompt if _is_edit and ticket.prompt else '' }}</textarea>
       </label>
 
-      <label class="flex flex-col gap-1 text-sm">
+      <div class="flex flex-col gap-1 text-sm">
         <span class="text-fg-muted text-xs uppercase tracking-wide">Profile{% if 'profile' in _missing %} <span class="text-warn">• required</span>{% endif %}</span>
-        <select name="profile_id" required
-                class="bg-bg-elev-2 border rounded px-2 py-1 text-fg focus:border-accent outline-none {% if 'profile' in _missing %}border-warn ring-1 ring-warn/40{% else %}border-border{% endif %}">
-          {% if not _is_edit %}<option value="">-- select --</option>{% endif %}
-          {% for p in profiles %}
-            <option value="{{ p.id }}" {% if _is_edit and ticket.profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
+        {%- set _profile_initial = ticket.profile_id if (_is_edit and ticket.profile_id) else (profiles[0].id if profiles|length == 1 else '') -%}
+        {#- Hidden input carries profile_id for form POST; JS keeps it in sync. -#}
+        <input type="hidden" name="profile_id" value="{{ _profile_initial }}" data-profile-hidden />
+        {#- Custom styled dropdown — inherits nd-prop-* picker classes for option styling.
+            The popover is repositioned to position:fixed by ticket_form.js so it escapes
+            the modal's overflow-y:auto body. -#}
+        <div data-profile-select class="relative">
+          <button type="button"
+                  data-profile-trigger
+                  aria-haspopup="listbox"
+                  aria-expanded="false"
+                  class="flex w-full items-center justify-between gap-2 rounded border bg-bg-elev-2 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 {% if 'profile' in _missing %}border-warn ring-1 ring-warn/40{% else %}border-border{% endif %}">
+            <span data-profile-trigger-label class="truncate {% if _profile_initial %}text-fg{% else %}text-fg-muted{% endif %}">
+              {%- if _profile_initial -%}
+                {%- for p in profiles -%}{%- if p.id == _profile_initial %}{{ p.name }}{%- endif -%}{%- endfor -%}
+              {%- else -%}Choose a profile…{%- endif -%}
+            </span>
+            <svg class="h-3.5 w-3.5 shrink-0 text-fg-muted" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/>
+            </svg>
+          </button>
+          {#- Options popover — styled via nd-prop-* classes; fixed-positioned by JS. -#}
+          <div data-profile-options
+               role="listbox"
+               aria-label="Profile"
+               class="nd-prop-menu hidden">
+            {% for p in profiles %}
+            <button type="button"
+                    role="option"
+                    data-profile-option
+                    data-value="{{ p.id }}"
+                    aria-selected="{{ 'true' if p.id == _profile_initial else 'false' }}"
+                    class="nd-prop-option{% if p.id == _profile_initial %} nd-prop-current{% endif %}">
+              <span class="nd-prop-label">{{ p.name }}</span>
+              {% if p.id == _profile_initial %}<span class="nd-prop-check" aria-hidden="true">✓</span>{% endif %}
+            </button>
+            {% endfor %}
+            {% if not profiles %}
+            <div class="nd-prop-msg">No profiles configured — add one under Setup.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
 
       <label class="flex flex-col gap-1 text-sm">
         <span class="text-fg-muted text-xs uppercase tracking-wide">Project</span>

@@ -1143,6 +1143,9 @@
     // --- Navigation & general commands ---
     cmds.push({ label: "New ticket", shortcut: "c", hint: "", section: "Navigation",
       run: openCreateTicket });
+    cmds.push({ label: "Capture to inbox", shortcut: "Shift C", hint: "quick capture",
+      section: "Navigation",
+      run: function () { openQuickCapture(); } });
     cmds.push({ label: "Go to Work", shortcut: "", hint: "Board", section: "Navigation",
       run: function () { location.href = "/"; } });
     cmds.push({ label: "Go to Insights", shortcut: "g i", hint: "Analytics", section: "Navigation",
@@ -1415,6 +1418,109 @@
     }
   }
 
+  // ---- quick capture (Shift+C) ------------------------------------------
+  // Opens a minimal dialog that posts title + optional notes + project to
+  // /inbox/capture without leaving the current page.  Projects are lazy-
+  // loaded on first open so base.html carries no per-page project query.
+
+  var _qcProjectsLoaded = false;
+
+  function openQuickCapture() {
+    var dlg = document.getElementById("nd-quick-capture");
+    if (!dlg) return;
+
+    // Lazy-load project options once per page load.
+    var sel = document.getElementById("nd-quick-capture-project");
+    if (sel && !_qcProjectsLoaded) {
+      fetch("/header/project-options", { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.text() : ""; })
+        .then(function (html) {
+          if (html && sel) {
+            sel.innerHTML = html;
+            _qcProjectsLoaded = true;
+          }
+        });
+    }
+
+    // Reset form and error state.
+    var form = document.getElementById("nd-quick-capture-form");
+    if (form) form.reset();
+    var err = document.getElementById("nd-quick-capture-error");
+    if (err) { err.textContent = ""; err.classList.add("hidden"); }
+
+    if (!dlg.open) {
+      try { dlg.showModal(); } catch (e) { return; }
+    }
+    var titleEl = document.getElementById("nd-quick-capture-title");
+    if (titleEl) titleEl.focus();
+  }
+  window.ndOpenQuickCapture = openQuickCapture;
+
+  function wireQuickCapture() {
+    var form = document.getElementById("nd-quick-capture-form");
+    if (!form || form.__ndWired) return;
+    form.__ndWired = true;
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var titleEl = document.getElementById("nd-quick-capture-title");
+      var title = (titleEl ? titleEl.value : "").trim();
+      var err = document.getElementById("nd-quick-capture-error");
+
+      if (!title) {
+        if (err) { err.textContent = "Title is required."; err.classList.remove("hidden"); }
+        if (titleEl) titleEl.focus();
+        return;
+      }
+
+      var fd = new FormData(form);
+      var body = new URLSearchParams(fd).toString();
+      fetch("/inbox/capture", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "HX-Request": "true",
+        },
+        body: body,
+      }).then(function (r) {
+        if (r.ok || r.status === 204) {
+          var dlg = document.getElementById("nd-quick-capture");
+          if (dlg) dlg.close();
+          flashStatus("Captured to inbox");
+
+          // Refresh inbox badge immediately.
+          var badgeWrap = document.getElementById("nd-inbox-badge-wrap");
+          if (badgeWrap && typeof window.htmx !== "undefined") {
+            window.htmx.ajax("GET", "/header/inbox-badge", {
+              target: "#nd-inbox-badge-wrap",
+              swap: "innerHTML",
+            });
+          }
+
+          // If currently on the inbox page, refresh the list too.
+          var inboxList = document.getElementById("inbox-list");
+          if (inboxList && typeof window.htmx !== "undefined") {
+            var qs = location.search || "";
+            window.htmx.ajax("GET", "/inbox/list" + qs, {
+              target: "#inbox-list",
+              swap: "outerHTML",
+            });
+          }
+        } else {
+          r.text().then(function (msg) {
+            if (err) {
+              err.textContent = msg || "Capture failed.";
+              err.classList.remove("hidden");
+            }
+          });
+        }
+      }).catch(function () {
+        if (err) { err.textContent = "Capture failed."; err.classList.remove("hidden"); }
+      });
+    });
+  }
+
   // ---- wiring ------------------------------------------------------------
 
   function wirePaletteInput() {
@@ -1497,6 +1603,14 @@
         e.preventDefault();
         window.ndDisplayPopover.toggle();
       }
+      return;
+    }
+
+    // Shift+C: open the quick-capture dialog (inbox capture from any page).
+    // Plain "c" opens create-ticket (handled below); Shift+C is capture.
+    if (e.shiftKey && (key === "c" || key === "C")) {
+      e.preventDefault();
+      openQuickCapture();
       return;
     }
 
@@ -1803,6 +1917,7 @@
 
   function init() {
     wirePaletteInput();
+    wireQuickCapture();
     document.addEventListener("keydown", onKeydown, true);
 
     // If we landed on the board via the "c" shortcut from another page,

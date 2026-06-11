@@ -835,6 +835,185 @@
     if (picker) _depUpdateEmpty(picker);
   };
 
+  // --- Profile dropdown ----------------------------------------------------
+  //
+  // Keyboard-native custom dropdown for the profile field. Focus stays on the
+  // trigger button; aria-activedescendant tracks cursor position. The popover
+  // uses position:fixed (set via inline style) so it escapes the modal's
+  // overflow-y:auto body. Data-attribute driven — no id-hardcoding — so the
+  // same code handles both create and edit modal instances.
+
+  // Tracks open profile dropdowns: form root → { trigger, menu }.
+  const _profState = new Map();
+
+  function _profPosition(trigger, menu) {
+    const r = trigger.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.left = r.left + 'px';
+    menu.style.top = (r.bottom + 4) + 'px';
+    menu.style.width = r.width + 'px';
+    menu.style.minWidth = '0';
+    menu.style.maxWidth = 'none';
+  }
+
+  function _profClose(root) {
+    const entry = _profState.get(root);
+    if (!entry) return;
+    _profState.delete(root);
+    entry.menu.classList.add('hidden');
+    entry.trigger.setAttribute('aria-expanded', 'false');
+    entry.trigger.removeAttribute('aria-activedescendant');
+    entry.menu.querySelectorAll('[data-profile-option].nd-opt-active')
+      .forEach((o) => o.classList.remove('nd-opt-active'));
+  }
+
+  function _profShow(root, trigger, menu) {
+    // Close other open profile pickers first (defensive; normally at most one).
+    _profState.forEach((_, r) => { if (r !== root) _profClose(r); });
+    _profPosition(trigger, menu);
+    menu.classList.remove('hidden');
+    trigger.setAttribute('aria-expanded', 'true');
+    _profState.set(root, { trigger, menu });
+    // Place keyboard cursor on the currently-selected option, if any.
+    const cur = menu.querySelector('[data-profile-option][aria-selected="true"]');
+    if (cur) {
+      cur.classList.add('nd-opt-active');
+      cur.scrollIntoView({ block: 'nearest' });
+      trigger.setAttribute('aria-activedescendant', cur.id);
+    }
+  }
+
+  function _profMoveCursor(menu, trigger, delta) {
+    const all = Array.from(menu.querySelectorAll('[data-profile-option]'));
+    if (!all.length) return;
+    const idx = all.findIndex((o) => o.classList.contains('nd-opt-active'));
+    const nextIdx = idx === -1
+      ? (delta > 0 ? 0 : all.length - 1)
+      : (idx + delta + all.length) % all.length;
+    const next = all[nextIdx];
+    all.forEach((o) => o.classList.toggle('nd-opt-active', o === next));
+    next.scrollIntoView({ block: 'nearest' });
+    trigger.setAttribute('aria-activedescendant', next.id);
+  }
+
+  function _profCommit(root, trigger, menu, opt, hiddenInput, labelEl) {
+    const val = opt.getAttribute('data-value') || '';
+    const lbl = (opt.querySelector('.nd-prop-label') || {}).textContent || '';
+    hiddenInput.value = val;
+    labelEl.textContent = lbl;
+    labelEl.classList.remove('text-fg-muted');
+    labelEl.classList.add('text-fg');
+    menu.querySelectorAll('[data-profile-option]').forEach((o) => {
+      const sel = o === opt;
+      o.setAttribute('aria-selected', sel ? 'true' : 'false');
+      o.classList.toggle('nd-prop-current', sel);
+      const chk = o.querySelector('.nd-prop-check');
+      if (sel && !chk) {
+        const span = document.createElement('span');
+        span.className = 'nd-prop-check';
+        span.setAttribute('aria-hidden', 'true');
+        span.textContent = '✓';
+        o.appendChild(span);
+      } else if (!sel && chk) {
+        chk.remove();
+      }
+    });
+    // Clear required-field warn styling once a selection is made.
+    trigger.classList.remove('border-warn', 'ring-1', 'ring-warn/40');
+    trigger.classList.add('border-border');
+    _profClose(root);
+    trigger.focus();
+    // Notify the effective-config preview via a bubbling change event.
+    hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function _initProfileDropdown(root) {
+    if (!root || root.__ndProfileDropdownBound) return;
+    const wrapper = root.querySelector('[data-profile-select]');
+    if (!wrapper) return;
+    root.__ndProfileDropdownBound = true;
+
+    const trigger = wrapper.querySelector('[data-profile-trigger]');
+    const menu = wrapper.querySelector('[data-profile-options]');
+    const hiddenInput = root.querySelector('input[name="profile_id"][data-profile-hidden]');
+    const labelEl = wrapper.querySelector('[data-profile-trigger-label]');
+    if (!trigger || !menu || !hiddenInput || !labelEl) return;
+
+    // Assign stable IDs to options so aria-activedescendant can point to them.
+    const pfx = 'nd-prof-' + (Math.random() * 1e6 | 0);
+    menu.querySelectorAll('[data-profile-option]').forEach((o, i) => {
+      if (!o.id) o.id = pfx + '-' + i;
+    });
+
+    // Auto-select when exactly one profile exists and nothing is pre-selected.
+    const allOpts = Array.from(menu.querySelectorAll('[data-profile-option]'));
+    if (allOpts.length === 1 && !hiddenInput.value) {
+      _profCommit(root, trigger, menu, allOpts[0], hiddenInput, labelEl);
+    }
+
+    // Trigger: click opens / closes (toggle).
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (trigger.getAttribute('aria-expanded') === 'true') {
+        _profClose(root);
+      } else {
+        _profShow(root, trigger, menu);
+      }
+    });
+
+    // Trigger: full keyboard support.
+    trigger.addEventListener('keydown', (e) => {
+      const open = trigger.getAttribute('aria-expanded') === 'true';
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        if (!open) {
+          _profShow(root, trigger, menu);
+        } else {
+          const active = menu.querySelector('[data-profile-option].nd-opt-active');
+          if (active) _profCommit(root, trigger, menu, active, hiddenInput, labelEl);
+          else _profClose(root);
+        }
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (!open) { _profShow(root, trigger, menu); return; }
+        _profMoveCursor(menu, trigger, 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!open) { _profShow(root, trigger, menu); return; }
+        _profMoveCursor(menu, trigger, -1);
+      } else if (e.key === 'Escape') {
+        if (open) { e.stopPropagation(); _profClose(root); }
+      } else if (e.key === 'Tab') {
+        // Don't preventDefault — let Tab move focus naturally after closing.
+        if (open) _profClose(root);
+      }
+    });
+
+    // Options: mousedown commits before blur can close the dropdown.
+    menu.querySelectorAll('[data-profile-option]').forEach((o) => {
+      o.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        _profCommit(root, trigger, menu, o, hiddenInput, labelEl);
+      });
+    });
+  }
+
+  // Reposition open profile menus on scroll / resize (they use position:fixed).
+  (function () {
+    function _profRepos() {
+      _profState.forEach(({ trigger, menu }) => _profPosition(trigger, menu));
+    }
+    window.addEventListener('scroll', _profRepos, true);
+    window.addEventListener('resize', _profRepos);
+    // Close on click anywhere outside the open dropdown's wrapper.
+    document.addEventListener('click', (e) => {
+      _profState.forEach((entry, root) => {
+        const wrapper = entry.trigger.closest('[data-profile-select]');
+        if (wrapper && !wrapper.contains(e.target)) _profClose(root);
+      });
+    }, true);
+  })();
+
   // --- Init / wire-up ----------------------------------------------------
   //
   // Run once on page load AND whenever a fresh ticket form mounts (e.g. a
@@ -881,6 +1060,26 @@
     } else {
       window.ndSyncWorktreeFields(root);
       window.ndScheduleWorktreePreview(0, root);
+    }
+
+    _initProfileDropdown(root);
+
+    // Profile required validation: hidden inputs bypass native constraint
+    // validation, so block HTMX submission and highlight the trigger if empty.
+    if (!root.__ndProfileSubmitBound) {
+      root.__ndProfileSubmitBound = true;
+      root.addEventListener('htmx:beforeRequest', (e) => {
+        if (e.target !== root) return;
+        const inp = root.querySelector('input[name="profile_id"][data-profile-hidden]');
+        if (!inp || inp.value) return;
+        e.preventDefault();
+        const trig = root.querySelector('[data-profile-trigger]');
+        if (trig) {
+          trig.classList.remove('border-border');
+          trig.classList.add('border-warn', 'ring-1', 'ring-warn/40');
+          trig.focus();
+        }
+      });
     }
 
     // Execution-context preview: refresh when any config-bearing field

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import html
 import subprocess
@@ -435,7 +436,11 @@ def reconcile_labels_from_form(session: Session, tid: str, form) -> None:
     try:
         _sl(session, tid, label_ids)
     except Exception:
-        pass
+        # Best-effort by design (the ticket save must not fail over labels),
+        # but never silently: a swallowed error here looks like data loss.
+        logging.getLogger(__name__).exception(
+            "label reconcile failed for ticket %s (label_ids=%r)", tid, label_ids
+        )
 
 def _safe_preview_name(name: Optional[str]) -> str:
     raw = (name or "").strip().strip("/")

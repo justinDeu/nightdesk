@@ -60,6 +60,10 @@ def _ticket_to_out(t) -> TicketOut:
     workspaces = []
     for ws in (t.workspaces or []):
         workspaces.append(TicketWorkspaceOut.model_validate(ws))
+    labels = [
+        {"id": lbl.id, "name": lbl.name, "color": lbl.color}
+        for lbl in (t.labels or [])
+    ]
     data = {
         "id": t.id,
         "title": t.title,
@@ -73,6 +77,7 @@ def _ticket_to_out(t) -> TicketOut:
         "toolchain_overrides": t.toolchain_overrides,
         "additional_dirs": t.additional_dirs or [],
         "workspaces": workspaces,
+        "labels": labels,
         "run_now": t.run_now,
         "scheduled_after": t.scheduled_after,
         "current_run_id": t.current_run_id,

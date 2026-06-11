@@ -455,11 +455,9 @@ async def test_projects_page_renders_operational_workspace(app, session):
         page = await client.get("/projects")
     assert page.status_code == 200
     body = page.text
-    assert 'data-project-workspace="' + project.id + '"' in body
-    assert "Work scope" in body
-    assert "Project board" in body
-    assert "Project inbox" in body
-    assert "Recent active work" in body
+    assert 'data-project-detail="' + project.id + '"' in body
+    assert "Recent tickets" in body
+    assert "Execution defaults" in body
     assert "workspace-inbox" in body
     assert "workspace-draft" in body
     assert "workspace-queued" in body
@@ -618,9 +616,9 @@ async def test_settings_projects_empty_state_uses_simple_help_text(app):
         assert page.status_code == 200
         assert 'data-projects-empty-state' in page.text
         assert "No projects yet." in page.text
-        assert "Use Create project to add one." in page.text
+        assert "Use + New to add one." in page.text
         assert "Create your first project" in page.text
-        assert "Projects hold source paths, workspace defaults, linked repositories, and toolsets" in page.text
+        assert "Projects hold source paths, workspace defaults, linked repos, and toolsets" in page.text
 
 def test_toolchain_columns_are_registered():
     projects = Base.metadata.tables["projects"]
@@ -984,9 +982,9 @@ async def test_settings_projects_page_shows_preview_for_active_project(app, sess
         assert f'data-project-defaults-preview="{pid}"' in text
 
         # Header and disclaimer
-        assert "Preview creation defaults" in text
-        assert "New tickets from this project will use these defaults" in text
-        assert "Explicit ticket values always take precedence" in text
+        assert "Creation defaults preview" in text
+        assert "New tickets from this project use these defaults" in text
+        assert "Explicit ticket values take precedence" in text
 
         # Resolved values rendered
         assert "/tmp/preview-render" in text
@@ -1076,7 +1074,7 @@ async def test_settings_projects_preview_appears_after_create(app, session):
         # The response is the full re-rendered settings page
         text = created.text
         assert "Created Preview" in text
-        assert "Preview creation defaults" in text
+        assert "Creation defaults preview" in text
         assert "fix/{slug}" in text
         assert "fix/example-ticket" in text
 

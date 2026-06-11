@@ -1,127 +1,132 @@
 {#
-  Single inbox item row.
+  Single inbox item row — dense, one-line, Linear-style triage.
 
-  Reuses the shared single-value property picker (priority / project / status)
-  and the label picker / chips — no inbox-specific picker logic. Promote and
-  decline post to the inbox action routes and swap the whole list (#inbox-list)
-  back in place so counts and ordering stay correct.
+  Layout (one line, ~36px):
+    [priority chip] [title] [snippet] [label chips] [project] [status dot] [age]
+  Clicking the title block toggles a <details> panel with the full prompt and
+  created/updated timestamps. Actions (promote / edit / open / decline) live
+  OUTSIDE the <summary> and are revealed on row hover, focus-within, or when the
+  keyboard cursor lands on the row (.nd-cursor-active) — so nesting interactive
+  controls in the summary never fights the disclosure toggle.
+
+  Contracts preserved for command_palette.js inbox triage:
+    * li[data-ticket-id]            — inboxCards / inboxCurrentTicket selector
+    * .nd-cursor-active             — keyboard cursor highlight (added by JS)
+    * first .font-medium = title    — inboxCurrentTicket reads the title text
+    * property chip [data-property-chip="{id}:project|priority"] — P / Shift+P
+    * [data-label-picker="{id}"]    — L opens the inline label popover
+    * window.ndOpenPromoteTicket    — E / edit icon opens the promote modal
 
   Expects: t (Ticket), project (Project|None), profile (Profile|None),
-           all_labels (list[Label]), project_filter (str).
+           all_labels (list[Label]), project_filter (str), rel_time (callable).
 #}
 {% set _blockers = inbox_blockers(t) %}
 {% set _complete = not _blockers %}
 <li
   data-ticket-id="{{ t.id }}"
-  class="rounded-md border border-border bg-bg-elev-2 px-3 py-2.5 shadow-sm"
+  class="nd-inbox-row group relative rounded border border-transparent hover:border-border"
 >
-  <div class="flex items-start gap-3">
-    <div class="flex-1 min-w-0">
-      {# Title → full ticket detail (where it can be fleshed out / edited). #}
-      <a href="/tickets/{{ t.id }}"
-         class="text-sm font-medium text-fg hover:text-accent hover:underline">
-        {{ t.title }}
-      </a>
-      {% if t.prompt %}
-        <p class="mt-0.5 text-xs text-fg-muted">{{ t.prompt | truncate(180) }}</p>
-      {% else %}
-        <p class="mt-0.5 text-xs italic text-fg-muted/70">No notes yet.</p>
-      {% endif %}
-
-      {# Metadata chips: priority + project + status share the one picker. #}
-      <div class="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+  <details class="nd-inbox-disclosure">
+    <summary class="nd-inbox-summary flex items-center gap-2 px-2 py-1 cursor-pointer select-none">
+      {# Priority chip (compact, opens the shared picker; Shift+P). #}
+      <span class="shrink-0">
         {% with tid=t.id, prop='priority', chip=property_chip('priority', t) %}
           {% include "partials/property_picker.html" %}
         {% endwith %}
+      </span>
+
+      {# Title — first .font-medium in the row (read by inboxCurrentTicket). #}
+      <span class="font-medium text-sm text-fg truncate shrink-0 max-w-[38%] group-hover:text-accent">{{ t.title }}</span>
+
+      {# One-line snippet, fills the remaining space. #}
+      <span class="flex-1 min-w-0 truncate text-xs text-fg-muted">
+        {% if t.prompt %}{{ t.prompt | truncate(160) }}{% else %}<span class="italic text-fg-muted/60">No notes yet</span>{% endif %}
+      </span>
+
+      {# Inline label chips + instant-commit popover (L). Placeholder "—" is
+         hidden until hover/cursor via .nd-inbox-row .nd-label-placeholder. #}
+      <span class="shrink-0">
+        {% with tid=t.id, ticket_labels=(t.labels if t.labels else []) %}
+          {% include "partials/inline_label_anchor.html" %}
+        {% endwith %}
+      </span>
+
+      {# Project chip (dot + name; opens the shared picker; P). #}
+      <span class="shrink-0 hidden sm:inline-flex">
         {% with tid=t.id, prop='project', chip=property_chip('project', t, project) %}
           {% include "partials/property_picker.html" %}
         {% endwith %}
-        {% with tid=t.id, prop='status', chip=property_chip('status', t) %}
-          {% include "partials/property_picker.html" %}
-        {% endwith %}
-        {% if profile %}
-          <span class="px-1.5 py-0.5 rounded bg-bg-elev border border-border text-fg-muted">{{ profile.name }}</span>
-        {% endif %}
-        {% if t.labels %}
-          {% with labels=t.labels, compact=true %}
-            {% include "partials/label_chips.html" %}
-          {% endwith %}
-        {% endif %}
-      </div>
+      </span>
 
-      {# Created / updated timestamps (localized client-side). #}
-      <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-fg-muted font-mono">
-        <span>created <span data-ts="{{ iso_utc(t.created_at) }}">{{ t.created_at }}</span></span>
-        <span>updated <span data-ts="{{ iso_utc(t.updated_at) }}">{{ t.updated_at }}</span></span>
-      </div>
-
-      {# Inline label editing — reuses the shared label picker + PUT route. #}
-      <details class="mt-1.5 text-xs">
-        <summary class="cursor-pointer text-fg-muted hover:text-fg select-none">Labels…</summary>
-        <form class="mt-1.5"
-              hx-put="/board/tickets/{{ t.id }}/labels"
-              hx-target="#label-picker-{{ t.id }}"
-              hx-swap="outerHTML">
-          {% with ticket=t, all_labels=all_labels, picker_name='label_ids',
-                  picker_target='label-picker-' ~ t.id %}
-            {% include "partials/label_picker.html" %}
-          {% endwith %}
-          <button type="submit"
-                  class="mt-1 px-2 py-0.5 rounded border border-border bg-bg-elev text-fg-muted hover:text-accent">
-            Save labels
-          </button>
-        </form>
-      </details>
-    </div>
-
-    {# --- Actions ----------------------------------------------------- #
-       Promote… opens the shared edit modal in promote mode (missing required
-       execution fields highlighted) so the item can be fleshed out and accepted
-       as a draft or queued in one step. Complete items also get quick-accept
-       shortcuts that skip the modal. #}
-    <div class="shrink-0 flex flex-col items-stretch gap-1 w-36 text-xs">
+      {# Promote-readiness signal: amber = blocked, green = ready. #}
       {% if _complete %}
-        <button type="button"
-                class="px-2 py-1 rounded border border-accent text-accent hover:bg-accent hover:text-bg font-medium"
-                hx-post="/inbox/tickets/{{ t.id }}/promote"
-                hx-vals='{"target": "queued", "project": {{ (project_filter or "") | tojson }}}'
-                hx-target="#inbox-list" hx-swap="outerHTML"
-                title="Accept and queue for the next run">
-          Accept &amp; queue
-        </button>
-        <button type="button"
-                class="px-2 py-1 rounded border border-border bg-bg-elev text-fg hover:text-accent"
-                hx-post="/inbox/tickets/{{ t.id }}/promote"
-                hx-vals='{"target": "draft", "project": {{ (project_filter or "") | tojson }}}'
-                hx-target="#inbox-list" hx-swap="outerHTML"
-                title="Accept onto the board as a draft">
-          Accept as draft
-        </button>
+        <span class="shrink-0 inline-block h-2 w-2 rounded-full bg-accent" data-tooltip="Ready to promote"></span>
       {% else %}
-        <span class="px-2 py-1 rounded border border-warn/40 text-warn bg-warn/10 text-[11px] leading-tight"
-              title="Flesh out before promoting">
-          Needs: {{ _blockers | join('; ') }}
-        </span>
+        <span class="shrink-0 inline-block h-2 w-2 rounded-full bg-warn" data-tooltip="Needs {{ _blockers | join('; ') }} before promote"></span>
       {% endif %}
-      <button type="button"
-              class="px-2 py-1 rounded border {% if _complete %}border-border bg-bg-elev text-fg hover:text-accent{% else %}border-accent text-accent hover:bg-accent hover:text-bg font-medium{% endif %}"
-              onclick="window.ndOpenPromoteTicket && window.ndOpenPromoteTicket('{{ t.id }}', {{ (project_filter or '') | tojson }})"
-              title="{{ 'Review and promote' if _complete else 'Flesh out the required fields and promote' }}">
-        Promote…
-      </button>
-      <a href="/tickets/{{ t.id }}"
-         class="px-2 py-1 rounded border border-border bg-bg-elev text-fg-muted hover:text-accent text-center">
-        Details
-      </a>
-      <button type="button"
-              class="px-2 py-1 rounded border border-border bg-bg-elev text-fg-muted hover:text-danger"
-              hx-post="/inbox/tickets/{{ t.id }}/decline"
-              hx-vals='{"project": {{ (project_filter or "") | tojson }}}'
-              hx-target="#inbox-list" hx-swap="outerHTML"
-              hx-on::after-request="if(event.detail.successful && window.ndFlashStatus){window.ndFlashStatus('Declined — moved to Archive');}"
-              data-tooltip="Decline and move to Archive">
-        Decline
-      </button>
+
+      {# Relative age (short); full local time on hover via data-ts-title. #}
+      <span class="shrink-0 w-9 text-right text-[11px] tabular-nums text-fg-muted"
+            data-ts-title="{{ iso_utc(t.created_at) }}">{{ rel_time(t.created_at) }}</span>
+    </summary>
+
+    {# Expanded panel — full prompt + status + timestamps. #}
+    <div class="nd-inbox-panel px-2 pb-2.5 pt-0.5 pl-9">
+      {% if t.prompt %}
+      <div class="rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg whitespace-pre-wrap break-words">{{ t.prompt }}</div>
+      {% else %}
+      <div class="text-xs italic text-fg-muted/70">No notes yet — press <kbd class="not-italic font-mono">e</kbd> to flesh this out.</div>
+      {% endif %}
+      <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-fg-muted">
+        <span class="inline-flex items-center gap-1.5">status
+          {% with tid=t.id, prop='status', chip=property_chip('status', t) %}
+            {% include "partials/property_picker.html" %}
+          {% endwith %}
+        </span>
+        {% if profile %}<span>profile <span class="text-fg">{{ profile.name }}</span></span>{% endif %}
+        <span class="font-mono">created <span data-ts="{{ iso_utc(t.created_at) }}">{{ t.created_at }}</span></span>
+        <span class="font-mono">updated <span data-ts="{{ iso_utc(t.updated_at) }}">{{ t.updated_at }}</span></span>
+      </div>
     </div>
+  </details>
+
+  {# --- Actions (hover / focus / keyboard-cursor) ----------------------- #
+     Kept OUTSIDE the <summary> so a click never toggles the disclosure. The
+     Promote icon quick-queues a complete item, or opens the promote modal (which
+     surfaces the blocker message) when the item is still under-specified — the
+     same split the keyboard 'a' / 'e' shortcuts use. #}
+  <div class="nd-inbox-actions absolute right-1.5 top-1 flex items-center gap-0.5">
+    {% if _complete %}
+    <button type="button" class="nd-inbox-act"
+            hx-post="/inbox/tickets/{{ t.id }}/promote"
+            hx-vals='{"target": "queued", "project": {{ (project_filter or "") | tojson }}}'
+            hx-target="#inbox-list" hx-swap="outerHTML"
+            hx-on::after-request="if(event.detail.successful && window.ndFlashStatus){window.ndFlashStatus('Promoted to queued');}"
+            data-tooltip="Promote to queued">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3"/><path d="M3.5 7.5 8 3l4.5 4.5"/></svg>
+    </button>
+    {% else %}
+    <button type="button" class="nd-inbox-act nd-inbox-act-warn"
+            onclick="window.ndOpenPromoteTicket && window.ndOpenPromoteTicket('{{ t.id }}', {{ (project_filter or '') | tojson }})"
+            data-tooltip="Flesh out the required fields, then promote">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3"/><path d="M3.5 7.5 8 3l4.5 4.5"/></svg>
+    </button>
+    {% endif %}
+    <button type="button" class="nd-inbox-act"
+            onclick="window.ndOpenPromoteTicket && window.ndOpenPromoteTicket('{{ t.id }}', {{ (project_filter or '') | tojson }})"
+            data-tooltip="Edit / flesh out">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 2.5 13.5 5 6 12.5 3 13l.5-3z"/></svg>
+    </button>
+    <a href="/tickets/{{ t.id }}" class="nd-inbox-act" data-tooltip="Open ticket">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3H3.5v9.5H13V10"/><path d="M9.5 2.5H13V6"/><path d="M13 2.5 7.5 8"/></svg>
+    </a>
+    <button type="button" class="nd-inbox-act nd-inbox-act-danger"
+            hx-post="/inbox/tickets/{{ t.id }}/decline"
+            hx-vals='{"project": {{ (project_filter or "") | tojson }}}'
+            hx-target="#inbox-list" hx-swap="outerHTML"
+            hx-on::after-request="if(event.detail.successful && window.ndFlashStatus){window.ndFlashStatus('Declined — moved to Archive');}"
+            data-tooltip="Decline (archive)">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+    </button>
   </div>
 </li>

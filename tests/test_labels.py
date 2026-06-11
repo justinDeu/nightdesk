@@ -1,8 +1,11 @@
 """Tests for labels CRUD API, settings page, rendering, and seed data."""
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from nightdesk.api.app import create_app
+from nightdesk.db.models import Base
 from nightdesk.domain.labels import (
     LabelNameTaken,
     LabelNotFound,
@@ -10,6 +13,7 @@ from nightdesk.domain.labels import (
     delete_label,
     get_label,
     list_labels,
+    seed_default_labels,
     set_ticket_labels,
     update_label,
 )
@@ -428,3 +432,54 @@ class TestLabelSeedData:
         # Every spec should have at least one label
         for spec in _TICKET_SPECS:
             assert spec.get("labels"), f"ticket '{spec['title']}' missing labels"
+
+
+# ---------------------------------------------------------------------------
+# Default-labels seeding tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def fresh_engine():
+    eng = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
+    Base.metadata.create_all(eng)
+    return eng
+
+
+class TestSeedDefaultLabels:
+    def test_creates_all_defaults_on_empty_table(self, fresh_engine):
+        created = seed_default_labels(fresh_engine)
+        assert len(created) == 6
+        with Session(fresh_engine) as s:
+            names = {lbl.name for lbl in list_labels(s)}
+        assert names == {"bug", "feature", "chore", "docs", "research", "idea"}
+
+    def test_is_idempotent(self, fresh_engine):
+        seed_default_labels(fresh_engine)
+        second = seed_default_labels(fresh_engine)
+        assert second == []
+        with Session(fresh_engine) as s:
+            assert len(list_labels(s)) == 6
+
+    def test_skips_when_labels_exist(self, fresh_engine):
+        with Session(fresh_engine) as s:
+            create_label(s, name="custom", color="#123456")
+        result = seed_default_labels(fresh_engine)
+        assert result == []
+        with Session(fresh_engine) as s:
+            names = {lbl.name for lbl in list_labels(s)}
+        assert names == {"custom"}
+
+    def test_default_colors(self, fresh_engine):
+        seed_default_labels(fresh_engine)
+        with Session(fresh_engine) as s:
+            by_name = {lbl.name: lbl.color for lbl in list_labels(s)}
+        assert by_name["bug"] == "#ef4444"
+        assert by_name["feature"] == "#22c55e"
+        assert by_name["chore"] == "#a3a3a3"
+        assert by_name["docs"] == "#3b82f6"
+        assert by_name["research"] == "#a855f7"
+        assert by_name["idea"] == "#eab308"
