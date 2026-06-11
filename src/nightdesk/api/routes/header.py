@@ -143,6 +143,8 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
     router = APIRouter(tags=["header"])
     auth = Depends(require_token_cookie_or_bearer(bearer_token))
 
+    # The header search box was removed; this partial now serves the command palette's
+    # ticket search (cookie-auth twin of the JSON API) and must outlive the box.
     @router.get("/header/search", response_class=HTMLResponse, dependencies=[auth])
     async def header_search(
         request: Request,

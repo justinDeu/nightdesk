@@ -5,10 +5,10 @@
 // actions. Pure client JS, no build step.
 //
 // PROGRESSIVE ENHANCEMENT: every action here is also reachable by mouse
-// (header search box, "+ New ticket" button, per-ticket Run-now / Archive /
-// Requeue controls, nav links, property picker chips, inbox promote/decline
-// buttons). If this script fails to load nothing breaks; the shortcuts simply
-// don't fire.
+// (Ctrl/Cmd+K palette, filter bar, "+ New ticket" button, per-ticket
+// Run-now / Archive / Requeue controls, nav links, property picker chips,
+// inbox promote/decline buttons). If this script fails to load nothing
+// breaks; the shortcuts simply don't fire.
 //
 // INBOX TRIAGE SHORTCUTS (active on /inbox):
 //   J/K       — next/previous inbox item
@@ -1107,8 +1107,9 @@
       label: "Focus search", shortcut: "/", hint: "",
       section: "View",
       run: function () {
-        var search = document.querySelector('#header-search input[name="q"]');
-        if (search) { search.focus(); search.select(); }
+        var sb = document.querySelector("[data-sb-input]");
+        if (sb) { sb.focus(); sb.select(); }
+        else openPalette();
       },
     });
     // Saved views — ndSavedViews() returns a [{name,surface,url}] array.
@@ -1552,9 +1553,9 @@
     if (key === "c" || key === "C") { e.preventDefault(); openCreateTicket(); return; }
     if (key === "/") {
       e.preventDefault();
-      var search = document.querySelector("[data-sb-input]") ||
-        document.querySelector('#header-search input[name="q"]');
-      if (search) { search.focus(); search.select(); }
+      var sb = document.querySelector("[data-sb-input]");
+      if (sb) { sb.focus(); sb.select(); }
+      else openPalette();
       return;
     }
     if (key === "?") { e.preventDefault(); openCheatSheet(); return; }
@@ -1798,60 +1799,11 @@
     }
   }
 
-  // ---- header-search arrow-key helper ------------------------------------
-
-  function setSearchActive(anchors, idx) {
-    anchors.forEach(function (a) {
-      a.classList.remove("nd-opt-active", "bg-bg-elev-2");
-    });
-    if (idx >= 0 && idx < anchors.length) {
-      anchors[idx].classList.add("nd-opt-active", "bg-bg-elev-2");
-      anchors[idx].scrollIntoView({ block: "nearest" });
-    }
-  }
-
   // ---- init --------------------------------------------------------------
 
   function init() {
     wirePaletteInput();
     document.addEventListener("keydown", onKeydown, true);
-
-    // Esc blurs the header search box; ArrowDown/Up move the result highlight;
-    // Enter follows the active result. Without this the global onKeydown
-    // early-returns inside typing targets, so Esc would never unfocus it.
-    var headerSearch = document.querySelector('#header-search input[name="q"]');
-    if (headerSearch && !headerSearch.__ndEscWired) {
-      headerSearch.__ndEscWired = true;
-      headerSearch.addEventListener("keydown", function (e) {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          headerSearch.blur();
-          return;
-        }
-        var anchors = Array.prototype.slice.call(
-          document.querySelectorAll('#search-results a')
-        );
-        if (!anchors.length) return;
-        var activeEl = document.querySelector('#search-results a.nd-opt-active');
-        var idx = activeEl ? anchors.indexOf(activeEl) : -1;
-        if (e.key === "ArrowDown") {
-          e.preventDefault();
-          setSearchActive(anchors, (idx + 1) % anchors.length);
-          return;
-        }
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          setSearchActive(anchors, (idx - 1 + anchors.length) % anchors.length);
-          return;
-        }
-        if (e.key === "Enter" && activeEl) {
-          e.preventDefault();
-          location.href = activeEl.href;
-          return;
-        }
-      });
-    }
 
     // If we landed on the board via the "c" shortcut from another page,
     // auto-open the create modal and clean the URL so a refresh doesn't
@@ -1866,13 +1818,7 @@
     }
 
     // Restore cursor highlight after HTMX column swaps on the board or inbox.
-    // Also reset the header-search highlight when results are refreshed.
-    document.body.addEventListener("htmx:afterSwap", function (ev) {
-      if (ev.detail && ev.detail.target && ev.detail.target.id === "search-results") {
-        document.querySelectorAll('#search-results a.nd-opt-active').forEach(function (a) {
-          a.classList.remove("nd-opt-active", "bg-bg-elev-2");
-        });
-      }
+    document.body.addEventListener("htmx:afterSwap", function () {
       restoreCursor();
       restoreInboxCursor();
     });
