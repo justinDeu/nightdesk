@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Ticket, TicketDependency, TicketWorkspace
 from nightdesk.domain.projects import apply_project_defaults, get_project
+from nightdesk.domain.priority import validate_priority
 from nightdesk.domain.toolchains import (
     assert_known_toolchains,
     assert_paths_not_excluded,
@@ -17,15 +18,28 @@ from nightdesk.domain.toolchains import (
 
 
 # v2 lifecycle. Run-level outcomes (success/failed/cancelled) now live on Run.exit_status.
+#
+# ``inbox`` is the entry point for under-specified work captured for triage. It
+# sits OUTSIDE the runnable board (the board only renders draft/queued/running/
+# review) and the scheduler never picks it (it picks ``status='queued'`` only).
+# An inbox item is promoted onto the board (``draft``/``queued``) once it is
+# complete enough to run, or declined (``archived``). Promotion crosses the
+# incomplete-ticket validation boundary enforced in ``transition_with_position``.
 _VALID_TRANSITIONS: dict[str, set[str]] = {
-    "draft":    {"queued", "running"},   # running implies run-now
+    "inbox":    {"draft", "queued", "archived"},  # promote / promote+queue / decline
+    "draft":    {"queued", "running", "inbox"},   # running implies run-now
     "queued":   {"draft", "running"},
     "running":  {"review"},
     "review":   {"queued", "archived"},
     "archived": {"queued"},
 }
 
-_ALL_STATUSES = ("draft", "queued", "running", "review", "archived")
+_ALL_STATUSES = ("inbox", "draft", "queued", "running", "review", "archived")
+
+# Statuses on (or destined for) the runnable board. Promoting an inbox item to
+# any of these requires the ticket to be complete; declining (inbox -> archived)
+# does not.
+_RUNNABLE_TARGETS = {"draft", "queued", "running"}
 
 
 class TicketNotFound(Exception):
@@ -34,6 +48,16 @@ class TicketNotFound(Exception):
 
 class InvalidTransition(Exception):
     pass
+
+
+class IncompleteTicket(InvalidTransition):
+    """Raised when an under-specified inbox ticket is promoted to the runnable
+    board before it has the fields a run needs. A subclass of
+    ``InvalidTransition`` so existing route handlers map it to HTTP 409."""
+
+    def __init__(self, reasons: list[str]):
+        self.reasons = reasons
+        super().__init__("; ".join(reasons) or "ticket is incomplete")
 
 
 _WORKSPACE_KINDS = {"directory", "git_worktree"}
@@ -123,8 +147,67 @@ def _apply_workspaces(session: Session, ticket: Ticket,
 
 
 
+def ticket_completeness(ticket: Ticket) -> list[str]:
+    """Return human-readable reasons an inbox ticket is not yet runnable.
+
+    A ticket is "complete" (promotable onto the runnable board) when it has a
+    title, a profile, and a primary workspace with a source path — exactly the
+    fields ``create_ticket`` hard-requires for non-inbox tickets. Under-specified
+    inbox items may be missing the workspace (and that is the whole point of the
+    inbox), so this is the single boundary that decides whether such an item can
+    leave triage.
+    """
+    reasons: list[str] = []
+    if not (ticket.title or "").strip():
+        reasons.append("a title is required")
+    if not ticket.profile_id:
+        reasons.append("a profile is required")
+    primary = next((w for w in ticket.workspaces if w.role == "primary"), None)
+    if primary is None or not (primary.source_path or "").strip():
+        reasons.append("a workspace with a source path is required")
+    return reasons
+
+
+def is_ticket_complete(ticket: Ticket) -> bool:
+    """True when a ticket has everything a run needs (see ``ticket_completeness``)."""
+    return not ticket_completeness(ticket)
+
+
+def ticket_missing_fields(ticket: Ticket) -> set[str]:
+    """Return the set of *form field* keys an inbox item must still satisfy
+    before it can be promoted onto the runnable board.
+
+    This is the field-level counterpart to ``ticket_completeness`` (which yields
+    human-readable sentences): the promote modal uses it to highlight exactly the
+    inputs that need attention. Keys mirror the edit-modal field names:
+
+      * ``"title"``     — title input
+      * ``"profile"``   — profile select (``profile_id``)
+      * ``"workspace"`` — primary workspace source path
+
+    Kept in lock-step with ``ticket_completeness`` so the highlight and the
+    server-side validation boundary can never disagree.
+    """
+    missing: set[str] = set()
+    if not (ticket.title or "").strip():
+        missing.add("title")
+    if not ticket.profile_id:
+        missing.add("profile")
+    primary = next((w for w in ticket.workspaces if w.role == "primary"), None)
+    if primary is None or not (primary.source_path or "").strip():
+        missing.add("workspace")
+    return missing
+
+
 def create_ticket(session: Session, **fields) -> Ticket:
-    """Create a ticket. Defaults to status='draft' (v2)."""
+    """Create a ticket. Defaults to status='draft' (v2).
+
+    Inbox tickets are the one exception to the "exactly one primary workspace"
+    rule: captured triage items may be under-specified (no workspace yet), so a
+    ``status='inbox'`` ticket can be created with no workspace at all. It must
+    be fleshed out and promoted (crossing the completeness boundary) before it
+    can run.
+    """
     fields = apply_project_defaults(session, fields)
     workspace_specs = fields.pop("workspaces", None)
     source_path = fields.pop("source_path", None)
@@ -142,6 +225,8 @@ def create_ticket(session: Session, **fields) -> Ticket:
     status = fields.get("status")
     if status not in _ALL_STATUSES:
         raise InvalidTransition(f"unknown status {status!r}")
+    if "priority" in fields:
+        fields["priority"] = validate_priority(fields["priority"])
 
     if not workspace_specs and source_path:
         workspace_specs = [{
@@ -154,13 +239,18 @@ def create_ticket(session: Session, **fields) -> Ticket:
             "worktree_path": worktree_path,
             "retention": "preserve",
         }]
+    # Inbox tickets may be captured before a workspace is known; everything else
+    # still requires exactly one primary workspace up front.
+    normalized: list[dict] = []
     if not workspace_specs:
-        raise ValueError("workspaces must include exactly one primary workspace")
-    normalized = [_workspace_dict(w) for w in workspace_specs]
-    normalized = _validate_workspace_specs(normalized)
-    primary = next(w for w in normalized if w.get("role") == "primary")
-    if not primary.get("source_path"):
-        raise ValueError("primary workspace source_path is required")
+        if status != "inbox":
+            raise ValueError("workspaces must include exactly one primary workspace")
+    else:
+        normalized = [_workspace_dict(w) for w in workspace_specs]
+        normalized = _validate_workspace_specs(normalized)
+        primary = next(w for w in normalized if w.get("role") == "primary")
+        if not primary.get("source_path"):
+            raise ValueError("primary workspace source_path is required")
 
     # Position defaults to end of the chosen column.
     if "position" not in fields:
@@ -168,7 +258,8 @@ def create_ticket(session: Session, **fields) -> Ticket:
     t = Ticket(**fields)
     session.add(t)
     session.flush()
-    _apply_workspaces(session, t, normalized)
+    if normalized:
+        _apply_workspaces(session, t, normalized)
     session.commit()
     session.refresh(t)
     return t
@@ -220,6 +311,8 @@ def update_ticket(session: Session, ticket_id: str, **fields) -> Ticket:
         assert_known_toolchains(toolchains.get("enable", []), config=current_config(session))
     if fields.get("project_id") is not None:
         get_project(session, fields["project_id"])
+    if "priority" in fields:
+        fields["priority"] = validate_priority(fields["priority"])
     for k, v in fields.items():
         setattr(t, k, v)
     if workspace_specs is None and any(v is not None for v in (source_path, workspace_mode, worktree_name, worktree_path)):
@@ -292,6 +385,14 @@ def transition_with_position(
     if new_status not in allowed:
         raise InvalidTransition(f"{t.status} -> {new_status}")
 
+    # Incomplete-ticket validation boundary: an under-specified inbox item
+    # cannot be promoted onto the runnable board until it has the fields a run
+    # needs. Declining it (inbox -> archived) is always allowed.
+    if t.status == "inbox" and new_status in _RUNNABLE_TARGETS:
+        reasons = ticket_completeness(t)
+        if reasons:
+            raise IncompleteTicket(reasons)
+
     _reorder_inserting(session, t, new_status, position)
     t.updated_at = datetime.now(timezone.utc)
     session.commit()
@@ -355,6 +456,61 @@ def unarchive(session: Session, ticket_id: str) -> Ticket:
     if t.status != "archived":
         raise InvalidTransition(f"cannot unarchive from {t.status}")
     return transition_status(session, ticket_id, "queued")
+
+
+# ---------------------------------------------------------------------------
+# Inbox
+# ---------------------------------------------------------------------------
+
+_PROMOTE_TARGETS = {"draft", "queued"}
+
+
+def list_inbox(
+    session: Session,
+    *,
+    project_id: Optional[str] = None,
+    limit: int = 200,
+) -> list[Ticket]:
+    """Inbox tickets for the triage surface, highest priority and newest first.
+
+    ``project_id='null'`` selects items with no project; a real id scopes to
+    that project; ``None`` returns every inbox item.
+    """
+    stmt = (
+        select(Ticket)
+        .where(Ticket.status == "inbox")
+        .order_by(Ticket.priority.desc(), Ticket.created_at.desc())
+        .limit(limit)
+    )
+    if project_id == "null":
+        stmt = stmt.where(Ticket.project_id.is_(None))
+    elif project_id is not None:
+        stmt = stmt.where(Ticket.project_id == project_id)
+    return list(session.scalars(stmt))
+
+
+def promote_ticket(session: Session, ticket_id: str, target_status: str = "draft") -> Ticket:
+    """Promote an inbox item onto the runnable board.
+
+    ``target_status`` is ``draft`` (accept for later) or ``queued`` (accept and
+    queue for the scheduler). Crosses the completeness boundary, so an
+    incomplete item raises ``IncompleteTicket`` (a ``InvalidTransition``).
+    """
+    if target_status not in _PROMOTE_TARGETS:
+        raise InvalidTransition(f"cannot promote to {target_status!r}")
+    t = get_ticket(session, ticket_id)
+    if t.status != "inbox":
+        raise InvalidTransition(f"cannot promote from {t.status}")
+    return transition_status(session, ticket_id, target_status)
+
+
+def decline_ticket(session: Session, ticket_id: str) -> Ticket:
+    """Decline an inbox item: inbox -> archived. Always allowed (no completeness
+    requirement) so junk and dead ideas can be cleared from triage."""
+    t = get_ticket(session, ticket_id)
+    if t.status != "inbox":
+        raise InvalidTransition(f"cannot decline from {t.status}")
+    return transition_status(session, ticket_id, "archived")
 
 
 def set_run_now(session: Session, ticket_id: str, run_now: bool) -> Ticket:
@@ -666,6 +822,187 @@ def _is_dependency_satisfied(session: Session, upstream: Ticket) -> tuple[bool, 
     if upstream.status == "draft":
         return False, "upstream is in draft (has not been queued)"
     return False, f"upstream status is '{upstream.status}'"
+
+
+# --- Focused metadata updates -------------------------------------------------
+# Thin helpers for the property picker, list inline edits, keyboard actions,
+# and bulk operations.  Each function touches exactly one field and returns
+# the updated Ticket.  They deliberately avoid the full ``update_ticket``
+# code path (which handles workspaces, toolchains, etc.) to keep the
+# interaction lightweight and avoid unintended side-effects.
+
+
+def update_ticket_priority(session: Session, ticket_id: str,
+                           priority: int) -> Ticket:
+    """Set the priority on a ticket using the fixed 0..4 metadata scale."""
+    priority = validate_priority(priority)
+    t = get_ticket(session, ticket_id)
+    t.priority = priority
+    t.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(t)
+    return t
+
+
+def update_ticket_project(session: Session, ticket_id: str,
+                          project_id: Optional[str]) -> Ticket:
+    """Set or clear the project assignment on a ticket.  Validates that the
+    project exists when setting a non-null value."""
+    if project_id is not None:
+        get_project(session, project_id)
+    t = get_ticket(session, ticket_id)
+    t.project_id = project_id
+    t.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(t)
+    return t
+
+
+def update_ticket_profile(session: Session, ticket_id: str,
+                          profile_id: str) -> Ticket:
+    """Reassign a ticket to a different profile.  Validates that the profile
+    exists."""
+    from nightdesk.domain.profiles import get_profile
+    get_profile(session, profile_id)
+    t = get_ticket(session, ticket_id)
+    t.profile_id = profile_id
+    t.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(t)
+    return t
+
+
+# --- Bulk metadata updates ----------------------------------------------------
+
+def bulk_update_priority(
+    session: Session,
+    ticket_ids: list[str],
+    priority: int,
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk priority update.  Returns ``(updated, skipped)`` where each
+    skipped entry is ``{"ticket_id": ..., "reason": ...}``."""
+    priority = validate_priority(priority)
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = update_ticket_priority(session, tid, priority)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+    return updated, skipped
+
+
+def bulk_update_status(
+    session: Session,
+    ticket_ids: list[str],
+    new_status: str,
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk status transition.  Each ticket is transitioned independently;
+    tickets that cannot transition are skipped rather than failing the whole
+    batch.  Returns ``(updated, skipped)``."""
+    if new_status not in _ALL_STATUSES:
+        raise InvalidTransition(f"unknown status {new_status!r}")
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = transition_status(session, tid, new_status)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+        except InvalidTransition as exc:
+            skipped.append({"ticket_id": tid, "reason": str(exc)})
+    return updated, skipped
+
+
+def bulk_update_project(
+    session: Session,
+    ticket_ids: list[str],
+    project_id: Optional[str],
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk project assignment.  Validates the project once, then applies to
+    each ticket.  Returns ``(updated, skipped)``."""
+    if project_id is not None:
+        get_project(session, project_id)
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = get_ticket(session, tid)
+            t.project_id = project_id
+            t.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            session.refresh(t)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+    return updated, skipped
+
+
+def bulk_update_profile(
+    session: Session,
+    ticket_ids: list[str],
+    profile_id: str,
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk profile reassignment.  Validates the profile once, then applies to
+    each ticket.  Returns ``(updated, skipped)``."""
+    from nightdesk.domain.profiles import get_profile
+    get_profile(session, profile_id)
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = get_ticket(session, tid)
+            t.profile_id = profile_id
+            t.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            session.refresh(t)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+    return updated, skipped
+
+
+def bulk_archive(
+    session: Session,
+    ticket_ids: list[str],
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk archive.  Archives each ticket that is in ``review`` (the only
+    state from which archiving is valid); every other ticket is skipped with a
+    reason rather than failing the whole batch.  Returns ``(updated, skipped)``
+    where each skipped entry is ``{"ticket_id": ..., "reason": ...}``."""
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = archive(session, tid)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+        except InvalidTransition as exc:
+            skipped.append({"ticket_id": tid, "reason": str(exc)})
+    return updated, skipped
+
+
+def bulk_unarchive(
+    session: Session,
+    ticket_ids: list[str],
+) -> tuple[list[Ticket], list[dict]]:
+    """Bulk unarchive.  Returns each archived ticket to ``queued`` (the
+    supported reverse of archiving) and is the undo path for ``bulk_archive``.
+    Tickets that are not archived are skipped.  Returns ``(updated, skipped)``."""
+    updated: list[Ticket] = []
+    skipped: list[dict] = []
+    for tid in ticket_ids:
+        try:
+            t = unarchive(session, tid)
+            updated.append(t)
+        except TicketNotFound:
+            skipped.append({"ticket_id": tid, "reason": "not found"})
+        except InvalidTransition as exc:
+            skipped.append({"ticket_id": tid, "reason": str(exc)})
+    return updated, skipped
 
 
 # --- internals ---------------------------------------------------------------

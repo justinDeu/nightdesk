@@ -26,6 +26,15 @@ from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_bearer, require_token_cookie_or_bearer
 from nightdesk.api.schemas import ProfileCreate, ProfileOut, ProfileUpdate
+from nightdesk.domain.backend_capabilities import (
+    CAPABILITIES,
+    DEFAULT_BACKEND,
+    FIELD_GROUPS,
+    SHARED_GROUP_KEYS,
+    backend_choices as capability_backend_choices,
+    capability_or_default,
+    enabled_backends as capability_enabled_backends,
+)
 from nightdesk.domain.cc_env_catalog import CC_ENV_CATALOG, categories as env_categories, lookup as env_lookup
 from nightdesk.domain.profile_secrets import ProfileSecretBox
 from nightdesk.domain.profiles import (
@@ -71,6 +80,16 @@ _BEHAVIOR_TOGGLE_KEYS: tuple[str, ...] = (
 )
 _BEHAVIOR_NUMERIC_KEYS: tuple[str, ...] = ("MAX_THINKING_TOKENS",)
 
+# OMP/RPC backend connection settings. Like the CC promoted keys these live
+# in the encrypted ``env`` blob (no schema change) but render in a dedicated
+# fieldset. ``OMP_RPC_AUTH_TOKEN`` is a secret: never echoed back, blank means
+# "keep what's on file".
+_OMP_ENDPOINT_KEY = "OMP_RPC_ENDPOINT"
+_OMP_TOKEN_KEY = "OMP_RPC_AUTH_TOKEN"
+_OMP_MODEL_KEY = "OMP_RPC_MODEL"
+_OMP_KEYS: tuple[str, ...] = (_OMP_ENDPOINT_KEY, _OMP_TOKEN_KEY, _OMP_MODEL_KEY)
+_OMP_SECRET_KEYS: frozenset[str] = frozenset((_OMP_TOKEN_KEY,))
+
 # Keys owned by the Authentication section (claude_credentials), which
 # cannot be set via the env editor. The generic editor refuses to write
 # them and the migration scrubbed them from existing Profile.env blobs.
@@ -78,18 +97,24 @@ _AUTH_OWNED_ENV_KEYS: frozenset[str] = frozenset(
     ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")
 )
 
-_PROMOTED_KEYS: frozenset[str] = frozenset(
-    _MODELS_KEYS
-    + _BEHAVIOR_TOGGLE_KEYS
-    + _BEHAVIOR_NUMERIC_KEYS
+# Promoted keys per backend: each backend's dedicated fieldsets own these
+# names in the env blob. The generic kv picker hides every promoted key so a
+# variable never has two editing doors at once; the save path only rewrites
+# the *active* backend's promoted keys and preserves the rest (so flipping
+# backends to inspect a profile doesn't silently wipe the other backend's
+# config).
+_CLAUDE_PROMOTED_KEYS: tuple[str, ...] = (
+    _MODELS_KEYS + _BEHAVIOR_TOGGLE_KEYS + _BEHAVIOR_NUMERIC_KEYS
 )
+_BACKEND_PROMOTED_KEYS: dict[str, frozenset[str]] = {
+    "claude_sdk": frozenset(_CLAUDE_PROMOTED_KEYS),
+    "omp_rpc": frozenset(_OMP_KEYS),
+}
+_PROMOTED_KEYS: frozenset[str] = frozenset(_CLAUDE_PROMOTED_KEYS + _OMP_KEYS)
 
-# v1 ships with one backend. The dropdown still exists so it can grow
-# without a schema change, but no vaporware "coming soon" entries appear
-# until the corresponding wiring lands.
-_BACKEND_CHOICES = (
-    ("claude_sdk", "Claude Code", True),
-)
+# Backend dropdown choices come from the capability descriptors so the editor,
+# the validator, and the runtime registry can't drift apart.
+_BACKEND_CHOICES = capability_backend_choices()
 
 
 def _split_lines(value: str | None) -> list[str]:
@@ -315,7 +340,14 @@ def _build_json_router(get_session, bearer_token: str) -> APIRouter:
         fields = payload.model_dump()
         creds_in = fields.pop("claude_credentials", None)
         env_in = fields.pop("env", None)
-        fields["claude_credentials"] = _encrypt_credentials_in(box, creds_in, None)
+        # Only require / encrypt credentials for backends that actually use them
+        # (those consuming the claude_auth field group). omp_rpc and any future
+        # non-Claude backend must be creatable without supplying credentials.
+        backend = fields.get("backend", DEFAULT_BACKEND)
+        if capability_or_default(backend).consumes("claude_auth"):
+            fields["claude_credentials"] = _encrypt_credentials_in(box, creds_in, None)
+        else:
+            fields.pop("claude_credentials", None)
         env_token = _encrypt_env_in(box, env_in)
         fields["env"] = None if env_token == "__UNCHANGED__" else env_token
         _validate_paths(fields.get("fs_read") or [], field="fs_read")
@@ -499,6 +531,13 @@ def _promoted_sections_context(env_blob: dict[str, str]) -> dict:
         "promoted_models_other": models_other,
         "promoted_behavior_toggles": behavior_toggles,
         "promoted_behavior_numeric": behavior_numeric,
+        # OMP/RPC connection fieldset. The auth token is a secret, so only a
+        # "value set" flag crosses to the template — never the value itself.
+        "promoted_omp": {
+            "endpoint": env_blob.get(_OMP_ENDPOINT_KEY, ""),
+            "model": env_blob.get(_OMP_MODEL_KEY, ""),
+            "token_set": bool(env_blob.get(_OMP_TOKEN_KEY)),
+        },
     }
 
 
@@ -515,6 +554,31 @@ def _daemon_claude_binary(session: Session) -> str:
     cfg_row = session.get(ConfigRow, 1)
     configured = getattr(cfg_row, "claude_binary_path", None)
     return configured or shutil.which("claude") or "claude"
+
+
+def _capability_context(selected_backend: str | None) -> dict:
+    """Capability view-model shared by the editor and the read-only preview.
+
+    ``selected_backend`` decides which backend-specific groups are *active*
+    (rendered/enabled) versus *inert* (hidden in the editor, listed as
+    ignored in the preview). The shared sandbox/runtime groups are common to
+    every backend.
+    """
+    cap = capability_or_default(selected_backend)
+    return {
+        "selected_backend": cap.code,
+        "backend_capability": cap,
+        "backend_label": cap.label,
+        "backend_shared_groups": [FIELD_GROUPS[k] for k in SHARED_GROUP_KEYS],
+        "backend_specific_groups": cap.specific_groups,
+        "backend_inert_groups": cap.inert_groups,
+        # Set of backend codes that are not yet fully wired for execution.
+        # Templates use this to show a "runs will fail" warning without
+        # hardcoding a backend name in markup.
+        "non_executable_backends": frozenset(
+            code for code, bc in CAPABILITIES.items() if not bc.executable
+        ),
+    }
 
 
 def _shared_form_context() -> dict:
@@ -552,6 +616,7 @@ def _form_context(profile, box: Optional[ProfileSecretBox]) -> dict:
             profile.cc_settings_passthrough or {}, indent=2, sort_keys=True,
         ),
         **_shared_form_context(),
+        **_capability_context(profile.backend),
         **_promoted_sections_context(env_blob),
     }
 
@@ -571,6 +636,7 @@ def _empty_form_context() -> dict:
         "secret_keys_text": "",
         "cc_settings_json": "{}",
         **_shared_form_context(),
+        **_capability_context(DEFAULT_BACKEND),
         **_promoted_sections_context({}),
     }
 
@@ -584,14 +650,22 @@ def _view_context(profile, box: Optional[ProfileSecretBox]) -> dict:
     leak doesn't expose the secret.
     """
     env_blob = _decrypt_env_blob(profile, box)
+    cap = capability_or_default(profile.backend)
+    is_claude = cap.code == "claude_sdk"
+    is_omp = cap.code == "omp_rpc"
     model_overrides: list[dict] = []
-    for key in _MODELS_KEYS:
-        if key in env_blob:
-            model_overrides.append({"name": key, "value": env_blob[key]})
+    if is_claude:
+        for key in _MODELS_KEYS:
+            if key in env_blob:
+                model_overrides.append({"name": key, "value": env_blob[key]})
     env_entries: list[dict] = []
     for key in sorted(env_blob):
         if key in _MODELS_KEYS:
             continue  # already surfaced under model_overrides
+        if key in _OMP_KEYS:
+            continue  # surfaced in the OMP connection block (token redacted)
+        if not is_claude and key in _BEHAVIOR_TOGGLE_KEYS + _BEHAVIOR_NUMERIC_KEYS:
+            continue  # claude-only knobs: data preserved, not shown on other backends
         known = env_lookup(key)
         is_secret = bool(known and known.secret)
         env_entries.append({
@@ -600,6 +674,13 @@ def _view_context(profile, box: Optional[ProfileSecretBox]) -> dict:
             "is_secret": is_secret,
             "description": known.description if known else "",
         })
+    # OMP/RPC connection summary. The auth token is never echoed — only a
+    # "configured" flag — matching the credential redaction elsewhere.
+    omp_connection = {
+        "endpoint": env_blob.get(_OMP_ENDPOINT_KEY) or "",
+        "model": env_blob.get(_OMP_MODEL_KEY) or "",
+        "token_set": bool(env_blob.get(_OMP_TOKEN_KEY)),
+    }
     return {
         "profile": profile,
         "credentials": _decrypt_creds_for_form(profile, box),
@@ -610,11 +691,11 @@ def _view_context(profile, box: Optional[ProfileSecretBox]) -> dict:
         "fs_write_lines": list(profile.fs_write or []),
         "allowed_tools_list": list(profile.allowed_tools or []),
         "denied_tools_list": list(profile.denied_tools or []),
-        "backend_label": next(
-            (label for code, label, _ in _BACKEND_CHOICES if code == profile.backend),
-            profile.backend,
-        ),
+        "is_claude_backend": is_claude,
+        "is_omp_backend": is_omp,
+        "omp_connection": omp_connection,
         "env_catalog_lookup": env_lookup,
+        **_capability_context(profile.backend),
     }
 
 
@@ -679,28 +760,71 @@ def _parse_env_form(
             out[key] = val or ""
 
     if has_promoted:
-        # Models: free-text inputs. Empty means "don't set".
-        for key in _MODELS_KEYS:
-            val = (form.get(f"promoted_model_{key}") or "").strip()
-            if val:
-                out[key] = val
-            else:
-                out.pop(key, None)
+        # Only the *selected* backend's dedicated fieldset is rendered/enabled,
+        # so only its promoted keys are rewritten here. The other backend's
+        # fields are disabled (don't submit), so we preserve whatever is on
+        # file — flipping the backend dropdown to peek doesn't wipe config.
+        backend = (form.get("backend") or DEFAULT_BACKEND).strip() or DEFAULT_BACKEND
 
-        # Behavior toggles: checkboxes write "1" when checked.
-        for key in _BEHAVIOR_TOGGLE_KEYS:
-            field = f"promoted_behavior_{key}"
-            if form.get(field):
-                out[key] = "1"
-            else:
-                out.pop(key, None)
+        if backend == "claude_sdk":
+            # Models: free-text inputs. Empty means "don't set".
+            for key in _MODELS_KEYS:
+                val = (form.get(f"promoted_model_{key}") or "").strip()
+                if val:
+                    out[key] = val
+                else:
+                    out.pop(key, None)
 
-        # Numeric: empty stays unset.
-        mtt = (form.get("promoted_max_thinking_tokens") or "").strip()
-        if mtt:
-            out["MAX_THINKING_TOKENS"] = mtt
-        else:
-            out.pop("MAX_THINKING_TOKENS", None)
+            # Behavior toggles: checkboxes write "1" when checked.
+            for key in _BEHAVIOR_TOGGLE_KEYS:
+                field = f"promoted_behavior_{key}"
+                if form.get(field):
+                    out[key] = "1"
+                else:
+                    out.pop(key, None)
+
+            # Numeric: empty stays unset.
+            mtt = (form.get("promoted_max_thinking_tokens") or "").strip()
+            if mtt:
+                out["MAX_THINKING_TOKENS"] = mtt
+            else:
+                out.pop("MAX_THINKING_TOKENS", None)
+
+        elif backend == "omp_rpc":
+            endpoint = (form.get("promoted_omp_endpoint") or "").strip()
+            if endpoint:
+                out[_OMP_ENDPOINT_KEY] = endpoint
+            else:
+                out.pop(_OMP_ENDPOINT_KEY, None)
+
+            model = (form.get("promoted_omp_model") or "").strip()
+            if model:
+                out[_OMP_MODEL_KEY] = model
+            else:
+                out.pop(_OMP_MODEL_KEY, None)
+
+            # Secret token: blank means "keep what's on file" (mirrors the
+            # credentials field). Removing it requires clearing it explicitly,
+            # which the form doesn't currently offer — endpoint reuse is the
+            # common case and re-typing rotates.
+            token = (form.get("promoted_omp_auth_token") or "").strip()
+            if token:
+                out[_OMP_TOKEN_KEY] = token
+            elif existing_blob and existing_blob.get(_OMP_TOKEN_KEY):
+                out[_OMP_TOKEN_KEY] = existing_blob[_OMP_TOKEN_KEY]
+            else:
+                out.pop(_OMP_TOKEN_KEY, None)
+
+        # Preserve promoted keys owned by *other* backends: they weren't part
+        # of this submission (their fieldset is inert), so the user did not
+        # intend to clear them.
+        inactive_promoted = _PROMOTED_KEYS - _BACKEND_PROMOTED_KEYS.get(
+            backend, frozenset()
+        )
+        if existing_blob:
+            for k in inactive_promoted:
+                if k in existing_blob and k not in out:
+                    out[k] = existing_blob[k]
 
         # If only the promoted form was submitted, preserve any
         # non-promoted keys already on file so a save of the Models
@@ -756,10 +880,10 @@ def _form_fields_to_update(
         fields["description"] = (form.get("description") or "").strip()
     if "backend" in form:
         backend = (form.get("backend") or "").strip()
-        # Only enabled backends from the picker are accepted. Submitting a
-        # disabled value (e.g. via curl) is rejected so we don't pretend to
-        # support a backend that isn't wired up.
-        enabled = {code for code, _, on in _BACKEND_CHOICES if on}
+        # Only enabled backends from the capability registry are accepted.
+        # Submitting a disabled/unknown value (e.g. via curl) is rejected so we
+        # don't pretend to support a backend that isn't wired up.
+        enabled = capability_enabled_backends()
         if backend not in enabled:
             raise HTTPException(400, f"backend must be one of {sorted(enabled)}")
         fields["backend"] = backend

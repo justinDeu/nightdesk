@@ -57,7 +57,7 @@
       </div>
       {{ _pill(backend_label, 'ok') }}
       {{ _pill('network ' ~ profile.network_mode, 'neutral') }}
-      {% if profile.permission_mode %}
+      {% if is_claude_backend and profile.permission_mode %}
         {{ _pill(profile.permission_mode) }}
       {% endif %}
       <div class="flex items-center gap-2">
@@ -84,20 +84,41 @@
       </div>
     </div>
 
-    {# Body: two columns of dl rows for fast scanning. #}
+    {# Non-executable backend warning. Shown when the profile's backend is
+       described but not yet wired for real runs — driven by the capability
+       descriptor's executable flag, not a hardcoded string match. #}
+    {% if backend_capability and not backend_capability.executable %}
+      <div class="mx-4 mt-3 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+           data-tooltip="This backend's executor always returns a failure. Runs dispatched against this profile will immediately fail.">
+        This backend is not yet executable — runs will fail.
+      </div>
+    {% endif %}
+
+    {# Body: two columns of dl rows for fast scanning. Backend-specific rows
+       only render for the backend that consumes them; this is the effective
+       config the run will actually see, so an inert Claude credential never
+       shows on an OMP/RPC profile. #}
     <div class="grid gap-x-8 gap-y-1 px-4 py-3 md:grid-cols-2">
       <dl>
         {{ _kv('Backend', backend_label) }}
-        {{ _kv('Default model', profile.default_model or '—') }}
-        {{ _kv('Permission mode', profile.permission_mode or 'default') }}
+        {% if is_claude_backend %}
+          {{ _kv('Default model', profile.default_model or '—') }}
+          {{ _kv('Permission mode', profile.permission_mode or 'default') }}
+          {{ _kv('Binary path', profile.claude_binary_path or (daemon_claude_binary ~ ' (daemon default)')) }}
+        {% elif is_omp_backend %}
+          {{ _kv('Endpoint', omp_connection.endpoint or 'not configured') }}
+          {{ _kv('Model', omp_connection.model or '—') }}
+          {{ _kv('Auth token', 'value set' if omp_connection.token_set else 'not configured') }}
+        {% endif %}
         {{ _kv('Network', profile.network_mode) }}
-        {{ _kv('Binary path', profile.claude_binary_path or (daemon_claude_binary ~ ' (daemon default)')) }}
       </dl>
       <dl>
-        {{ _kv('Credentials',
-               (credentials.source or 'not configured')
-               ~ (' · value set' if credentials.value_set else '')
-               ~ (' · ' ~ credentials.base_url if credentials.base_url else '') ) }}
+        {% if is_claude_backend %}
+          {{ _kv('Credentials',
+                 (credentials.source or 'not configured')
+                 ~ (' · value set' if credentials.value_set else '')
+                 ~ (' · ' ~ credentials.base_url if credentials.base_url else '') ) }}
+        {% endif %}
         {{ _kv('Allowed tools',
                allowed_tools_list | join(', ') if allowed_tools_list else 'all') }}
         {{ _kv('Denied tools',
@@ -106,6 +127,50 @@
                profile.run_token_scopes | join(', ') if profile.run_token_scopes else 'self-only') }}
         {{ _kv('Env variables', env_keys | length ) }}
       </dl>
+    </div>
+
+    {# Backend capabilities: what this backend consumes vs. what it ignores.
+       Makes the effective-config preview self-explanatory — the user sees why
+       a field they configured on another backend is absent here. #}
+    <div class="border-t border-border px-4 py-3">
+      <div class="text-fg-muted text-xs uppercase tracking-wide mb-2">Backend capabilities</div>
+      {% if backend_capability %}
+        <p class="text-xs text-fg-muted mb-3">{{ backend_capability.summary }}</p>
+      {% endif %}
+      <div class="grid gap-4 md:grid-cols-3 text-sm">
+        <div>
+          <div class="text-fg-muted text-[10px] uppercase tracking-wide mb-1">Shared</div>
+          <ul class="space-y-0.5">
+            {% for g in backend_shared_groups %}
+              <li class="text-fg" title="{{ g.description }}">{{ g.label }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        <div>
+          <div class="text-accent text-[10px] uppercase tracking-wide mb-1">{{ backend_label }}-specific</div>
+          {% if backend_specific_groups %}
+            <ul class="space-y-0.5">
+              {% for g in backend_specific_groups %}
+                <li class="text-fg" title="{{ g.description }}">{{ g.label }}</li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="text-fg-muted">—</p>
+          {% endif %}
+        </div>
+        <div>
+          <div class="text-fg-muted text-[10px] uppercase tracking-wide mb-1">Not used (inert)</div>
+          {% if backend_inert_groups %}
+            <ul class="space-y-0.5">
+              {% for g in backend_inert_groups %}
+                <li class="text-fg-muted line-through" title="{{ g.description }}">{{ g.label }}</li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="text-fg-muted">—</p>
+          {% endif %}
+        </div>
+      </div>
     </div>
 
     {% if profile.system_prompt %}
@@ -239,9 +304,14 @@
       </label>
     </div>
 
-    {# Everything below is Claude Code-specific. Once another backend lands
-       we'll branch this section by selected backend; for now the form just
-       declares its intent up front so users know what they're configuring. #}
+    {# ===== Backend-specific: Claude Code (claude_sdk) ======================
+       Sections inside this wrapper render only when the claude_sdk backend is
+       selected. The wrapper is tagged so the inline JS (and the server's
+       initial `hidden` class) can show/disable it as a unit when the backend
+       dropdown changes — irrelevant fields are both hidden AND disabled so
+       they neither submit nor get tab-focus on another backend. #}
+    <div data-backend-section="claude_sdk"
+         class="divide-y divide-border {% if selected_backend != 'claude_sdk' %}hidden{% endif %}">
     <div class="px-4 py-2 bg-bg-elev-2/40 text-xs text-fg-muted uppercase tracking-wide">
       Claude Code configuration
     </div>
@@ -332,63 +402,125 @@
       </label>
     </fieldset>
 
-    {# Permission mode + Network ----------------------------------------- #}
-    <div class="px-4 pt-5 pb-3 grid gap-4 md:grid-cols-2">
-      <div>
-        <div class="text-fg-muted text-xs uppercase tracking-wide mb-2"
-             title="How Claude Code handles permission prompts when it tries to use a tool.">
-          Permission mode
-        </div>
-        <div class="flex items-stretch gap-1 rounded-md border border-border bg-bg-elev-2 p-1"
-             role="radiogroup" aria-label="Permission mode">
-          {% for pm, pm_label, pm_hint in [
-            ('default', 'default', 'Ask before each tool call. The safest mode.'),
-            ('acceptEdits', 'edits', 'Auto-accept file edits, still prompt for shell/network actions. Maps to permission_mode=acceptEdits.'),
-            ('bypassPermissions', 'bypass', 'Skip every prompt. Use only inside the sandbox. Maps to permission_mode=bypassPermissions.'),
-          ] %}
-            <label class="cursor-pointer flex-1 min-w-0" title="{{ pm_hint }}">
-              <input type="radio" name="permission_mode" value="{{ pm }}"
-                     class="peer sr-only"
-                     {% if (profile and profile.permission_mode == pm) or (not profile and pm == 'default') %}checked{% endif %} />
-              <span class="block text-center whitespace-nowrap px-2 py-2 rounded font-mono text-[11px] text-fg-muted
-                           hover:bg-bg-elev-3 hover:text-fg
-                           peer-checked:bg-accent peer-checked:text-bg peer-checked:shadow-sm
-                           peer-focus-visible:ring-2 peer-focus-visible:ring-accent
-                           transition-colors">
-                {{ pm_label }}
-              </span>
-            </label>
-          {% endfor %}
-        </div>
+    {# Permission mode (Claude Code-specific) ---------------------------- #}
+    <div class="px-4 pt-5 pb-3">
+      <div class="text-fg-muted text-xs uppercase tracking-wide mb-2"
+           title="How Claude Code handles permission prompts when it tries to use a tool.">
+        Permission mode
       </div>
-      <div aria-disabled="true">
-        <div class="text-fg-muted text-xs uppercase tracking-wide mb-2 flex items-center gap-2">
-          <span>Network</span>
-          <span class="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-border text-fg-muted">
-            not yet enforced
+      <div class="flex items-stretch gap-1 rounded-md border border-border bg-bg-elev-2 p-1 md:max-w-md"
+           role="radiogroup" aria-label="Permission mode">
+        {% for pm, pm_label, pm_hint in [
+          ('default', 'default', 'Ask before each tool call. The safest mode.'),
+          ('acceptEdits', 'edits', 'Auto-accept file edits, still prompt for shell/network actions. Maps to permission_mode=acceptEdits.'),
+          ('bypassPermissions', 'bypass', 'Skip every prompt. Use only inside the sandbox. Maps to permission_mode=bypassPermissions.'),
+        ] %}
+          <label class="cursor-pointer flex-1 min-w-0" title="{{ pm_hint }}">
+            <input type="radio" name="permission_mode" value="{{ pm }}"
+                   class="peer sr-only"
+                   {% if (profile and profile.permission_mode == pm) or (not profile and pm == 'default') %}checked{% endif %} />
+            <span class="block text-center whitespace-nowrap px-2 py-2 rounded font-mono text-[11px] text-fg-muted
+                         hover:bg-bg-elev-3 hover:text-fg
+                         peer-checked:bg-accent peer-checked:text-bg peer-checked:shadow-sm
+                         peer-focus-visible:ring-2 peer-focus-visible:ring-accent
+                         transition-colors">
+              {{ pm_label }}
+            </span>
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+    </div>{# /data-backend-section claude_sdk #}
+
+    {# ===== Backend-specific: OMP / RPC (omp_rpc) ===========================
+       The OMP/RPC backend dials a remote endpoint instead of running Claude
+       Code locally. Its connection settings live in the encrypted env blob
+       (OMP_RPC_ENDPOINT / OMP_RPC_AUTH_TOKEN / OMP_RPC_MODEL); the auth token
+       is a secret and is never echoed back. Shown only when omp_rpc is the
+       selected backend. #}
+    <div data-backend-section="omp_rpc"
+         class="divide-y divide-border {% if selected_backend != 'omp_rpc' %}hidden{% endif %}">
+      <div class="px-4 py-2 bg-bg-elev-2/40 text-xs text-fg-muted uppercase tracking-wide">
+        OMP / RPC configuration
+      </div>
+      {# Warn that this backend is not yet wired for execution. Driven by
+         non_executable_backends from the capability registry; no hardcoded
+         backend-name check in markup. #}
+      {% if 'omp_rpc' in non_executable_backends %}
+        <div class="mx-4 mt-3 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+             data-tooltip="Runs dispatched against an OMP/RPC profile will immediately fail until the executor is wired.">
+          This backend is not yet executable — runs will fail.
+        </div>
+      {% endif %}
+      <fieldset class="px-4 pt-5 pb-4 space-y-3">
+        <legend class="text-fg-muted text-xs uppercase tracking-wide mb-2"
+                title="Remote Open-Model-Protocol endpoint this profile dispatches runs to.">
+          Connection
+        </legend>
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-[10px] uppercase tracking-wide"
+                title="RPC endpoint URL the run is dispatched to.">
+            Endpoint <code class="text-accent normal-case">OMP_RPC_ENDPOINT</code>
           </span>
-        </div>
-        {# Persist the current value so disabling the radios doesn't clear it. #}
-        <input type="hidden" name="network_mode"
-               value="{{ profile.network_mode if profile and profile.network_mode else 'on' }}" />
-        <div class="flex items-stretch gap-1 rounded-md border border-border bg-bg-elev-2 p-1 opacity-50 pointer-events-none select-none"
-             role="radiogroup" aria-label="Network mode" aria-disabled="true">
-          {% for nm in ['off', 'on'] %}
-            <label class="flex-1 min-w-0">
-              <input type="radio" disabled
-                     class="peer sr-only"
-                     {% if (profile and profile.network_mode == nm) or (not profile and nm == 'on') %}checked{% endif %} />
-              <span class="block text-center whitespace-nowrap px-2 py-2 rounded font-mono text-[11px] text-fg-muted
-                           peer-checked:bg-bg-elev-3 peer-checked:text-fg">
-                {{ nm }}
-              </span>
-            </label>
-          {% endfor %}
-        </div>
-        <p class="text-[10px] text-fg-muted mt-1">
-          Per-host outbound enforcement is on the v1 roadmap. The current sandbox always shares the host network so inference works.
-        </p>
+          <input name="promoted_omp_endpoint"
+                 value="{{ promoted_omp.endpoint }}"
+                 placeholder="https://omp.internal/rpc"
+                 class="bg-bg border border-border rounded px-2 py-1.5 text-fg font-mono text-xs" />
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-[10px] uppercase tracking-wide"
+                title="Bearer token for the RPC endpoint. Encrypted at rest; leave blank to keep the current value.">
+            Auth token <code class="text-accent normal-case">OMP_RPC_AUTH_TOKEN</code>
+            <span class="text-fg-muted normal-case">(secret)</span>
+          </span>
+          <input type="password" name="promoted_omp_auth_token" autocomplete="off"
+                 placeholder="{% if promoted_omp.token_set %}value set — type to rotate{% else %}paste token here{% endif %}"
+                 class="bg-bg border border-border rounded px-2 py-1.5 text-fg font-mono text-xs" />
+          {% if promoted_omp.token_set %}
+            <span class="text-[10px] text-fg-muted">A token is on file. Type a new value to rotate.</span>
+          {% endif %}
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-fg-muted text-[10px] uppercase tracking-wide"
+                title="Model name the remote endpoint should run.">
+            Model <code class="text-accent normal-case">OMP_RPC_MODEL</code>
+          </span>
+          <input name="promoted_omp_model"
+                 value="{{ promoted_omp.model }}"
+                 placeholder="e.g. gpt-oss-120b"
+                 class="bg-bg border border-border rounded px-2 py-1.5 text-fg font-mono text-xs" />
+        </label>
+      </fieldset>
+    </div>{# /data-backend-section omp_rpc #}
+
+    {# Network (shared sandbox/runtime surface) -------------------------- #}
+    <div class="px-4 pt-5 pb-3" aria-disabled="true">
+      <div class="text-fg-muted text-xs uppercase tracking-wide mb-2 flex items-center gap-2">
+        <span>Network</span>
+        <span class="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-border text-fg-muted">
+          not yet enforced
+        </span>
       </div>
+      {# Persist the current value so disabling the radios doesn't clear it. #}
+      <input type="hidden" name="network_mode"
+             value="{{ profile.network_mode if profile and profile.network_mode else 'on' }}" />
+      <div class="flex items-stretch gap-1 rounded-md border border-border bg-bg-elev-2 p-1 opacity-50 pointer-events-none select-none md:max-w-md"
+           role="radiogroup" aria-label="Network mode" aria-disabled="true">
+        {% for nm in ['off', 'on'] %}
+          <label class="flex-1 min-w-0">
+            <input type="radio" disabled
+                   class="peer sr-only"
+                   {% if (profile and profile.network_mode == nm) or (not profile and nm == 'on') %}checked{% endif %} />
+            <span class="block text-center whitespace-nowrap px-2 py-2 rounded font-mono text-[11px] text-fg-muted
+                         peer-checked:bg-bg-elev-3 peer-checked:text-fg">
+              {{ nm }}
+            </span>
+          </label>
+        {% endfor %}
+      </div>
+      <p class="text-[10px] text-fg-muted mt-1">
+        Per-host outbound enforcement is on the v1 roadmap. The current sandbox always shares the host network so inference works.
+      </p>
     </div>
 
     {# Tools + filesystem in two columns --------------------------------- #}
@@ -421,6 +553,22 @@
       </div>
     </div>
 
+    {# Secret keys (shared sandbox/runtime surface) --------------------- #}
+    <div class="px-4 py-3">
+      <label class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide"
+              data-tooltip="Names of env variables whose values must not appear in logs or transcripts. One per line or comma-separated.">
+          Secret keys
+        </span>
+        <textarea name="secret_keys" rows="2"
+                  placeholder="MY_TOKEN, DB_PASSWORD (one per line)"
+                  class="bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ secret_keys_text }}</textarea>
+        <span class="text-[10px] text-fg-muted">
+          Env variable names whose values are secrets — never echoed in logs or transcripts.
+        </span>
+      </label>
+    </div>
+
     {# System prompt (collapsed by default to keep the form tight) ------- #}
     <details class="px-4 py-3" {% if profile and profile.system_prompt %}open{% endif %}>
       <summary class="cursor-pointer text-fg-muted text-xs uppercase tracking-wide hover:text-fg">
@@ -431,10 +579,17 @@
                 class="mt-2 w-full bg-bg border border-border rounded px-2 py-1 text-fg font-mono text-xs">{{ profile.system_prompt if profile and profile.system_prompt else '' }}</textarea>
     </details>
 
-    {# Models / Routing / Behavior — promoted sections share storage with
-       the generic env editor below but render dedicated UI for the
-       common knobs so users don't have to type the env var name. #}
+    {# Models / Behavior — promoted sections share storage with the generic
+       env editor below but render dedicated UI for the common knobs so users
+       don't have to type the env var name. The submit marker is SHARED (always
+       present, never disabled) so the save path knows the promoted fieldsets
+       were on screen; the per-backend parser then only rewrites the active
+       backend's promoted keys. #}
     <input type="hidden" name="promoted_env_submitted" value="1" />
+
+    {# ===== Backend-specific: Claude Code model + behavior knobs ========= #}
+    <div data-backend-section="claude_sdk"
+         class="divide-y divide-border {% if selected_backend != 'claude_sdk' %}hidden{% endif %}">
 
     {# Models fieldset -------------------------------------------------- #}
     <fieldset class="px-4 pt-5 pb-3 space-y-2">
@@ -521,8 +676,9 @@
         </span>
       </label>
     </fieldset>
+    </div>{# /data-backend-section claude_sdk (models + behavior) #}
 
-    {# Run-token scopes -------------------------------------------------- #}
+    {# Run-token scopes (shared Nightdesk capability) -------------------- #}
     <fieldset class="px-4 pt-5 pb-3 space-y-2">
       <legend class="text-fg-muted text-xs uppercase tracking-wide mb-2"
               title="Extra capabilities the per-run bearer token grants the agent.">
@@ -690,6 +846,49 @@
         })();
       </script>
     </div>
+
+    {# Backend-aware section toggle. Each [data-backend-section] declares which
+       backend(s) it belongs to; the selected backend decides which are shown.
+       Hidden sections are also `disabled` so their inputs neither submit nor
+       receive focus — the irrelevant fields are inert, not merely invisible.
+       Runs on initial render and on every backend-dropdown change, and is
+       re-evaluated after each HTMX pane swap because the whole partial (script
+       included) is re-inserted. #}
+    <script>
+      (function () {
+        function applyBackend(form, backend) {
+          if (!form) return;
+          var sections = form.querySelectorAll('[data-backend-section]');
+          for (var i = 0; i < sections.length; i++) {
+            var sec = sections[i];
+            var owners = (sec.getAttribute('data-backend-section') || '').split(/\s+/);
+            var active = owners.indexOf(backend) !== -1;
+            sec.classList.toggle('hidden', !active);
+            var fields = sec.querySelectorAll('input, select, textarea, button');
+            for (var j = 0; j < fields.length; j++) {
+              fields[j].disabled = !active;
+            }
+          }
+          // The Claude credential token field has its own enable/disable rule
+          // (disabled for the "inherit" source). After re-enabling the claude
+          // section, hand control back to that helper so we don't force the
+          // token input on for a host-file profile.
+          if (backend === 'claude_sdk' && window.ndUpdateCredentialField) {
+            window.ndUpdateCredentialField(form);
+          }
+        }
+        window.ndApplyBackend = applyBackend;
+        var selects = document.querySelectorAll('select[name="backend"]');
+        for (var k = 0; k < selects.length; k++) {
+          (function (sel) {
+            sel.addEventListener('change', function () {
+              applyBackend(sel.form, sel.value);
+            });
+            applyBackend(sel.form, sel.value);
+          })(selects[k]);
+        }
+      })();
+    </script>
 
   </form>
 {% endif %}

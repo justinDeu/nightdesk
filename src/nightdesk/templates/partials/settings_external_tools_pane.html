@@ -2,13 +2,7 @@
 {% set mono_input_class = input_class ~ " font-mono text-xs" %}
 
 <div class="rounded border border-border bg-bg-elev p-5">
-  <header class="mb-5 flex items-center gap-3">
-    <div class="min-w-0 flex-1">
-      <h2 class="text-xl font-semibold text-fg">External tools</h2>
-      <p class="mt-1 text-sm text-fg-muted">Name reusable groups of host bin directories. Projects opt in to the presets they need; the sandbox bind-mounts those paths read-only and adds them to PATH.</p>
-    </div>
-    {% if saved %}<span class="px-2 py-0.5 text-xs bg-green-900/40 text-green-200 rounded">saved</span>{% endif %}
-  </header>
+  {% if saved %}<div class="mb-5 rounded border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-accent">Saved.</div>{% endif %}
 
   {% set _builtin_options = toolchain_options | selectattr('builtin') | list %}
   {% if _builtin_options %}
@@ -32,7 +26,7 @@
     </section>
   {% endif %}
 
-  <form method="post" action="/settings/external-tools" class="flex flex-col gap-5" data-settings-form data-toolchain-presets-form>
+  <form method="post" action="/toolsets" class="flex flex-col gap-5" data-settings-form data-toolchain-presets-form>
     <section class="border border-border rounded p-4 bg-bg space-y-3">
       <div class="flex items-start justify-between gap-2">
         <div>
@@ -97,7 +91,7 @@
     </section>
 
     <div class="flex justify-end gap-2">
-      <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save external tool presets</button>
+      <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save toolsets</button>
     </div>
   </form>
 </div>

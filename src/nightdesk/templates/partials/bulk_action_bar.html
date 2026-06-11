@@ -1,0 +1,131 @@
+{#
+  Bulk action bar for board/list management. Rendered once (hidden) on the
+  board; static/bulk_select.js shows it while a selection is active and wires
+  every control to the cookie-auth /board/tickets/bulk/* routes.
+
+  Option sources come from the board/list context:
+    priority_scale  list[{value,name,label,css}]   (PRIORITY_SCALE)
+    bulk_statuses   list[str]                       (valid status targets)
+    projects        list[Project]
+    all_labels      list[Label]
+    profiles        list[Profile]
+
+  All menus are server-rendered so applying a bulk change is a single POST with
+  no extra round-trip to fetch options. The bar lives OUTSIDE the polled column
+  sections and the sidebar, so the 3s board poll never wipes it.
+#}
+<div id="nd-bulk-bar" class="nd-bulk-bar" role="toolbar"
+     aria-label="Bulk actions" hidden>
+  <span class="nd-bulk-count"><span data-nd-bulk-count>0</span> selected</span>
+  <span class="nd-bulk-sep" aria-hidden="true"></span>
+
+  {# ---- Priority ---- #}
+  <div class="nd-bulk-group">
+    <button type="button" class="nd-bulk-btn" data-nd-bulk-toggle="priority"
+            aria-haspopup="true" aria-expanded="false">Priority ▾</button>
+    <div class="nd-bulk-menu" data-nd-bulk-menu="priority" hidden role="menu">
+      {% for p in priority_scale %}
+        <button type="button" class="nd-bulk-opt" role="menuitem"
+                data-nd-bulk-apply="priority" data-value="{{ p.value }}">
+          <span class="{{ p.css }}">{{ p.label }}</span>
+        </button>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ---- Status ---- #}
+  <div class="nd-bulk-group">
+    <button type="button" class="nd-bulk-btn" data-nd-bulk-toggle="status"
+            aria-haspopup="true" aria-expanded="false">Status ▾</button>
+    <div class="nd-bulk-menu" data-nd-bulk-menu="status" hidden role="menu">
+      {% for s in bulk_statuses %}
+        <button type="button" class="nd-bulk-opt" role="menuitem"
+                data-nd-bulk-apply="status" data-value="{{ s }}">
+          <span class="capitalize">{{ s }}</span>
+        </button>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ---- Project ---- #}
+  <div class="nd-bulk-group">
+    <button type="button" class="nd-bulk-btn" data-nd-bulk-toggle="project"
+            aria-haspopup="true" aria-expanded="false">Project ▾</button>
+    <div class="nd-bulk-menu" data-nd-bulk-menu="project" hidden role="menu">
+      <button type="button" class="nd-bulk-opt" role="menuitem"
+              data-nd-bulk-apply="project" data-value="">
+        <span class="text-fg-muted">No project</span>
+      </button>
+      {% for proj in projects %}
+        <button type="button" class="nd-bulk-opt" role="menuitem"
+                data-nd-bulk-apply="project" data-value="{{ proj.id }}">
+          {% if proj.color %}<span class="nd-bulk-dot" style="background: {{ proj.color }}"></span>{% endif %}
+          <span>{{ proj.name }}</span>
+        </button>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ---- Labels (add) ---- #}
+  <div class="nd-bulk-group">
+    <button type="button" class="nd-bulk-btn" data-nd-bulk-toggle="labels"
+            aria-haspopup="true" aria-expanded="false">Labels ▾</button>
+    <div class="nd-bulk-menu nd-bulk-menu-modal overflow-hidden rounded-xl border border-border bg-bg-elev p-0 shadow-2xl"
+         data-nd-bulk-menu="labels" hidden role="listbox" aria-label="Bulk labels">
+      <form class="border-b border-border p-2" data-nd-bulk-create-label>
+        <label class="block">
+          <span class="sr-only">Search or create label</span>
+          <input type="text" name="label_name" autocomplete="off" spellcheck="false"
+                 placeholder="Search or create label…"
+                 role="combobox" aria-expanded="true" aria-controls="nd-bulk-label-results"
+                 data-nd-bulk-label-search
+                 class="w-full rounded border border-border bg-bg px-2 py-1 text-xs text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+          <input type="hidden" name="label_color" value="" />
+        </label>
+        <div class="mt-1 text-[10px] text-fg-muted">Marked labels are on the selection. Select again to remove.</div>
+      </form>
+      <div id="nd-bulk-label-results" class="max-h-80 overflow-y-auto p-1" data-nd-bulk-label-results>
+      {% if all_labels %}
+        {% for lbl in all_labels %}
+          <button type="button" class="nd-bulk-opt w-full" role="option"
+                  data-nd-bulk-apply="labels" data-value="{{ lbl.id }}"
+                  data-nd-bulk-label-option data-search-text="{{ lbl.name | lower }}">
+            <span class="inline-flex w-5 justify-center text-accent" data-nd-bulk-label-marker></span>
+            <span class="nd-bulk-dot" style="background: {{ lbl.color or 'var(--color-fg-muted)' }}"></span>
+            <span>{{ lbl.name }}</span>
+          </button>
+        {% endfor %}
+      {% else %}
+        <span class="nd-bulk-opt text-fg-muted" data-nd-bulk-label-empty>No labels defined</span>
+      {% endif %}
+      </div>
+      <button type="button" class="nd-bulk-opt hidden" role="option" data-nd-bulk-create-option>
+        Create and apply <span data-nd-bulk-create-name></span>
+      </button>
+    </div>
+  </div>
+
+  {# ---- Profile ---- #}
+  <div class="nd-bulk-group">
+    <button type="button" class="nd-bulk-btn" data-nd-bulk-toggle="profile"
+            aria-haspopup="true" aria-expanded="false">Profile ▾</button>
+    <div class="nd-bulk-menu" data-nd-bulk-menu="profile" hidden role="menu">
+      {% for prof in profiles %}
+        <button type="button" class="nd-bulk-opt" role="menuitem"
+                data-nd-bulk-apply="profile" data-value="{{ prof.id }}">
+          <span>{{ prof.name }}</span>
+        </button>
+      {% endfor %}
+    </div>
+  </div>
+
+  <span class="nd-bulk-sep" aria-hidden="true"></span>
+
+  {# ---- Archive (destructive; undoable) ---- #}
+  <button type="button" class="nd-bulk-btn nd-bulk-danger"
+          data-nd-bulk-archive>Archive</button>
+
+  <span class="nd-bulk-sep" aria-hidden="true"></span>
+  <button type="button" class="nd-bulk-btn" data-nd-bulk-clear
+          title="Clear selection (Esc)">Clear</button>
+</div>

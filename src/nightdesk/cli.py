@@ -22,6 +22,7 @@ from nightdesk.config import (
     load_config,
 )
 from nightdesk.db.session import make_engine, session_factory
+from nightdesk.domain.labels import seed_default_labels
 from nightdesk.domain.profiles import seed_default_profiles
 from nightdesk.worker.main import WorkerLoop, WorkerSettings, default_host
 
@@ -253,7 +254,9 @@ def _init() -> NightdeskConfig:
     cfg.worktree_root.mkdir(parents=True, exist_ok=True)
 
     _run_migrations(cfg)
-    seed_default_profiles(make_engine(cfg.db_path))
+    engine = make_engine(cfg.db_path)
+    seed_default_profiles(engine)
+    seed_default_labels(engine)
     return cfg
 
 

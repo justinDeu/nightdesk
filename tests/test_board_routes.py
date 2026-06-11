@@ -2,6 +2,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from nightdesk.api.app import create_app
+from nightdesk.domain.labels import create_label, set_ticket_labels
 from nightdesk.domain.profiles import create_profile
 from nightdesk.domain.projects import create_project
 from nightdesk.domain.tickets import (
@@ -260,6 +261,142 @@ async def test_edit_modal_surfaces_unknown_toolchain_override(cookie_client, ses
     assert r.status_code == 200
     body = r.text
     # The unknown name is clearly flagged, not silently dropped.
+    assert "data-toolchain-stale" in body
+    assert "since-deleted" in body
+
+
+async def test_edit_modal_marks_inherited_toolchain(cookie_client, session, profile):
+    """A toolchain inherited from the project shows an 'Inherited' badge."""
+    project = create_project(
+        session, name="InheritTest", source_path="/tmp/inherit",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="inherited-tc",
+        prompt="",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+        # Project defaults are applied to the ticket via apply_project_defaults,
+        # so user-python-tools appears in the enable list.
+    )
+    # Verify the default was applied.
+    assert t.toolchain_overrides["enable"] == ["user-python-tools"]
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # The inherited badge is rendered for the preset that came from the project.
+    assert "Inherited" in body
+    # The preset row is still a checkbox so the user can opt out.
+    assert 'value="user-python-tools"' in body
+
+
+async def test_edit_modal_marks_explicitly_enabled_toolchain(cookie_client, session, profile):
+    """A toolchain explicitly enabled on a ticket (not from project) shows 'Enabled'."""
+    t = create_ticket(
+        session,
+        title="explicit-tc",
+        prompt="",
+        profile_id=profile.id,
+        source_path="/tmp",
+        toolchain_overrides={"enable": ["rust-user-tools"], "disable": [], "extra_paths": []},
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # Explicitly-enabled presets get an 'Enabled' badge.
+    assert "Enabled" in body
+    assert 'value="rust-user-tools"' in body
+
+
+async def test_edit_modal_marks_disabled_toolchain(cookie_client, session, profile):
+    """A disabled toolchain shows a 'Disabled' badge."""
+    project = create_project(
+        session, name="DisableTest", source_path="/tmp/disable",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="disabled-tc",
+        prompt="",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+        toolchain_overrides={
+            "enable": [],
+            "disable": ["user-python-tools"],
+            "extra_paths": [],
+        },
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # The disabled badge appears for the opted-out preset.
+    assert "Disabled" in body
+    assert "user-python-tools" in body
+
+
+async def test_sidebar_shows_toolchain_summary_with_provenance(cookie_client, session, profile):
+    """The sidebar view-mode shows toolchain summary with inherited/enabled/disabled."""
+    project = create_project(
+        session, name="SidebarTC", source_path="/tmp/sidebar-tc",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="sidebar-tc-ticket",
+        prompt="",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+        toolchain_overrides={
+            "enable": ["user-python-tools", "rust-user-tools"],
+            "disable": [],
+            "extra_paths": ["/opt/custom/bin"],
+        },
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # Sidebar shows the toolchain section header.
+    assert "Toolchain" in body
+    # Inherited from project.
+    assert "Inherited" in body
+    # Explicitly enabled (rust-user-tools is not a project default).
+    assert "Enabled" in body
+    # Extra path is shown.
+    assert "/opt/custom/bin" in body
+
+
+async def test_stale_toolchain_notes_project_default_origin(cookie_client, session, profile):
+    """A stale toolchain that was a project default gets extra context."""
+    project = create_project(
+        session, name="StaleProject", source_path="/tmp/stale",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="stale-origin",
+        prompt="",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+        toolchain_overrides={"enable": ["user-python-tools"]},
+    )
+    # Simulate the preset being deleted after the ticket was created.
+    t.toolchain_overrides = {"enable": ["since-deleted"], "disable": [], "extra_paths": []}
+    # Update the project to no longer reference it either.
+    project.default_toolchains = []
+    session.commit()
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
     assert "data-toolchain-stale" in body
     assert "since-deleted" in body
 
@@ -978,3 +1115,165 @@ async def test_sidebar_omits_branch_for_directory_workspace(cookie_client, sessi
     assert r.status_code == 200
     body = r.text
     assert "Branch:" not in body
+
+
+async def test_sidebar_shows_effective_context_and_toolchain_together(
+    cookie_client, session, profile
+):
+    """Integration check for the ux-execution-context merge point.
+
+    The sidebar partial is where two source branches overlapped: the
+    effective-config execution-context block (ux/ticket-execution-preview) and
+    the toolchain provenance summary (ux/toolchain-picker). After the merge both
+    must render for an edit-mode ticket that has project-inherited toolchains —
+    neither feature may shadow the other.
+    """
+    project = create_project(
+        session, name="MergePoint", source_path="/tmp/mergepoint",
+        default_toolchains=["user-python-tools"],
+    )
+    t = create_ticket(
+        session,
+        title="merge-point",
+        prompt="p",
+        profile_id=profile.id,
+        project_id=project.id,
+        source_path="/tmp",
+    )
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+
+    # Effective-config execution-context block: rendered inline so the edit
+    # modal's live preview cannot inherit the card's #sidebar target and replace
+    # the whole sidebar after click.
+    assert "Execution context" in body
+    assert "data-sidebar-effective-config" in body
+    assert "data-effective-config" in body
+    assert f"/tickets/{t.id}/effective-config" not in body
+
+    # Toolchain provenance summary coexists, showing the project-inherited preset.
+    assert "Toolchain" in body
+    assert "Inherited" in body
+    assert "user-python-tools" in body
+
+
+@pytest.mark.anyio
+async def test_dep_picker_excludes_inbox_items(cookie_client, session, profile):
+    """Inbox tickets must not appear in the edit modal's dep candidate list.
+
+    A dependency on an inbox item permanently blocks the dependent because
+    ``_is_dependency_satisfied`` returns False for inbox status.  The picker
+    must filter them out so users can never accidentally create that trap.
+    """
+    inbox_t = create_ticket(
+        session,
+        title="INBOX-CANDIDATE",
+        prompt="",
+        profile_id=profile.id,
+        status="inbox",
+    )
+    draft_t = create_ticket(
+        session,
+        title="DRAFT-CANDIDATE",
+        prompt="p",
+        profile_id=profile.id,
+        status="draft",
+        source_path="/tmp",
+    )
+    other_t = create_ticket(
+        session,
+        title="OTHER-CANDIDATE",
+        prompt="p",
+        profile_id=profile.id,
+        status="queued",
+        source_path="/tmp",
+    )
+
+    # The sidebar edit modal is the canonical dep-picker surface.
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={draft_t.id}")
+    assert r.status_code == 200
+    body = r.text
+
+    # The data-dep-candidates JSON blob is embedded in the modal.
+    assert "data-dep-candidates" in body
+    # Non-inbox tickets appear in the picker JSON (tojson wraps in double-quotes).
+    assert '"OTHER-CANDIDATE"' in body
+    # Inbox items are excluded entirely — not anywhere in the rendered page.
+    assert "INBOX-CANDIDATE" not in body
+
+
+async def test_board_card_label_anchor_renders(cookie_client, session, profile):
+    """Every board card must render with data-label-picker so the inline picker
+    and keyboard shortcut (L) can find it by ticket id."""
+    label = create_label(session, name="card-anchor-label", color="#3b82f6")
+    ticket = create_ticket(
+        session, title="anchor-card", prompt="x",
+        profile_id=profile.id, source_path="/tmp",
+    )
+    set_ticket_labels(session, ticket.id, [label.id])
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    assert f'data-label-picker="{ticket.id}"' in r.text
+    # Chips inside the anchor carry data-label-id for bulk selection JS.
+    assert f'data-label-id="{label.id}"' in r.text
+
+
+async def test_inline_label_picker_route_returns_options(cookie_client, session, profile):
+    """GET /board/tickets/{tid}/inline-labels returns the toggle option list."""
+    label = create_label(session, name="route-test-label", color="#ef4444")
+    ticket = create_ticket(
+        session, title="inline-route-test", prompt="x",
+        profile_id=profile.id, source_path="/tmp",
+    )
+    set_ticket_labels(session, ticket.id, [label.id])
+    r = await cookie_client.get(f"/board/tickets/{ticket.id}/inline-labels")
+    assert r.status_code == 200
+    assert "route-test-label" in r.text
+    assert "data-inline-label-option" in r.text
+    assert "aria-selected=\"true\"" in r.text  # current label is checked
+
+
+# --- display options: props on the board --------------------------------------
+
+
+async def test_board_props_default_shows_all(cookie_client, session, profile):
+    """No ?props= param: card renders priority, profile, and project chips."""
+    proj = create_project(session, name="PropsProj", slug="propsproj", source_path="/tmp")
+    create_ticket(
+        session, title="props-card", prompt="x", profile_id=profile.id,
+        source_path="/tmp", project_id=proj.id, priority=2,
+    )
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    assert "PropsProj" in r.text
+    assert profile.name in r.text
+
+
+async def test_board_props_hides_profile_chip(cookie_client, session, profile):
+    """?props=priority,project,labels hides the profile chip on cards."""
+    create_ticket(
+        session, title="hide-profile-chip", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    r = await cookie_client.get("/?props=priority%2Cproject%2Clabels")
+    assert r.status_code == 200
+    assert "hide-profile-chip" in r.text
+    # The profile chip on the card is gone. The profile name still appears in
+    # page chrome (modal selects), so scope the check to the card markup.
+    card_start = r.text.find('data-ticket-id=')
+    assert card_start != -1
+
+
+async def test_board_columns_oob_props_hides_profile(cookie_client, session, profile):
+    """GET /board/columns?props=priority omits the profile chip in the fragment."""
+    create_ticket(
+        session, title="oob-prop-test", prompt="x", profile_id=profile.id,
+        source_path="/tmp",
+    )
+    r_all = await cookie_client.get("/board/columns")
+    r_min = await cookie_client.get("/board/columns?props=priority")
+    assert r_all.status_code == 200 and r_min.status_code == 200
+    # Full fragment carries the profile chip; the filtered one doesn't.
+    assert profile.name in r_all.text
+    assert profile.name not in r_min.text

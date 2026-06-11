@@ -1,0 +1,28 @@
+{#
+  Saved views nav popover content.
+
+  Rendered by GET /views/menu and returned by POST /views/{id}/delete and
+  /views/{id}/rename so HTMX can swap the popover in place.
+
+  Context: views (list of SavedView ORM objects).
+  Globals: view_url(view) -> str.
+#}
+{% if views %}
+  {% for view in views %}
+    <div class="nd-nav-view-item">
+      <a href="{{ view_url(view) }}" class="nd-nav-item">
+        <span class="nd-nav-item-label">{{ view.name }}</span>
+      </a>
+      <button type="button"
+              class="nd-view-delete-btn"
+              hx-post="/views/{{ view.id }}/delete"
+              hx-target="#nd-views-nav-popover"
+              hx-swap="innerHTML"
+              hx-confirm="Remove saved view &ldquo;{{ view.name }}&rdquo;?"
+              data-tooltip="Remove view">&#x00D7;</button>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="px-3 py-2 text-xs text-fg-muted italic">No saved views yet.</p>
+  <p class="px-3 pb-2 text-xs text-fg-muted">Use <strong>Save view</strong> on the board or list to add one.</p>
+{% endif %}

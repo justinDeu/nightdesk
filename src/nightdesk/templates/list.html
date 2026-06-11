@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% set active_page = 'list' %}
+{% block body %}
+<div class="flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
+  {% with sb_id='list-search', sb_resource='ticket', sb_query=query, sb_view='list' %}
+    {% include "partials/search_bar.html" %}
+  {% endwith %}
+
+  {# Display toolbar: one Display button opening the consolidated popover
+     (grouping, ordering, show/hide columns). Everything maps straight onto
+     the ?group= / ?order= / ?props= query params and re-fetches the rows
+     fragment, so the view stays shareable/bookmarkable. #}
+  <div class="flex items-center gap-2 text-xs text-fg-muted">
+    <div class="relative">
+      <button type="button" id="nd-display-btn"
+              class="px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
+              aria-expanded="false" aria-haspopup="true"
+              data-tooltip="Display options (Shift+V)">
+        Display
+      </button>
+      <div id="nd-display-popover" class="nd-display-popover" hidden>
+        <div class="nd-display-section">Group by</div>
+        <div class="nd-display-select-row">
+          <select id="list-group" aria-label="Group rows by">
+            {% for val, label in group_options %}
+              <option value="{{ val }}" {% if val == group %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="nd-display-section">Order by</div>
+        <div class="nd-display-select-row">
+          <select id="list-order" aria-label="Order rows by">
+            {% for val, label in order_options %}
+              <option value="{{ val }}" {% if val == order %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="nd-display-section">Show columns</div>
+        {% for key, label in (list_property_options if list_property_options is defined else []) %}
+          <label class="nd-display-prop-row">
+            <input type="checkbox" name="list-prop" value="{{ key }}"
+                   {% if show_props is not defined or key in show_props %}checked{% endif %}>
+            {{ label }}
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+    <span class="ml-auto" data-list-count>{{ list_count }} ticket{{ '' if list_count == 1 else 's' }}</span>
+    <button type="button"
+            class="px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
+            onclick="window.ndOpenSaveViewDialog && window.ndOpenSaveViewDialog('list')"
+            data-tooltip="Save current filters and display settings as a named view">
+      Save view
+    </button>
+  </div>
+
+  {# #board-grid is the gate command_palette.js checks for the keyboard cursor;
+     reusing the id (and section[data-column] rows inside #list-body) means the
+     list inherits J/K navigation + sidebar-on-focus with no view-specific JS.
+     The sidebar rail sits alongside, exactly like the board, so selecting a
+     row opens the same editor. #}
+  <div
+    id="board-grid"
+    class="grid flex-1 min-h-0 overflow-hidden gap-3 grid-cols-[1fr_480px] grid-rows-1"
+  >
+    <div id="list-body" class="overflow-y-auto border border-border rounded-md bg-bg-elev-2/30">
+      {% include "partials/list_groups.html" %}
+    </div>
+    {% include "partials/sidebar.html" %}
+  </div>
+</div>
+
+{# Create-mode modal so "+ New ticket" works inline on this page too. #}
+{% with ticket=None, modal_id='ticket-create-modal' %}
+  {% include "partials/ticket_edit_modal.html" %}
+{% endwith %}
+
+{# Bulk action bar — lives outside the polled list body and the sidebar so
+   the 4s list poll never wipes it. Shown by static/bulk_select.js while a
+   selection is active. #}
+{% include "partials/bulk_action_bar.html" %}
+
+<script>
+  (function () {
+    var bar = document.getElementById('list-search');
+    var body = document.getElementById('list-body');
+    var groupSel = document.getElementById('list-group');
+    var orderSel = document.getElementById('list-order');
+    if (!body) return;
+
+    var currentQuery = {{ (query or '') | tojson }};
+    var currentGroup = {{ (group or 'status') | tojson }};
+    var currentOrder = {{ (order or 'manual') | tojson }};
+    var currentProps = {{ (props | default('')) | tojson }};
+
+    function enc(s) { return encodeURIComponent(s || ''); }
+
+    function listParams() {
+      var p = new URLSearchParams();
+      if (currentQuery) p.set('q', currentQuery);
+      if (currentGroup && currentGroup !== 'status') p.set('group', currentGroup);
+      if (currentOrder && currentOrder !== 'manual') p.set('order', currentOrder);
+      if (currentProps) p.set('props', currentProps);
+      return p;
+    }
+
+    function syncUrl() {
+      var qs = listParams().toString();
+      history.replaceState(null, '', qs ? ('/list?' + qs) : '/list');
+    }
+
+    function refreshList() {
+      if (typeof htmx === 'undefined') return;
+      var p = listParams();
+      p.set('group', currentGroup);
+      p.set('order', currentOrder);
+      htmx.ajax('GET', '/board/list-rows?' + p.toString(), {
+        target: '#list-body', swap: 'innerHTML',
+      });
+    }
+
+    // Don't yank the rows out from under an open property-picker popover, an
+    // inline label picker popover, an open bulk menu, or a text selection
+    // mid-edit.
+    function pickerOpen() {
+      return !!(
+        document.querySelector('[data-property-menu]:not(.hidden)') ||
+        document.querySelector('[data-inline-label-menu]:not(.hidden)') ||
+        document.querySelector('[data-nd-bulk-menu]:not([hidden])')
+      );
+    }
+
+    if (groupSel) {
+      groupSel.addEventListener('change', function () {
+        currentGroup = groupSel.value || 'status';
+        syncUrl();
+        refreshList();
+      });
+    }
+    if (orderSel) {
+      orderSel.addEventListener('change', function () {
+        currentOrder = orderSel.value || 'manual';
+        syncUrl();
+        refreshList();
+      });
+    }
+
+    // Display popover props setter (wired by static/display_options.js). The
+    // URL stays the single source of truth: update it, then refresh the rows.
+    window.ndListSetProps = function (p) {
+      currentProps = p || '';
+      syncUrl();
+      refreshList();
+    };
+
+    if (bar) {
+      // The unified search bar owns the query string; apply its effect here.
+      bar.addEventListener('nd:search', function (e) {
+        currentQuery = (e.detail && e.detail.query) || '';
+        syncUrl();
+        refreshList();
+      });
+      // View toggle. 'list' stays here; 'tickets'/'runs' navigate to the board.
+      bar.addEventListener('nd:view', function (e) {
+        var view = e.detail && e.detail.view;
+        var q = (e.detail && e.detail.query) || '';
+        if (view === 'list') { refreshList(); return; }
+        if (view === 'runs') { window.location = '/?view=runs' + (q ? '&q=' + enc(q) : ''); return; }
+        window.location = q ? ('/?q=' + enc(q)) : '/';
+      });
+    }
+
+    // Light live refresh so worker-driven status changes show up, mirroring the
+    // board's column poll. Skipped while a picker is open so an in-flight edit
+    // isn't interrupted.
+    setInterval(function () {
+      if (!document.hidden && !pickerOpen()) refreshList();
+    }, 4000);
+
+    // Property picker commits dispatch nd:property-changed. Trigger a list
+    // refresh so the row reflects the new state (e.g. status change moves it
+    // to a different group). Delay slightly so the chip swap completes first.
+    document.addEventListener("nd:property-changed", function () {
+      setTimeout(function () { if (!pickerOpen()) refreshList(); }, 150);
+    });
+
+    // Bulk action bar dispatches nd:bulk-applied after every bulk mutation so
+    // the list rows reflect the change (board uses its own poll trigger).
+    document.body.addEventListener("nd:bulk-applied", function () {
+      setTimeout(function () { refreshList(); }, 150);
+    });
+  })();
+</script>
+{% endblock %}

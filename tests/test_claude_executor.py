@@ -304,6 +304,82 @@ def _runner_spec_for(spec: PermissionSpec, tmp_path) -> dict:
     return ClaudeExecutor()._build_runner_spec(req)
 
 
+def test_runner_spec_carries_system_prompt(tmp_path):
+    """A non-empty system_prompt on PermissionSpec lands in the runner spec dict
+    so _sdk_runner can wire it into ClaudeAgentOptions."""
+    spec = PermissionSpec(system_prompt="Be a careful worker.")
+    runner = _runner_spec_for(spec, tmp_path)
+    assert runner.get("system_prompt") == "Be a careful worker."
+
+
+def test_runner_spec_omits_system_prompt_when_empty(tmp_path):
+    """An absent or None system_prompt must not appear in the runner spec at all
+    (rather than landing as None/empty), so _sdk_runner's truthy check works."""
+    for sp in (None, ""):
+        spec = PermissionSpec(system_prompt=sp)
+        runner = _runner_spec_for(spec, tmp_path)
+        assert "system_prompt" not in runner, f"expected absent for system_prompt={sp!r}"
+
+
+@pytest.mark.anyio
+async def test_sdk_runner_wires_system_prompt_as_preset_append(tmp_path):
+    """system_prompt in the runner spec must reach ClaudeAgentOptions as a
+    preset+append dict, not as a plain string that would replace the default
+    claude_code prompt and degrade worker behaviour."""
+    stub = tmp_path / "sp_stub.py"
+    stub.write_text(textwrap.dedent('''
+        import sys, types, asyncio, json
+
+        fake = types.ModuleType("claude_agent_sdk")
+
+        _captured_sp = None
+
+        class ClaudeAgentOptions:
+            def __init__(self, **kwargs):
+                global _captured_sp
+                _captured_sp = kwargs.get("system_prompt")
+
+        async def query(prompt, options):
+            yield {"type": "result", "subtype": "success",
+                   "result": json.dumps(_captured_sp)}
+
+        fake.ClaudeAgentOptions = ClaudeAgentOptions
+        fake.query = query
+        sys.modules["claude_agent_sdk"] = fake
+
+        from nightdesk.worker import _sdk_runner
+        sys.exit(_sdk_runner.main())
+    '''))
+
+    repo_src = Path(__file__).resolve().parent.parent / "src"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo_src) + os.pathsep + env.get("PYTHONPATH", "")
+
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(stub),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    spec = json.dumps({
+        "prompt": "hi",
+        "system_prompt": "Be very careful.",
+        "disallowed_tools": [],
+    }).encode()
+    out, err = await proc.communicate(input=spec)
+    assert proc.returncode == 0, err.decode()
+
+    lines = [json.loads(ln) for ln in out.decode().splitlines() if ln.strip()]
+    result = next(e for e in lines if e.get("type") == "result")
+    captured_sp = json.loads(result["result"])
+    # Must be the preset+append dict, not a plain string replacement.
+    assert isinstance(captured_sp, dict), f"expected dict, got {captured_sp!r}"
+    assert captured_sp.get("type") == "preset"
+    assert captured_sp.get("preset") == "claude_code"
+    assert captured_sp.get("append") == "Be very careful."
+
+
 def test_git_push_blocked_by_default(tmp_path):
     """With no opt-in, the git-push deny rules are injected into the disallowed
     tools so a sandboxed agent can't push to a real remote."""

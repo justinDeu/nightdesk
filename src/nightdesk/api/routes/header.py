@@ -14,12 +14,13 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow, Run, ScheduleWindow, Ticket, WorkerHeartbeat
 from nightdesk.domain.analytics import compute_spend_status
+from nightdesk.domain.projects import list_projects
 from nightdesk.domain.query import parse_query, search_tickets, suggest_values
 from nightdesk.domain.search import hit_from_ticket
 from nightdesk.worker.scheduler import capacity_for, window_matches
@@ -143,6 +144,8 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
     router = APIRouter(tags=["header"])
     auth = Depends(require_token_cookie_or_bearer(bearer_token))
 
+    # The header search box was removed; this partial now serves the command palette's
+    # ticket search (cookie-auth twin of the JSON API) and must outlive the box.
     @router.get("/header/search", response_class=HTMLResponse, dependencies=[auth])
     async def header_search(
         request: Request,
@@ -194,5 +197,61 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         return templates.TemplateResponse(request, "partials/spend_chip.html", {
             "status": status,
         })
+
+    @router.get("/header/inbox-badge", response_class=HTMLResponse,
+                 dependencies=[auth])
+    async def header_inbox_badge(session: Session = Depends(get_session)):
+        """Inbox count chip for the nav badge + Work-trigger dot.
+
+        Returns the badge inner HTML for ``#nd-inbox-badge-wrap`` (main swap)
+        plus an OOB swap updating ``#nd-inbox-dot-wrap`` on the Work trigger,
+        so both indicators stay in sync from a single poll.  Hidden at zero.
+        """
+        count = (
+            session.execute(
+                select(func.count(Ticket.id)).where(Ticket.status == "inbox")
+            ).scalar()
+            or 0
+        )
+        if count > 0:
+            badge_inner = (
+                f'<span class="inline-flex items-center justify-center '
+                f'rounded-full bg-accent text-bg font-bold leading-none"'
+                f' style="min-width:1.1rem;height:1.1rem;font-size:10px;">'
+                f"{count}</span>"
+            )
+            dot_inner = (
+                '<span class="inline-block w-1.5 h-1.5 rounded-full bg-accent shrink-0"'
+                ' aria-label="Inbox has items"></span>'
+            )
+        else:
+            badge_inner = ""
+            dot_inner = ""
+        oob = (
+            f'<span id="nd-inbox-dot-wrap"'
+            f' hx-swap-oob="innerHTML">{dot_inner}</span>'
+        )
+        return HTMLResponse(badge_inner + oob)
+
+    @router.get("/header/project-options", response_class=HTMLResponse,
+                 dependencies=[auth])
+    async def header_project_options(session: Session = Depends(get_session)):
+        """Project <option> elements for the quick-capture dialog select.
+
+        Fetched lazily when the dialog opens, so base.html carries no
+        per-page project query.
+        """
+        projects = list_projects(session)
+        parts = ["<option value=\"\">No project</option>"]
+        for p in projects:
+            name = (
+                str(p.name)
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;")
+            )
+            parts.append(f'<option value="{p.id}">{name}</option>')
+        return HTMLResponse("\n".join(parts))
 
     return router

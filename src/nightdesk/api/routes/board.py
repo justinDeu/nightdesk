@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import html
 import subprocess
@@ -13,12 +14,28 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
-from nightdesk.db.models import ConfigRow
+from nightdesk.db.models import ConfigRow, Label
 from nightdesk.domain.projects import ProjectNotFound, get_project_by_slug, list_projects
+from nightdesk.domain.effective_config import resolve_for_ticket
 from nightdesk.domain.profiles import list_profiles
+from nightdesk.domain.labels import list_labels
 from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
 from nightdesk.domain.runs import get_run, list_runs
 from nightdesk.domain.toolchains import current_config, toolchain_options
+from nightdesk.domain.priority import (
+    priority_css,
+    priority_label,
+    resolve_priority,
+    PRIORITY_MIN,
+    PRIORITY_MAX,
+    PRIORITY_SCALE,
+    validate_priority,
+)
+from nightdesk.domain.properties import (
+    PROPERTY_REGISTRY,
+    get_property,
+    property_chip,
+)
 from nightdesk.domain.tickets import (
     CyclicDependency,
     DependencyNotFound,
@@ -26,6 +43,8 @@ from nightdesk.domain.tickets import (
     TicketNotFound,
     add_dependency,
     archive,
+    bulk_archive, bulk_unarchive,
+    bulk_update_priority, bulk_update_profile, bulk_update_project, bulk_update_status,
     create_ticket,
     delete_ticket,
     get_ticket,
@@ -38,6 +57,12 @@ from nightdesk.domain.tickets import (
     transition_status,
     transition_with_position,
     update_ticket,
+    update_ticket_priority, update_ticket_profile, update_ticket_project,
+)
+from nightdesk.domain.profiles import ProfileNotFound
+from nightdesk.domain.labels import (
+    LabelNameTaken, LabelNotFound, bulk_add_labels, bulk_remove_labels,
+    create_label, get_ticket_labels,
 )
 
 
@@ -47,6 +72,151 @@ _COLUMNS = [
     ("running", "Running"),
     ("review", "Review"),
 ]
+
+# Properties the board can group cards by. ``status`` is the default and keeps
+# the classic kanban layout (with status-changing drag). The others arrange the
+# same cards by the chosen property; they are read-only groupings that must not
+# imply status drag (see the Sortable wiring in board.html).
+_GROUPABLE = ("status", "label", "project", "priority")
+
+def _normalize_group(raw: Optional[str]) -> str:
+    """Coerce a ``group`` query value to a supported grouping (default status)."""
+    g = (raw or "status").strip().lower()
+    return g if g in _GROUPABLE else "status"
+
+
+def _dep_candidates(session: Session, project_id: Optional[str] = None) -> list:
+    """Tickets offered in the "Depends on" picker.
+
+    Inbox items are excluded: they are under-specified and unpromotable, so a
+    dependency on one silently blocks the dependent ticket forever.
+    """
+    return [
+        t
+        for t in list_tickets(session, project_id=project_id, limit=500)
+        if t.status != "inbox"
+    ]
+
+
+def _status_column(status: str, label: str, tickets: list) -> dict:
+    """A real status column: keyed by status, droppable (status-changing drag)."""
+    return {
+        "key": status,
+        "status": status,
+        "label": label,
+        "tickets": tickets,
+        "count": len(tickets),
+        "color": None,
+        "droppable": True,
+    }
+
+
+def _group_by_label(session: Session, tickets: list) -> list[dict]:
+    """One column per label (plus an Unlabeled bucket). A ticket with several
+    labels appears under each of them. Read-only: no status drag."""
+    labels = list_labels(session)
+    buckets: dict[str, list] = {l.id: [] for l in labels}
+    unlabeled: list = []
+    for t in tickets:
+        tl = list(t.labels) if t.labels else []
+        if not tl:
+            unlabeled.append(t)
+            continue
+        for l in tl:
+            buckets.setdefault(l.id, []).append(t)
+    cols: list[dict] = []
+    for l in labels:
+        ts = buckets.get(l.id, [])
+        cols.append({
+            "key": f"label-{l.id}",
+            "status": None,
+            "label": l.name,
+            "tickets": ts,
+            "count": len(ts),
+            "color": l.color or None,
+            "droppable": False,
+        })
+    cols.append({
+        "key": "label-none",
+        "status": None,
+        "label": "Unlabeled",
+        "tickets": unlabeled,
+        "count": len(unlabeled),
+        "color": None,
+        "droppable": False,
+    })
+    return cols
+
+
+def _group_by_project(projects: list, tickets: list) -> list[dict]:
+    """One column per project (plus a No-project bucket). Read-only."""
+    buckets: dict[str, list] = {p.id: [] for p in projects}
+    no_project: list = []
+    for t in tickets:
+        pid = getattr(t, "project_id", None)
+        if pid and pid in buckets:
+            buckets[pid].append(t)
+        else:
+            # No project, or a project not in the active list (e.g. archived):
+            # fold into the No-project bucket so the ticket never disappears.
+            no_project.append(t)
+    cols: list[dict] = []
+    for p in projects:
+        ts = buckets.get(p.id, [])
+        cols.append({
+            "key": f"project-{p.id}",
+            "status": None,
+            "label": p.name,
+            "tickets": ts,
+            "count": len(ts),
+            "color": getattr(p, "color", None) or None,
+            "droppable": False,
+        })
+    cols.append({
+        "key": "project-none",
+        "status": None,
+        "label": "No project",
+        "tickets": no_project,
+        "count": len(no_project),
+        "color": None,
+        "droppable": False,
+    })
+    return cols
+
+
+def _canonical_priority_value(value: object) -> int:
+    raw = int(value or 0)
+    return raw if PRIORITY_MIN <= raw <= PRIORITY_MAX else 0
+
+
+def _group_by_priority(tickets: list) -> list[dict]:
+    """One column per occupied priority value, highest first.
+
+    Priority is metadata for triage and grouping. Queue position still controls
+    execution order; priority only breaks ties inside the same position. Any
+    stale out-of-range values are treated as No priority until migration cleans
+    them up.
+    """
+    present = {_canonical_priority_value(getattr(t, "priority", 0)) for t in tickets}
+    values = sorted((v for v in present if v != 0), reverse=True)
+    if 0 in present:
+        values.append(0)
+    buckets: dict[int, list] = {v: [] for v in values}
+    for t in tickets:
+        buckets[_canonical_priority_value(getattr(t, "priority", 0))].append(t)
+    return [
+        {
+            "key": f"priority-{v}",
+            "status": None,
+            "label": priority_label(v),
+            "tickets": buckets[v],
+            "count": len(buckets[v]),
+            "color": None,
+            "css": priority_css(v),
+            "droppable": False,
+        }
+        for v in values
+    ]
 
 
 def _parse_additional_dirs(values: list[str] | None) -> list[dict]:
@@ -187,6 +357,91 @@ def _toolchain_overrides_from_form(form) -> Optional[dict]:
     }
     return overrides if any(overrides.values()) else None
 
+
+def ticket_fields_from_form(form) -> dict:
+    """PATCH-style field dict from an edit/create-modal form submission.
+
+    Only keys the form actually carries are included, so a partial submission
+    never clobbers untouched fields. Shared by the board edit route and the
+    Inbox promote flow (which posts the very same modal), so the two can never
+    drift on how a workspace/toolchain/priority payload is parsed.
+    """
+    fields: dict = {}
+    if "title" in form:
+        title = (form.get("title") or "").strip()
+        if not title:
+            raise HTTPException(422, "title cannot be empty")
+        fields["title"] = title
+    if "profile_id" in form:
+        profile_id = form.get("profile_id")
+        if not profile_id:
+            raise HTTPException(422, "profile_id cannot be empty")
+        fields["profile_id"] = profile_id
+    if "prompt" in form:
+        fields["prompt"] = form.get("prompt") or ""
+    if "project_id" in form:
+        fields["project_id"] = (form.get("project_id") or "").strip() or None
+    if "priority" in form:
+        try:
+            fields["priority"] = validate_priority(int(form.get("priority") or 0))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+    if "source_path" in form or "primary_source_path" in form:
+        if form.get("workspace_form") == "1":
+            _mode, _wt_name, _wt_path, workspaces = _workspace_payload_from_form(form)
+            fields["workspaces"] = workspaces
+            if "additional_dirs" in form:
+                fields["additional_dirs"] = _parse_additional_dirs(form.getlist("additional_dirs"))
+        else:
+            fields["source_path"] = _normalize_source_path(form.get("source_path"))
+    if "toolchain_form" in form:
+        fields["toolchain_overrides"] = _toolchain_overrides_from_form(form)
+    return fields
+
+
+def reconcile_deps_from_form(session: Session, tid: str, form) -> None:
+    """Reconcile a ticket's direct dependencies from a modal submission.
+
+    Only acts when the deps section was part of the submission (``deps_form=1``);
+    an empty selection then means "remove all". Cycles and unknown ids are
+    skipped rather than failing the whole request.
+    """
+    if form.get("deps_form") != "1":
+        return
+    desired = {d.strip() for d in form.getlist("depends_on_id")
+               if d.strip() and d.strip() != tid}
+    current = {d.id for d in list_dependencies(session, tid)}
+    for dep_id in desired - current:
+        try:
+            add_dependency(session, tid, dep_id)
+        except (CyclicDependency, TicketNotFound):
+            pass
+    for dep_id in current - desired:
+        try:
+            remove_dependency(session, tid, dep_id)
+        except DependencyNotFound:
+            pass
+
+
+def reconcile_labels_from_form(session: Session, tid: str, form) -> None:
+    """Reconcile a ticket's labels from a modal submission.
+
+    Only acts when the label section was part of the submission
+    (``labels_form=1``); an empty selection then means "clear all".
+    """
+    if form.get("labels_form") != "1":
+        return
+    from nightdesk.domain.labels import set_ticket_labels as _sl
+    label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+    try:
+        _sl(session, tid, label_ids)
+    except Exception:
+        # Best-effort by design (the ticket save must not fail over labels),
+        # but never silently: a swallowed error here looks like data loss.
+        logging.getLogger(__name__).exception(
+            "label reconcile failed for ticket %s (label_ids=%r)", tid, label_ids
+        )
+
 def _safe_preview_name(name: Optional[str]) -> str:
     raw = (name or "").strip().strip("/")
     if not raw:
@@ -305,7 +560,125 @@ def _toolchain_options(session: Session) -> list[dict]:
     return toolchain_options(current_config(session))
 
 
-def _gather_board(session: Session, *, q: str = ""):
+def _list_labels_sidebar(session: Session) -> list:
+    """Fetch all labels for template contexts (sidebar, modals)."""
+    from nightdesk.domain.labels import list_labels as _ll
+    return _ll(session)
+
+
+def _list_run_outcomes(session: Session, tickets: list) -> dict[str, str]:
+    """Map ticket_id -> last-run status for the list view's "last run" column.
+
+    Batched (one query for all current runs) so a 500-row list doesn't fan out
+    into 500 ``get_run`` calls. A run with no ``exit_status`` yet but no
+    ``finished_at`` reads as ``running``; everything else uses the exit status.
+    Tickets with no current run are simply absent from the map.
+    """
+    from nightdesk.db.models import Run as _Run
+
+    run_ids = [t.current_run_id for t in tickets if getattr(t, "current_run_id", None)]
+    if not run_ids:
+        return {}
+    rows = session.scalars(select(_Run).where(_Run.id.in_(run_ids))).all()
+    by_id = {r.id: r for r in rows}
+    out: dict[str, str] = {}
+    for t in tickets:
+        rid = getattr(t, "current_run_id", None)
+        run = by_id.get(rid) if rid else None
+        if run is None:
+            continue
+        if run.exit_status:
+            out[t.id] = run.exit_status
+        elif run.finished_at is None:
+            out[t.id] = "running"
+    return out
+
+
+def _gather_list(session: Session, *, q: str = "", group: str = "status", order: str = "manual",
+                 props: str = ""):
+    """Assemble the list-view context.
+
+    Reuses ``_gather_board`` for the *exact same* filtered, status-bucketed
+    ticket set as the board (including the run-now visual reshuffle), then
+    regroups/reorders per the display settings. Building on the board's columns
+    is what guarantees query/display parity: the list can never show a ticket
+    the board wouldn't, or vice versa. The board's own ``order`` stays "manual"
+    here; this function applies the list's ordering per group itself.
+    """
+    from nightdesk.domain import display
+
+    ctx = _gather_board(session, q=q)
+    columns = ctx["columns"]
+    all_tickets = [t for col in columns for t in col["tickets"]]
+
+    g = display.normalize_group(group)
+    o = display.normalize_order(order)
+    if g == "status":
+        # Reuse the board's status columns verbatim (parity), applying only the
+        # within-group ordering.
+        groups = [
+            {
+                "key": col["status"],
+                "label": col["label"],
+                "swatch_color": None,
+                "count": len(col["tickets"]),
+                "tickets": display.order_tickets(col["tickets"], o),
+            }
+            for col in columns
+        ]
+    else:
+        groups = display.group_tickets(
+            all_tickets,
+            group=g,
+            order=o,
+            projects_by_id=ctx["projects_by_id"],
+            profiles_by_id=ctx["profiles_by_id"],
+            labels=ctx["all_labels"],
+        )
+
+    show_props = display.normalize_props(props, display.ALL_LIST_PROPS)
+    return {
+        **ctx,
+        "groups": groups,
+        "group": g,
+        "order": o,
+        "group_options": display.LIST_GROUP_OPTIONS,
+        "order_options": display.LIST_ORDER_OPTIONS,
+        "list_run_outcomes": _list_run_outcomes(session, all_tickets),
+        "list_count": len(all_tickets),
+        "props": props,
+        "show_props": show_props,
+        "list_property_options": display.LIST_PROPERTY_OPTIONS,
+    }
+
+
+def _ticket_exists(session: Session, ticket_id: str) -> bool:
+    """True if a ticket with this id exists (no raise). Used to capture prior
+    values for bulk undo without aborting on already-deleted ids."""
+    try:
+        get_ticket(session, ticket_id)
+        return True
+    except TicketNotFound:
+        return False
+
+
+def _restore_undo(label: str, prop: str, prior: dict) -> Optional[dict]:
+    """Build the undo descriptor for a reversible bulk metadata change. The
+    client re-POSTs ``payload`` to ``/board/tickets/bulk/restore`` (JSON) to
+    revert each ticket to its captured prior value. Returns ``None`` when there
+    is nothing to undo."""
+    if not prior:
+        return None
+    return {
+        "label": label,
+        "route": "/board/tickets/bulk/restore",
+        "json": True,
+        "payload": {"prop": prop, "values": prior},
+    }
+
+
+def _gather_board(session: Session, *, q: str = "", group: str = "status", order: str = "manual"):
+    group = _normalize_group(group)
     ast = parse_query(q)
     selected_project = _sole_project(session, ast)
     projects = list_projects(session)
@@ -350,13 +723,36 @@ def _gather_board(session: Session, *, q: str = ""):
             if titles:
                 dep_titles[t.id] = titles
 
-    columns = [
-        {"status": status, "label": label, "tickets": raw[status]}
-        for status, label in _COLUMNS
-    ]
+    # All labels for the label picker on ticket cards.
+    from nightdesk.domain.labels import list_labels as _list_labels
+    all_labels = _list_labels(session)
+
+    if group == "label":
+        columns = _group_by_label(session, all_tickets)
+    elif group == "project":
+        columns = _group_by_project(projects, all_tickets)
+    elif group == "priority":
+        columns = _group_by_priority(all_tickets)
+    else:  # status (default): the classic kanban with status-changing drag.
+        columns = [
+            _status_column(status, label, raw[status])
+            for status, label in _COLUMNS
+        ]
+
+    # Within-column ordering. Applied after grouping so every grouping gets
+    # it; "manual" (the default) keeps the DB order (position/priority/created)
+    # untouched, which also keeps the status kanban's drag-reorder meaningful.
+    from nightdesk.domain import display as _display
+    _order = _display.normalize_order(order)
+    if _order != "manual":
+        for col in columns:
+            col["tickets"] = _display.order_tickets(col["tickets"], _order)
+            col["count"] = len(col["tickets"])
 
     return {
         "columns": columns,
+        "group": group,
+        "order": _order,
         "profiles": profiles,
         "profiles_by_id": profiles_by_id,
         "run_outcomes": review_run_outcomes,
@@ -365,15 +761,15 @@ def _gather_board(session: Session, *, q: str = ""):
         "projects_by_id": projects_by_id,
         "selected_project": selected_project,
         "query": q,
-        # Every ticket, for the modal's "Depends on" picker (all statuses). When
+        # Every non-inbox ticket, for the modal's "Depends on" picker. When
         # the query is a single project, scope the picker to it (as the old
         # project filter did); richer queries leave the picker unscoped.
-        "dep_all": list_tickets(
+        "dep_all": _dep_candidates(
             session,
             project_id=selected_project.id if selected_project else None,
-            limit=500,
         ),
         "toolchain_options": _toolchain_options(session),
+        "all_labels": all_labels,
     }
 
 
@@ -473,17 +869,28 @@ def build_router(
         q: str = Query(default=""),
         project: str = Query(default=""),
         view: str = Query(default="tickets"),
+        group: str = Query(default="status"),
+        order: str = Query(default="manual"),
+        props: str = Query(default=""),
         session: Session = Depends(get_session),
     ):
+        from nightdesk.domain import display as _display
         query = _board_query(q, project)
         view = "runs" if view == "runs" else "tickets"
-        ctx = _gather_board(session, q=query)
+        ctx = _gather_board(session, q=query, group=group, order=order)
         return templates.TemplateResponse(
             request,
             "board.html",
             {
                 "title": "Board",
                 "columns": ctx["columns"],
+                "group": ctx["group"],
+                "groupable": _GROUPABLE,
+                "order": ctx["order"],
+                "props": props,
+                "show_props": _display.normalize_props(props, _display.ALL_CARD_PROPS),
+                "order_options": _display.BOARD_ORDER_OPTIONS,
+                "card_property_options": _display.CARD_PROPERTY_OPTIONS,
                 "profiles": ctx["profiles"],
                 "profiles_by_id": ctx["profiles_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
@@ -493,6 +900,10 @@ def build_router(
                 "projects_by_id": ctx["projects_by_id"],
                 "selected_project": ctx["selected_project"],
                 "toolchain_options": ctx["toolchain_options"],
+                "all_labels": ctx["all_labels"],
+                # Bulk action bar option sources.
+                "priority_scale": PRIORITY_SCALE,
+                "bulk_statuses": ["draft", "queued", "review", "archived"],
                 "query": ctx["query"],
                 "view": view,
                 # Only assembled when the runs view is the initial render.
@@ -507,26 +918,125 @@ def build_router(
         request: Request,
         q: str = Query(default=""),
         project: str = Query(default=""),
+        group: str = Query(default="status"),
+        order: str = Query(default="manual"),
+        props: str = Query(default=""),
         session: Session = Depends(get_session),
     ):
-        """Polled fragment returning the four column sections as OOB swaps.
+        """Polled fragment returning the grouped column sections as OOB swaps.
 
         The board template polls this every few seconds. The response carries
         no main-target body — each column is an ``hx-swap-oob="true"`` block
-        that replaces the matching ``#board-col-<status>`` section in place.
-        The sidebar is outside those ids and is never touched, so unsaved
-        edits in the editor survive every poll cycle.
+        that replaces the matching ``#board-col-<key>`` section in place. The
+        ``group`` param mirrors the active grouping so the polled columns line
+        up with the rendered grid (status keys for the default kanban, or
+        ``label-/project-/priority-`` keys for the property groupings). The
+        sidebar is outside those ids and is never touched, so unsaved edits in
+        the editor survive every poll cycle.
         """
-        ctx = _gather_board(session, q=_board_query(q, project))
+        from nightdesk.domain import display as _display
+        ctx = _gather_board(session, q=_board_query(q, project), group=group, order=order)
         return templates.TemplateResponse(
             request,
             "partials/board_columns_oob.html",
             {
                 "columns": ctx["columns"],
+                "group": ctx["group"],
                 "profiles_by_id": ctx["profiles_by_id"],
                 "projects_by_id": ctx["projects_by_id"],
                 "run_outcomes": ctx["run_outcomes"],
                 "dep_titles": ctx["dep_titles"],
+                "all_labels": ctx["all_labels"],
+                "show_props": _display.normalize_props(props, _display.ALL_CARD_PROPS),
+            },
+        )
+
+    @router.get("/list", response_class=HTMLResponse, dependencies=[auth])
+    async def list_view(
+        request: Request,
+        q: str = Query(default=""),
+        project: str = Query(default=""),
+        group: str = Query(default="status"),
+        order: str = Query(default="manual"),
+        props: str = Query(default=""),
+        session: Session = Depends(get_session),
+    ):
+        """First-class list/table surface for ticket management.
+
+        Renders the same filtered ticket set as the board (via ``_gather_list``
+        -> ``_gather_board``) as grouped rows, honouring the Display grouping
+        and ordering settings. Inline property edits reuse the shared picker;
+        the focused-row cursor reuses the board's keyboard spine (the rows live
+        under ``#board-grid`` / ``section[data-column]`` so command_palette.js
+        drives them unchanged).
+        """
+        query = _board_query(q, project)
+        ctx = _gather_list(session, q=query, group=group, order=order, props=props)
+        return templates.TemplateResponse(
+            request,
+            "list.html",
+            {
+                "title": "List",
+                "groups": ctx["groups"],
+                "group": ctx["group"],
+                "order": ctx["order"],
+                "group_options": ctx["group_options"],
+                "order_options": ctx["order_options"],
+                "props": ctx["props"],
+                "show_props": ctx["show_props"],
+                "list_property_options": ctx["list_property_options"],
+                "list_count": ctx["list_count"],
+                "profiles": ctx["profiles"],
+                "profiles_by_id": ctx["profiles_by_id"],
+                "projects": ctx["projects"],
+                "projects_by_id": ctx["projects_by_id"],
+                "run_outcomes": ctx["list_run_outcomes"],
+                "dep_titles": ctx["dep_titles"],
+                "dep_all": ctx["dep_all"],
+                "selected_project": ctx["selected_project"],
+                "toolchain_options": ctx["toolchain_options"],
+                "all_labels": ctx["all_labels"],
+                "query": ctx["query"],
+                # Bulk action bar option sources (same as the board route).
+                "priority_scale": PRIORITY_SCALE,
+                "bulk_statuses": ["draft", "queued", "review", "archived"],
+                "mode": "create",
+                "ticket": None,
+            },
+        )
+
+    @router.get("/board/list-rows", response_class=HTMLResponse, dependencies=[auth])
+    async def list_rows(
+        request: Request,
+        q: str = Query(default=""),
+        project: str = Query(default=""),
+        group: str = Query(default="status"),
+        order: str = Query(default="manual"),
+        props: str = Query(default=""),
+        session: Session = Depends(get_session),
+    ):
+        """Grouped list rows as a swappable fragment.
+
+        Backs both the live poll and the group/order toolbar refresh on the
+        list page. Returns just the groups (no shell, no sidebar) so the
+        sidebar's in-progress edit survives every refresh, exactly like the
+        board's column poll.
+        """
+        ctx = _gather_list(session, q=_board_query(q, project), group=group, order=order,
+                           props=props)
+        return templates.TemplateResponse(
+            request,
+            "partials/list_groups.html",
+            {
+                "groups": ctx["groups"],
+                "group": ctx["group"],
+                "profiles_by_id": ctx["profiles_by_id"],
+                "projects_by_id": ctx["projects_by_id"],
+                "run_outcomes": ctx["list_run_outcomes"],
+                "dep_titles": ctx["dep_titles"],
+                "query": ctx["query"],
+                "list_count": ctx["list_count"],
+                "show_props": ctx["show_props"],
             },
         )
 
@@ -559,6 +1069,7 @@ def build_router(
         runs: list = []
         deps_upstreams: list = []
         deps_downstreams: list = []
+        effective = None
         if ticket_id:
             try:
                 ticket = get_ticket(session, ticket_id)
@@ -568,6 +1079,7 @@ def build_router(
             runs = list_runs(session, ticket_id=ticket_id)
             deps_upstreams = list_dependencies(session, ticket_id)
             deps_downstreams = list_dependents(session, ticket_id)
+            effective = resolve_for_ticket(session, ticket)
         return templates.TemplateResponse(
             request,
             "partials/sidebar.html",
@@ -578,9 +1090,11 @@ def build_router(
                 "runs": runs,
                 "deps_upstreams": deps_upstreams,
                 "deps_downstreams": deps_downstreams,
-                "dep_all": list_tickets(session, limit=500),
+                "effective": effective,
+                "dep_all": _dep_candidates(session),
                 "projects": list_projects(session),
                 "toolchain_options": _toolchain_options(session),
+                "all_labels": _list_labels_sidebar(session),
             },
         )
 
@@ -600,10 +1114,11 @@ def build_router(
                 "profiles": list_profiles(session),
                 "ticket": None,
                 "modal_id": "ticket-create-modal",
-                "dep_all": list_tickets(session, limit=500),
+                "dep_all": _dep_candidates(session),
                 "projects": list_projects(session),
                 "selected_project": _project_filter(session, project)[1],
                 "toolchain_options": _toolchain_options(session),
+                "all_labels": _list_labels_sidebar(session),
             },
         )
 
@@ -638,6 +1153,7 @@ def build_router(
                 prompt=(form.get("prompt") or ""),
                 profile_id=profile_id,
                 project_id=project_id,
+                priority=int(form.get("priority") or 0),
                 workspaces=workspaces,
                 additional_dirs=_parse_additional_dirs(form.getlist("additional_dirs")),
                 toolchain_overrides=_toolchain_overrides_from_form(form),
@@ -657,9 +1173,293 @@ def build_router(
                     add_dependency(session, new_ticket.id, dep_id)
                 except (CyclicDependency, TicketNotFound):
                     pass
+        # Optional labels from the label picker.
+        if form.get("labels_form") == "1":
+            from nightdesk.domain.labels import set_ticket_labels as _sl
+            label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+            if label_ids:
+                try:
+                    _sl(session, new_ticket.id, label_ids)
+                except Exception:
+                    pass
         resp = Response(status_code=204)
         resp.headers["HX-Redirect"] = "/"
         return resp
+
+    # --- Bulk metadata update (cookie-auth / HTMX) ----------------------------
+    # Registered BEFORE /board/tickets/{tid} routes so FastAPI does not
+    # match "bulk" as a tid parameter.
+
+    @router.post("/board/tickets/bulk/priority", dependencies=[auth])
+    async def bulk_priority_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk priority update.  Accepts ``ticket_ids`` (comma-
+        separated) and ``priority`` as form fields.  Returns JSON with updated
+        and skipped lists."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        try:
+            priority = int(form.get("priority", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(422, "priority must be an integer")
+        try:
+            priority = validate_priority(priority)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        # Capture prior priorities so the action bar can offer an Undo.
+        prior = {tid: get_ticket(session, tid).priority
+                 for tid in ticket_ids if _ticket_exists(session, tid)}
+        updated, skipped = bulk_update_priority(session, ticket_ids, priority)
+        return JSONResponse({
+            "updated": [{"id": t.id, "priority": t.priority} for t in updated],
+            "skipped": skipped,
+            "undo": _restore_undo("priority", "priority", prior),
+        })
+
+    @router.post("/board/tickets/bulk/status", dependencies=[auth])
+    async def bulk_status_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk status transition.  Each ticket is transitioned
+        independently; invalid transitions are skipped."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        new_status = (form.get("status") or "").strip()
+        if not new_status:
+            raise HTTPException(422, "status required")
+        prior = {tid: get_ticket(session, tid).status
+                 for tid in ticket_ids if _ticket_exists(session, tid)}
+        try:
+            updated, skipped = bulk_update_status(session, ticket_ids, new_status)
+        except InvalidTransition as e:
+            raise HTTPException(422, str(e))
+        # Only offer undo for tickets that actually moved; restoring a status is
+        # best-effort because the lifecycle state machine may reject the reverse
+        # transition (that's the "where feasible" caveat).
+        moved = {t.id: prior[t.id] for t in updated if t.id in prior}
+        return JSONResponse({
+            "updated": [{"id": t.id, "status": t.status} for t in updated],
+            "skipped": skipped,
+            "undo": _restore_undo("status", "status", moved),
+        })
+
+    @router.post("/board/tickets/bulk/project", dependencies=[auth])
+    async def bulk_project_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk project assignment."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        project_id = (form.get("project_id") or "").strip() or None
+        prior = {tid: (get_ticket(session, tid).project_id or "")
+                 for tid in ticket_ids if _ticket_exists(session, tid)}
+        try:
+            updated, skipped = bulk_update_project(session, ticket_ids, project_id)
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        return JSONResponse({
+            "updated": [{"id": t.id, "project_id": t.project_id} for t in updated],
+            "skipped": skipped,
+            "undo": _restore_undo("project", "project", prior),
+        })
+
+    @router.post("/board/tickets/bulk/profile", dependencies=[auth])
+    async def bulk_profile_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk profile reassignment."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        profile_id = (form.get("profile_id") or "").strip()
+        if not profile_id:
+            raise HTTPException(422, "profile_id required")
+        prior = {tid: get_ticket(session, tid).profile_id
+                 for tid in ticket_ids if _ticket_exists(session, tid)}
+        try:
+            updated, skipped = bulk_update_profile(session, ticket_ids, profile_id)
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
+        return JSONResponse({
+            "updated": [{"id": t.id, "profile_id": t.profile_id} for t in updated],
+            "skipped": skipped,
+            "undo": _restore_undo("profile", "profile", prior),
+        })
+
+    @router.post("/board/tickets/bulk/labels", dependencies=[auth])
+    async def bulk_labels_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk label add/remove. Returns JSON with
+        updated/skipped lists and an undo payload that restores each ticket's
+        prior label set."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        raw_labels = (form.get("label_ids") or "")
+        label_ids = [s.strip() for s in raw_labels.split(",") if s.strip()]
+        label_action = (form.get("label_action") or "add").strip().lower()
+        if label_action not in {"add", "remove"}:
+            raise HTTPException(422, "label_action must be add or remove")
+        created_label = None
+        label_name = (form.get("label_name") or "").strip()
+        if label_name:
+            if label_action != "add":
+                raise HTTPException(422, "label_name can only be used with add")
+            label_color = (form.get("label_color") or "").strip()
+            try:
+                created_label = create_label(
+                    session, name=label_name, color=label_color,
+                )
+            except LabelNameTaken:
+                created_label = session.scalar(
+                    select(Label).where(Label.name == label_name)
+                )
+                if created_label is None:
+                    raise HTTPException(409, f"label name already taken: {label_name}")
+            label_ids.append(created_label.id)
+        if not label_ids:
+            raise HTTPException(422, "label_ids required")
+        # Capture prior label sets for undo before mutating.
+        prior = {
+            tid: [lbl.id for lbl in get_ticket_labels(session, tid)]
+            for tid in ticket_ids if _ticket_exists(session, tid)
+        }
+        try:
+            if label_action == "remove":
+                updated, skipped = bulk_remove_labels(session, ticket_ids, label_ids)
+            else:
+                updated, skipped = bulk_add_labels(session, ticket_ids, label_ids)
+        except LabelNotFound as e:
+            raise HTTPException(404, str(e))
+        return JSONResponse({
+            "updated": [
+                {"id": t.id, "label_ids": [lbl.id for lbl in t.labels]}
+                for t in updated
+            ],
+            "skipped": skipped,
+            "undo": _restore_undo("labels", "labels", prior),
+            "label": (
+                {
+                    "id": created_label.id,
+                    "name": created_label.name,
+                    "color": created_label.color,
+                }
+                if created_label is not None else None
+            ),
+        })
+
+    @router.post("/board/tickets/bulk/archive", dependencies=[auth])
+    async def bulk_archive_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk archive.  Archives every selected ticket that is in
+        ``review`` (the only valid source state); others are skipped.  The undo
+        payload unarchives exactly the tickets that were archived."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        updated, skipped = bulk_archive(session, ticket_ids)
+        archived_ids = [t.id for t in updated]
+        undo = None
+        if archived_ids:
+            undo = {
+                "label": "archive",
+                "route": "/board/tickets/bulk/unarchive",
+                "json": False,
+                "payload": {"ticket_ids": ",".join(archived_ids)},
+            }
+        return JSONResponse({
+            "updated": [{"id": t.id, "status": t.status} for t in updated],
+            "skipped": skipped,
+            "undo": undo,
+        })
+
+    @router.post("/board/tickets/bulk/unarchive", dependencies=[auth])
+    async def bulk_unarchive_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth bulk unarchive.  Returns each archived ticket to
+        ``queued``.  Used both as a standalone action and as the undo path for
+        bulk archive."""
+        form = await request.form()
+        raw_ids = (form.get("ticket_ids") or "")
+        ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
+        if not ticket_ids:
+            raise HTTPException(422, "ticket_ids required")
+        updated, skipped = bulk_unarchive(session, ticket_ids)
+        return JSONResponse({
+            "updated": [{"id": t.id, "status": t.status} for t in updated],
+            "skipped": skipped,
+        })
+
+    @router.post("/board/tickets/bulk/restore", dependencies=[auth])
+    async def bulk_restore_inline(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Generic undo endpoint: restore a property to per-ticket prior values.
+
+        Accepts a JSON body ``{"prop": <name>, "values": {tid: value}}`` where
+        the value type depends on the property (int for priority, id-or-empty
+        for project/profile, status string, or a list of label ids). Each ticket
+        is restored independently; failures (missing ticket, invalid status
+        transition) are skipped so a partial undo still applies what it can."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "JSON body required")
+        prop = (body.get("prop") or "").strip()
+        values = body.get("values") or {}
+        if prop not in ("priority", "project", "profile", "status", "labels"):
+            raise HTTPException(422, f"cannot restore property {prop!r}")
+        if not isinstance(values, dict):
+            raise HTTPException(422, "values must be an object")
+        restored: list[str] = []
+        skipped: list[dict] = []
+        for tid, val in values.items():
+            try:
+                if prop == "priority":
+                    update_ticket_priority(session, tid, int(val))
+                elif prop == "project":
+                    update_ticket_project(session, tid, (val or None))
+                elif prop == "profile":
+                    update_ticket_profile(session, tid, val)
+                elif prop == "status":
+                    transition_status(session, tid, val)
+                elif prop == "labels":
+                    from nightdesk.domain.labels import set_ticket_labels
+                    set_ticket_labels(session, tid, list(val or []))
+                restored.append(tid)
+            except TicketNotFound:
+                skipped.append({"ticket_id": tid, "reason": "not found"})
+            except (InvalidTransition, ProjectNotFound, ProfileNotFound,
+                    LabelNotFound, ValueError) as exc:
+                skipped.append({"ticket_id": tid, "reason": str(exc)})
+        return JSONResponse({"restored": restored, "skipped": skipped})
 
     @router.post("/board/tickets/{tid}", dependencies=[auth])
     async def update(
@@ -674,31 +1474,7 @@ def build_router(
         # would otherwise wipe (e.g.) the prompt to "" because the field
         # wasn't part of the submission.
         form = await request.form()
-        fields: dict = {}
-        if "title" in form:
-            title = (form.get("title") or "").strip()
-            if not title:
-                raise HTTPException(422, "title cannot be empty")
-            fields["title"] = title
-        if "profile_id" in form:
-            profile_id = form.get("profile_id")
-            if not profile_id:
-                raise HTTPException(422, "profile_id cannot be empty")
-            fields["profile_id"] = profile_id
-        if "prompt" in form:
-            fields["prompt"] = form.get("prompt") or ""
-        if "project_id" in form:
-            fields["project_id"] = (form.get("project_id") or "").strip() or None
-        if "source_path" in form or "primary_source_path" in form:
-            if form.get("workspace_form") == "1":
-                workspace_mode, worktree_name, worktree_path, workspaces = _workspace_payload_from_form(form)
-                fields["workspaces"] = workspaces
-                if "additional_dirs" in form:
-                    fields["additional_dirs"] = _parse_additional_dirs(form.getlist("additional_dirs"))
-            else:
-                fields["source_path"] = _normalize_source_path(form.get("source_path"))
-        if "toolchain_form" in form:
-            fields["toolchain_overrides"] = _toolchain_overrides_from_form(form)
+        fields = ticket_fields_from_form(form)
         try:
             update_ticket(session, tid, **fields)
         except TicketNotFound:
@@ -707,23 +1483,10 @@ def build_router(
             raise HTTPException(404, "project not found")
         except ValueError as e:
             raise HTTPException(422, str(e))
-        # Reconcile dependencies from the modal's "Depends on" picker. Only
-        # touched when the deps section was part of the submission (the modal
-        # sends deps_form=1); an empty selection then means "remove all".
-        if form.get("deps_form") == "1":
-            desired = {d.strip() for d in form.getlist("depends_on_id")
-                       if d.strip() and d.strip() != tid}
-            current = {d.id for d in list_dependencies(session, tid)}
-            for dep_id in desired - current:
-                try:
-                    add_dependency(session, tid, dep_id)
-                except (CyclicDependency, TicketNotFound):
-                    pass
-            for dep_id in current - desired:
-                try:
-                    remove_dependency(session, tid, dep_id)
-                except DependencyNotFound:
-                    pass
+        # Reconcile dependencies + labels from the modal's pickers (shared with
+        # the Inbox promote flow). No-ops unless those sections were submitted.
+        reconcile_deps_from_form(session, tid, form)
+        reconcile_labels_from_form(session, tid, form)
         # Return the sidebar partial re-rendered in edit mode for the same
         # ticket so HTMX swaps just the rail in place. Previously this
         # returned HX-Redirect to "/", which reloaded the board and dropped
@@ -737,9 +1500,11 @@ def build_router(
              "runs": list_runs(session, ticket_id=tid),
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
-             "dep_all": list_tickets(session, limit=500),
+             "effective": resolve_for_ticket(session, ticket),
+             "dep_all": _dep_candidates(session),
              "projects": list_projects(session),
-             "toolchain_options": _toolchain_options(session)},
+             "toolchain_options": _toolchain_options(session),
+             "all_labels": _list_labels_sidebar(session)},
         )
 
     @router.post("/board/tickets/{tid}/archive", dependencies=[auth])
@@ -770,9 +1535,11 @@ def build_router(
              "runs": list_runs(session, ticket_id=tid),
              "deps_upstreams": list_dependencies(session, tid),
              "deps_downstreams": list_dependents(session, tid),
-             "dep_all": list_tickets(session, limit=500),
+             "effective": resolve_for_ticket(session, ticket),
+             "dep_all": _dep_candidates(session),
              "projects": list_projects(session),
-             "toolchain_options": _toolchain_options(session)},
+             "toolchain_options": _toolchain_options(session),
+             "all_labels": _list_labels_sidebar(session)},
         )
 
     @router.post("/board/tickets/{tid}/cancel", dependencies=[auth])
@@ -873,6 +1640,208 @@ def build_router(
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
         return Response(status_code=204)
+
+    # --- Shared property picker (priority / status / project / …) ------------
+    #
+    # ONE menu route + ONE commit route back the reusable property-picker
+    # primitive for every editable ticket metadata field. The per-property
+    # behaviour lives in domain.properties; nothing here is property-specific
+    # beyond looking the descriptor up by name. This is the "focused metadata
+    # update route" the picker calls instead of submitting the full ticket
+    # modal.
+
+    def _render_chip(request: Request, prop: str, ticket) -> HTMLResponse:
+        """Render the single property chip partial for an HTMX swap."""
+        return templates.TemplateResponse(
+            request,
+            "partials/property_chip.html",
+            {"tid": ticket.id, "prop": prop, "chip": property_chip(prop, ticket)},
+        )
+
+    @router.get(
+        "/board/tickets/{tid}/picker/{prop}",
+        response_class=HTMLResponse,
+        dependencies=[auth],
+    )
+    async def property_picker_menu(
+        tid: str,
+        prop: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Lazy-loaded popover body for a property picker.
+
+        Returns the option list (searchable for properties that opt in) the
+        picker JS injects under the chip. Options are computed fresh per open
+        so e.g. the project list and the valid status transitions are always
+        current.
+        """
+        try:
+            descriptor = get_property(prop)
+        except KeyError:
+            raise HTTPException(404, f"unknown property {prop!r}")
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        options = [o.as_dict() for o in descriptor.options(session, ticket)]
+        return templates.TemplateResponse(
+            request,
+            "partials/property_picker_menu.html",
+            {
+                "tid": tid,
+                "prop": prop,
+                "label": descriptor.label,
+                "searchable": descriptor.searchable,
+                "options": options,
+            },
+        )
+
+    async def _read_property_value(request: Request, *keys: str) -> str:
+        """Pull the submitted value from a form field or JSON body.
+
+        Accepts the canonical ``value`` key (picker) plus any property-specific
+        aliases (e.g. the legacy ``priority`` field) so HTMX forms and JSON API
+        clients share one parser.
+        """
+        content_type = request.headers.get("content-type") or ""
+        if "application/json" in content_type:
+            body = await request.json()
+            for k in keys:
+                if k in body:
+                    return str(body.get(k, ""))
+            return ""
+        form = await request.form()
+        for k in keys:
+            if k in form:
+                return str(form.get(k, ""))
+        return ""
+
+    @router.post("/board/tickets/{tid}/property/{prop}", dependencies=[auth])
+    async def update_property(
+        tid: str,
+        prop: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Focused metadata update for the shared property picker.
+
+        HTMX callers get the re-rendered chip to swap in place; JSON API
+        callers get ``{property, value, label}``.
+        """
+        try:
+            descriptor = get_property(prop)
+        except KeyError:
+            raise HTTPException(404, f"unknown property {prop!r}")
+        raw = (await _read_property_value(request, "value", prop)).strip()
+        try:
+            ticket = descriptor.apply(session, tid, raw)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+        if request.headers.get("HX-Request") == "true":
+            return _render_chip(request, prop, ticket)
+        chip = property_chip(prop, ticket)
+        return JSONResponse(
+            {"property": prop, "value": raw, "label": chip["label"]}
+        )
+
+    @router.post("/board/tickets/{tid}/priority", dependencies=[auth])
+    async def update_priority(
+        tid: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Back-compatible priority update.
+
+        Delegates to the shared property registry so there is exactly one
+        priority code path. Kept as a stable alias for the JSON API and any
+        existing clients posting a ``priority`` field; the response shape
+        (``{priority, label}``) is preserved.
+        """
+        raw = (await _read_property_value(request, "priority", "value")).strip()
+        try:
+            ticket = get_property("priority").apply(session, tid, raw)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ValueError:
+            raise HTTPException(422, f"invalid priority value: {raw!r}")
+
+        if request.headers.get("HX-Request") == "true":
+            return _render_chip(request, "priority", ticket)
+        from nightdesk.domain.priority import priority_label
+        return JSONResponse(
+            {"priority": ticket.priority, "label": priority_label(ticket.priority)}
+        )
+
+    # --- Focused metadata updates (cookie-auth / HTMX) -----------------------
+    #
+    # Per-property HTMX aliases that mirror the JSON API focused-update routes.
+    # They delegate to the SAME domain functions the shared property registry
+    # uses (transition_status / update_ticket_project / update_ticket_profile),
+    # so there is exactly one write path per property — the picker, keyboard
+    # shortcuts, and these focused routes can never diverge. Kept as stable
+    # aliases for the metadata-update-routes contract and its callers; the
+    # picker route ``/property/{prop}`` remains the primary UI surface.
+
+    @router.post("/board/tickets/{tid}/status", dependencies=[auth])
+    async def update_status_inline(
+        tid: str,
+        request: Request,
+        new_status: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth status transition for inline status changes and keyboard
+        shortcuts.  Respects the lifecycle state machine."""
+        try:
+            t = transition_status(session, tid, new_status)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        return JSONResponse({"id": t.id, "status": t.status})
+
+    @router.post("/board/tickets/{tid}/project", dependencies=[auth])
+    async def update_project_inline(
+        tid: str,
+        request: Request,
+        project_id: str = Form(""),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth project assignment for the property picker.  Empty
+        string clears the project."""
+        pid = project_id.strip() or None
+        try:
+            t = update_ticket_project(session, tid, pid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        return JSONResponse({"id": t.id, "project_id": t.project_id})
+
+    @router.post("/board/tickets/{tid}/profile", dependencies=[auth])
+    async def update_profile_inline(
+        tid: str,
+        request: Request,
+        profile_id: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        """Cookie-auth profile reassignment for the property picker."""
+        try:
+            t = update_ticket_profile(session, tid, profile_id)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
+        return JSONResponse({"id": t.id, "profile_id": t.profile_id})
 
     # --- Dependency management (cookie-auth) ---------------------------------
 
@@ -976,5 +1945,158 @@ def build_router(
             {"id": t.id, "title": t.title, "status": t.status}
             for t in results
         ]
+
+    @router.put("/board/tickets/{tid}/labels", dependencies=[auth])
+    async def set_ticket_labels_hx(
+        request: Request,
+        tid: str,
+        session: Session = Depends(get_session),
+    ):
+        """HTMX: replace a ticket's labels.  Body is ``label_ids`` (repeated)."""
+        from nightdesk.domain.labels import set_ticket_labels as _set_labels
+        from nightdesk.domain.labels import LabelNotFound as _LNF
+        from nightdesk.db.models import Label
+        form = await request.form()
+        label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+        try:
+            ticket = _set_labels(session, tid, label_ids)
+        except TicketNotFound:
+            raise HTTPException(404, "ticket not found")
+        except _LNF as e:
+            raise HTTPException(404, str(e))
+        all_labels = list(session.scalars(select(Label).order_by(Label.name.asc())))
+        return templates.TemplateResponse(
+            request,
+            "partials/label_picker.html",
+            {
+                "ticket": ticket,
+                "all_labels": all_labels,
+                "picker_name": "label_ids",
+                "picker_target": f"label-picker-{tid}",
+            },
+        )
+
+    @router.get("/board/labels-search", dependencies=[auth])
+    async def labels_search(
+        q: str = Query(default=""),
+        limit: int = Query(default=20, ge=1, le=100),
+        session: Session = Depends(get_session),
+    ):
+        """Search labels for the label picker.  Returns JSON."""
+        from nightdesk.db.models import Label as LabelModel
+        stmt = select(LabelModel).order_by(LabelModel.name.asc()).limit(limit)
+        if q:
+            stmt = stmt.where(LabelModel.name.ilike(f"%{q}%"))
+        results = session.scalars(stmt)
+        return [
+            {"id": l.id, "name": l.name, "color": l.color}
+            for l in results
+        ]
+
+    # --- Inline label editing (list rows) -----------------------------------
+    #
+    # A popover-style label picker for inline use in list rows. Each label is
+    # a toggle button that adds or removes that single label, then re-renders
+    # the anchor chips + popover in place. The re-render keeps the popover open
+    # so the user can toggle multiple labels without re-opening.
+
+    def _render_label_anchor(request: Request, tid: str, ticket, all_labels) -> HTMLResponse:
+        """Render the label anchor (chips + popover) for a list row."""
+        ticket_label_ids = {l.id for l in (ticket.labels or [])} if ticket.labels else set()
+        return templates.TemplateResponse(
+            request,
+            "partials/inline_label_anchor.html",
+            {
+                "tid": tid,
+                "ticket_labels": ticket.labels or [],
+                "ticket_label_ids": ticket_label_ids,
+                "all_labels": all_labels,
+            },
+        )
+
+    @router.get(
+        "/board/tickets/{tid}/inline-labels",
+        response_class=HTMLResponse,
+        dependencies=[auth],
+    )
+    async def inline_label_picker(
+        tid: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        """Lazy-loaded label popover body for inline list-row editing.
+
+        Returns the toggle-based option list the label picker JS injects
+        under the label anchor. Labels are always fresh so the user sees
+        newly-created labels without a page reload.
+        """
+        from nightdesk.db.models import Label
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        all_labels = list(session.scalars(select(Label).order_by(Label.name.asc())))
+        ticket_label_ids = {l.id for l in (ticket.labels or [])} if ticket.labels else set()
+        return templates.TemplateResponse(
+            request,
+            "partials/inline_label_picker.html",
+            {
+                "tid": tid,
+                "all_labels": all_labels,
+                "ticket_labels": ticket.labels or [],
+                "ticket_label_ids": ticket_label_ids,
+            },
+        )
+
+    @router.post("/board/tickets/{tid}/label-toggle", dependencies=[auth])
+    async def label_toggle(
+        tid: str,
+        request: Request,
+        label_id: str = Form(...),
+        session: Session = Depends(get_session),
+    ):
+        """Toggle a single label on a ticket for inline editing.
+
+        If the label is present, remove it; if absent, add it. Returns the
+        full label anchor (chips + popover) so the popover stays open for
+        further toggles.
+        """
+        from nightdesk.domain.labels import set_ticket_labels as _set_labels
+        from nightdesk.domain.labels import LabelNotFound as _LNF
+        from nightdesk.db.models import Label
+        try:
+            ticket = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "ticket not found")
+        current_ids = [l.id for l in (ticket.labels or [])] if ticket.labels else []
+        if label_id in current_ids:
+            desired = [lid for lid in current_ids if lid != label_id]
+        else:
+            desired = current_ids + [label_id]
+        try:
+            ticket = _set_labels(session, tid, desired)
+        except _LNF as e:
+            raise HTTPException(404, str(e))
+        all_labels = list(session.scalars(select(Label).order_by(Label.name.asc())))
+        ticket_label_ids = {l.id for l in (ticket.labels or [])} if ticket.labels else set()
+        # For HTMX callers: return the full anchor so the popover stays open.
+        # For JSON callers: return the updated label list.
+        if request.headers.get("HX-Request") == "true":
+            return templates.TemplateResponse(
+                request,
+                "partials/inline_label_anchor.html",
+                {
+                    "tid": tid,
+                    "ticket_labels": ticket.labels or [],
+                    "ticket_label_ids": ticket_label_ids,
+                    "all_labels": all_labels,
+                    "_inline_label_open": True,
+                },
+            )
+        return JSONResponse({
+            "id": ticket.id,
+            "labels": [{"id": l.id, "name": l.name, "color": l.color}
+                       for l in (ticket.labels or [])],
+        })
 
     return router

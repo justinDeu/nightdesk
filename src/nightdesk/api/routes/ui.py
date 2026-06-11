@@ -14,13 +14,14 @@ from pydantic import ValidationError
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.api.schemas import ConfigUpdate
-from nightdesk.db.models import ConfigRow, ScheduleWindow
+from nightdesk.db.models import ConfigRow, ScheduleWindow, Ticket
 from nightdesk.domain.projects import (
     ProjectNameTaken,
     ProjectNotFound,
     archive_project,
     create_project,
     list_projects,
+    preview_defaults,
     update_project,
 )
 from nightdesk.domain.toolchains import (
@@ -120,6 +121,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "external_tools": "partials/settings_external_tools_pane.html",
             "notifications": "partials/settings_notifications_pane.html",
             "projects": "partials/settings_projects_pane.html",
+            "labels": "partials/settings_labels_pane.html",
         }[category]
         return {
             "title": "Settings",
@@ -134,6 +136,11 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "toolchain_names": toolchain_names(cfg),
             "toolchain_options": toolchain_options(cfg),
             "projects": list_projects(session, include_archived=True),
+            "project_previews": {
+                p.id: preview_defaults(session, p)
+                for p in list_projects(session, include_archived=True)
+                if not p.archived_at
+            },
         }
 
     def _render_settings(request: Request, session: Session, *, category: str, saved: bool):
@@ -142,6 +149,70 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "settings_shell.html",
             _settings_context(session, category=category, saved=saved),
         )
+
+    def _render_toolsets(request: Request, session: Session, *, saved: bool):
+        ctx = _settings_context(session, category="external_tools", saved=saved)
+        ctx["title"] = "Toolsets"
+        ctx["active_page"] = "toolsets"
+        return templates.TemplateResponse(request, "toolsets.html", ctx)
+
+    def _render_projects(request: Request, session: Session, *, saved: bool):
+        ctx = _settings_context(session, category="projects", saved=saved)
+        ctx["title"] = "Projects"
+        ctx["active_page"] = "projects"
+        ctx["project_workspaces"] = _project_workspace_context(session, ctx["projects"])
+        return templates.TemplateResponse(request, "projects.html", ctx)
+
+    def _project_workspace_context(session: Session, projects: list) -> dict[str, dict]:
+        statuses = ["inbox", "draft", "queued", "running", "review"]
+        out: dict[str, dict] = {}
+        if not projects:
+            return out
+        project_ids = [p.id for p in projects]
+        tickets = list(session.scalars(
+            select(Ticket)
+            .where(Ticket.project_id.in_(project_ids))
+            .where(Ticket.status.in_(statuses))
+            .order_by(Ticket.position.asc(), Ticket.updated_at.desc())
+        ))
+        for project in projects:
+            out[project.id] = {
+                "counts": {status: 0 for status in statuses},
+                "by_status": {status: [] for status in statuses},
+                "recent_work": [],
+                "inbox_items": [],
+            }
+        for ticket in tickets:
+            workspace = out.get(ticket.project_id)
+            if workspace is None:
+                continue
+            workspace["counts"][ticket.status] += 1
+            workspace["by_status"][ticket.status].append(ticket)
+        for project in projects:
+            workspace = out[project.id]
+            work_tickets = [
+                t
+                for status in ("draft", "queued", "running", "review")
+                for t in workspace["by_status"][status]
+            ]
+            workspace["recent_work"] = sorted(
+                work_tickets,
+                key=lambda t: t.updated_at or t.created_at,
+                reverse=True,
+            )[:5]
+            workspace["inbox_items"] = sorted(
+                workspace["by_status"]["inbox"],
+                key=lambda t: t.updated_at or t.created_at,
+                reverse=True,
+            )[:5]
+            for status in statuses:
+                workspace["by_status"][status] = workspace["by_status"][status][:5]
+        return out
+
+    def _save_toolsets(session: Session, form) -> None:
+        cfg = _ensure_cfg(session)
+        cfg.toolchain_presets = _parse_toolchain_presets(form)
+        session.commit()
 
     @router.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request):
@@ -328,9 +399,22 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         session.commit()
         return _render_settings(request, session, category="worktrees", saved=True)
 
+    @router.get("/toolsets", response_class=HTMLResponse, dependencies=[auth])
+    async def toolsets_page(request: Request, session: Session = Depends(get_session)):
+        return _render_toolsets(request, session, saved=False)
+
+    @router.post("/toolsets", response_class=HTMLResponse, dependencies=[auth])
+    async def toolsets_save(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        form = await request.form()
+        _save_toolsets(session, form)
+        return _render_toolsets(request, session, saved=True)
+
     @router.get("/settings/external-tools", response_class=HTMLResponse, dependencies=[auth])
     async def settings_external_tools_page(request: Request, session: Session = Depends(get_session)):
-        return _render_settings(request, session, category="external_tools", saved=False)
+        return RedirectResponse(url="/toolsets", status_code=303)
 
     @router.post("/settings/external-tools", response_class=HTMLResponse, dependencies=[auth])
     async def settings_external_tools_save(
@@ -338,14 +422,16 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         session: Session = Depends(get_session),
     ):
         form = await request.form()
-        cfg = _ensure_cfg(session)
-        cfg.toolchain_presets = _parse_toolchain_presets(form)
-        session.commit()
-        return _render_settings(request, session, category="external_tools", saved=True)
+        _save_toolsets(session, form)
+        return RedirectResponse(url="/toolsets", status_code=303)
+
+    @router.get("/projects", response_class=HTMLResponse, dependencies=[auth])
+    async def projects_page(request: Request, session: Session = Depends(get_session)):
+        return _render_projects(request, session, saved=False)
 
     @router.get("/settings/projects", response_class=HTMLResponse, dependencies=[auth])
     async def settings_projects_page(request: Request, session: Session = Depends(get_session)):
-        return _render_settings(request, session, category="projects", saved=False)
+        return RedirectResponse(url="/projects", status_code=303)
 
 
     def _project_linked_workspaces(form) -> list[dict]:
@@ -380,8 +466,8 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             out.append(item)
         return out
 
-    @router.post("/settings/projects", response_class=HTMLResponse, dependencies=[auth])
-    async def settings_projects_save(
+    @router.post("/projects", response_class=HTMLResponse, dependencies=[auth])
+    async def projects_save(
         request: Request,
         session: Session = Depends(get_session),
         name: str = Form(...),
@@ -411,10 +497,31 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             raise HTTPException(409, "project name or slug already exists")
         except ValueError as exc:
             raise HTTPException(422, str(exc))
-        return _render_settings(request, session, category="projects", saved=True)
+        return _render_projects(request, session, saved=True)
 
-    @router.post("/settings/projects/{project_id}", response_class=HTMLResponse, dependencies=[auth])
-    async def settings_projects_update(
+    @router.post("/settings/projects", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_projects_save(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        source_path: str = Form(...),
+        default_workspace_mode: str = Form("directory"),
+        default_worktree_name_template: str = Form(""),
+        default_base_ref: str = Form(""),
+    ):
+        await projects_save(
+            request,
+            session,
+            name,
+            source_path,
+            default_workspace_mode,
+            default_worktree_name_template,
+            default_base_ref,
+        )
+        return RedirectResponse(url="/projects", status_code=303)
+
+    @router.post("/projects/{project_id}", response_class=HTMLResponse, dependencies=[auth])
+    async def projects_update(
         request: Request,
         project_id: str,
         session: Session = Depends(get_session),
@@ -448,11 +555,34 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             raise HTTPException(409, "project name or slug already exists")
         except ValueError as exc:
             raise HTTPException(422, str(exc))
-        return _render_settings(request, session, category="projects", saved=True)
+        return _render_projects(request, session, saved=True)
+
+    @router.post("/settings/projects/{project_id}", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_projects_update(
+        request: Request,
+        project_id: str,
+        session: Session = Depends(get_session),
+        name: str = Form(...),
+        source_path: str = Form(...),
+        default_workspace_mode: str = Form("directory"),
+        default_worktree_name_template: str = Form(""),
+        default_base_ref: str = Form(""),
+    ):
+        await projects_update(
+            request,
+            project_id,
+            session,
+            name,
+            source_path,
+            default_workspace_mode,
+            default_worktree_name_template,
+            default_base_ref,
+        )
+        return RedirectResponse(url="/projects", status_code=303)
 
 
-    @router.post("/settings/projects/{project_id}/archive", response_class=HTMLResponse, dependencies=[auth])
-    async def settings_projects_archive(
+    @router.post("/projects/{project_id}/archive", response_class=HTMLResponse, dependencies=[auth])
+    async def projects_archive(
         request: Request,
         project_id: str,
         session: Session = Depends(get_session),
@@ -461,7 +591,16 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             archive_project(session, project_id)
         except ProjectNotFound:
             raise HTTPException(404, "project not found")
-        return _render_settings(request, session, category="projects", saved=True)
+        return _render_projects(request, session, saved=True)
+
+    @router.post("/settings/projects/{project_id}/archive", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_projects_archive(
+        request: Request,
+        project_id: str,
+        session: Session = Depends(get_session),
+    ):
+        await projects_archive(request, project_id, session)
+        return RedirectResponse(url="/projects", status_code=303)
 
 
     @router.get("/settings/notifications", response_class=HTMLResponse, dependencies=[auth])
@@ -500,5 +639,78 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         url: str = Form(""),
     ):
         return await test_webhook(request, url)
+
+    # --- Labels settings -----------------------------------------------------
+
+    @router.get("/settings/labels", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_labels_page(request: Request, session: Session = Depends(get_session)):
+        from nightdesk.domain.labels import list_labels
+        ctx = _settings_context(session, category="labels", saved=False)
+        ctx["labels"] = list_labels(session)
+        return templates.TemplateResponse(request, "settings_shell.html", ctx)
+
+    @router.post("/settings/labels", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_labels_create(
+        request: Request,
+        session: Session = Depends(get_session),
+        name: str = Form(""),
+        color: str = Form(""),
+    ):
+        from nightdesk.domain.labels import create_label, list_labels, LabelNameTaken
+        name_clean = (name or "").strip()
+        if not name_clean:
+            raise HTTPException(422, "label name is required")
+        try:
+            create_label(session, name=name_clean, color=(color or "").strip())
+        except LabelNameTaken:
+            raise HTTPException(409, f"label name already taken: {name_clean}")
+        ctx = _settings_context(session, category="labels", saved=True)
+        ctx["labels"] = list_labels(session)
+        return templates.TemplateResponse(request, "settings_shell.html", ctx)
+
+    @router.post("/settings/labels/{label_id}", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_labels_update(
+        request: Request,
+        label_id: str,
+        session: Session = Depends(get_session),
+        name: str = Form(""),
+        color: str = Form(""),
+    ):
+        from nightdesk.domain.labels import (
+            update_label, list_labels, LabelNotFound, LabelNameTaken,
+        )
+        name_clean = (name or "").strip()
+        if not name_clean:
+            raise HTTPException(422, "label name is required")
+        try:
+            update_label(
+                session, label_id,
+                name=name_clean,
+                color=(color or "").strip(),
+            )
+        except LabelNotFound:
+            raise HTTPException(404, "label not found")
+        except LabelNameTaken as e:
+            raise HTTPException(409, f"label name already taken: {e}")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        ctx = _settings_context(session, category="labels", saved=True)
+        ctx["labels"] = list_labels(session)
+        return templates.TemplateResponse(request, "settings_shell.html", ctx)
+
+    @router.post("/settings/labels/{label_id}/delete", response_class=HTMLResponse, dependencies=[auth])
+    async def settings_labels_delete(
+        request: Request,
+        label_id: str,
+        session: Session = Depends(get_session),
+    ):
+        from nightdesk.domain.labels import delete_label, list_labels, LabelNotFound
+        try:
+            delete_label(session, label_id)
+        except LabelNotFound:
+            raise HTTPException(404, "label not found")
+        ctx = _settings_context(session, category="labels", saved=True)
+        ctx["labels"] = list_labels(session)
+        return templates.TemplateResponse(request, "settings_shell.html", ctx)
 
     return router

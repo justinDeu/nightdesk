@@ -24,9 +24,9 @@
 <aside
   id="sidebar"
   {% if is_edit %}data-selected-ticket-id="{{ ticket.id }}"{% endif %}
-  class="flex flex-col h-full min-h-0 rounded-md border border-border bg-bg-elev p-4 gap-4 overflow-y-auto overflow-x-hidden"
+  class="flex flex-col h-full min-h-0 rounded-md border border-border bg-bg-elev p-4 gap-4 overflow-hidden"
 >
-  <header class="flex items-center justify-between gap-2">
+  <header class="flex shrink-0 items-center justify-between gap-2">
     <h2 class="text-sm font-semibold text-fg">
       {% if is_edit %}Ticket{% else %}New ticket{% endif %}
     </h2>
@@ -42,12 +42,64 @@
   </header>
 
   {% if is_edit %}
+    <div class="shrink-0 rounded-lg border border-border bg-bg-elev-2/60 p-2">
+      <div class="mb-2 flex min-w-0 items-center gap-2 border-b border-border pb-2">
+        <span class="min-w-0 flex-1 truncate text-xs font-medium text-fg" title="{{ ticket.title }}">{{ ticket.title }}</span>
+        <span class="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] text-fg-muted">{{ ticket.status }}</span>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onclick="document.getElementById('ticket-edit-modal').showModal()"
+          class="px-3 py-1.5 rounded bg-accent text-bg font-medium hover:brightness-110 text-sm"
+        >Edit</button>
+        {% if ticket.status in ('draft', 'queued', 'review', 'archived') %}
+          <button
+            type="button"
+            data-run-now-btn
+            hx-post="/tickets/{{ ticket.id }}/run-now"
+            hx-swap="none"
+            hx-on::after-request="window.ndRunNowFeedback && window.ndRunNowFeedback(this, event)"
+            class="px-3 py-1.5 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-sm font-medium"
+          >Run now</button>
+        {% endif %}
+        {% if ticket.status == 'review' %}
+          <button
+            type="button"
+            data-archive-btn
+            hx-post="/board/tickets/{{ ticket.id }}/archive"
+            hx-target="#sidebar"
+            hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded border border-border text-fg-muted hover:border-accent hover:text-accent text-sm font-medium"
+          >Archive</button>
+        {% endif %}
+        <button
+          type="button"
+          hx-delete="/board/tickets/{{ ticket.id }}"
+          hx-confirm="Delete this ticket?"
+          hx-target="body"
+          hx-swap="none"
+          class="ml-auto px-3 py-1.5 rounded border border-danger text-danger hover:bg-danger hover:text-bg text-sm font-medium"
+        >Delete</button>
+      </div>
+    </div>
+
     {# --- View pane: nicely-formatted readonly display. ------------------ #}
-    <section class="flex flex-col gap-4 text-sm">
+    <section class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden pr-1 text-sm">
       <div class="flex flex-col gap-2">
         <h3 class="text-base font-semibold text-fg break-words">{{ ticket.title }}</h3>
         <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
-          <span class="rounded-full border px-2 py-0.5 uppercase tracking-wide {{ status_chip_class.get(ticket.status, 'border-border text-fg-muted') }}">{{ ticket.status }}</span>
+          {# Shared property pickers: status, priority, project. All commit via
+             focused metadata routes and swap the chip in place. #}
+          {% with tid=ticket.id, prop='status', chip=property_chip('status', ticket) %}
+            {% include "partials/property_picker.html" %}
+          {% endwith %}
+          {% with tid=ticket.id, prop='priority', chip=property_chip('priority', ticket) %}
+            {% include "partials/property_picker.html" %}
+          {% endwith %}
+          {% with tid=ticket.id, prop='project', chip=property_chip('project', ticket) %}
+            {% include "partials/property_picker.html" %}
+          {% endwith %}
           {% if ticket_profile %}
             <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">{{ ticket_profile.name }}</span>
           {% endif %}
@@ -56,6 +108,26 @@
           {% else %}
             <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">in directory</span>
           {% endif %}
+          {# Labels — clickable to open the card's inline label picker. #}
+          <span
+            role="button"
+            tabindex="0"
+            onclick="event.stopPropagation(); window.ndOpenLabelPicker && window.ndOpenLabelPicker('{{ ticket.id }}')"
+            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.ndOpenLabelPicker&&window.ndOpenLabelPicker('{{ ticket.id }}')}"
+            data-tooltip="Edit labels"
+            class="nd-label-anchor"
+          >
+            {% for label in ticket.labels %}
+              <span
+                data-label-id="{{ label.id }}"
+                class="rounded-full px-2 py-0.5 text-[10px] font-medium border"
+                style="{% if label.color %}background-color: {{ label.color }}22; border-color: {{ label.color }}66; color: {{ label.color }};{% else %}background-color: var(--color-bg-elev-2); border-color: var(--color-border); color: var(--color-fg-muted);{% endif %}"
+              >{{ label.name }}</span>
+            {% endfor %}
+            {% if not ticket.labels %}
+              <span class="text-[10px] text-fg-muted/50 nd-label-placeholder">—</span>
+            {% endif %}
+          </span>
         </div>
       </div>
 
@@ -129,6 +201,69 @@
         </div>
       {% endif %}
 
+      {# --- Effective execution context (read-only) ----------------------- #
+       # The merged run context with provenance chips, resolved by the shared
+       # effective-config resolver and rendered with the same partial used on
+       # the ticket detail page and in the create/edit preview. Lazily loaded
+       # so the merge only runs when a ticket is actually selected. #}
+      <div class="flex flex-col gap-1">
+        <span class="text-fg-muted text-xs uppercase tracking-wide">Execution context</span>
+        <div data-sidebar-effective-config>
+          {% include "partials/effective_config.html" %}
+        </div>
+      </div>
+
+      {# Toolchain summary — compact provenance display for the sidebar view.
+         Shows which toolchain presets are active (inherited from project or
+         explicitly enabled/disabled on the ticket). Edit the ticket to change. #}
+      {% set _tc_overrides = ticket.toolchain_overrides if is_edit and ticket.toolchain_overrides else {} %}
+      {% set _tc_en = _tc_overrides.get('enable') or [] %}
+      {% set _tc_dis = _tc_overrides.get('disable') or [] %}
+      {% set _tc_extra = _tc_overrides.get('extra_paths') or [] %}
+      {% set _tc_proj_defaults = ticket.project.default_toolchains if is_edit and ticket.project and ticket.project.default_toolchains else [] %}
+      {% if _tc_en or _tc_dis or _tc_extra or _tc_proj_defaults %}
+        <div class="flex flex-col gap-1">
+          <span class="text-fg-muted text-xs uppercase tracking-wide">Toolchain</span>
+          <div class="space-y-1">
+            {% for name in _tc_en %}
+              {% if name in _tc_proj_defaults %}
+                <div class="flex items-center gap-1.5 text-xs">
+                  <span class="rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">Inherited</span>
+                  <code class="font-mono text-fg">{{ name }}</code>
+                </div>
+              {% else %}
+                <div class="flex items-center gap-1.5 text-xs">
+                  <span class="rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn">Enabled</span>
+                  <code class="font-mono text-fg">{{ name }}</code>
+                </div>
+              {% endif %}
+            {% endfor %}
+            {% for name in _tc_dis %}
+              <div class="flex items-center gap-1.5 text-xs">
+                <span class="rounded border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger">Disabled</span>
+                <code class="font-mono text-fg-muted">{{ name }}</code>
+              </div>
+            {% endfor %}
+            {% for p in _tc_extra %}
+              <div class="flex items-center gap-1.5 text-xs">
+                <span class="rounded border border-border bg-bg-elev-2 px-1.5 py-0.5 text-[10px] font-medium text-fg-muted">Path</span>
+                <code class="font-mono text-fg">{{ p }}</code>
+              </div>
+            {% endfor %}
+            {# Project defaults that are not in the ticket's overrides at all
+               (neither enabled nor disabled) — they still apply at run time. #}
+            {% for name in _tc_proj_defaults %}
+              {% if name not in _tc_en and name not in _tc_dis %}
+                <div class="flex items-center gap-1.5 text-xs">
+                  <span class="rounded border border-border bg-bg-elev-2 px-1.5 py-0.5 text-[10px] font-medium text-fg-muted italic">Project default</span>
+                  <code class="font-mono text-fg-muted">{{ name }}</code>
+                </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
       {# --- Dependencies section ------------------------------------------- #}
       <div id="dependency-section">
         {% if is_edit %}
@@ -187,41 +322,6 @@
         {% endif %}
       </div>
 
-      <div class="flex flex-wrap items-center gap-2 pt-1">
-        <button
-          type="button"
-          onclick="document.getElementById('ticket-edit-modal').showModal()"
-          class="px-3 py-1.5 rounded bg-accent text-bg font-medium hover:brightness-110 text-sm"
-        >Edit</button>
-        {% if ticket.status in ('draft', 'queued', 'review', 'archived') %}
-          <button
-            type="button"
-            data-run-now-btn
-            hx-post="/tickets/{{ ticket.id }}/run-now"
-            hx-swap="none"
-            hx-on::after-request="window.ndRunNowFeedback && window.ndRunNowFeedback(this, event)"
-            class="px-3 py-1.5 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-sm font-medium"
-          >Run now</button>
-        {% endif %}
-        {% if ticket.status == 'review' %}
-          <button
-            type="button"
-            data-archive-btn
-            hx-post="/board/tickets/{{ ticket.id }}/archive"
-            hx-target="#sidebar"
-            hx-swap="outerHTML"
-            class="px-3 py-1.5 rounded border border-border text-fg-muted hover:border-accent hover:text-accent text-sm font-medium"
-          >Archive</button>
-        {% endif %}
-        <button
-          type="button"
-          hx-delete="/board/tickets/{{ ticket.id }}"
-          hx-confirm="Delete this ticket?"
-          hx-target="body"
-          hx-swap="none"
-          class="px-3 py-1.5 rounded border border-danger text-danger hover:bg-danger hover:text-bg text-sm font-medium ml-auto"
-        >Delete</button>
-      </div>
     </section>
   {% else %}
     {# --- Create mode: actionable empty state. The CTA is a real <button>

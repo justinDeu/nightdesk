@@ -28,6 +28,7 @@ from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.projects import list_projects
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
 from nightdesk.domain.toolchains import current_config, toolchain_options
+from nightdesk.domain.labels import list_labels
 from nightdesk.domain.tickets import (
     add_dependency, clone_ticket, get_ticket, list_dependencies, list_dependents,
     list_tickets, merge_next_run_context_into_prompt, remove_dependency, restart_ticket,
@@ -105,10 +106,16 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
 
         deps_upstreams = list_dependencies(session, tid)
         # Candidate tickets for the "Add dependency" control: every other
-        # ticket that isn't this one and isn't already an upstream dependency.
+        # non-inbox ticket that isn't this one and isn't already an upstream
+        # dependency. Inbox items are excluded: an unpromotable dependency
+        # would silently block the dependent ticket forever.
         _upstream_ids = {d.id for d in deps_upstreams}
-        dep_candidates = [
+        _all_non_inbox = [
             c for c in list_tickets(session, limit=500)
+            if c.status != "inbox"
+        ]
+        dep_candidates = [
+            c for c in _all_non_inbox
             if c.id != tid and c.id not in _upstream_ids
         ]
 
@@ -125,9 +132,10 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             "deps_upstreams": deps_upstreams,
             "deps_downstreams": list_dependents(session, tid),
             "dep_candidates": dep_candidates,
-            "dep_all": list_tickets(session, limit=500),
+            "dep_all": _all_non_inbox,
             "projects": list_projects(session),
             "toolchain_options": toolchain_options(current_config(session)),
+            "all_labels": list_labels(session),
             "title": t.title,
             "active_page": "tickets",
         })

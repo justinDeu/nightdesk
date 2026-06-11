@@ -2,7 +2,10 @@
   Single ticket card used inside a board column.
   Expects: t (Ticket-like), profiles_by_id (dict id->Profile),
            run_outcomes (dict ticket_id->exit_status),
-           dep_titles (dict ticket_id->list[str] of upstream titles).
+           dep_titles (dict ticket_id->list[str] of upstream titles),
+           show_props (frozenset of visible property keys; absent = all
+           shown). Gated: priority chip, profile chip, project chip, label
+           chips. Title, run outcome, and blocked indicators always render.
 
   Clicking the card opens the sidebar in edit mode for this ticket.
   Clicking the small ↗ link in the corner opens the full ticket detail
@@ -12,6 +15,8 @@
 {% set project = projects_by_id.get(t.project_id) if projects_by_id and t.project_id else none %}
 {% set outcome = run_outcomes.get(t.id) if run_outcomes else None %}
 {% set blocked_by = dep_titles.get(t.id) if dep_titles else None %}
+{% set ticket_labels = t.labels if t.labels is defined and t.labels else [] %}
+{% set _sp = show_props if show_props is defined else none %}
 <li
   data-ticket-id="{{ t.id }}"
   class="group rounded-md border border-border bg-bg-elev-2 px-3 py-2 cursor-grab hover:border-accent transition-colors shadow-sm"
@@ -24,16 +29,25 @@
     <div class="flex-1 min-w-0">
       <div class="text-sm text-fg truncate font-medium">{{ t.title }}</div>
       <div class="mt-1 flex flex-wrap items-center gap-1 text-xs">
-        {% if profile %}
+        {# Priority chip — shared property picker. Only shown once a ticket has
+           a priority to keep the card compact; full priority editing (incl.
+           clearing) is available in the sidebar. The picker's own
+           stopPropagation keeps the card-click from opening the sidebar. #}
+        {% if t.priority > 0 and (_sp is none or 'priority' in _sp) %}
+        {% with tid=t.id, prop='priority', chip=property_chip('priority', t) %}
+          {% include "partials/property_picker.html" %}
+        {% endwith %}
+        {% endif %}
+        {% if profile and (_sp is none or 'profile' in _sp) %}
           <span class="px-1.5 py-0.5 rounded bg-bg-elev border border-border text-fg-muted">
             {{ profile.name }}
           </span>
         {% endif %}
-        {% if project %}
-          <span class="px-1.5 py-0.5 rounded bg-bg-elev border border-border text-fg-muted">
-            {% if project.color %}<span style="color: {{ project.color }}">●</span>{% endif %}
-            {{ project.name }}
-          </span>
+        {% if project and (_sp is none or 'project' in _sp) %}
+          {# Project chip — shared property picker (reassign or clear inline). #}
+          {% with tid=t.id, prop='project', chip=property_chip('project', t, project) %}
+            {% include "partials/property_picker.html" %}
+          {% endwith %}
         {% endif %}
         {% if t.status == 'review' and outcome %}
           {% set chip_class = 'text-fg-muted border-border' %}
@@ -48,6 +62,12 @@
           <span class="px-1.5 py-0.5 rounded bg-warn/15 border border-warn/40 text-warn" title="Waiting on: {{ blocked_by | join(', ') }}">
             blocked by {{ blocked_by | length }}
           </span>
+        {% endif %}
+        {# Labels — inline label picker anchor (same as list rows). #}
+        {% if _sp is none or 'labels' in _sp %}
+        {% with tid=t.id, ticket_labels=ticket_labels %}
+          {% include "partials/inline_label_anchor.html" %}
+        {% endwith %}
         {% endif %}
       </div>
     </div>

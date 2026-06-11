@@ -345,11 +345,11 @@ async def test_ticket_api_rejects_unknown_project_id(app):
         assert update_response.status_code == 404
 
 
-async def test_settings_projects_ui_creates_project(app, session):
+async def test_projects_page_creates_project(app, session):
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         assert page.status_code == 200
-        assert 'href="/settings/projects"' in page.text
+        assert 'href="/projects"' in page.text
         assert 'name="name"' in page.text
         assert 'name="source_path"' in page.text
         assert 'name="slug"' not in page.text
@@ -365,7 +365,7 @@ async def test_settings_projects_ui_creates_project(app, session):
         assert "Any user-installed executables" in page.text
         assert "Cargo-installed tools" in page.text
         assert "Tools installed by cargo install" in page.text
-        assert "External tools" in page.text
+        assert "Toolsets" in page.text
         assert "Project Python venv" not in page.text
         assert "Project Node tools" not in page.text
         assert "project-create-modal-source-path-suggest" in page.text
@@ -377,7 +377,7 @@ async def test_settings_projects_ui_creates_project(app, session):
         assert "Create project" in page.text
         assert "showModal()" in page.text
 
-        created = await client.post("/settings/projects", data={
+        created = await client.post("/projects", data={
             "name": "Night Desk",
             "source_path": "/tmp/nightdesk",
             "default_workspace_mode": "git_worktree",
@@ -409,7 +409,69 @@ async def test_settings_projects_ui_creates_project(app, session):
     ]
 
 
-async def test_settings_projects_ui_edits_existing_project(app, session):
+async def test_settings_projects_redirects_to_projects(app):
+    async with await _cookie_client(app) as client:
+        response = await client.get("/settings/projects")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/projects"
+
+
+async def test_projects_page_renders_operational_workspace(app, session):
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.projects import create_project
+
+    profile = create_profile(
+        session,
+        name="project-workspace-profile",
+        fs_read=[],
+        fs_write=[],
+        allowed_tools=[],
+        denied_tools=[],
+        network_mode="off",
+        network_allowlist=[],
+        secret_keys=[],
+        default_model=None,
+    )
+    project = create_project(
+        session,
+        name="Nightdesk Workspace",
+        source_path="/tmp/nightdesk-workspace",
+        default_workspace_mode="git_worktree",
+        default_base_ref="main",
+        default_toolchains=["user-python-tools"],
+    )
+    for status in ("inbox", "draft", "queued", "running", "review"):
+        create_ticket(
+            session,
+            title=f"workspace-{status}",
+            prompt="x",
+            profile_id=profile.id,
+            project_id=project.id,
+            status=status,
+            source_path="/tmp/nightdesk-workspace",
+        )
+
+    async with await _cookie_client(app) as client:
+        page = await client.get("/projects")
+    assert page.status_code == 200
+    body = page.text
+    assert 'data-project-detail="' + project.id + '"' in body
+    assert "Recent tickets" in body
+    assert "Execution defaults" in body
+    assert "workspace-inbox" in body
+    assert "workspace-draft" in body
+    assert "workspace-queued" in body
+    assert "workspace-running" in body
+    assert "workspace-review" in body
+    assert f'/?project={project.slug}' in body
+    assert f'/?project={project.slug}&group=label' in body
+    assert f'/list?project={project.slug}' in body
+    assert f'/inbox?project={project.slug}' in body
+    assert f'/archive?project={project.slug}' in body
+    assert "Project settings" in body
+
+
+async def test_projects_page_edits_existing_project(app, session):
     from nightdesk.domain.projects import create_project, list_projects
 
     project = create_project(
@@ -420,12 +482,12 @@ async def test_settings_projects_ui_edits_existing_project(app, session):
     )
 
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         assert page.status_code == 200
         assert f"project-edit-modal-{project.id}" in page.text
         assert "Edit" in page.text
 
-        updated = await client.post(f"/settings/projects/{project.id}", data={
+        updated = await client.post(f"/projects/{project.id}", data={
             "name": "Night Desk Updated",
             "source_path": "/tmp/nightdesk-updated",
             "default_workspace_mode": "git_worktree",
@@ -550,12 +612,13 @@ async def test_archive_and_header_search_project_filters(app, session, sample_pr
 
 async def test_settings_projects_empty_state_uses_simple_help_text(app):
     async with await _cookie_client(app) as client:
-        page = await client.get("/settings/projects")
+        page = await client.get("/projects")
         assert page.status_code == 200
         assert 'data-projects-empty-state' in page.text
         assert "No projects yet." in page.text
-        assert "Use Create project to add one." in page.text
-        assert "Create your first project" not in page.text
+        assert "Use + New to add one." in page.text
+        assert "Create your first project" in page.text
+        assert "Projects hold source paths, workspace defaults, linked repos, and toolsets" in page.text
 
 def test_toolchain_columns_are_registered():
     projects = Base.metadata.tables["projects"]
@@ -802,3 +865,242 @@ def test_ticket_rejects_extra_path_overlapping_protected_dir(session, sample_pro
         assert "protected directory" in str(exc)
     else:
         raise AssertionError("protected extra_path was accepted")
+
+
+# ---------------------------------------------------------------------------
+# Project defaults preview panel — domain + rendering tests
+# ---------------------------------------------------------------------------
+
+
+def test_preview_defaults_resolves_full_project_config(session):
+    from nightdesk.domain.projects import create_project, preview_defaults
+
+    project = create_project(
+        session,
+        name="Preview Full",
+        source_path="/tmp/preview-full",
+        default_workspace_mode="git_worktree",
+        default_worktree_name_template="feat/{slug}",
+        default_base_ref="main",
+        default_linked_workspaces=[
+            {
+                "role": "linked",
+                "label": "docs",
+                "kind": "directory",
+                "access": "read_only",
+                "source_path": "/tmp/docs",
+            }
+        ],
+        default_toolchains=["user-python-tools"],
+        default_tool_paths=["./.venv/bin"],
+    )
+
+    preview = preview_defaults(session, project)
+
+    assert preview["source_path"] == "/tmp/preview-full"
+    assert preview["workspace_mode"] == "git_worktree"
+    assert preview["base_ref"] == "main"
+    assert preview["worktree_name_template"] == "feat/{slug}"
+    assert preview["worktree_name_resolved"] == "feat/example-ticket"
+    assert len(preview["linked_workspaces"]) == 1
+    assert preview["linked_workspaces"][0]["source_path"] == "/tmp/docs"
+    assert preview["toolchains"] == ["user-python-tools"]
+    assert preview["tool_paths"] == ["./.venv/bin"]
+    assert preview["toolchain_overrides"] == {
+        "enable": ["user-python-tools"],
+        "disable": [],
+        "extra_paths": [],
+    }
+
+
+def test_preview_defaults_minimal_project(session):
+    from nightdesk.domain.projects import create_project, preview_defaults
+
+    project = create_project(
+        session,
+        name="Preview Minimal",
+        source_path="/tmp/preview-min",
+    )
+
+    preview = preview_defaults(session, project)
+
+    assert preview["source_path"] == "/tmp/preview-min"
+    assert preview["workspace_mode"] == "directory"
+    assert preview["base_ref"] is None
+    assert preview["worktree_name_template"] is None
+    assert preview["worktree_name_resolved"] is None
+    assert preview["linked_workspaces"] == []
+    assert preview["toolchains"] == []
+    assert preview["tool_paths"] == []
+    assert preview["toolchain_overrides"] is None
+
+
+def test_preview_defaults_no_toolchain_overrides_when_project_has_none(session):
+    """A project with no default toolchains should produce None overrides."""
+    from nightdesk.domain.projects import create_project, preview_defaults
+
+    project = create_project(
+        session,
+        name="No Tool Defaults",
+        source_path="/tmp/no-tools",
+    )
+    preview = preview_defaults(session, project)
+    assert preview["toolchain_overrides"] is None
+
+
+async def test_settings_projects_page_shows_preview_for_active_project(app, session):
+    from nightdesk.domain.projects import create_project
+
+    project = create_project(
+        session,
+        name="Preview Render",
+        source_path="/tmp/preview-render",
+        default_workspace_mode="git_worktree",
+        default_worktree_name_template="feat/{slug}",
+        default_base_ref="develop",
+        default_linked_workspaces=[
+            {
+                "role": "linked",
+                "label": "lib",
+                "kind": "git_worktree",
+                "access": "read_write",
+                "source_path": "/tmp/lib",
+            }
+        ],
+        default_toolchains=["rust-user-tools"],
+        default_tool_paths=["/opt/tools/bin"],
+    )
+
+    async with await _cookie_client(app) as client:
+        page = await client.get("/projects")
+        assert page.status_code == 200
+
+        text = page.text
+        pid = project.id
+
+        # Preview container exists for this project
+        assert f'data-project-defaults-preview="{pid}"' in text
+
+        # Header and disclaimer
+        assert "Creation defaults preview" in text
+        assert "New tickets from this project use these defaults" in text
+        assert "Explicit ticket values take precedence" in text
+
+        # Resolved values rendered
+        assert "/tmp/preview-render" in text
+        assert "git_worktree" in text
+        assert "develop" in text
+        assert "feat/{slug}" in text
+        assert "feat/example-ticket" in text
+        assert "/tmp/lib" in text
+        assert "rust-user-tools" in text
+        assert "/opt/tools/bin" in text
+        assert "toolchain_overrides.enable" in text
+
+
+async def test_settings_projects_page_no_preview_for_archived_project(app, session):
+    from nightdesk.domain.projects import archive_project, create_project
+
+    project = create_project(
+        session,
+        name="Archived Preview",
+        source_path="/tmp/archived-preview",
+        default_workspace_mode="git_worktree",
+        default_base_ref="main",
+    )
+    archive_project(session, project.id)
+
+    async with await _cookie_client(app) as client:
+        page = await client.get("/projects")
+        assert page.status_code == 200
+
+        # Archived project should show in the list but NOT have a preview
+        assert "Archived Preview" in page.text
+        assert f'data-project-defaults-preview="{project.id}"' not in page.text
+
+
+async def test_settings_projects_preview_shows_directory_mode_for_default(app, session):
+    from nightdesk.domain.projects import create_project
+
+    project = create_project(
+        session,
+        name="Dir Mode Preview",
+        source_path="/tmp/dir-mode",
+    )
+
+    async with await _cookie_client(app) as client:
+        page = await client.get("/projects")
+        assert page.status_code == 200
+
+        pid = project.id
+        assert f'data-project-defaults-preview="{pid}"' in page.text
+        # Should show "directory" workspace mode (the default)
+        assert "directory" in page.text
+
+
+async def test_settings_projects_preview_no_worktree_fields_in_directory_mode(app, session):
+    from nightdesk.domain.projects import create_project
+
+    project = create_project(
+        session,
+        name="Dir No Worktree",
+        source_path="/tmp/dir-no-wt",
+        default_workspace_mode="directory",
+    )
+
+    async with await _cookie_client(app) as client:
+        page = await client.get("/projects")
+        text = page.text
+
+        pid = project.id
+        # Preview exists
+        assert f'data-project-defaults-preview="{pid}"' in text
+        # In directory mode, base_ref and worktree template should not appear
+        # (they're conditional in the template)
+
+
+async def test_settings_projects_preview_appears_after_create(app, session):
+    async with await _cookie_client(app) as client:
+        created = await client.post("/projects", data={
+            "name": "Created Preview",
+            "source_path": "/tmp/created-preview",
+            "default_workspace_mode": "git_worktree",
+            "default_worktree_name_template": "fix/{slug}",
+            "default_base_ref": "main",
+            "default_toolchain": ["user-python-tools"],
+        })
+        assert created.status_code == 200, created.text
+
+        # The response is the full re-rendered settings page
+        text = created.text
+        assert "Created Preview" in text
+        assert "Creation defaults preview" in text
+        assert "fix/{slug}" in text
+        assert "fix/example-ticket" in text
+
+
+async def test_settings_projects_preview_updates_after_edit(app, session):
+    from nightdesk.domain.projects import create_project
+
+    project = create_project(
+        session,
+        name="Edit Preview",
+        source_path="/tmp/edit-preview",
+        default_workspace_mode="directory",
+    )
+
+    async with await _cookie_client(app) as client:
+        updated = await client.post(f"/projects/{project.id}", data={
+            "name": "Edit Preview Updated",
+            "source_path": "/tmp/edit-preview-v2",
+            "default_workspace_mode": "git_worktree",
+            "default_worktree_name_template": "chore/{slug}",
+            "default_base_ref": "develop",
+        })
+        assert updated.status_code == 200, updated.text
+
+        text = updated.text
+        assert "Edit Preview Updated" in text
+        assert "chore/{slug}" in text
+        assert "chore/example-ticket" in text
+        assert "develop" in text

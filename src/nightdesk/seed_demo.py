@@ -19,9 +19,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import ConfigRow, Profile, Project, Run, Ticket, WorkerHeartbeat
+from nightdesk.domain.labels import LabelNameTaken, create_label, list_labels
 from nightdesk.db.session import make_engine, session_factory
 from nightdesk.domain.profiles import seed_default_profiles
-from nightdesk.domain.projects import create_project
+from nightdesk.domain.projects import ProjectNameTaken, create_project
 from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import add_dependency, create_ticket
 from nightdesk.transcript import now_iso, write_event
@@ -44,6 +45,39 @@ DEFAULT_SOURCE_PATH = "/demo/nightdesk"
 # ---------------------------------------------------------------------------
 
 _TICKET_SPECS: list[dict] = [
+    # --- Inbox (under-specified triage items) ---
+    # "incomplete": True items are captured with NO workspace, so they cannot be
+    # promoted until fleshed out — they exercise the validation boundary in the
+    # Inbox surface. Items without the flag are complete and promotable.
+    {
+        "title": "Investigate flaky integration test",
+        "prompt": (
+            "Someone mentioned test_worker_picks_eligible flakes in CI. "
+            "Need to reproduce and narrow down before this becomes a ticket."
+        ),
+        "status": "inbox",
+        "priority": 3,
+        "labels": ["bug"],
+        "incomplete": True,
+    },
+    {
+        "title": "Idea: keyboard-only ticket triage mode",
+        "prompt": "",
+        "status": "inbox",
+        "priority": 0,
+        "labels": ["ui/ux"],
+        "incomplete": True,
+    },
+    {
+        "title": "Add OpenAPI examples to ticket endpoints",
+        "prompt": (
+            "Flesh out request/response examples in the generated openapi.json "
+            "so the docs surface is usable. Workspace is known; ready to promote."
+        ),
+        "status": "inbox",
+        "priority": 1,
+        "labels": ["docs"],
+    },
     # --- Draft ---
     {
         "title": "Add dark mode toggle",
@@ -54,6 +88,8 @@ _TICKET_SPECS: list[dict] = [
             "variants kick in automatically."
         ),
         "status": "draft",
+        "priority": 2,
+        "labels": ["ui/ux"],
     },
     {
         "title": "Write onboarding guide",
@@ -63,6 +99,8 @@ _TICKET_SPECS: list[dict] = [
             "your first ticket. Keep it under 200 words."
         ),
         "status": "draft",
+        "priority": 0,
+        "labels": ["docs"],
     },
     # --- Queued ---
     {
@@ -73,6 +111,8 @@ _TICKET_SPECS: list[dict] = [
             "Reproduce with > 200 archived tickets and fix the cursor encoding."
         ),
         "status": "queued",
+        "priority": 3,
+        "labels": ["backend", "cleanup"],
     },
     {
         "title": "Add rate-limit banner component",
@@ -82,6 +122,8 @@ _TICKET_SPECS: list[dict] = [
             "endpoint. Show utilization percentage and time until reset."
         ),
         "status": "queued",
+        "priority": 1,
+        "labels": ["ui/ux", "backend"],
     },
     # --- Running ---
     {
@@ -94,6 +136,8 @@ _TICKET_SPECS: list[dict] = [
             "bearer-token flow."
         ),
         "status": "running",
+        "priority": 4,
+        "labels": ["backend", "infra"],
         "run": {
             "intent": "first_run",
             "exit_status": None,
@@ -109,6 +153,8 @@ _TICKET_SPECS: list[dict] = [
             "run count. Use streaming response so large exports don't OOM."
         ),
         "status": "review",
+        "priority": 2,
+        "labels": ["backend"],
         "run": {
             "intent": "first_run",
             "exit_status": "success",
@@ -123,6 +169,8 @@ _TICKET_SPECS: list[dict] = [
             "with model_validator. Run the test suite and fix any breakage."
         ),
         "status": "review",
+        "priority": 3,
+        "labels": ["backend", "cleanup"],
         "run": {
             "intent": "first_run",
             "exit_status": "failed",
@@ -138,6 +186,8 @@ _TICKET_SPECS: list[dict] = [
             "Keep the existing sync session paths working."
         ),
         "status": "review",
+        "priority": 1,
+        "labels": ["backend", "infra"],
         "run": {
             "intent": "retry",
             "exit_status": "cancelled",
@@ -154,6 +204,8 @@ _TICKET_SPECS: list[dict] = [
             "deprecation warnings."
         ),
         "status": "archived",
+        "priority": 0,
+        "labels": ["cleanup"],
         "run": {
             "intent": "first_run",
             "exit_status": "success",
@@ -167,11 +219,83 @@ _TICKET_SPECS: list[dict] = [
             "Include DB connectivity check. Document in the API reference."
         ),
         "status": "archived",
+        "priority": 1,
+        "labels": ["backend", "docs"],
         "run": {
             "intent": "first_run",
             "exit_status": "success",
             "transcript": "archived_success_short",
         },
+    },
+    # --- Additional tickets for richer grouping/filtering demos ---
+    {
+        "title": "Add webhook delivery retry logic",
+        "prompt": (
+            "When a notify webhook returns 5xx, retry up to 3 times with "
+            "exponential backoff. Log each attempt to the run transcript."
+        ),
+        "status": "queued",
+        "priority": 2,
+        "labels": ["backend", "infra"],
+    },
+    {
+        "title": "Research: evaluate SQLite FTS5 vs tantivy for search",
+        "prompt": (
+            "Benchmark the current FTS5 search against a tantivy-based "
+            "approach. Compare index size, query latency, and incremental "
+            "update cost with ~10k tickets."
+        ),
+        "status": "draft",
+        "priority": 1,
+        "labels": ["research"],
+    },
+    {
+        "title": "Design token audit for accessibility",
+        "prompt": (
+            "Audit all CSS custom properties (colors, contrast ratios) against "
+            "WCAG 2.1 AA. Generate a report of failing tokens and suggest "
+            "alternatives."
+        ),
+        "status": "inbox",
+        "priority": 2,
+        "labels": ["ui/ux", "feature"],
+        "incomplete": True,
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# Label specifications
+# ---------------------------------------------------------------------------
+
+_LABEL_SPECS: list[dict] = [
+    {"name": "backend",  "color": "#3b82f6"},  # blue
+    {"name": "ui/ux",    "color": "#8b5cf6"},  # violet
+    {"name": "bug",      "color": "#ef4444"},  # red
+    {"name": "research", "color": "#f59e0b"},  # amber
+    {"name": "infra",    "color": "#dc2626"},  # darker red
+    {"name": "docs",     "color": "#10b981"},  # emerald
+    {"name": "cleanup",  "color": "#6b7280"},  # gray
+    {"name": "feature",  "color": "#06b6d4"},  # cyan
+]
+
+
+# Demo projects so the board's group-by-project view has content. Tickets are
+# assigned to these round-robin in the seeder (with some left unassigned).
+_PROJECT_SPECS: list[dict] = [
+    {
+        "name": "Web App",
+        "slug": "web-app",
+        "color": "#2563eb",
+        "default_workspace_mode": "git_worktree",
+        "default_base_ref": "main",
+        "default_toolchains": ["user-python-tools"],
+    },
+    {
+        "name": "Platform",
+        "slug": "platform",
+        "color": "#db2777",
+        "default_workspace_mode": "directory",
     },
 ]
 
@@ -411,6 +535,57 @@ def _seq(counter: list[int]) -> int:
     v = counter[0]
     counter[0] = v + 1
     return v
+
+
+def _seed_demo_omp_profile(engine) -> None:
+    """Add a demo ``omp_rpc`` profile so the backend-aware editor/preview has
+    a non-Claude profile to show off.
+
+    Idempotent: skips if a profile with the demo name already exists. The
+    OMP/RPC connection settings (endpoint / token / model) live in the
+    encrypted ``env`` blob, so this seeds them only when a bearer token is
+    configured (an encryption key is available); otherwise it creates the
+    profile with the backend selected but the connection left blank, which
+    still demonstrates the backend-specific form sections.
+    """
+    from nightdesk.config import load_config
+    from nightdesk.domain.profile_secrets import ProfileSecretBox
+    from nightdesk.domain.profiles import create_profile, ProfileNameTaken
+
+    name = "OMP / RPC (demo)"
+    with Session(engine) as session:
+        exists = session.execute(
+            text("SELECT 1 FROM profiles WHERE name = :n"), {"n": name}
+        ).first()
+        if exists:
+            return
+
+        env_blob = None
+        try:
+            bearer = load_config().bearer_token
+        except Exception:
+            bearer = ""
+        if bearer:
+            box = ProfileSecretBox(bearer)
+            env_blob = box.encrypt({
+                "OMP_RPC_ENDPOINT": "https://omp.demo.internal/rpc",
+                "OMP_RPC_MODEL": "gpt-oss-120b",
+                "OMP_RPC_AUTH_TOKEN": "demo-rpc-token",
+            })
+
+        try:
+            create_profile(
+                session,
+                name=name,
+                description="Dispatches runs to a remote OMP/RPC endpoint.",
+                backend="omp_rpc",
+                network_mode="on",
+                allowed_tools=[],
+                denied_tools=[],
+                env=env_blob,
+            )
+        except ProfileNameTaken:
+            pass
 
 
 def _write_transcript(
@@ -661,11 +836,12 @@ def seed(
 
     # Seed profiles (returns detached objects, so we query IDs below)
     seed_default_profiles(engine)
+    _seed_demo_omp_profile(engine)
 
     with SessionLocal() as session:
         _ensure_demo_config(session)
         _sanitize_demo_profiles(session)
-        project = _ensure_demo_project(session, source_path=source_path)
+        _ensure_demo_project(session, source_path=source_path)
 
         # Fetch profile IDs in-session to avoid DetachedInstanceError
         profile_ids = [
@@ -677,28 +853,116 @@ def seed(
             print("No profiles found after seeding.", file=sys.stderr)
             return
 
+        # --- Seed labels ---
+        # Idempotent: reuse any label already present (the demo seeder is
+        # designed to be safe to re-run), creating only the missing ones.
+        label_by_name: dict[str, object] = {
+            lbl.name: lbl for lbl in list_labels(session)
+        }
+        for spec in _LABEL_SPECS:
+            if spec["name"] in label_by_name:
+                continue
+            lbl = create_label(session, name=spec["name"], color=spec["color"])
+            label_by_name[lbl.name] = lbl
+
+        # --- Seed projects ---
+        # A couple of demo projects so the board's group-by-project view (and
+        # the project facet) has something to show. Idempotent like labels.
+        from nightdesk.domain.projects import (
+            create_project as _create_project,
+            list_projects as _list_projects,
+        )
+        project_by_slug: dict[str, object] = {
+            p.slug: p for p in _list_projects(session)
+        }
+        seeded_projects: list = []
+        for spec in _PROJECT_SPECS:
+            existing = project_by_slug.get(spec["slug"])
+            if existing is None:
+                create_kwargs = dict(
+                    name=spec["name"],
+                    slug=spec["slug"],
+                    source_path=source_path,
+                    color=spec.get("color"),
+                )
+                # Project workspace defaults (mode, base_ref) are always safe.
+                if spec.get("default_workspace_mode"):
+                    create_kwargs["default_workspace_mode"] = spec["default_workspace_mode"]
+                if spec.get("default_base_ref"):
+                    create_kwargs["default_base_ref"] = spec["default_base_ref"]
+                # Toolchain defaults require the preset to be registered; skip
+                # if the config has none (e.g. first seed in a fresh DB).
+                tc = spec.get("default_toolchains")
+                if tc:
+                    try:
+                        from nightdesk.config import load_config
+                        cfg = load_config()
+                        known = set((cfg.toolchain_presets or {}).keys())
+                        if known and all(t in known for t in tc):
+                            create_kwargs["default_toolchains"] = tc
+                    except Exception:
+                        pass  # demo seeding is best-effort
+                try:
+                    existing = _create_project(session, **create_kwargs)
+                except Exception:
+                    # Fall back to a minimal project (no toolchains/workspace mode)
+                    existing = _create_project(
+                        session,
+                        name=spec["name"],
+                        slug=spec["slug"],
+                        source_path=source_path,
+                        color=spec.get("color"),
+                    )
+                project_by_slug[existing.slug] = existing
+            seeded_projects.append(existing)
+
         tickets_by_status: dict[str, list[Ticket]] = {}
 
         for idx, raw_spec in enumerate(_TICKET_SPECS):
             spec = dict(raw_spec)  # copy to avoid mutating the module-level list
             run_spec = spec.pop("run", None)
+            label_names = spec.pop("labels", [])
+            # Under-specified inbox items are captured without a workspace so the
+            # Inbox surface can demo the "flesh out before promoting" boundary.
+            incomplete = spec.pop("incomplete", False)
             profile_id = profile_ids[idx % len(profile_ids)]
+            # Assign most tickets to a project (round-robin), leaving every
+            # third one unassigned so the "No project" bucket is populated too.
+            project_id = None
+            if seeded_projects and idx % 3 != 2:
+                project_id = seeded_projects[idx % len(seeded_projects)].id
+            # Assigning a project injects that project's default workspace, which
+            # would make an "incomplete" inbox item complete. Keep these
+            # project-less so they stay genuinely under-specified for the demo.
+            if incomplete:
+                project_id = None
 
-            ticket = create_ticket(
-                session,
+            create_kwargs = dict(
                 title=spec["title"],
                 prompt=spec["prompt"],
                 status=spec["status"],
                 profile_id=profile_id,
-                project_id=project.id if idx % 2 == 0 else None,
-                source_path=source_path,
-                priority=idx % 3,
+                project_id=project_id,
+                priority=spec.get("priority", idx % 3),
                 next_run_context=(
                     "Prefer small, reviewable patches. Preserve existing CLI behavior."
                     if spec["status"] in {"queued", "review"}
                     else None
                 ),
             )
+            if not incomplete:
+                create_kwargs["source_path"] = source_path
+            ticket = create_ticket(session, **create_kwargs)
+
+            # Assign labels to the ticket.
+            if label_names and label_by_name:
+                from nightdesk.domain.labels import set_ticket_labels
+                label_ids = [
+                    label_by_name[n].id for n in label_names
+                    if n in label_by_name
+                ]
+                if label_ids:
+                    set_ticket_labels(session, ticket.id, label_ids)
 
             tickets_by_status.setdefault(ticket.status, []).append(ticket)
 
@@ -743,6 +1007,61 @@ def seed(
                         session.commit()
 
         _seed_usage_history(session, transcript_root, source_path, tickets_by_status)
+
+        # Demo project + ticket exercising the effective-config resolver so the
+        # provenance chips (project default / profile / ticket override /
+        # derived) are visible on the ticket detail page out of the box.
+        try:
+            from nightdesk.domain.projects import create_project
+
+            project = create_project(
+                session,
+                name="Demo project",
+                source_path=source_path,
+                default_workspace_mode="git_worktree",
+                default_base_ref="main",
+                default_toolchains=["user-python-tools"],
+                default_tool_paths=["/opt/demo/bin"],
+            )
+            create_ticket(
+                session,
+                title="Effective config showcase",
+                prompt=(
+                    "Demo ticket: open the detail page to see the effective "
+                    "execution context with provenance chips."
+                ),
+                status="draft",
+                profile_id=profile_ids[0],
+                project_id=project.id,
+                source_path=source_path,
+                priority=2,
+                permission_overrides={"default_model": "claude-opus-4-6"},
+                toolchain_overrides={
+                    "enable": ["rust-user-tools"],
+                    "disable": [],
+                    "extra_paths": ["/opt/ticket/bin"],
+                },
+                additional_dirs=[{"path": "/srv/shared-cache", "mode": "ro"}],
+            )
+            # A second ticket that inherits all toolchains from the project
+            # (no explicit overrides) — exercises the "Inherited" provenance
+            # badge in the toolchain picker.
+            create_ticket(
+                session,
+                title="Inherited toolchains showcase",
+                prompt=(
+                    "Demo ticket: toolchains are inherited entirely from the "
+                    "project defaults (user-python-tools). No per-ticket "
+                    "overrides. The sidebar and edit modal should show "
+                    "'Inherited' badges."
+                ),
+                status="draft",
+                profile_id=profile_ids[0],
+                project_id=project.id,
+                source_path=source_path,
+            )
+        except Exception as exc:  # demo seeding is best-effort
+            print(f"effective-config demo seed skipped: {exc}", file=sys.stderr)
 
         # For the running ticket: insert a WorkerHeartbeat so the pill shows alive
         running_tickets = tickets_by_status.get("running", [])

@@ -1,0 +1,107 @@
+{# Labels settings pane — CRUD for label management. #}
+{% set _labels = labels if labels is defined else [] %}
+<div data-settings-form>
+  <div class="space-y-4">
+    <div>
+      <h2 class="text-lg font-semibold text-fg">Labels</h2>
+      <p class="mt-1 text-xs text-fg-muted">Named tags for categorising and filtering tickets. Labels appear as chips on cards, sidebar, and archive rows.</p>
+    </div>
+
+    {# --- Create form --- #}
+    <form method="post" action="/settings/labels"
+          class="flex items-end gap-2">
+      <label class="flex-1">
+        <span class="text-fg-muted text-[11px] uppercase tracking-wide">Name</span>
+        <input name="name" required placeholder="e.g. backend"
+               class="w-full bg-bg border border-border rounded px-2 py-1.5 text-sm text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+      </label>
+      <label class="w-28">
+        <span class="text-fg-muted text-[11px] uppercase tracking-wide">Color</span>
+        <input name="color" type="color" value="#6366f1"
+               class="w-full h-[30px] bg-bg border border-border rounded px-1 py-0.5 text-sm text-fg cursor-pointer focus:border-accent focus:outline-none" />
+      </label>
+      <button type="submit"
+              class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm hover:brightness-110 shrink-0">
+        Add label
+      </button>
+    </form>
+
+    {% if saved %}
+      <div class="text-xs text-accent">Label saved.</div>
+    {% endif %}
+
+    {# --- Label list --- #}
+    {% if _labels %}
+      <ul class="divide-y divide-border rounded border border-border bg-bg overflow-hidden">
+        {% for label in _labels %}
+          <li class="flex flex-col gap-1 px-3 py-2">
+            {# Read row #}
+            <div class="flex items-center gap-3">
+              <span
+                class="inline-block w-4 h-4 rounded-full border shrink-0"
+                style="{% if label.color %}background-color: {{ label.color }}; border-color: {{ label.color }}66;{% else %}background-color: var(--color-bg-elev-2); border-color: var(--color-border);{% endif %}"
+              ></span>
+              <span class="flex-1 text-sm text-fg">{{ label.name }}</span>
+              <button
+                type="button"
+                data-tooltip="Rename or recolor this label"
+                onclick="(function(btn){var li=btn.closest('li');li.querySelectorAll('.nd-label-edit-form').forEach(function(f){f.classList.toggle('hidden')});btn.setAttribute('aria-expanded',!btn.getAttribute('aria-expanded')||btn.getAttribute('aria-expanded')==='false'?'true':'false')})(this)"
+                aria-expanded="false"
+                class="px-2 py-1 text-xs rounded border border-border text-fg-muted hover:border-accent hover:text-accent transition-colors"
+              >Edit</button>
+              <form method="post" action="/settings/labels/{{ label.id }}/delete"
+                    class="inline"
+                    onsubmit="return confirm('Delete label &quot;{{ label.name }}&quot;? This removes it from all tickets.')">
+                <button
+                  type="submit"
+                  data-tooltip="Delete this label"
+                  class="px-2 py-1 text-xs rounded border border-border text-fg-muted hover:border-danger hover:text-danger transition-colors"
+                >Delete</button>
+              </form>
+            </div>
+            {# Inline edit form — hidden until the Edit button is clicked #}
+            <form
+              method="post"
+              action="/settings/labels/{{ label.id }}"
+              class="nd-label-edit-form hidden flex items-end gap-2 mt-1"
+            >
+              <label class="flex-1">
+                <span class="text-fg-muted text-[11px] uppercase tracking-wide">Name</span>
+                <input
+                  name="name"
+                  required
+                  value="{{ label.name }}"
+                  class="w-full bg-bg border border-border rounded px-2 py-1.5 text-sm text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                />
+              </label>
+              <label class="w-28">
+                <span class="text-fg-muted text-[11px] uppercase tracking-wide">Color</span>
+                <input
+                  name="color"
+                  type="color"
+                  value="{{ label.color or '#6366f1' }}"
+                  class="w-full h-[30px] bg-bg border border-border rounded px-1 py-0.5 text-sm text-fg cursor-pointer focus:border-accent focus:outline-none"
+                />
+              </label>
+              <button
+                type="submit"
+                data-tooltip="Save changes"
+                class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm hover:brightness-110 shrink-0"
+              >Save</button>
+              <button
+                type="button"
+                data-tooltip="Discard changes"
+                onclick="this.closest('.nd-label-edit-form').classList.add('hidden')"
+                class="rounded border border-border text-fg-muted font-medium px-3 py-1.5 text-sm hover:border-accent hover:text-accent transition-colors shrink-0"
+              >Cancel</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="px-3 py-6 text-center text-fg-muted text-sm border border-border rounded bg-bg">
+        No labels yet. Create one above to start tagging tickets.
+      </div>
+    {% endif %}
+  </div>
+</div>

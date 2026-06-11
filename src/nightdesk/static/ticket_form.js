@@ -243,6 +243,69 @@
     window.ndRenumberLinkedWorkspaceRows(root);
   }
 
+  // Sync toolchain-picker badge spans to reflect a new project's default_toolchains.
+  // Called after a project change so the "Inherited" badge stays accurate without
+  // a full page reload. Only the inherited-vs-none state is dynamic; explicit
+  // enabled/disabled states come from the checkbox values and don't change.
+  function _syncToolchainBadges(root, projectDefaults) {
+    if (!root) return;
+    const inherited = new Set(Array.isArray(projectDefaults) ? projectDefaults : []);
+    root.querySelectorAll('[data-toolchain-row]').forEach((row) => {
+      const enableInput = row.querySelector('[data-toolchain-enable]');
+      const disableInput = row.querySelector('[data-toolchain-disable]');
+      if (!enableInput) return;
+      const name = enableInput.value;
+      const isInherited = inherited.has(name);
+      const isDisabled = !!(disableInput && disableInput.checked);
+      const isExplicit = enableInput.checked && !isInherited;
+      // Determine the desired badge state.
+      let wantState;
+      if (isInherited && !isDisabled) {
+        wantState = 'inherited';
+      } else if (isExplicit) {
+        wantState = 'enabled';
+      } else if (isDisabled) {
+        wantState = 'disabled';
+      } else {
+        wantState = 'none';
+      }
+      // Find existing badge (server-rendered or previously injected).
+      const existing = row.querySelector('[data-toolchain-badge]');
+      const currentState = existing ? (existing.getAttribute('data-toolchain-badge') || 'none') : 'none';
+      if (currentState === wantState) return;
+      // Remove stale badge.
+      if (existing) existing.remove();
+      if (wantState === 'none') return;
+      // Create replacement badge.
+      const badge = document.createElement('span');
+      badge.setAttribute('data-toolchain-badge', wantState);
+      badge.className = (
+        wantState === 'inherited'
+          ? 'rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent'
+          : wantState === 'enabled'
+          ? 'rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn'
+          : 'rounded border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger'
+      );
+      badge.setAttribute('data-tooltip',
+        wantState === 'inherited' ? 'Inherited from project — active unless disabled'
+          : wantState === 'enabled' ? 'Explicitly enabled on this ticket'
+          : 'Disabled on this ticket — opts out of project default'
+      );
+      badge.textContent = (
+        wantState === 'inherited' ? 'Inherited'
+          : wantState === 'enabled' ? 'Enabled'
+          : 'Disabled'
+      );
+      // Insert before the Enable label so badge appears in the same visual slot.
+      const enableLabel = enableInput.closest('label');
+      if (enableLabel) {
+        row.insertBefore(badge, enableLabel);
+      } else {
+        row.appendChild(badge);
+      }
+    });
+  }
+
   function _applyProjectWorkspaceDefaults(root, projectId, force = false) {
     if (!root) return;
     // Auto-apply (force=false) is create-only and respects the dirty guard so
@@ -265,6 +328,8 @@
     const baseRefInput = root.querySelector('[data-base-ref-input]');
     if (baseRefInput) baseRefInput.value = project && project.default_base_ref ? project.default_base_ref : '';
     _setLinkedWorkspaceRows(root, project && project.default_linked_workspaces ? project.default_linked_workspaces : []);
+    // Refresh toolchain-picker badge states to reflect the new project's defaults.
+    _syncToolchainBadges(root, project ? (project.default_toolchains || []) : []);
     root.__ndApplyingProjectDefaults = false;
     window.ndSyncWorktreeFields(root);
     window.ndScheduleWorktreePreview(0, root);
@@ -350,6 +415,42 @@
       () => window.ndUpdateWorktreePreview(scope), delay,
     );
   };
+
+  // --- Effective execution-context preview -------------------------------
+  //
+  // Debounced refresh of the shared effective-config partial inside the
+  // ticket create/edit modal. The actual request + swap is htmx's job (the
+  // [data-effective-preview] element carries hx-post / hx-include / hx-swap);
+  // we only fire the nd-config-refresh trigger so the panel reflects the
+  // latest project / profile / workspace / toolchain selection.
+  window.ndScheduleEffectiveConfigPreview = function (delay = 350, scope) {
+    const root = (scope && scope.closest && scope.closest('[data-ticket-form]'))
+      || (scope || document);
+    clearTimeout(root.__ndEffConfigTimer);
+    root.__ndEffConfigTimer = setTimeout(() => {
+      const target = (root.querySelector && root.querySelector('[data-effective-preview]'))
+        || document.querySelector('[data-effective-preview]');
+      if (target && window.htmx) window.htmx.trigger(target, 'nd-config-refresh');
+    }, delay);
+  };
+
+  // Fields whose changes should NOT refresh the execution-context preview
+  // (they don't affect the merged run context). Everything else does.
+  function _cfgIrrelevant(target) {
+    if (!target) return true;
+    const name = target.name || '';
+    if (name === 'title' || name === 'prompt') return true;
+    // Priority and label fields are purely organisational — they don't affect
+    // the sandbox, toolchain, or permission resolution.
+    if (name === 'priority') return true;
+    if (name === 'label_ids' || name === 'labels_form') return true;
+    // Dependency search box and its hidden depends_on_id rows don't change
+    // the execution context either.
+    if (target.matches && target.matches(
+      '[data-dep-search], [name="depends_on_id"], [name="deps_form"]'
+    )) return true;
+    return false;
+  }
 
   window.ndSetWorktreePreview = function (pathText, sourceText = '', scope) {
     const root = scope || document;
@@ -472,21 +573,20 @@
       ev.preventDefault();
       _setActive(dropdownId, (cur <= 0 ? items.length : cur) - 1);
     } else if (ev.key === 'Tab') {
-      // While the list is open, Tab/Shift-Tab move the highlight (down/up,
-      // wrapping) instead of leaving the field. When it's closed/empty we
-      // fall through so Tab moves focus normally — never trap focus.
+      // Shift+Tab: keep native focus movement.
+      if (ev.shiftKey) return;
+      // Tab with suggestions visible: shell-style completion — commit the
+      // highlighted item (or the first if none highlighted). When the list is
+      // closed/empty fall through so Tab moves focus normally.
       if (!items.length) return;
       ev.preventDefault();
-      if (ev.shiftKey) {
-        _setActive(dropdownId, (cur <= 0 ? items.length : cur) - 1);
-      } else {
-        _setActive(dropdownId, cur + 1);
-      }
+      const tabI = cur >= 0 ? cur : 0;
+      window.ndPathSuggestPick(inputEl.id, items[tabI].getAttribute('data-suggest-value'));
     } else if (ev.key === 'Enter') {
-      // Enter selects the highlighted item and closes the list. With no
-      // highlight yet, default to the first item so one Enter still picks.
-      if (!items.length) return;
+      // Always preventDefault so a stray Enter never submits the enclosing
+      // form. Only commit a suggestion when the list has items.
       ev.preventDefault();
+      if (!items.length) return;
       const i = cur >= 0 ? cur : 0;
       window.ndPathSuggestPick(inputEl.id, items[i].getAttribute('data-suggest-value'));
     } else if (ev.key === 'Escape') {
@@ -735,6 +835,185 @@
     if (picker) _depUpdateEmpty(picker);
   };
 
+  // --- Profile dropdown ----------------------------------------------------
+  //
+  // Keyboard-native custom dropdown for the profile field. Focus stays on the
+  // trigger button; aria-activedescendant tracks cursor position. The popover
+  // uses position:fixed (set via inline style) so it escapes the modal's
+  // overflow-y:auto body. Data-attribute driven — no id-hardcoding — so the
+  // same code handles both create and edit modal instances.
+
+  // Tracks open profile dropdowns: form root → { trigger, menu }.
+  const _profState = new Map();
+
+  function _profPosition(trigger, menu) {
+    const r = trigger.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.left = r.left + 'px';
+    menu.style.top = (r.bottom + 4) + 'px';
+    menu.style.width = r.width + 'px';
+    menu.style.minWidth = '0';
+    menu.style.maxWidth = 'none';
+  }
+
+  function _profClose(root) {
+    const entry = _profState.get(root);
+    if (!entry) return;
+    _profState.delete(root);
+    entry.menu.classList.add('hidden');
+    entry.trigger.setAttribute('aria-expanded', 'false');
+    entry.trigger.removeAttribute('aria-activedescendant');
+    entry.menu.querySelectorAll('[data-profile-option].nd-opt-active')
+      .forEach((o) => o.classList.remove('nd-opt-active'));
+  }
+
+  function _profShow(root, trigger, menu) {
+    // Close other open profile pickers first (defensive; normally at most one).
+    _profState.forEach((_, r) => { if (r !== root) _profClose(r); });
+    _profPosition(trigger, menu);
+    menu.classList.remove('hidden');
+    trigger.setAttribute('aria-expanded', 'true');
+    _profState.set(root, { trigger, menu });
+    // Place keyboard cursor on the currently-selected option, if any.
+    const cur = menu.querySelector('[data-profile-option][aria-selected="true"]');
+    if (cur) {
+      cur.classList.add('nd-opt-active');
+      cur.scrollIntoView({ block: 'nearest' });
+      trigger.setAttribute('aria-activedescendant', cur.id);
+    }
+  }
+
+  function _profMoveCursor(menu, trigger, delta) {
+    const all = Array.from(menu.querySelectorAll('[data-profile-option]'));
+    if (!all.length) return;
+    const idx = all.findIndex((o) => o.classList.contains('nd-opt-active'));
+    const nextIdx = idx === -1
+      ? (delta > 0 ? 0 : all.length - 1)
+      : (idx + delta + all.length) % all.length;
+    const next = all[nextIdx];
+    all.forEach((o) => o.classList.toggle('nd-opt-active', o === next));
+    next.scrollIntoView({ block: 'nearest' });
+    trigger.setAttribute('aria-activedescendant', next.id);
+  }
+
+  function _profCommit(root, trigger, menu, opt, hiddenInput, labelEl) {
+    const val = opt.getAttribute('data-value') || '';
+    const lbl = (opt.querySelector('.nd-prop-label') || {}).textContent || '';
+    hiddenInput.value = val;
+    labelEl.textContent = lbl;
+    labelEl.classList.remove('text-fg-muted');
+    labelEl.classList.add('text-fg');
+    menu.querySelectorAll('[data-profile-option]').forEach((o) => {
+      const sel = o === opt;
+      o.setAttribute('aria-selected', sel ? 'true' : 'false');
+      o.classList.toggle('nd-prop-current', sel);
+      const chk = o.querySelector('.nd-prop-check');
+      if (sel && !chk) {
+        const span = document.createElement('span');
+        span.className = 'nd-prop-check';
+        span.setAttribute('aria-hidden', 'true');
+        span.textContent = '✓';
+        o.appendChild(span);
+      } else if (!sel && chk) {
+        chk.remove();
+      }
+    });
+    // Clear required-field warn styling once a selection is made.
+    trigger.classList.remove('border-warn', 'ring-1', 'ring-warn/40');
+    trigger.classList.add('border-border');
+    _profClose(root);
+    trigger.focus();
+    // Notify the effective-config preview via a bubbling change event.
+    hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function _initProfileDropdown(root) {
+    if (!root || root.__ndProfileDropdownBound) return;
+    const wrapper = root.querySelector('[data-profile-select]');
+    if (!wrapper) return;
+    root.__ndProfileDropdownBound = true;
+
+    const trigger = wrapper.querySelector('[data-profile-trigger]');
+    const menu = wrapper.querySelector('[data-profile-options]');
+    const hiddenInput = root.querySelector('input[name="profile_id"][data-profile-hidden]');
+    const labelEl = wrapper.querySelector('[data-profile-trigger-label]');
+    if (!trigger || !menu || !hiddenInput || !labelEl) return;
+
+    // Assign stable IDs to options so aria-activedescendant can point to them.
+    const pfx = 'nd-prof-' + (Math.random() * 1e6 | 0);
+    menu.querySelectorAll('[data-profile-option]').forEach((o, i) => {
+      if (!o.id) o.id = pfx + '-' + i;
+    });
+
+    // Auto-select when exactly one profile exists and nothing is pre-selected.
+    const allOpts = Array.from(menu.querySelectorAll('[data-profile-option]'));
+    if (allOpts.length === 1 && !hiddenInput.value) {
+      _profCommit(root, trigger, menu, allOpts[0], hiddenInput, labelEl);
+    }
+
+    // Trigger: click opens / closes (toggle).
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (trigger.getAttribute('aria-expanded') === 'true') {
+        _profClose(root);
+      } else {
+        _profShow(root, trigger, menu);
+      }
+    });
+
+    // Trigger: full keyboard support.
+    trigger.addEventListener('keydown', (e) => {
+      const open = trigger.getAttribute('aria-expanded') === 'true';
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        if (!open) {
+          _profShow(root, trigger, menu);
+        } else {
+          const active = menu.querySelector('[data-profile-option].nd-opt-active');
+          if (active) _profCommit(root, trigger, menu, active, hiddenInput, labelEl);
+          else _profClose(root);
+        }
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (!open) { _profShow(root, trigger, menu); return; }
+        _profMoveCursor(menu, trigger, 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!open) { _profShow(root, trigger, menu); return; }
+        _profMoveCursor(menu, trigger, -1);
+      } else if (e.key === 'Escape') {
+        if (open) { e.stopPropagation(); _profClose(root); }
+      } else if (e.key === 'Tab') {
+        // Don't preventDefault — let Tab move focus naturally after closing.
+        if (open) _profClose(root);
+      }
+    });
+
+    // Options: mousedown commits before blur can close the dropdown.
+    menu.querySelectorAll('[data-profile-option]').forEach((o) => {
+      o.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        _profCommit(root, trigger, menu, o, hiddenInput, labelEl);
+      });
+    });
+  }
+
+  // Reposition open profile menus on scroll / resize (they use position:fixed).
+  (function () {
+    function _profRepos() {
+      _profState.forEach(({ trigger, menu }) => _profPosition(trigger, menu));
+    }
+    window.addEventListener('scroll', _profRepos, true);
+    window.addEventListener('resize', _profRepos);
+    // Close on click anywhere outside the open dropdown's wrapper.
+    document.addEventListener('click', (e) => {
+      _profState.forEach((entry, root) => {
+        const wrapper = entry.trigger.closest('[data-profile-select]');
+        if (wrapper && !wrapper.contains(e.target)) _profClose(root);
+      });
+    }, true);
+  })();
+
   // --- Init / wire-up ----------------------------------------------------
   //
   // Run once on page load AND whenever a fresh ticket form mounts (e.g. a
@@ -781,6 +1060,42 @@
     } else {
       window.ndSyncWorktreeFields(root);
       window.ndScheduleWorktreePreview(0, root);
+    }
+
+    _initProfileDropdown(root);
+
+    // Profile required validation: hidden inputs bypass native constraint
+    // validation, so block HTMX submission and highlight the trigger if empty.
+    if (!root.__ndProfileSubmitBound) {
+      root.__ndProfileSubmitBound = true;
+      root.addEventListener('htmx:beforeRequest', (e) => {
+        if (e.target !== root) return;
+        const inp = root.querySelector('input[name="profile_id"][data-profile-hidden]');
+        if (!inp || inp.value) return;
+        e.preventDefault();
+        const trig = root.querySelector('[data-profile-trigger]');
+        if (trig) {
+          trig.classList.remove('border-border');
+          trig.classList.add('border-warn', 'ring-1', 'ring-warn/40');
+          trig.focus();
+        }
+      });
+    }
+
+    // Execution-context preview: refresh when any config-bearing field
+    // changes. A single delegated listener (bound once) covers fields that
+    // exist now and ones added later (linked workspaces, extra paths).
+    const previewHost = root.querySelector('[data-effective-preview]');
+    if (previewHost && !root.__ndEffConfigBound) {
+      root.__ndEffConfigBound = true;
+      const onChange = (e) => {
+        if (_cfgIrrelevant(e.target)) return;
+        window.ndScheduleEffectiveConfigPreview(400, root);
+      };
+      root.addEventListener('change', onChange);
+      root.addEventListener('input', onChange);
+      // Initial render once the form has settled (project defaults applied).
+      window.ndScheduleEffectiveConfigPreview(120, root);
     }
   }
 

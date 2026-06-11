@@ -23,48 +23,117 @@
     {# search_bar.js: unified query/filter bar (board + Ctrl-K). Owns the query
        string, facet dropdowns, autocomplete, and chips. #}
     <script src="{{ static_v('search_bar.js') }}" defer></script>
-    {# command_palette.js: Ctrl/Cmd+K palette + global keyboard shortcuts.
-       Progressive enhancement — every action stays reachable by mouse. #}
-    <script src="{{ static_v('command_palette.js') }}" defer></script>
+    {# display_options.js: the Display popover (group/order/property toggles)
+       on the board + list toolbars. Opened by the Display button or Shift+V. #}
+    <script src="{{ static_v('display_options.js') }}" defer></script>
     {# notifications.js: browser desktop notifications for run completions. #}
     <script src="{{ static_v('notifications.js') }}" defer></script>
+    {# property_picker.js: the ONE shared anchored picker for single-value
+       ticket metadata (priority, status, project, …). Replaces all
+       per-property pickers. #}
+    <script src="{{ static_v('property_picker.js') }}" defer></script>
+    {# label_picker.js: the multi-select search-and-select control for ticket
+       labels (add/remove many, inline create). Separate primitive from the
+       single-value property picker above; shares no globals with it. #}
+    <script src="{{ static_v('label_picker.js') }}" defer></script>
+    {# inline_label_picker.js: toggle-based inline label popover for list rows.
+       Opens a compact popover where each label is toggled on/off individually.
+       Follows the same patterns as property_picker.js. #}
+    <script src="{{ static_v('inline_label_picker.js') }}" defer></script>
+    {# bulk_select.js: selection model (X / Shift+J/K / Esc) + bulk action bar.
+       Reuses command_palette.js's cursor (window.ndBoardCursor); no new
+       picker/cursor logic. #}
+    <script src="{{ static_v('bulk_select.js') }}" defer></script>
+    {# saved_views.js: ndSavedViews() — fetches and caches saved views for the
+       command palette and save-view form; defines window.ndOpenSaveViewDialog. #}
+    <script src="{{ static_v('saved_views.js') }}" defer></script>
+    {# command_palette.js: Ctrl/Cmd+K palette + global keyboard shortcuts.
+       Loads last so window globals from the scripts above are defined first.
+       Progressive enhancement — every action stays reachable by mouse. #}
+    <script src="{{ static_v('command_palette.js') }}" defer></script>
   </head>
   <body class="bg-bg text-fg min-h-screen">
     <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">
       <a href="/" class="font-bold text-accent shrink-0">nightdesk</a>
-      <div id="header-search" class="relative w-64 shrink-0">
-        <input type="text"
-               name="q"
-               placeholder="Search… project=nd status=review"
-               autocomplete="off"
-               hx-get="/header/search"
-               hx-trigger="keyup changed delay:200ms, focus"
-               hx-target="#search-results"
-               hx-include="this"
-               hx-swap="innerHTML"
-               onfocus="document.getElementById('search-results').classList.remove('hidden')"
-               onblur="setTimeout(() => document.getElementById('search-results').classList.add('hidden'), 150)"
-               class="w-full px-2 py-1 text-sm bg-bg-elev-2 border border-border rounded text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent" />
-        <div id="search-results"
-             class="absolute mt-1 w-72 bg-bg-elev border border-border rounded shadow z-50 hidden"></div>
-      </div>
-      <nav class="flex items-center gap-1 text-sm">
-        {% set nav_items = [
-          ('board', '/', 'Board'),
-          ('archive', '/archive', 'Archive'),
-          ('cron', '/cron', 'Cron'),
-          ('analytics', '/analytics', 'Analytics'),
-          ('profiles', '/profiles', 'Profiles'),
-          ('settings', '/settings', 'Settings'),
+      <nav class="flex items-center gap-1 text-sm" aria-label="Primary">
+        {% set nav_groups = [
+          ('work', 'Work', '/', [
+            ('/', 'Board'),
+            ('/projects', 'Projects'),
+            ('/list', 'List'),
+            ('/inbox', 'Inbox'),
+            ('/archive', 'Archive'),
+            ('/cron', 'Scheduled'),
+          ]),
+          ('insights', 'Insights', '/analytics', [
+            ('/analytics', 'Analytics'),
+          ]),
+          ('setup', 'Setup', '/settings', [
+            ('/profiles', 'Profiles'),
+            ('/settings/scheduling', 'Settings'),
+            ('/toolsets', 'Toolsets'),
+            ('/cron', 'Cron configuration'),
+          ]),
         ] %}
-        {% for key, href, label in nav_items %}
-          {% set is_active = (active_page == key) %}
-          <a href="{{ href }}"
-             class="px-3 py-1 border-b-2 transition-colors
-                    {% if is_active %}border-accent text-fg{% else %}border-transparent text-fg-muted hover:text-fg hover:border-border{% endif %}">
-            {{ label }}
-          </a>
+        {% set active_groups = {
+          'work': ['', 'board', 'tickets', 'projects', 'list', 'inbox', 'archive', 'cron'],
+          'insights': ['analytics'],
+          'setup': ['profiles', 'settings', 'toolsets'],
+        } %}
+        {% for group_key, label, href, children in nav_groups %}
+          {% set is_active = active_page in active_groups[group_key] %}
+          <details class="nd-nav-menu relative">
+            <summary class="nd-nav-trigger {% if is_active %}is-active{% endif %}"
+                     {% if is_active %}aria-current="true"{% endif %}>
+              <span>{{ label }}</span>
+              {# Piece 2: inbox dot on the Work trigger — visible without
+                 opening the dropdown; updated by the badge poll below. #}
+              {% if group_key == 'work' %}<span id="nd-inbox-dot-wrap"></span>{% endif %}
+              <span class="nd-nav-chevron" aria-hidden="true"></span>
+            </summary>
+            <div class="nd-nav-popover">
+              {% for child_href, child_label in children %}
+                {% set child_active = (request.url.path == child_href) if request is defined else false %}
+                {% if child_href == '/inbox' %}
+                  {# Inbox gets a count badge. flex layout puts the badge at the right edge. #}
+                  <a href="{{ child_href }}"
+                     class="nd-nav-item flex items-center {% if child_active %}is-active{% endif %}"
+                     {% if child_active %}aria-current="page"{% endif %}>
+                    <span class="nd-nav-item-label flex-1">{{ child_label }}</span>
+                    {# Piece 2: inbox badge chip — polls /header/inbox-badge every 15 s.
+                       OOB response also refreshes #nd-inbox-dot-wrap in the trigger. #}
+                    <span id="nd-inbox-badge-wrap"
+                          class="shrink-0 ml-1"
+                          hx-get="/header/inbox-badge"
+                          hx-trigger="load, every 15s"
+                          hx-swap="innerHTML"></span>
+                  </a>
+                {% else %}
+                  <a href="{{ child_href }}"
+                     class="nd-nav-item {% if child_active %}is-active{% endif %}"
+                     {% if child_active %}aria-current="page"{% endif %}>
+                    <span class="nd-nav-item-label">{{ child_label }}</span>
+                  </a>
+                {% endif %}
+              {% endfor %}
+            </div>
+          </details>
         {% endfor %}
+        {# Saved Views dropdown — content loaded via HTMX on page load so views
+           are always current without coupling to individual route handlers. #}
+        <details class="nd-nav-menu relative">
+          <summary class="nd-nav-trigger">
+            <span>Views</span>
+            <span class="nd-nav-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="nd-nav-popover"
+               id="nd-views-nav-popover"
+               hx-get="/views/menu"
+               hx-trigger="load"
+               hx-swap="innerHTML">
+            <span class="px-3 py-2 text-xs text-fg-muted block">Loading&#x2026;</span>
+          </div>
+        </details>
         {# Works on every page: ndOpenCreateTicket pops the inline modal when
            the page already has one (the board), otherwise lazy-loads it into
            #create-modal-host below. #}
@@ -98,7 +167,71 @@
            class="relative group text-sm text-fg-muted font-mono"
            hx-get="/header/worker-pill"
            hx-trigger="load, every 3s"
-           hx-swap="innerHTML">·</div>
+            hx-swap="innerHTML">·</div>
+      <script>
+        (function () {
+          var closeTimer = null;
+          function clearCloseTimer() {
+            if (closeTimer) window.clearTimeout(closeTimer);
+            closeTimer = null;
+          }
+          function openMenu(menu) {
+            if (!menu) return;
+            clearCloseTimer();
+            closeMenus(menu);
+            menu.open = true;
+            menu.classList.remove('is-closing');
+          }
+          function closeMenu(menu) {
+            if (!menu || !menu.open) return;
+            menu.classList.add('is-closing');
+            window.setTimeout(function () {
+              menu.open = false;
+              menu.classList.remove('is-closing');
+            }, 140);
+          }
+          function scheduleClose(menu, delay) {
+            clearCloseTimer();
+            closeTimer = window.setTimeout(function () {
+              if (!menu || !menu.open || menu.matches(':hover')) return;
+              closeMenu(menu);
+            }, delay || 160);
+          }
+          function closeMenus(except) {
+            clearCloseTimer();
+            document.querySelectorAll('.nd-nav-menu[open]').forEach(function (menu) {
+              if (menu !== except) closeMenu(menu);
+            });
+          }
+          document.querySelectorAll('.nd-nav-menu').forEach(function (menu) {
+            var summary = menu.querySelector('summary');
+            if (summary) {
+              summary.addEventListener('click', function (ev) {
+                ev.preventDefault();
+                if (menu.open) closeMenu(menu);
+                else openMenu(menu);
+              });
+            }
+            menu.addEventListener('pointerenter', function () { openMenu(menu); });
+            menu.addEventListener('focusin', clearCloseTimer);
+            menu.addEventListener('pointerleave', function () {
+              if (menu.open) scheduleClose(menu);
+            });
+            menu.addEventListener('focusout', function () {
+              window.setTimeout(function () {
+                if (menu.open && !menu.contains(document.activeElement)) scheduleClose(menu, 0);
+              }, 0);
+            });
+          });
+          document.addEventListener('click', function (ev) {
+            if (ev.target.closest && ev.target.closest('.nd-nav-menu')) return;
+            closeMenus(null);
+          });
+          document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') closeMenus(null);
+          });
+        })();
+      </script>
     </header>
     <main class="w-full px-6 py-4">
       {% block body %}{% endblock %}
@@ -109,6 +242,51 @@
     {# Lazy-load target for the create-ticket modal on pages that don't embed
        it inline (everything except the board). Filled by ndOpenCreateTicket. #}
     <div id="create-modal-host"></div>
+    {# Lazy-load target for the Inbox promote modal (the shared edit modal in
+       promote mode). Filled by ndOpenPromoteTicket. #}
+    <div id="promote-modal-host"></div>
+    {# Save-view dialog: opened by ndOpenSaveViewDialog(surface) from board/list
+       toolbars.  The JS collects current URL params at submit time. #}
+    <dialog id="nd-save-view-dialog"
+            aria-label="Save view"
+            class="bg-bg-elev border border-border rounded-lg shadow-xl backdrop:bg-black/50 text-fg p-0 w-80"
+            style="margin: auto;">
+      <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+        <h2 class="text-sm font-semibold">Save current view</h2>
+        <button type="button"
+                onclick="document.getElementById('nd-save-view-dialog').close()"
+                class="text-fg-muted hover:text-fg text-xl leading-none px-1"
+                aria-label="Close">&times;</button>
+      </div>
+      <form id="nd-save-view-form" class="px-4 py-3 flex flex-col gap-3" novalidate>
+        <input type="hidden" id="nd-save-view-surface" name="surface" value="">
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-fg-muted">View name</span>
+          <input type="text"
+                 id="nd-save-view-name"
+                 name="name"
+                 placeholder="e.g. Active backend work"
+                 autocomplete="off"
+                 required
+                 class="px-2 py-1.5 text-sm bg-bg-elev-2 border border-border rounded focus:outline-none focus:border-accent" />
+        </label>
+        <p id="nd-save-view-error" class="text-xs text-red-400 hidden"></p>
+        <div class="flex justify-end gap-2">
+          <button type="button"
+                  onclick="document.getElementById('nd-save-view-dialog').close()"
+                  class="px-3 py-1.5 text-xs rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted transition-colors">
+            Cancel
+          </button>
+          <button type="submit"
+                  class="px-3 py-1.5 text-xs rounded bg-accent text-bg hover:opacity-90 font-medium transition-opacity">
+            Save view
+          </button>
+        </div>
+      </form>
+    </dialog>
+    {# Piece 3: quick-capture dialog (Shift+C). Posts to the existing
+       /inbox/capture endpoint without navigating away. #}
+    {% include "partials/quick_capture.html" %}
     <script>
       // Shared feedback for Run-now buttons (board sidebar + ticket detail).
       // The endpoint returns 204 on success (HTMX) or 409 if the ticket is

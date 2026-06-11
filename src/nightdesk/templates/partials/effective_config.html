@@ -1,0 +1,284 @@
+{# Effective execution-context preview.
+
+  Reusable across ticket preview, project-defaults preview, promote-from-inbox,
+  and profile/backend UX. Expects ``effective`` to be an EffectiveConfig.
+#}
+{% set fields = namespace(
+  project=none, source_path=none, workspace_mode=none, base_ref=none, git_worktree=none,
+  profile=none, backend=none, default_model=none, permission_mode=none, claude_binary_path=none, credentials=none,
+  fs_read=none, fs_write=none, allowed_tools=none, denied_tools=none,
+  network_mode=none, network_allowlist=none, secret_keys=none,
+  toolchains=none, extra_paths=none, resolved_tool_paths=none
+) %}
+{% for group in effective.groups %}
+  {% for field in group.fields %}
+    {% if field.key == 'project' %}{% set fields.project = field %}{% endif %}
+    {% if field.key == 'source_path' %}{% set fields.source_path = field %}{% endif %}
+    {% if field.key == 'workspace_mode' %}{% set fields.workspace_mode = field %}{% endif %}
+    {% if field.key == 'base_ref' %}{% set fields.base_ref = field %}{% endif %}
+    {% if field.key == 'git_worktree' %}{% set fields.git_worktree = field %}{% endif %}
+    {% if field.key == 'profile' %}{% set fields.profile = field %}{% endif %}
+    {% if field.key == 'backend' %}{% set fields.backend = field %}{% endif %}
+    {% if field.key == 'default_model' %}{% set fields.default_model = field %}{% endif %}
+    {% if field.key == 'permission_mode' %}{% set fields.permission_mode = field %}{% endif %}
+    {% if field.key == 'claude_binary_path' %}{% set fields.claude_binary_path = field %}{% endif %}
+    {% if field.key == 'credentials' %}{% set fields.credentials = field %}{% endif %}
+    {% if field.key == 'fs_read' %}{% set fields.fs_read = field %}{% endif %}
+    {% if field.key == 'fs_write' %}{% set fields.fs_write = field %}{% endif %}
+    {% if field.key == 'allowed_tools' %}{% set fields.allowed_tools = field %}{% endif %}
+    {% if field.key == 'denied_tools' %}{% set fields.denied_tools = field %}{% endif %}
+    {% if field.key == 'network_mode' %}{% set fields.network_mode = field %}{% endif %}
+    {% if field.key == 'network_allowlist' %}{% set fields.network_allowlist = field %}{% endif %}
+    {% if field.key == 'secret_keys' %}{% set fields.secret_keys = field %}{% endif %}
+    {% if field.key == 'toolchains' %}{% set fields.toolchains = field %}{% endif %}
+    {% if field.key == 'extra_paths' %}{% set fields.extra_paths = field %}{% endif %}
+    {% if field.key == 'resolved_tool_paths' %}{% set fields.resolved_tool_paths = field %}{% endif %}
+  {% endfor %}
+{% endfor %}
+
+{% macro source_text(source) %}
+  {{ {
+    'global': 'Global config',
+    'project': 'Project default',
+    'profile': 'Profile',
+    'ticket': 'Ticket override',
+    'derived': 'Derived',
+  }[source] | default(source) }}
+{% endmacro %}
+
+{% macro source_chip(source, compact=True) %}
+  {% set classes = {
+    'global':  'border-info/40 text-info bg-info/10',
+    'project': 'border-accent/40 text-accent bg-accent/10',
+    'profile': 'border-border text-fg-muted bg-bg-elev-2',
+    'ticket':  'border-warn/40 text-warn bg-warn/10',
+    'derived': 'border-border text-fg-muted bg-bg-elev-2 italic',
+  }[source] | default('border-border text-fg-muted bg-bg-elev-2') %}
+  {% if compact %}
+    <span class="text-[10px] text-fg-muted" data-provenance="{{ source }}" title="{{ source_text(source) | trim }}">from {{ source_text(source) | trim }}</span>
+  {% else %}
+    <span class="rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide {{ classes }}"
+          data-provenance="{{ source }}" title="{{ source_text(source) | trim }}">{{ source_text(source) | trim }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro empty_value(label='Not set') %}
+  <span class="text-fg-muted italic" data-config-empty>{{ label }}</span>
+{% endmacro %}
+
+{% macro scalar_value(field) %}
+  {% set value = field.value if field and field.value is not none else '' %}
+  {% set placeholder = value in ('', '(none)', '(unset)', 'not set', 'not used') %}
+  {% if value == '(none)' %}
+    {{ empty_value('None') }}{% if field.source != 'derived' %} {{ source_chip(field.source) }}{% endif %}
+  {% elif value == '(unset)' or value == '' or value == 'not set' %}
+    {{ empty_value('Not set') }}{% if field.source != 'derived' %} {{ source_chip(field.source) }}{% endif %}
+  {% elif value == 'not used' %}
+    {{ empty_value('Not used') }}{% if field.source != 'derived' %} {{ source_chip(field.source) }}{% endif %}
+  {% else %}
+    <span class="font-mono text-fg break-all">{{ value }}</span>
+    {{ source_chip(field.source) }}
+  {% endif %}
+{% endmacro %}
+
+{% macro field_block(field, title=None, accent='') %}
+  <div class="rounded-lg border border-border bg-bg-elev-2/45 p-3 {{ accent }}" data-config-field="{{ field.key }}">
+    <div class="text-[10px] font-semibold uppercase tracking-wide text-fg-muted">{{ title or field.label }}</div>
+    <div class="mt-1 text-xs leading-snug">{{ scalar_value(field) }}</div>
+    {% if field.note %}<p class="mt-1 text-[11px] leading-snug text-fg-muted">{{ field.note }}</p>{% endif %}
+  </div>
+{% endmacro %}
+
+{% macro path_block(field, title, accent=False) %}
+  {% set value = field.value if field and field.value is not none else '' %}
+  <div class="rounded-lg border p-3 {% if accent %}border-accent/30 bg-accent/5{% else %}border-border bg-bg-elev-2/45{% endif %}" data-config-field="{{ field.key }}">
+    <div class="text-[10px] font-semibold uppercase tracking-wide {% if accent %}text-accent{% else %}text-fg-muted{% endif %}">{{ title }}</div>
+    {% if value in ('', '(unset)', 'not set') %}
+      <div class="mt-2 text-xs">{{ empty_value('Not set') }}</div>
+    {% else %}
+      <code class="mt-2 block rounded border border-border bg-bg px-2 py-1.5 font-mono text-[11px] leading-relaxed text-fg break-all">{{ value }}</code>
+    {% endif %}
+    {% if field.source != 'derived' %}
+      <div class="mt-1">{{ source_chip(field.source) }}</div>
+    {% endif %}
+    {% if field.note %}<p class="mt-1 text-[11px] leading-snug text-fg-muted">{{ field.note }}</p>{% endif %}
+  </div>
+{% endmacro %}
+
+{% macro list_item(item, style='card') %}
+  {% if style == 'path' %}
+    <li class="rounded border border-border bg-bg px-2 py-1.5" data-config-item>
+      <code class="block break-all font-mono text-[11px] text-fg">{{ item.value }}</code>
+      {{ source_chip(item.source) }}
+    </li>
+  {% else %}
+    <li class="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-bg px-2 py-1" data-config-item>
+      <code class="truncate font-mono text-[11px] text-fg">{{ item.value }}</code>
+      {{ source_chip(item.source) }}
+    </li>
+  {% endif %}
+{% endmacro %}
+
+{% macro item_list(field, empty_label='Not set', style='card', head=4) %}
+  <div data-config-field="{{ field.key }}">
+    {% if field.items %}
+      {% set overflow = field.items|length - head %}
+      <ul class="{% if style == 'path' %}space-y-1{% else %}flex flex-wrap gap-1.5{% endif %}">
+        {% for item in (field.items if overflow < 2 else field.items[:head]) %}
+          {{ list_item(item, style) }}
+        {% endfor %}
+      </ul>
+      {% if overflow >= 2 %}
+        <details class="mt-1 group" data-config-overflow>
+          <summary class="cursor-pointer select-none text-[11px] text-accent hover:underline list-none">
+            <span class="group-open:hidden">Show {{ overflow }} more...</span>
+            <span class="hidden group-open:inline">Show fewer</span>
+          </summary>
+          <ul class="mt-1 {% if style == 'path' %}space-y-1{% else %}flex flex-wrap gap-1.5{% endif %}">
+            {% for item in field.items[head:] %}
+              {{ list_item(item, style) }}
+            {% endfor %}
+          </ul>
+        </details>
+      {% endif %}
+    {% else %}
+      <div class="rounded border border-dashed border-border bg-bg/50 px-2 py-1.5 text-xs">
+        {{ empty_value(empty_label) }}
+        {% if field.source != 'derived' %} {{ source_chip(field.source) }}{% endif %}
+      </div>
+    {% endif %}
+    {% if field.note %}<p class="mt-1 text-[11px] leading-snug text-fg-muted">{{ field.note }}</p>{% endif %}
+  </div>
+{% endmacro %}
+
+{% macro mini_stat(label, field, empty='Not set') %}
+  <div class="rounded-lg border border-border bg-bg px-3 py-2" data-config-field="{{ field.key }}">
+    <div class="text-[10px] font-semibold uppercase tracking-wide text-fg-muted">{{ label }}</div>
+    <div class="mt-1 text-xs">{{ scalar_value(field) }}</div>
+    {% if field and field.note %}<p class="mt-1 text-[11px] leading-snug text-fg-muted">{{ field.note }}</p>{% endif %}
+  </div>
+{% endmacro %}
+
+<div class="space-y-3" data-effective-config>
+  {% if effective.issues %}
+    <div class="rounded-xl border border-warn/40 bg-warn/10 p-3">
+      <div class="flex items-center justify-between gap-2">
+        <div class="text-xs font-semibold uppercase tracking-wide text-warn">Needs attention</div>
+        <span class="rounded-full border border-warn/40 px-2 py-0.5 text-[10px] text-warn">{{ effective.issues|length }} note{{ '' if effective.issues|length == 1 else 's' }}</span>
+      </div>
+      <ul class="mt-2 list-disc space-y-0.5 pl-4 text-xs text-warn">
+        {% for issue in effective.issues %}
+          <li data-config-issue>{{ issue }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% else %}
+    <div class="rounded-xl border border-accent/25 bg-accent/5 px-3 py-2 text-xs text-accent">
+      No configuration notes from the shallow preflight checks.
+    </div>
+  {% endif %}
+
+  <section class="rounded-xl border border-border bg-bg-elev overflow-hidden" data-config-group="Project & workspace">
+    <div class="border-b border-border bg-bg-elev-2/45 px-3 py-2">
+      <div class="text-[10px] font-semibold uppercase tracking-[0.18em] text-fg-muted">Run identity</div>
+      <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
+        <span data-config-field="project" class="font-medium text-fg">{{ scalar_value(fields.project) }}</span>
+        <span class="text-fg-muted">/</span>
+        <span data-config-field="workspace_mode">{{ scalar_value(fields.workspace_mode) }}</span>
+      </div>
+    </div>
+    <div class="space-y-3 p-3">
+      {{ path_block(fields.source_path, 'Agent starts here', True) }}
+      <div class="grid grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] gap-2">
+        {% if fields.base_ref %}{{ field_block(fields.base_ref, 'Base ref') }}{% endif %}
+        {% if fields.git_worktree %}{{ field_block(fields.git_worktree, 'Worktree behavior') }}{% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2" data-config-group="Execution backend">
+    {% if fields.profile %}{{ mini_stat('Profile', fields.profile) }}{% endif %}
+    {{ mini_stat('Backend', fields.backend) }}
+    {{ mini_stat('Model', fields.default_model) }}
+    {{ mini_stat('Permission mode', fields.permission_mode) }}
+    {{ mini_stat('Credentials', fields.credentials) }}
+    <div class="sm:col-span-2">{{ field_block(fields.claude_binary_path, 'Claude binary') }}</div>
+  </section>
+
+  <section class="rounded-xl border border-border bg-bg-elev p-3" data-config-group="Filesystem reach">
+    <div class="mb-2 flex items-center justify-between gap-2">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-fg-muted">Filesystem reach</h3>
+      <span class="text-[10px] text-fg-muted">read + write mounts</span>
+    </div>
+    <div class="grid grid-cols-[repeat(auto-fit,minmax(14rem,1fr))] gap-2">
+      <div class="rounded-lg border border-border bg-bg-elev-2/45 p-2">
+        <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">Read</div>
+        {{ item_list(fields.fs_read, 'No extra read paths', 'path') }}
+      </div>
+      <div class="rounded-lg border border-accent/25 bg-accent/5 p-2">
+        <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent">Write</div>
+        {{ item_list(fields.fs_write, 'No write paths', 'path') }}
+      </div>
+    </div>
+  </section>
+
+  <section class="rounded-xl border border-border bg-bg-elev p-3" data-config-group="Tools">
+    <div class="mb-2 flex items-center justify-between gap-2">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-fg-muted">Tools</h3>
+      <span class="text-[10px] text-fg-muted">allow list + deny rules</span>
+    </div>
+    <div class="space-y-3">
+      <div>
+        <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">Allowed</div>
+        {{ item_list(fields.allowed_tools, 'All tools allowed unless denied', 'pill') }}
+      </div>
+      <div>
+        <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-warn">Denied</div>
+        {{ item_list(fields.denied_tools, 'No deny rules', 'pill') }}
+      </div>
+    </div>
+  </section>
+
+  <section class="rounded-xl border border-border bg-bg-elev p-3" data-config-group="Network & secrets">
+    <div class="mb-2 flex items-center justify-between gap-2">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-fg-muted">Network & secrets</h3>
+      {% if fields.network_mode and fields.network_mode.value == 'on' %}
+        <span class="rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-[10px] text-warn">network on</span>
+      {% else %}
+        <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-[10px] text-fg-muted">network limited</span>
+      {% endif %}
+    </div>
+    <div class="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2">
+      {{ mini_stat('Mode', fields.network_mode) }}
+      <div class="rounded-lg border border-border bg-bg px-3 py-2">
+        <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">Allowlist</div>
+        {{ item_list(fields.network_allowlist, 'No hosts listed', 'pill', 6) }}
+      </div>
+      <div class="rounded-lg border border-border bg-bg px-3 py-2">
+        <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">Secret env keys</div>
+        {{ item_list(fields.secret_keys, 'Not set', 'pill', 6) }}
+      </div>
+    </div>
+  </section>
+
+  <section class="rounded-xl border border-border bg-bg-elev p-3" data-config-group="Toolchain & PATH">
+    <div class="mb-2 flex items-center justify-between gap-2">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-fg-muted">Toolchain & PATH</h3>
+      <span class="text-[10px] text-fg-muted">presets expanded before run</span>
+    </div>
+    <div class="space-y-3">
+      <div>
+        <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">Presets</div>
+        {{ item_list(fields.toolchains, 'No presets selected', 'pill') }}
+      </div>
+      <div>
+        <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">Extra paths</div>
+        {{ item_list(fields.extra_paths, 'No extra tool paths', 'path') }}
+      </div>
+      <details class="rounded-lg border border-border bg-bg p-2" open>
+        <summary class="cursor-pointer select-none text-[10px] font-semibold uppercase tracking-wide text-fg-muted list-none">Resolved PATH dirs</summary>
+        <div class="mt-2">{{ item_list(fields.resolved_tool_paths, 'No resolved PATH additions', 'path', 5) }}</div>
+      </details>
+    </div>
+  </section>
+</div>

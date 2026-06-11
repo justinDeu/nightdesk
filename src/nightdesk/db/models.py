@@ -5,8 +5,8 @@ from typing import Optional
 import uuid
 
 from sqlalchemy import (
-    String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, Time,
-    UniqueConstraint,
+    Column, Index, String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, Time,
+    Table, UniqueConstraint,
 )
 from sqlalchemy import Float as sa_Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -22,6 +22,18 @@ def _now() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+# ---------------------------------------------------------------------------
+# Many-to-many: tickets <-> labels
+# ---------------------------------------------------------------------------
+ticket_labels = Table(
+    "ticket_labels",
+    Base.metadata,
+    Column("ticket_id", ForeignKey("tickets.id", ondelete="CASCADE"), primary_key=True),
+    Column("label_id", ForeignKey("labels.id", ondelete="CASCADE"), primary_key=True),
+    Index("ix_ticket_labels_label_id", "label_id"),
+)
 
 
 class Profile(Base):
@@ -53,6 +65,21 @@ class Profile(Base):
     run_token_scopes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class Label(Base):
+    """A named, colored tag that can be attached to tickets."""
+    __tablename__ = "labels"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    color: Mapped[str] = mapped_column(String, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    tickets: Mapped[list["Ticket"]] = relationship(
+        secondary=ticket_labels, back_populates="labels",
+    )
+
 
 class Project(Base):
     __tablename__ = "projects"
@@ -88,7 +115,7 @@ class Ticket(Base):
     priority: Mapped[int] = mapped_column(Integer, default=0, index=True)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     project_id: Mapped[Optional[str]] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
-    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"))
+    profile_id: Mapped[Optional[str]] = mapped_column(ForeignKey("profiles.id"), nullable=True)
     permission_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     toolchain_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
@@ -101,7 +128,7 @@ class Ticket(Base):
     next_run_context_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     project: Mapped[Optional["Project"]] = relationship(back_populates="tickets")
-    profile: Mapped["Profile"] = relationship(lazy="joined")
+    profile: Mapped[Optional["Profile"]] = relationship(lazy="joined")
     runs: Mapped[list["Run"]] = relationship(back_populates="ticket", foreign_keys="Run.ticket_id")
     workspaces: Mapped[list["TicketWorkspace"]] = relationship(
         back_populates="ticket",
@@ -119,6 +146,9 @@ class Ticket(Base):
         foreign_keys="TicketDependency.depends_on_id",
         back_populates="depends_on",
         cascade="all, delete-orphan",
+    )
+    labels: Mapped[list["Label"]] = relationship(
+        secondary=ticket_labels, back_populates="tickets", lazy="selectin",
     )
 
 
@@ -403,3 +433,24 @@ class CronJobFire(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
 
     cron_job: Mapped["CronJob"] = relationship(back_populates="fires")
+
+
+class SavedView(Base):
+    """A named, bookmarkable slice of the board or list surface.
+
+    Stores the URL params (q, group, order) for a surface so the user can
+    navigate back to a recurring query with one click.  Applying a view is
+    pure client-side navigation to the composed URL — no server-side state.
+    """
+
+    __tablename__ = "saved_views"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    # "board" | "list"
+    surface: Mapped[str] = mapped_column(String, nullable=False)
+    # Dict of URL params: q, group, (order for list).  All values are strings.
+    params: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

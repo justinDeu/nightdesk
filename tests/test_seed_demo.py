@@ -50,7 +50,30 @@ def test_all_five_statuses_present(demo_engine, demo_session, demo_transcript_ro
             text("SELECT DISTINCT status FROM tickets")
         ).scalars()
     )
-    assert statuses == {"draft", "queued", "running", "review", "archived"}
+    # Inbox triage items are now seeded alongside the runnable lifecycle states.
+    assert statuses == {"inbox", "draft", "queued", "running", "review", "archived"}
+
+
+def test_projects_seeded_and_assigned(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    """Demo seeds projects and assigns tickets so group-by-project has content,
+    while leaving some tickets unassigned for the No-project bucket."""
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    slugs = set(
+        demo_session.execute(text("SELECT slug FROM projects")).scalars()
+    )
+    assert {"web-app", "platform"} <= slugs
+    assigned = demo_session.execute(
+        text("SELECT COUNT(*) FROM tickets WHERE project_id IS NOT NULL")
+    ).scalar()
+    unassigned = demo_session.execute(
+        text("SELECT COUNT(*) FROM tickets WHERE project_id IS NULL")
+    ).scalar()
+    assert assigned > 0
+    assert unassigned > 0
 
 
 def test_profiles_seeded(demo_engine, demo_session, demo_transcript_root, tmp_path):
@@ -396,3 +419,72 @@ def test_idempotent_second_run(demo_engine, demo_session, demo_transcript_root, 
     # Second seed adds more tickets (it's additive, not truly idempotent
     # at the ticket level — but profiles are idempotent and it doesn't crash)
     assert second_count >= first_count
+
+
+def test_labels_seeded_with_colors(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    """Demo seeds a rich set of labels with distinct colors."""
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    rows = demo_session.execute(
+        text("SELECT name, color FROM labels ORDER BY name")
+    ).fetchall()
+    names = {r[0] for r in rows}
+    # Core labels used across ticket specs
+    assert {"backend", "ui/ux", "bug", "research", "infra", "docs", "cleanup", "feature"} <= names
+    # Every label has a non-empty color
+    for name, color in rows:
+        assert color, f"Label {name!r} has no color"
+
+
+def test_inbox_items_seeded(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    """Inbox items exist including incomplete (under-specified) ones."""
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    inbox = demo_session.execute(
+        text("SELECT id, title FROM tickets WHERE status = 'inbox'")
+    ).fetchall()
+    assert len(inbox) >= 3, f"Expected ≥3 inbox items, got {len(inbox)}"
+    # At least one inbox item should have NO workspaces (under-specified)
+    incomplete = demo_session.execute(text(
+        "SELECT COUNT(*) FROM tickets t "
+        "LEFT JOIN ticket_workspaces tw ON tw.ticket_id = t.id "
+        "WHERE t.status = 'inbox' AND tw.id IS NULL"
+    )).scalar()
+    assert incomplete >= 1, "Expected at least one incomplete inbox item"
+
+
+def test_tickets_have_labels(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    """Multiple tickets are labelled so grouping/filtering demos have content."""
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    labelled = demo_session.execute(text(
+        "SELECT COUNT(DISTINCT tl.ticket_id) FROM ticket_labels tl"
+    )).scalar()
+    assert labelled >= 5, f"Expected ≥5 labelled tickets, got {labelled}"
+
+
+def test_bug_label_assigned_to_inbox_item(demo_engine, demo_session, demo_transcript_root, tmp_path):
+    """The 'bug' label is created and assigned to the flaky-test inbox item."""
+    seed_demo(
+        db_path=Path(demo_engine.url.database),
+        transcript_root=demo_transcript_root,
+        source_path=str(tmp_path),
+    )
+    bug_label = demo_session.execute(text(
+        "SELECT id FROM labels WHERE name = 'bug'"
+    )).scalar()
+    assert bug_label is not None, "'bug' label not seeded"
+    # Check that some ticket has the bug label
+    has_bug = demo_session.execute(text(
+        "SELECT COUNT(*) FROM ticket_labels WHERE label_id = :lid"
+    ), {"lid": bug_label}).scalar()
+    assert has_bug >= 1, "No ticket assigned the 'bug' label"

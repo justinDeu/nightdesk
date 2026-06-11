@@ -11,8 +11,8 @@
   control here is a real <button>, so the palette is keyboard- and
   screen-reader-friendly. Keyboard shortcuts are a progressive enhancement:
   if JS is disabled these dialogs simply never open and every action they
-  expose (new ticket, search, run-now, archive, requeue, open detail, board,
-  archive nav) stays reachable by mouse through the header and board UI.
+  expose (new ticket, search, run-now, archive, requeue, open detail, Work,
+  Insights, and Setup nav) stays reachable by mouse through the header and UI.
 #}
 
 {# --- Command palette ---------------------------------------------------- #}
@@ -49,36 +49,108 @@
 {# --- Keyboard shortcuts cheat sheet -------------------------------------- #}
 <dialog id="nd-shortcuts-cheatsheet"
         aria-label="Keyboard shortcuts"
-        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[460px] max-w-[calc(100vw-2rem)]"
+        class="bg-bg-elev border border-border rounded-xl shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[1120px] max-w-[calc(100vw-2rem)]"
         style="margin: auto;">
-  <div tabindex="-1" autofocus class="focus:outline-none">
-  <div class="flex items-center justify-between px-5 py-3 border-b border-border">
-    <h2 class="text-base font-semibold">Keyboard shortcuts</h2>
+  <div tabindex="-1" autofocus class="focus:outline-none max-h-[min(760px,calc(100vh-4rem))] flex flex-col">
+  <div class="flex shrink-0 items-center justify-between px-5 py-3 border-b border-border bg-bg-elev-2/50">
+    <div>
+      <h2 class="text-base font-semibold">Keyboard shortcuts</h2>
+      <p class="mt-0.5 text-xs text-fg-muted">Quick commands grouped by where they work.</p>
+    </div>
     <button type="button"
             onclick="document.getElementById('nd-shortcuts-cheatsheet').close()"
             class="text-fg-muted hover:text-fg text-2xl leading-none px-2"
             aria-label="Close">&times;</button>
   </div>
-  <div class="px-5 py-4 space-y-2 text-sm">
+  <div class="overflow-y-auto px-5 py-4 text-sm">
     {% set _shortcuts = [
       ('Ctrl / Cmd + K', 'Open the command palette'),
+      ('Ctrl / Cmd + B', 'Toggle board / list view'),
       ('c', 'New ticket'),
+      ('Shift + C', 'Capture to inbox'),
       ('/', 'Focus search'),
       ('g then b', 'Go to board'),
+      ('g then l', 'Go to list'),
+      ('g then v', 'Jump to saved view'),
+      ('g then i', 'Go to Insights'),
+      ('g then s', 'Go to Setup'),
       ('g then a', 'Go to archive'),
       ('?', 'Show this cheat sheet'),
       ('Esc', 'Close palette or dialog'),
     ] %}
-    {% for keys, label in _shortcuts %}
-      <div class="flex items-center justify-between gap-4">
-        <span class="text-fg-muted">{{ label }}</span>
+    {% set _nav_shortcuts = [
+      ('J / K', 'Next / previous ticket on board'),
+      ('H / L', 'Previous / next column'),
+      ('Enter', 'Open ticket detail (board)'),
+      ('X', 'Select / deselect focused ticket'),
+      ('Shift + J / K', 'Extend selection down / up'),
+      ('Esc', 'Clear selection / cursor'),
+    ] %}
+    {% set _view_shortcuts = [
+      ('/', 'Filter bar on board/list; palette elsewhere'),
+      ('Ctrl / Cmd + B', 'Toggle board / list view'),
+      ('Shift + V', 'Display options (group, order, properties)'),
+    ] %}
+    {% set _ticket_shortcuts = [
+      ('E', 'Edit focused ticket'),
+      ('P', 'Set project'),
+      ('Shift + P', 'Set priority'),
+      ('S', 'Set status'),
+      ('Shift + L', 'Set labels'),
+      ('A', 'Archive'),
+      ('R', 'Run now / Requeue'),
+      ('I', 'Send to Inbox (draft only)'),
+      ('Space', 'Open sidebar / peek'),
+    ] %}
+    {% set _inbox_shortcuts = [
+      ('J / K', 'Next / previous inbox item'),
+      ('Enter', 'Open detail'),
+      ('A', 'Accept / promote'),
+      ('D', 'Decline / archive'),
+      ('E', 'Flesh out / promote…'),
+      ('L', 'Set labels'),
+      ('P', 'Set project'),
+      ('Shift + P', 'Set priority'),
+    ] %}
+    {% macro shortcut_row(keys, label) %}
+      <div class="flex items-center justify-between gap-4 rounded border border-border/70 bg-bg px-2.5 py-1.5">
+        <span class="min-w-0 text-fg-muted">{{ label }}</span>
         <kbd class="shrink-0 rounded border border-border bg-bg-elev-2 px-2 py-0.5 font-mono text-xs text-fg">{{ keys }}</kbd>
       </div>
-    {% endfor %}
-    <p class="pt-2 text-[11px] leading-snug text-fg-muted border-t border-border mt-3">
+    {% endmacro %}
+    {% macro shortcut_card(title, rows, note='') %}
+      <section class="rounded-lg border border-border bg-bg-elev-2/35 p-3">
+        <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">{{ title }}</h3>
+        <div class="space-y-1.5">
+          {% for keys, label in rows %}
+            {{ shortcut_row(keys, label) }}
+          {% endfor %}
+        </div>
+        {% if note %}<p class="mt-2 text-[11px] leading-snug text-fg-muted">{{ note }}</p>{% endif %}
+      </section>
+    {% endmacro %}
+
+    <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+      <div class="space-y-3">
+        {{ shortcut_card('Global', _shortcuts) }}
+      </div>
+      <div class="space-y-3">
+        {{ shortcut_card('Board navigation', _nav_shortcuts) }}
+        {{ shortcut_card('View & display', _view_shortcuts, 'Use Work for Board/List display modes plus Inbox, Archive, and Scheduled views.') }}
+      </div>
+      <div class="space-y-3">
+        {{ shortcut_card('Inbox triage', _inbox_shortcuts, 'Active on the Inbox page (/inbox). S is reserved for future snooze support.') }}
+      </div>
+      <div class="space-y-3">
+        {{ shortcut_card('Focused ticket', _ticket_shortcuts, 'These act on the cursor-selected ticket on the board or the current ticket detail page. When tickets are multi-selected, P / Shift+P / S / Shift+L act on all selected tickets.') }}
+      </div>
+    </div>
+
+    <p class="mt-3 rounded border border-border bg-bg px-3 py-2 text-[11px] leading-snug text-fg-muted">
       Shortcuts are an enhancement. Every action stays reachable by mouse:
-      the header search box, the + New ticket button, and the per-ticket
-      Run-now / Archive / Requeue controls.
+      the Ctrl/Cmd+K palette, the filter bar, the + New ticket button, and
+      the per-ticket Run-now / Archive / Requeue controls. Shortcuts are
+      ignored while typing in input fields.
     </p>
   </div>
   </div>

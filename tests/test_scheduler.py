@@ -107,7 +107,7 @@ def test_single_matching_window_caps_normal(session, sample_profile):
 
 def test_single_match_priority_then_created(session, sample_profile):
     _window(session, start="22:00", end="07:00", max_parallel=5)
-    older_high = _qt(session, sample_profile, title="oh", priority=5, run_now=False)
+    older_high = _qt(session, sample_profile, title="oh", priority=4, run_now=False)
     newer_low = _qt(session, sample_profile, title="nl", priority=0, run_now=False)
     picked = pick_eligible(session, now=SATURDAY, total_running=0)
     assert [t.id for t in picked] == [older_high.id, newer_low.id]
@@ -194,13 +194,13 @@ def test_window_matches_uses_configured_timezone():
     assert window_matches(w, before, tz) is False
 
 
-def test_pick_eligible_orders_normal_by_position_then_priority(session, sample_profile):
-    """Normal picks honor (position ASC, priority DESC, created_at ASC)."""
+def test_pick_eligible_orders_normal_by_position_before_priority(session, sample_profile):
+    """Normal picks use queue position first; priority only breaks ties."""
     from nightdesk.domain.tickets import reorder_in_column
     _window(session)
     a = _qt(session, sample_profile, title="a", priority=0, run_now=False)
-    b = _qt(session, sample_profile, title="b", priority=9, run_now=False)
-    c = _qt(session, sample_profile, title="c", priority=5, run_now=False)
+    b = _qt(session, sample_profile, title="b", priority=4, run_now=False)
+    c = _qt(session, sample_profile, title="c", priority=2, run_now=False)
     # Force ordering: c, a, b
     reorder_in_column(session, "queued", [c.id, a.id, b.id])
     picked = pick_eligible(session, now=SATURDAY, total_running=0)
