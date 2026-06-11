@@ -38,14 +38,25 @@
   // ---- open / close ------------------------------------------------------
 
   function closeAll(except) {
+    var closed = 0;
     openMenus().forEach(function (menu) {
       if (menu === except) return;
       menu.classList.add("hidden");
+      closed += 1;
       // Only clear if it was lazy-loaded (has a picker-url for next open)
       if (menu.getAttribute("data-picker-url")) {
         menu.innerHTML = "";
       }
     });
+    // Nudge the columns poll when a menu actually closed. The board guard
+    // suppresses polls while a picker is open, so this is the first chance
+    // for other surfaces to pick up any toggles made during the session.
+    if (closed > 0) {
+      var poll = document.getElementById("board-columns-poll");
+      if (poll && window.htmx) {
+        try { window.htmx.trigger(poll, "poll"); } catch (e) {}
+      }
+    }
   }
 
   function renderError(menu) {
@@ -84,8 +95,11 @@
   function openPicker(anchor) {
     var menu = menuOf(anchor);
     if (!menu) return;
-    closeAll(menu);
+    // Unhide BEFORE closeAll: its poll nudge must see an open menu so the
+    // board's pickerOpen() guard suppresses the poll (else the response
+    // could swap the card under the picker that's just opening).
     menu.classList.remove("hidden");
+    closeAll(menu);
     // Lazy-load if empty (initial open)
     if (!menu.textContent.trim()) {
       loadMenu(menu);
@@ -169,32 +183,30 @@
   // ---- commit feedback (called from toggle buttons' hx-on::after-request) --
 
   window.ndInlineLabelCommitted = function (btn, ev) {
+    // On success the outerHTML swap destroys the button BEFORE htmx
+    // dispatches after-request (it re-targets the event at the swap
+    // container), so this handler only ever runs for FAILED requests —
+    // no swap happened and the button survived. Success-side work
+    // (refocus + poll nudge) lives in the delegated htmx:afterSettle
+    // listener and closeAll() below.
     var ok = !!(ev && ev.detail && ev.detail.successful);
-    if (ok) {
-      // Nudge the list poll so other surfaces reflect the change.
-      var poll = document.getElementById("board-columns-poll");
-      if (poll && window.htmx) {
-        try { window.htmx.trigger(poll, "poll"); } catch (e) {}
-      }
-    }
+    if (ok) return;
     // On failure, show an inline error. The popover stays open.
-    if (!ok) {
-      var menu = btn.closest("[data-inline-label-menu]");
-      if (!menu) return;
-      var xhr = ev && ev.detail && ev.detail.xhr;
-      var msg = "Update failed";
-      if (xhr) {
-        if (xhr.status === 404) msg = "Ticket or label not found";
-      }
-      var existing = menu.querySelector("[data-inline-label-error]");
-      if (existing) existing.remove();
-      var err = document.createElement("div");
-      err.setAttribute("data-inline-label-error", "");
-      err.setAttribute("role", "alert");
-      err.className = "px-3 py-1.5 text-[11px] text-danger border-t border-border";
-      err.textContent = msg;
-      menu.appendChild(err);
+    var menu = btn.closest("[data-inline-label-menu]");
+    if (!menu) return;
+    var xhr = ev && ev.detail && ev.detail.xhr;
+    var msg = "Update failed";
+    if (xhr) {
+      if (xhr.status === 404) msg = "Ticket or label not found";
     }
+    var existing = menu.querySelector("[data-inline-label-error]");
+    if (existing) existing.remove();
+    var err = document.createElement("div");
+    err.setAttribute("data-inline-label-error", "");
+    err.setAttribute("role", "alert");
+    err.className = "px-3 py-1.5 text-[11px] text-danger border-t border-border";
+    err.textContent = msg;
+    menu.appendChild(err);
   };
 
   // ---- global wiring (event delegation; survives HTMX swaps) --------------
@@ -240,6 +252,26 @@
     if (menu) applyFilter(menu, search.value);
   });
 
+  // After a successful label toggle, htmx outerHTML-swaps the whole anchor
+  // and dispatches afterSettle at the swapped-in NEW anchor. Refocus its
+  // search input here — the button's own after-request hook never fires on
+  // success (the swap destroys the button first), so this delegated
+  // listener is the only reliable success-side hook.
+  document.body.addEventListener("htmx:afterSettle", function (e) {
+    var anchor = e.target;
+    if (!anchor || !anchor.matches || !anchor.matches("[data-label-picker]")) return;
+    var menu = menuOf(anchor);
+    if (!menu || menu.classList.contains("hidden")) return;
+    focusMenu(menu);
+    // Nudge the columns poll so other surfaces reflect the change. While
+    // the popover is open the board's poll guard suppresses it; closeAll()
+    // fires another nudge on close to catch up.
+    var poll = document.getElementById("board-columns-poll");
+    if (poll && window.htmx) {
+      try { window.htmx.trigger(poll, "poll"); } catch (err) {}
+    }
+  });
+
   document.addEventListener(
     "keydown",
     function (e) {
@@ -247,14 +279,14 @@
       if (!menu) return;
       if (e.key === "Escape") {
         e.preventDefault();
-        e.stopPropagation();
+        // stopImmediatePropagation prevents sibling capture listeners (e.g.
+        // command palette) from also acting on this Escape, independent of
+        // load order.
+        e.stopImmediatePropagation();
         closeAll();
-        // Return focus to the label anchor
+        // Return focus to the anchor element itself (it has tabindex="-1").
         var anchor = menu.closest("[data-label-picker]");
-        if (anchor) {
-          var first = anchor.querySelector("span");
-          if (first && first.focus) try { first.focus(); } catch (err) {}
-        }
+        if (anchor) try { anchor.focus(); } catch (err) {}
         return;
       }
       if (e.key === "ArrowDown") {

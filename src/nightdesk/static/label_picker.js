@@ -139,9 +139,11 @@
       return;
     }
     if (event.key === "Enter") {
+      // Always prevent default so Enter never bubbles up and submits the
+      // enclosing form while the picker input has focus.
+      event.preventDefault();
       var focused = suggest.querySelector(".bg-bg-elev-2");
       if (focused) {
-        event.preventDefault();
         focused.dispatchEvent(new Event("mousedown"));
       }
     }

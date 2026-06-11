@@ -624,6 +624,14 @@
       if (e.key === "Escape" && !menu.hidden) closeMenu();
     });
 
+    // Close the facet menu when focus moves outside the search bar (e.g. Tab).
+    // Auto-complete menus are already handled by the input blur listener above;
+    // facet menus opened by button click are not, so we cover them here.
+    document.addEventListener("focusin", function (e) {
+      if (menu.hidden || menuMode !== "facet") return;
+      if (!bar.contains(e.target)) closeMenu();
+    });
+
     // ---- initial state from the prefilled query -------------------------- //
     (function initFilters() {
       var q = bar.dataset.query || "";

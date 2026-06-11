@@ -406,8 +406,13 @@
   // Re-apply cursor highlight after HTMX swaps replace cards.
   function restoreCursor() {
     if (restorePendingBoardFocus()) return;
-    var sidebar = document.getElementById("sidebar");
-    var sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    // Prefer the in-flight desired id; sidebar attribute is stale while the
+    // sidebar AJAX from setCursor is still in flight.
+    var sel = desiredBoardSidebarTicketId;
+    if (!sel) {
+      var sidebar = document.getElementById("sidebar");
+      sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    }
     if (!sel) return;
     clearBoardCursor();
     var cards = boardCards();
@@ -1440,7 +1445,7 @@
     if ((e.metaKey || e.ctrlKey) && (key === "k" || key === "K")) {
       e.preventDefault();
       if (palette() && palette().open) closePalette();
-      else openPalette();
+      else if (!foreignDialogOpen()) openPalette();
       return;
     }
 
@@ -1465,6 +1470,10 @@
     if (isTypingTarget(e.target)) return;
     if (foreignDialogOpen()) return;
 
+    var now = Date.now();
+    var hadG = now - lastG < 800;
+    lastG = 0;
+
     // If our own palette/cheatsheet is open, let their own handlers / native
     // dialog behavior deal with keys.
     if ((palette() && palette().open) || (cheatsheet() && cheatsheet().open)) return;
@@ -1473,6 +1482,7 @@
     // own handler manages Arrow/Enter/Escape.
     if (document.querySelector("[data-property-menu]:not(.hidden)")) return;
     if (document.querySelector("[data-nd-bulk-menu]:not([hidden])")) return;
+    if (document.querySelector("[data-inline-label-menu]:not(.hidden)")) return;
 
     // Shift+V: toggle the Display options popover (board + list toolbars).
     if (e.shiftKey && (key === "v" || key === "V")) {
@@ -1490,7 +1500,7 @@
     if (key === "Escape" || key === "Esc") {
       if (window.ndDisplayPopover && window.ndDisplayPopover.isOpen()) {
         e.preventDefault();
-        window.ndDisplayPopover.close();
+        window.ndDisplayPopover.close({ refocus: true });
         return;
       }
       if (window.ndBulkSelect && window.ndBulkSelect.count() > 0) {
@@ -1510,8 +1520,7 @@
       return;
     }
 
-    var now = Date.now();
-    var hadG = now - lastG < 800;
+    if (window.ndDisplayPopover && window.ndDisplayPopover.isOpen()) return;
 
     if (hadG && (key === "i" || key === "I")) {
       e.preventDefault(); lastG = 0; location.href = "/analytics"; return;
@@ -1532,13 +1541,13 @@
       // g v: open the command palette pre-filtered to saved views.
       e.preventDefault(); lastG = 0; openPaletteFiltered("View:"); return;
     }
-    lastG = 0;
 
     if (key === "g" || key === "G") { lastG = now; return; }
     if (key === "c" || key === "C") { e.preventDefault(); openCreateTicket(); return; }
     if (key === "/") {
       e.preventDefault();
-      var search = document.querySelector('#header-search input[name="q"]');
+      var search = document.querySelector("[data-sb-input]") ||
+        document.querySelector('#header-search input[name="q"]');
       if (search) { search.focus(); search.select(); }
       return;
     }
@@ -1588,7 +1597,8 @@
 
       // Enter — open focused inbox item
       if (key === "Enter") {
-        if (ictx) { e.preventDefault(); inboxOpenDetail(ictx); }
+        e.preventDefault();
+        if (ictx) inboxOpenDetail(ictx);
         return;
       }
       // A — accept / promote (queued if complete, shows blocker feedback if not)
@@ -1732,7 +1742,10 @@
     }
     // Space — peek (opens the board sidebar for the focused ticket)
     if (key === " ") {
-      if (ctx) { e.preventDefault(); openPeek(ctx); }
+      if (document.getElementById("board-grid")) {
+        e.preventDefault();
+        if (ctx) openPeek(ctx);
+      }
       return;
     }
     // I — send the cursor-focused draft ticket to Inbox

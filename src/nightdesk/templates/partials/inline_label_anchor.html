@@ -19,7 +19,7 @@
     all_labels       - all Label objects (optional; only for toggle swap)
     ticket_label_ids - set of label ids currently on the ticket (optional)
 #}
-<span class="nd-label-anchor" data-label-picker="{{ tid }}">
+<span class="nd-label-anchor" data-label-picker="{{ tid }}" tabindex="-1">
   {# Label chips (current state). #}
   {% for label in ticket_labels %}
     <span

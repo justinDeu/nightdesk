@@ -31,6 +31,7 @@
   "use strict";
 
   var selected = new Set();
+  var barWired = false;
 
   // ---- helpers -----------------------------------------------------------
 
@@ -246,6 +247,19 @@
     });
   }
 
+  function openMenuName() {
+    var m = document.querySelector("[data-nd-bulk-menu]:not([hidden])");
+    return m ? m.getAttribute("data-nd-bulk-menu") : null;
+  }
+
+  function focusToggleFor(name) {
+    if (!name) return;
+    var b = bar();
+    if (!b) return;
+    var btn = b.querySelector('[data-nd-bulk-toggle="' + name + '"]');
+    if (btn) { try { btn.focus(); } catch (e) {} }
+  }
+
   function toggleMenu(name) {
     var b = bar();
     if (!b) return;
@@ -266,15 +280,21 @@
   function clearActive(menu) {
     menu.querySelectorAll(".nd-opt-active").forEach(function (opt) {
       opt.classList.remove("nd-opt-active");
-      opt.setAttribute("aria-selected", "false");
     });
+    menu.removeAttribute("aria-activedescendant");
   }
 
   function setActive(menu, opt) {
     if (!opt) return;
     clearActive(menu);
     opt.classList.add("nd-opt-active");
-    opt.setAttribute("aria-selected", "true");
+    if (!opt.id) {
+      var menuName = menu.getAttribute("data-nd-bulk-menu") || "x";
+      var allOpts = menu.querySelectorAll("[data-nd-bulk-apply], [data-nd-bulk-create-option]");
+      var idx = Array.prototype.indexOf.call(allOpts, opt);
+      opt.id = "nd-bulk-opt-" + menuName + "-" + (idx >= 0 ? idx : Date.now());
+    }
+    menu.setAttribute("aria-activedescendant", opt.id);
     try { opt.scrollIntoView({ block: "nearest" }); } catch (e) {}
   }
 
@@ -314,6 +334,8 @@
     var btn = b.querySelector('[data-nd-bulk-toggle="' + name + '"]');
     if (!menu) return false;
     if (name === "labels" && menu.parentElement !== document.body) {
+      var orphan = document.querySelector('body > [data-nd-bulk-menu="labels"]');
+      if (orphan && orphan !== menu) orphan.remove();
       document.body.appendChild(menu);
     }
     closeMenus();
@@ -451,6 +473,7 @@
     var params = { ticket_ids: picked.join(",") };
     params[cfg.field] = value;
     if (prop === "labels") params.label_action = action || "add";
+    var applyMenuName = openMenuName();
     closeMenus();
     postForm(cfg.url, params).then(function (r) {
       if (!r.ok) {
@@ -466,6 +489,8 @@
         refreshBoardSurfaces();
         updateLabelMarkers(bar() && bar().querySelector('[data-nd-bulk-menu="labels"]'));
         toast(text, body.undo || null);
+        var b = bar();
+        if (b && !b.hidden) focusToggleFor(applyMenuName);
       });
     }, function () {
       toast("Couldn't update " + describe(prop));
@@ -505,6 +530,7 @@
       label_name: name,
       label_color: (form.querySelector('input[name="label_color"]') || {}).value || "",
     };
+    var createMenuName = openMenuName();
     postForm("/board/tickets/bulk/labels", params).then(function (r) {
       if (!r.ok) { toast("Couldn't create label (" + r.status + ")"); return; }
       return r.json().then(function (body) {
@@ -517,6 +543,8 @@
         closeMenus();
         refreshBoardSurfaces();
         toast(text, body.undo || null);
+        var b = bar();
+        if (b && !b.hidden) focusToggleFor(createMenuName);
       });
     }, function () { toast("Couldn't create label"); });
   }
@@ -540,9 +568,10 @@
   }
 
   function wireBar() {
+    if (barWired) return;
     var b = bar();
-    if (!b || b.__ndWired) return;
-    b.__ndWired = true;
+    if (!b) return;
+    barWired = true;
     document.addEventListener("click", function (e) {
       var toggle = e.target.closest("[data-nd-bulk-toggle]");
       if (toggle) { e.preventDefault(); toggleMenu(toggle.getAttribute("data-nd-bulk-toggle")); return; }
@@ -586,7 +615,9 @@
         var openBulkMenu = document.querySelector("[data-nd-bulk-menu]:not([hidden])");
         if (openBulkMenu) {
           e.preventDefault();
+          var escapedMenuName = openBulkMenu.getAttribute("data-nd-bulk-menu");
           closeMenus();
+          focusToggleFor(escapedMenuName);
           return;
         }
       }

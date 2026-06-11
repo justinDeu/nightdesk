@@ -175,6 +175,13 @@
       );
     }
 
+    function pickerOpen() {
+      return !!(
+        document.querySelector('[data-inline-label-menu]:not(.hidden)') ||
+        document.querySelector('[data-property-menu]:not(.hidden)')
+      );
+    }
+
     // Per-column scroll memory keyed by the column's group key (status value
     // for the kanban, label-/project-/priority- key otherwise). The 3s poll
     // OOB-replaces each <section> wholesale — including its scrollable
@@ -305,13 +312,12 @@
       restoreColumnScroll();
     });
 
-    // Don't let the periodic columns poll fire mid-drag — Sortable
-    // re-renders the dragged element and the ghost-class swap would
-    // either yank the card or wipe the drop visual. Sortable issues
-    // its own poll the moment the drop finishes anyway.
+    // Don't let the periodic columns poll fire mid-drag or while an inline
+    // picker is open — either would OOB-replace the card under the user's
+    // cursor and silently destroy the interaction.
     document.body.addEventListener('htmx:beforeRequest', function (evt) {
       var elt = evt.detail && evt.detail.elt;
-      if (elt && elt.id === 'board-columns-poll' && isDragging()) {
+      if (elt && elt.id === 'board-columns-poll' && (isDragging() || pickerOpen())) {
         evt.preventDefault();
       }
     });

@@ -31,14 +31,22 @@
     p.hidden = false;
     var btn = btnEl();
     if (btn) btn.setAttribute("aria-expanded", "true");
+    // Move focus into the first interactive control so keyboard users can
+    // reach the popover immediately and global shortcuts stop firing.
+    var first = p.querySelector("select, input, button");
+    if (first) first.focus();
   }
 
-  function close() {
+  // opts.refocus: restore focus to the toggle button after closing (pass true
+  // for keyboard-initiated closes; omit or false for mouse-initiated ones so
+  // the click doesn't yank focus away from where the user was heading).
+  function close(opts) {
     var p = popoverEl();
     if (!p) return;
     p.hidden = true;
     var btn = btnEl();
     if (btn) btn.setAttribute("aria-expanded", "false");
+    if (opts && opts.refocus && btn) btn.focus();
   }
 
   function toggle() {
@@ -53,6 +61,14 @@
     if (!p) return;
     if (p.contains(e.target) || (btn && btn.contains(e.target))) return;
     close();
+  });
+
+  // Esc closes the popover and returns focus to the toggle button so the user
+  // doesn't lose their place.
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && isOpen()) {
+      close({ refocus: true });
+    }
   });
 
   // Props string from the checked boxes of one checkbox group. Returns ""

@@ -573,21 +573,20 @@
       ev.preventDefault();
       _setActive(dropdownId, (cur <= 0 ? items.length : cur) - 1);
     } else if (ev.key === 'Tab') {
-      // While the list is open, Tab/Shift-Tab move the highlight (down/up,
-      // wrapping) instead of leaving the field. When it's closed/empty we
-      // fall through so Tab moves focus normally — never trap focus.
+      // Shift+Tab: keep native focus movement.
+      if (ev.shiftKey) return;
+      // Tab with suggestions visible: shell-style completion — commit the
+      // highlighted item (or the first if none highlighted). When the list is
+      // closed/empty fall through so Tab moves focus normally.
       if (!items.length) return;
       ev.preventDefault();
-      if (ev.shiftKey) {
-        _setActive(dropdownId, (cur <= 0 ? items.length : cur) - 1);
-      } else {
-        _setActive(dropdownId, cur + 1);
-      }
+      const tabI = cur >= 0 ? cur : 0;
+      window.ndPathSuggestPick(inputEl.id, items[tabI].getAttribute('data-suggest-value'));
     } else if (ev.key === 'Enter') {
-      // Enter selects the highlighted item and closes the list. With no
-      // highlight yet, default to the first item so one Enter still picks.
-      if (!items.length) return;
+      // Always preventDefault so a stray Enter never submits the enclosing
+      // form. Only commit a suggestion when the list has items.
       ev.preventDefault();
+      if (!items.length) return;
       const i = cur >= 0 ? cur : 0;
       window.ndPathSuggestPick(inputEl.id, items[i].getAttribute('data-suggest-value'));
     } else if (ev.key === 'Escape') {

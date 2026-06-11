@@ -277,6 +277,8 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
   font-size: .8125rem;
 }
 .nd-bulk-opt:hover { background: var(--color-bg-elev-2); }
+.nd-bulk-opt:focus,
+.nd-bulk-opt.nd-opt-active { background: rgba(52, 211, 153, .12); outline: none; }
 .nd-bulk-dot {
   display: inline-block;
   width: .55rem;
