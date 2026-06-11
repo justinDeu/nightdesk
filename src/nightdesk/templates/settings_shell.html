@@ -2,8 +2,9 @@
 {% set title = "Settings" %}
 {% set active_page = 'settings' %}
 {% block body %}
-<div class="flex flex-col gap-4 lg:flex-row lg:items-stretch min-h-[calc(100vh-8rem)]">
-  {% include "partials/settings_nav.html" %}
+{# The settings category nav now lives in the left sidebar (settings mode),
+   so the pane takes the full content width here. #}
+<div class="min-h-[calc(100vh-4rem)]">
   <section class="min-w-0 flex-1" id="settings-pane">
     {% include pane_template %}
   </section>

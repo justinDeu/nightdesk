@@ -53,189 +53,193 @@
     <script src="{{ static_v('command_palette.js') }}" defer></script>
   </head>
   <body class="bg-bg text-fg min-h-screen">
-    <header class="sticky top-0 z-40 flex items-center gap-4 px-4 py-2 border-b border-border bg-bg-elev">
-      <a href="/" class="font-bold text-accent shrink-0">nightdesk</a>
-      <nav class="flex items-center gap-1 text-sm" aria-label="Primary">
-        {% set nav_groups = [
-          ('work', 'Work', '/', [
-            ('/', 'Board'),
-            ('/projects', 'Projects'),
-            ('/list', 'List'),
-            ('/inbox', 'Inbox'),
-            ('/archive', 'Archive'),
-            ('/cron', 'Scheduled'),
-          ]),
-          ('insights', 'Insights', '/analytics', [
-            ('/analytics', 'Analytics'),
-          ]),
-          ('setup', 'Setup', '/settings', [
-            ('/profiles', 'Profiles'),
-            ('/settings/scheduling', 'Settings'),
-            ('/toolsets', 'Toolsets'),
-            ('/cron', 'Cron configuration'),
-          ]),
-        ] %}
-        {% set active_groups = {
-          'work': ['', 'board', 'tickets', 'projects', 'list', 'inbox', 'archive', 'cron'],
-          'insights': ['analytics'],
-          'setup': ['profiles', 'settings', 'toolsets'],
-        } %}
-        {% for group_key, label, href, children in nav_groups %}
-          {% set is_active = active_page in active_groups[group_key] %}
-          <details class="nd-nav-menu relative">
-            <summary class="nd-nav-trigger {% if is_active %}is-active{% endif %}"
-                     {% if is_active %}aria-current="true"{% endif %}>
-              <span>{{ label }}</span>
-              {# Piece 2: inbox dot on the Work trigger — visible without
-                 opening the dropdown; updated by the badge poll below. #}
-              {% if group_key == 'work' %}<span id="nd-inbox-dot-wrap"></span>{% endif %}
-              <span class="nd-nav-chevron" aria-hidden="true"></span>
-            </summary>
-            <div class="nd-nav-popover">
-              {% for child_href, child_label in children %}
-                {% set child_active = (request.url.path == child_href) if request is defined else false %}
-                {% if child_href == '/inbox' %}
-                  {# Inbox gets a count badge. flex layout puts the badge at the right edge. #}
-                  <a href="{{ child_href }}"
-                     class="nd-nav-item flex items-center {% if child_active %}is-active{% endif %}"
-                     {% if child_active %}aria-current="page"{% endif %}>
-                    <span class="nd-nav-item-label flex-1">{{ child_label }}</span>
-                    {# Piece 2: inbox badge chip — polls /header/inbox-badge every 15 s.
-                       OOB response also refreshes #nd-inbox-dot-wrap in the trigger. #}
-                    <span id="nd-inbox-badge-wrap"
-                          class="shrink-0 ml-1"
-                          hx-get="/header/inbox-badge"
-                          hx-trigger="load, every 15s"
-                          hx-swap="innerHTML"></span>
-                  </a>
-                {% else %}
-                  <a href="{{ child_href }}"
-                     class="nd-nav-item {% if child_active %}is-active{% endif %}"
-                     {% if child_active %}aria-current="page"{% endif %}>
-                    <span class="nd-nav-item-label">{{ child_label }}</span>
-                  </a>
-                {% endif %}
-              {% endfor %}
-            </div>
-          </details>
-        {% endfor %}
-        {# Saved Views dropdown — content loaded via HTMX on page load so views
-           are always current without coupling to individual route handlers. #}
-        <details class="nd-nav-menu relative">
-          <summary class="nd-nav-trigger">
-            <span>Views</span>
-            <span class="nd-nav-chevron" aria-hidden="true"></span>
-          </summary>
-          <div class="nd-nav-popover"
-               id="nd-views-nav-popover"
-               hx-get="/views/menu"
-               hx-trigger="load"
-               hx-swap="innerHTML">
-            <span class="px-3 py-2 text-xs text-fg-muted block">Loading&#x2026;</span>
-          </div>
-        </details>
+    {# Apply the persisted collapse state before first paint so the rail never
+       flashes from wide to narrow. Default: collapsed on narrow viewports. #}
+    <script>
+      (function () {
+        var v = localStorage.getItem('nd-sidebar-collapsed');
+        var c = v === null ? window.innerWidth < 1100 : v === '1';
+        if (c) document.documentElement.classList.add('nd-sb-collapsed');
+      })();
+    </script>
+
+    {# Sidebar nav item. Each destination supplies its own 16x16 inline SVG via
+       the call block; the label collapses to a data-tooltip in the icon rail. #}
+    {% macro sb_item(href, label, active, extra='') %}
+    <a href="{{ href }}"
+       class="nd-sb-item{% if active %} is-active{% endif %}"
+       {% if active %}aria-current="page"{% endif %}
+       data-tooltip="{{ label }}" {{ extra|safe }}>
+      <span class="nd-sb-icon" aria-hidden="true">{{ caller() }}</span>
+      <span class="nd-sb-label">{{ label }}</span>
+    </a>
+    {% endmacro %}
+
+    <div class="flex min-h-screen">
+      <aside id="nd-sidebar" class="nd-sidebar" aria-label="Primary navigation">
+        {# Brand + collapse toggle. The wordmark shrinks to "n" in the rail. #}
+        <div class="nd-sb-brand">
+          <a href="/" class="nd-sb-wordmark">
+            <span class="nd-sb-brand-full">nightdesk</span>
+            <span class="nd-sb-brand-mini">n</span>
+          </a>
+          <button type="button" class="nd-sb-toggle"
+                  onclick="window.ndToggleSidebar && window.ndToggleSidebar()"
+                  data-tooltip="Toggle sidebar ([)" aria-label="Toggle sidebar">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 4-4 4 4 4"/><path d="m13 4-4 4 4 4"/></svg>
+          </button>
+        </div>
+
         {# Works on every page: ndOpenCreateTicket pops the inline modal when
            the page already has one (the board), otherwise lazy-loads it into
            #create-modal-host below. #}
-        <button type="button"
+        <button type="button" class="nd-sb-new"
                 onclick="window.ndOpenCreateTicket && window.ndOpenCreateTicket()"
-                class="ml-2 px-2.5 py-1 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-xs font-medium">
-          + New ticket
+                data-tooltip="New ticket">
+          <svg class="nd-sb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+          <span class="nd-sb-label">New ticket</span>
         </button>
-      </nav>
-      <div class="flex-1"></div>
-      <button id="notify-bell" type="button" title="Enable desktop notifications"
-              class="hidden text-sm text-fg-muted hover:text-fg transition-colors"
-              onclick="window.ndRequestNotificationPermission(function(){document.getElementById('notify-bell').classList.add('hidden')})">
-        &#x1F514;
-      </button>
-      <script>
-        (function(){
-          if ('Notification' in window && Notification.permission === 'default') {
-            document.getElementById('notify-bell').classList.remove('hidden');
-          }
-        })();
-      </script>
-      {# Top-line spend summary chip. Links to the analytics dashboard.
-         Polled on a relaxed cadence since spend changes slowly. #}
-      <a id="spend-chip" href="/analytics"
-         class="text-sm text-fg-muted font-mono hover:text-fg transition-colors"
-         hx-get="/header/spend-chip"
-         hx-trigger="load, every 30s"
-         hx-swap="innerHTML">·</a>
-      <div id="worker-pill"
-           class="relative group text-sm text-fg-muted font-mono"
-           hx-get="/header/worker-pill"
-           hx-trigger="load, every 3s"
-            hx-swap="innerHTML">·</div>
-      <script>
-        (function () {
-          var closeTimer = null;
-          function clearCloseTimer() {
-            if (closeTimer) window.clearTimeout(closeTimer);
-            closeTimer = null;
-          }
-          function openMenu(menu) {
-            if (!menu) return;
-            clearCloseTimer();
-            closeMenus(menu);
-            menu.open = true;
-            menu.classList.remove('is-closing');
-          }
-          function closeMenu(menu) {
-            if (!menu || !menu.open) return;
-            menu.classList.add('is-closing');
-            window.setTimeout(function () {
-              menu.open = false;
-              menu.classList.remove('is-closing');
-            }, 140);
-          }
-          function scheduleClose(menu, delay) {
-            clearCloseTimer();
-            closeTimer = window.setTimeout(function () {
-              if (!menu || !menu.open || menu.matches(':hover')) return;
-              closeMenu(menu);
-            }, delay || 160);
-          }
-          function closeMenus(except) {
-            clearCloseTimer();
-            document.querySelectorAll('.nd-nav-menu[open]').forEach(function (menu) {
-              if (menu !== except) closeMenu(menu);
-            });
-          }
-          document.querySelectorAll('.nd-nav-menu').forEach(function (menu) {
-            var summary = menu.querySelector('summary');
-            if (summary) {
-              summary.addEventListener('click', function (ev) {
-                ev.preventDefault();
-                if (menu.open) closeMenu(menu);
-                else openMenu(menu);
-              });
-            }
-            menu.addEventListener('pointerenter', function () { openMenu(menu); });
-            menu.addEventListener('focusin', clearCloseTimer);
-            menu.addEventListener('pointerleave', function () {
-              if (menu.open) scheduleClose(menu);
-            });
-            menu.addEventListener('focusout', function () {
-              window.setTimeout(function () {
-                if (menu.open && !menu.contains(document.activeElement)) scheduleClose(menu, 0);
-              }, 0);
-            });
-          });
-          document.addEventListener('click', function (ev) {
-            if (ev.target.closest && ev.target.closest('.nd-nav-menu')) return;
-            closeMenus(null);
-          });
-          document.addEventListener('keydown', function (ev) {
-            if (ev.key === 'Escape') closeMenus(null);
-          });
-        })();
-      </script>
-    </header>
-    <main class="w-full px-6 py-4">
-      {% block body %}{% endblock %}
-    </main>
+
+        {# Search affordance — opens the command palette (also Ctrl/Cmd+K, "/"). #}
+        <button type="button" class="nd-sb-search"
+                onclick="window.ndOpenPalette && window.ndOpenPalette()"
+                data-tooltip="Search">
+          <svg class="nd-sb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m13 13-3-3"/></svg>
+          <span class="nd-sb-label">Search</span>
+          <kbd class="nd-sb-kbd">/</kbd>
+        </button>
+
+        {% if active_page == 'settings' %}
+          {# Settings mode: the app destinations give way to the settings
+             categories so there is never a double sidebar. Each link carries
+             data-settings-nav-link — settings_shell.html's dirty-state guard
+             queries that attribute before navigating away. #}
+          <nav class="nd-sb-nav" aria-label="Settings sections">
+            {% call sb_item('/', 'Back', false) %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8H3"/><path d="m7 4-4 4 4 4"/></svg>
+            {% endcall %}
+            <div class="nd-sb-section">Settings</div>
+            {% call sb_item('/settings/scheduling', 'Scheduling', settings_category is defined and settings_category == 'scheduling', 'data-settings-nav-link') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg>
+            {% endcall %}
+            {% call sb_item('/settings/claude', 'Claude Code', settings_category is defined and settings_category == 'claude', 'data-settings-nav-link') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M3 5l10 6M13 5 3 11"/></svg>
+            {% endcall %}
+            {% call sb_item('/settings/worktrees', 'Git worktrees', settings_category is defined and settings_category == 'worktrees', 'data-settings-nav-link') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="4.5" cy="4" r="1.6"/><circle cx="4.5" cy="12" r="1.6"/><circle cx="11.5" cy="6" r="1.6"/><path d="M4.5 5.6v4.8"/><path d="M11.5 7.6c0 2.2-2.4 2.6-4 2.6"/></svg>
+            {% endcall %}
+            {% call sb_item('/settings/labels', 'Labels', settings_category is defined and settings_category == 'labels', 'data-settings-nav-link') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5 8 3h4.5V7.5L7 13Z"/><circle cx="10" cy="6" r=".7"/></svg>
+            {% endcall %}
+            {% call sb_item('/settings/notifications', 'Notifications', settings_category is defined and settings_category == 'notifications', 'data-settings-nav-link') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7a3 3 0 0 1 6 0c0 3 1.2 4 1.2 4H3.8S5 10 5 7Z"/><path d="M6.8 13a1.4 1.4 0 0 0 2.4 0"/></svg>
+            {% endcall %}
+          </nav>
+        {% else %}
+          {# App mode: every destination is visible at once (no dropdowns). #}
+          <nav class="nd-sb-nav" aria-label="Sections">
+            {# Inbox carries two unread indicators fed by one poll: the chip at
+               the right edge (expanded) and a corner dot on the icon (rail).
+               GET /header/inbox-badge swaps the chip and OOB-swaps the dot. #}
+            <a href="/inbox"
+               class="nd-sb-item{% if active_page == 'inbox' %} is-active{% endif %}"
+               {% if active_page == 'inbox' %}aria-current="page"{% endif %}
+               data-tooltip="Inbox">
+              <span class="nd-sb-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9.5h-3l-1 2H6l-1-2H2"/><path d="M4.3 3.5 2 9.5V12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9.5l-2.3-6a1 1 0 0 0-.9-.6H5.2a1 1 0 0 0-.9.6Z"/></svg>
+                <span id="nd-inbox-dot-wrap" class="nd-sb-inbox-dot"></span>
+              </span>
+              <span class="nd-sb-label">Inbox</span>
+              <span id="nd-inbox-badge-wrap"
+                    class="nd-sb-badge"
+                    hx-get="/header/inbox-badge"
+                    hx-trigger="load, every 15s"
+                    hx-swap="innerHTML"></span>
+            </a>
+            {% call sb_item('/', 'Board', active_page in ['', 'board', 'tickets']) %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="3" height="10" rx="1"/><rect x="6.5" y="3" width="3" height="10" rx="1"/><rect x="11" y="3" width="3" height="10" rx="1"/></svg>
+            {% endcall %}
+            {% call sb_item('/list', 'List', active_page == 'list') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9M5 8h9M5 12h9M2.6 4h.01M2.6 8h.01M2.6 12h.01"/></svg>
+            {% endcall %}
+            {% call sb_item('/archive', 'Archive', active_page == 'archive') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="3" rx="1"/><path d="M3 6v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6"/><path d="M6.5 9h3"/></svg>
+            {% endcall %}
+
+            <div class="nd-sb-section">Organize</div>
+            {% call sb_item('/projects', 'Projects', active_page == 'projects') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5a1 1 0 0 1 1-1h2.8l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/></svg>
+            {% endcall %}
+            {% call sb_item('/cron', 'Scheduled', active_page == 'cron') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg>
+            {% endcall %}
+            {% call sb_item('/analytics', 'Analytics', active_page == 'analytics') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13V8M8 13V4M13 13v-3M2 13h12"/></svg>
+            {% endcall %}
+
+            {# Saved views — loaded via HTMX on page load so the list is always
+               current without coupling to individual route handlers. The
+               #nd-views-nav-popover id is a hard contract: saved_view_menu.html's
+               delete/rename buttons target it for in-place swaps. #}
+            <div class="nd-sb-views" id="nd-views-section">
+              <div class="nd-sb-section">Views</div>
+              <div id="nd-views-nav-popover"
+                   hx-get="/views/menu"
+                   hx-trigger="load"
+                   hx-swap="innerHTML">
+                <span class="px-2 py-1 text-xs text-fg-muted block">Loading&#x2026;</span>
+              </div>
+            </div>
+
+            <div class="nd-sb-section">Setup</div>
+            {% call sb_item('/profiles', 'Profiles', active_page == 'profiles') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5.5" r="2.5"/><path d="M3.5 13a4.5 4.5 0 0 1 9 0"/></svg>
+            {% endcall %}
+            {% call sb_item('/toolsets', 'Toolsets', active_page == 'toolsets') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2.6a3 3 0 0 0-3.9 3.7l-4.6 4.6a1.3 1.3 0 0 0 1.8 1.8l4.6-4.6a3 3 0 0 0 3.7-3.9L11.3 5.4 9.7 5l-.4-1.6Z"/></svg>
+            {% endcall %}
+            {% call sb_item('/settings/scheduling', 'Settings', active_page == 'settings') %}
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2"/><path d="M8 1.6v1.7M8 12.7v1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M1.6 8h1.7M12.7 8h1.7M3.4 12.6l1.2-1.2M11.4 4.6l1.2-1.2"/></svg>
+            {% endcall %}
+          </nav>
+        {% endif %}
+
+        {# Bottom status cluster — the three live elements keep their ids and
+           htmx polling exactly as before; only their location moved here. #}
+        <div class="nd-sb-status">
+          <button id="notify-bell" type="button" data-tooltip="Enable desktop notifications"
+                  class="nd-sb-bell hidden"
+                  onclick="window.ndRequestNotificationPermission(function(){document.getElementById('notify-bell').classList.add('hidden')})">
+            &#x1F514;
+          </button>
+          <script>
+            (function(){
+              if ('Notification' in window && Notification.permission === 'default') {
+                document.getElementById('notify-bell').classList.remove('hidden');
+              }
+            })();
+          </script>
+          {# Spend summary chip. Links to the analytics dashboard. Polled on a
+             relaxed cadence since spend changes slowly. Text hides in the rail
+             (the element stays mounted so its poll never breaks). #}
+          <a id="spend-chip" href="/analytics"
+             class="nd-sb-spend text-sm text-fg-muted font-mono hover:text-fg transition-colors"
+             hx-get="/header/spend-chip"
+             hx-trigger="load, every 30s"
+             hx-swap="innerHTML">·</a>
+          <div id="worker-pill"
+               class="nd-sb-worker relative group text-sm text-fg-muted font-mono"
+               hx-get="/header/worker-pill"
+               hx-trigger="load, every 3s"
+               hx-swap="innerHTML">·</div>
+        </div>
+      </aside>
+      <div class="flex-1 min-w-0 flex flex-col">
+        <main class="w-full px-6 py-4 flex-1">
+          {% block body %}{% endblock %}
+        </main>
+      </div>
+    </div>
     {# Command palette + keyboard-shortcut cheat sheet. Behavior in
        /static/command_palette.js. #}
     {% include "partials/command_palette.html" %}

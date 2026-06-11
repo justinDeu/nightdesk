@@ -1455,6 +1455,15 @@
     if (titleEl) titleEl.focus();
   }
   window.ndOpenQuickCapture = openQuickCapture;
+  window.ndOpenPalette = openPalette;
+
+  // ---- sidebar collapse --------------------------------------------------
+  // Toggles the icon rail and persists the choice. The pre-paint script in
+  // base.html reads the same key so the rail never flashes on load.
+  window.ndToggleSidebar = function () {
+    var collapsed = document.documentElement.classList.toggle("nd-sb-collapsed");
+    try { localStorage.setItem("nd-sidebar-collapsed", collapsed ? "1" : "0"); } catch (e) {}
+  };
 
   function wireQuickCapture() {
     var form = document.getElementById("nd-quick-capture-form");
@@ -1673,6 +1682,11 @@
       return;
     }
     if (key === "?") { e.preventDefault(); openCheatSheet(); return; }
+    if (key === "[") {
+      e.preventDefault();
+      if (window.ndToggleSidebar) window.ndToggleSidebar();
+      return;
+    }
 
     // --- Board cursor: J/K navigate cards (vim-style down/up) ------------
     // Shift+J / Shift+K extend the bulk selection while moving the cursor.
