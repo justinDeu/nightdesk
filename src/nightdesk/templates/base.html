@@ -4,8 +4,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b0c0f" />
     <title>{{ title }} | nightdesk</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="preload" href="/static/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="{{ static_v('app.css') }}" />
     <script src="/static/htmx.min.js" defer></script>
     <script src="/static/sortable.min.js" defer></script>
@@ -52,7 +54,7 @@
        Progressive enhancement — every action stays reachable by mouse. #}
     <script src="{{ static_v('command_palette.js') }}" defer></script>
   </head>
-  <body class="bg-bg text-fg min-h-screen">
+  <body class="bg-bg text-fg min-h-screen antialiased">
     {# Apply the persisted collapse state before first paint so the rail never
        flashes from wide to narrow. Default: collapsed on narrow viewports. #}
     <script>
@@ -253,7 +255,7 @@
        toolbars.  The JS collects current URL params at submit time. #}
     <dialog id="nd-save-view-dialog"
             aria-label="Save view"
-            class="bg-bg-elev border border-border rounded-lg shadow-xl backdrop:bg-black/50 text-fg p-0 w-80"
+            class="bg-bg-elev border border-border rounded-lg shadow-xl backdrop:bg-black/60 backdrop:backdrop-blur-[2px] text-fg p-0 w-80"
             style="margin: auto;">
       <div class="px-4 py-3 border-b border-border flex items-center justify-between">
         <h2 class="text-sm font-semibold">Save current view</h2>
@@ -274,7 +276,7 @@
                  required
                  class="px-2 py-1.5 text-sm bg-bg-elev-2 border border-border rounded focus:outline-none focus:border-accent" />
         </label>
-        <p id="nd-save-view-error" class="text-xs text-red-400 hidden"></p>
+        <p id="nd-save-view-error" class="text-xs text-danger hidden"></p>
         <div class="flex justify-end gap-2">
           <button type="button"
                   onclick="document.getElementById('nd-save-view-dialog').close()"

@@ -47,7 +47,7 @@
 {% set _project_default_toolchains = _tc_project.default_toolchains if _tc_project and _tc_project.default_toolchains else [] %}
 
 <dialog id="{{ _mid }}"
-        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[820px] max-w-[calc(100vw-2rem)]"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-[2px] text-fg p-0 w-[820px] max-w-[calc(100vw-2rem)]"
         style="margin: auto; max-height: 92vh;">
   <form method="post"
         action="{{ _form_action }}"

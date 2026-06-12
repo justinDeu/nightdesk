@@ -2,21 +2,74 @@
 
 @source "../nightdesk/templates/**/*.html";
 
+@font-face {
+  font-family: "Inter";
+  font-weight: 100 900;
+  font-display: swap;
+  font-style: normal;
+  src: url("/static/fonts/InterVariable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Inter";
+  font-weight: 100 900;
+  font-display: swap;
+  font-style: italic;
+  src: url("/static/fonts/InterVariable-Italic.woff2") format("woff2");
+}
+
 @theme {
-  --color-bg: #0d1117;
-  --color-bg-elev: #161b22;
-  --color-bg-elev-2: #21262d;
-  --color-bg-elev-3: #2d333b;
-  --color-border: #30363d;
-  --color-fg: #c9d1d9;
-  --color-fg-muted: #8b949e;
-  --color-accent: #34d399;
-  --color-accent-strong: #10b981;
-  --color-danger: #f87171;
-  --color-warn: #fbbf24;
-  --color-info: #60a5fa;
+  /* Surfaces — cool graphite ramp, deeper canvas/panel separation */
+  --color-bg: #0b0c0f;
+  --color-bg-elev: #131519;
+  --color-bg-elev-2: #1b1e24;
+  --color-bg-elev-3: #242830;
+  --color-bg-inset: #07080a;
+  --color-border: #23262e;
+  --color-border-strong: #333845;
+  --color-fg: #e2e4e9;
+  --color-fg-muted: #9298a4;
+  /* Accent — calmer jade */
+  --color-accent: #3ecf8e;
+  --color-accent-strong: #29b377;
+  /* Semantic */
+  --color-danger: #ef5350;
+  --color-warn: #ffb74d;
+  --color-info: #64b5f6;
   --color-subagent: #a78bfa;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  /* Radius scale. Bare `rounded` is hardcoded in Tailwind v4; see the
+     @layer utilities override at the bottom of this file. */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-md: 0 2px 4px rgb(0 0 0 / 0.3), 0 6px 16px -4px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 4px 10px rgb(0 0 0 / 0.35), 0 20px 48px -12px rgb(0 0 0 / 0.55);
+  --shadow-xl: 0 4px 12px rgb(0 0 0 / 0.45), 0 24px 64px -8px rgb(0 0 0 / 0.65);
+}
+
+@layer base {
+  html, body {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv05", "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    letter-spacing: -0.006em;
+  }
+
+  :where(button, [role="button"], a, summary):focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--color-accent) 65%, transparent);
+    outline-offset: 1px;
+  }
+
+  :root {
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  }
 }
 
 /* Selected ticket card on the board: persists the hover-state accent border
@@ -26,7 +79,7 @@
    data-selected-ticket-id. */
 li[data-ticket-id][data-selected] {
   border-color: var(--color-accent) !important;
-  box-shadow: 0 0 0 1px var(--color-accent), 0 4px 12px rgba(52, 211, 153, .15);
+  box-shadow: 0 0 0 1px var(--color-accent), var(--shadow-md);
 }
 
 /* ---- Sidebar -----------------------------------------------------------
@@ -50,7 +103,7 @@ li[data-ticket-id][data-selected] {
   overflow: visible;
   background: var(--color-bg-elev);
   border-right: 1px solid var(--color-border);
-  transition: flex-basis .12s ease-out, width .12s ease-out;
+  transition: flex-basis .12s var(--ease-standard), width .12s var(--ease-standard);
 }
 .nd-sb-collapsed .nd-sidebar {
   flex-basis: 3.25rem;
@@ -83,7 +136,7 @@ li[data-ticket-id][data-selected] {
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: color .12s ease, background .12s ease;
+  transition: color .12s var(--ease-standard), background .12s var(--ease-standard);
 }
 .nd-sb-toggle:hover {
   color: var(--color-fg);
@@ -110,16 +163,17 @@ li[data-ticket-id][data-selected] {
   font-size: .8125rem;
   line-height: 1;
   cursor: pointer;
-  transition: color .12s ease, background .12s ease, border-color .12s ease;
+  transition: color .12s var(--ease-standard), background .12s var(--ease-standard), border-color .12s var(--ease-standard);
 }
 .nd-sb-new {
   justify-content: center;
-  border: 1px solid var(--color-accent);
-  color: var(--color-accent);
-  background: transparent;
-  font-weight: 500;
+  background: var(--color-accent-strong);
+  color: #06130d;
+  border: 1px solid transparent;
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
 }
-.nd-sb-new:hover { background: var(--color-accent); color: var(--color-bg); }
+.nd-sb-new:hover { background: var(--color-accent); }
 .nd-sb-search {
   border: 1px solid var(--color-border);
   color: var(--color-fg-muted);
@@ -154,8 +208,8 @@ li[data-ticket-id][data-selected] {
   color: var(--color-fg-muted);
 }
 
-/* Nav item: icon + label. Active gets accent text, an accent left border, and
-   a subtle bg tint. */
+/* Nav item: icon + label. Active gets standard text, an accent left border,
+   and a subtle bg tint. */
 .nd-sb-item {
   position: relative;
   display: flex;
@@ -173,8 +227,8 @@ li[data-ticket-id][data-selected] {
   color: var(--color-fg);
 }
 .nd-sb-item.is-active {
-  color: var(--color-accent);
-  background: color-mix(in oklab, var(--color-accent) 8%, transparent);
+  color: var(--color-fg);
+  background: color-mix(in oklab, var(--color-accent) 9%, transparent);
   border-left-color: var(--color-accent);
 }
 .nd-sb-icon {
@@ -344,7 +398,7 @@ li[data-ticket-id][data-selected] {
   line-height: 1;
   cursor: pointer;
   opacity: 0;
-  transition: opacity .1s ease, background .1s ease;
+  transition: opacity .1s var(--ease-standard), background .1s var(--ease-standard);
 }
 
 .nd-nav-view-item:hover .nd-view-delete-btn,
@@ -388,7 +442,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
   background: var(--color-bg-elev);
   border: 1px solid var(--color-border);
   border-radius: .5rem;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgb(255 255 255 / 0.04);
   font-size: .8125rem;
   color: var(--color-fg);
 }
@@ -416,8 +470,8 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
   line-height: 1;
   white-space: nowrap;
 }
-.nd-bulk-btn:hover { border-color: var(--color-accent); }
-.nd-bulk-btn.nd-bulk-danger:hover { border-color: var(--color-danger); color: var(--color-danger); }
+.nd-bulk-btn:hover { border-color: var(--color-border-strong); background: var(--color-bg-elev-3); }
+.nd-bulk-btn.nd-bulk-danger:hover { border-color: var(--color-danger); color: var(--color-danger); background: var(--color-bg-elev-2); }
 .nd-bulk-menu {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -425,10 +479,10 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
   min-width: 160px;
   max-height: 280px;
   overflow-y: auto;
-  background: var(--color-bg-elev);
+  background: var(--color-bg-elev-2);
   border: 1px solid var(--color-border);
-  border-radius: .375rem;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgb(255 255 255 / 0.04);
   padding: .25rem;
   z-index: 95;
 }
@@ -453,13 +507,13 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
   border: 0;
   background: transparent;
   color: var(--color-fg);
-  border-radius: .25rem;
+  border-radius: 6px;
   padding: .35rem .5rem;
   font-size: .8125rem;
 }
-.nd-bulk-opt:hover { background: var(--color-bg-elev-2); }
+.nd-bulk-opt:hover { background: var(--color-bg-elev-3); }
 .nd-bulk-opt:focus,
-.nd-bulk-opt.nd-opt-active { background: rgba(52, 211, 153, .12); outline: none; }
+.nd-bulk-opt.nd-opt-active { background: color-mix(in oklab, var(--color-accent) 12%, transparent); outline: none; }
 .nd-bulk-dot {
   display: inline-block;
   width: .55rem;
@@ -496,7 +550,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     font-size: 10px;
     width: 0.75rem;
     display: inline-block;
-    transition: transform 0.12s ease;
+    transition: transform 0.12s var(--ease-standard);
     flex: 0 0 auto;
   }
   .tc-card[open] > summary::before {
@@ -607,7 +661,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     content: "\25B8";
     display: inline-block;
     margin-right: 0.25rem;
-    transition: transform 0.1s;
+    transition: transform 0.1s var(--ease-standard);
   }
   details[open] > .subagent-children-toggle::before { transform: rotate(90deg); }
 
@@ -661,10 +715,10 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     z-index: 50;
     max-width: 22rem;
     padding: 0.5rem 0.625rem;
-    background: var(--color-bg-elev-2);
-    border: 1px solid var(--color-border);
+    background: var(--color-bg-elev-3);
+    border: 1px solid var(--color-border-strong);
     border-radius: 6px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.04);
     font-size: 0.75rem;
     line-height: 1.35;
     color: var(--color-fg);
@@ -695,9 +749,9 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     width: max-content;
     max-width: min(16rem, calc(100vw - 24px));
     padding: 0.25rem 0.4rem;
-    background: var(--color-bg-elev-2);
-    border-color: var(--color-border);
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28);
+    background: var(--color-bg-elev-3);
+    border-color: var(--color-border-strong);
+    box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.04);
     border-radius: 4px;
     backdrop-filter: none;
     display: inline-flex;
@@ -783,14 +837,13 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     background: transparent;
     color: var(--color-fg);
   }
-  /* GitHub dark-theme "added" / "removed" line tints. The row element
-     spans all three columns so the tint reads edge-to-edge. */
+  /* Added / removed line tints at 14% alpha for a subtle but readable signal. */
   .diff-row.ins {
-    background: color-mix(in oklab, var(--color-accent) 18%, transparent);
+    background: color-mix(in oklab, var(--color-accent) 14%, transparent);
     color: var(--color-fg);
   }
   .diff-row.del {
-    background: color-mix(in oklab, var(--color-danger) 18%, transparent);
+    background: color-mix(in oklab, var(--color-danger) 14%, transparent);
     color: var(--color-fg);
   }
   .diff-gutter {
@@ -869,7 +922,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
 
   /* ---- bash command / generic preview block ------------------------ */
   .bash-cmd {
-    background: #0b0f14;
+    background: var(--color-bg-inset);
     color: var(--color-fg);
     border: 1px solid var(--color-border);
     border-radius: 4px;
@@ -932,7 +985,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     font-size: 9px;
     width: 0.625rem;
     display: inline-block;
-    transition: transform 0.12s ease;
+    transition: transform 0.12s var(--ease-standard);
     flex: 0 0 auto;
   }
   .tool-result[open] > summary::before {
@@ -950,7 +1003,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     color: var(--color-danger);
   }
   .tool-result-pre {
-    background: #0b0f14;
+    background: var(--color-bg-inset);
     color: var(--color-fg);
     font-family: var(--font-mono);
     font-size: 12px;
@@ -963,7 +1016,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
 
   /* ---- thinking ----------------------------------------------------- */
   .thinking-block {
-    border-left: 2px solid var(--color-accent);
+    border-left: 2px solid var(--color-border-strong);
     background: color-mix(in oklab, var(--color-bg-elev) 60%, transparent);
     padding: 0.25rem 0.625rem;
     font-style: italic;
@@ -985,7 +1038,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     font-size: 9px;
     width: 0.625rem;
     display: inline-block;
-    transition: transform 0.12s ease;
+    transition: transform 0.12s var(--ease-standard);
     margin-right: 0.25rem;
   }
   .thinking-block[open] > summary::before {
@@ -1032,7 +1085,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     font-size: 9px;
     width: 0.625rem;
     display: inline-block;
-    transition: transform 0.12s ease;
+    transition: transform 0.12s var(--ease-standard);
     margin-right: 0.25rem;
   }
   .user-prompt[open] > .user-prompt-author::before {
@@ -1051,7 +1104,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
      cards (which are utility chrome around tool I/O). Left accent border
      and elevated background make the model's prose pop in a scan of the
      transcript column. Distinct from .thinking-block (which is also
-     accent-bordered but italicized + muted + collapsed). */
+     bordered but italicized + muted + collapsed). */
   .assistant-text {
     border-left: 3px solid var(--color-accent);
     background: var(--color-bg-elev);
@@ -1182,7 +1235,7 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
      dialogs could fall back to the browser scrollbar. */
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--color-bg-elev-2) transparent;
+    scrollbar-color: var(--color-border-strong) transparent;
   }
   *::-webkit-scrollbar {
     width: 8px;
@@ -1192,26 +1245,20 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
-    background: var(--color-bg-elev-2);
+    background: var(--color-border-strong);
     border-radius: 4px;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: var(--color-border);
+    background: color-mix(in oklab, var(--color-fg-muted) 50%, transparent);
   }
 
 /* ---- board: highlight recently-viewed ticket card -------------------- */
 @keyframes nd-highlight-fade {
-  0% {
-    box-shadow: 0 0 0 2px var(--color-accent), 0 0 12px color-mix(in oklab, var(--color-accent) 30%, transparent);
-    border-color: var(--color-accent);
+  from {
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 70%, transparent);
   }
-  70% {
-    box-shadow: 0 0 0 2px var(--color-accent), 0 0 8px color-mix(in oklab, var(--color-accent) 20%, transparent);
-    border-color: var(--color-accent);
-  }
-  100% {
-    box-shadow: none;
-    border-color: var(--color-border);
+  to {
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 0%, transparent);
   }
 }
 .nd-card-highlight {
@@ -1283,16 +1330,16 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
   word-break: break-word;
   background: var(--color-bg-elev-3);
   color: var(--color-fg);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   border-radius: 6px;
   padding: 5px 9px;
   font-size: 11px;
   line-height: 1.3;
   font-weight: 400;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, .45);
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.04);
   opacity: 0;
   pointer-events: none;
-  transition: opacity .12s ease, transform .12s ease;
+  transition: opacity .12s var(--ease-standard), transform .12s var(--ease-standard);
   z-index: 60;
 }
 [data-tooltip]::before {
@@ -1302,10 +1349,10 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
   left: 50%;
   transform: translateX(-50%);
   border: 5px solid transparent;
-  border-top-color: var(--color-border);
+  border-top-color: var(--color-border-strong);
   opacity: 0;
   pointer-events: none;
-  transition: opacity .12s ease;
+  transition: opacity .12s var(--ease-standard);
   z-index: 60;
 }
 [data-tooltip]:hover::after,
@@ -1351,14 +1398,14 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
   max-width: min(30rem, 80vw);
   padding: 7px 9px;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg-elev-3);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, .45);
+  border-radius: 8px;
+  background: var(--color-bg-elev-2);
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.04);
   text-align: left;
   opacity: 0;
   pointer-events: none;
   transform: translateY(3px);
-  transition: opacity .12s ease, transform .12s ease;
+  transition: opacity .12s var(--ease-standard), transform .12s var(--ease-standard);
 }
 .nd-cmd-btn:hover .nd-cmd-tip,
 .nd-cmd-btn:focus-visible .nd-cmd-tip {
@@ -1429,6 +1476,7 @@ dialog button[aria-label="Close"]:focus-visible {
   }
   .nd-searchbar-box:focus-within {
     border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 35%, transparent);
   }
   .nd-searchbar-icon {
     display: flex;
@@ -1496,11 +1544,12 @@ dialog button[aria-label="Close"]:focus-visible {
     background: var(--color-bg-elev-2);
     border: 1px solid var(--color-border);
     border-radius: 999px;
-    transition: color .12s, border-color .12s, background .12s;
+    transition: color .12s var(--ease-standard), border-color .12s var(--ease-standard), background .12s var(--ease-standard);
   }
   .nd-facet-btn:hover {
     color: var(--color-fg);
-    border-color: var(--color-accent);
+    border-color: var(--color-border-strong);
+    background: var(--color-bg-elev-3);
   }
   .nd-facet-btn[aria-expanded="true"] {
     color: var(--color-accent);
@@ -1565,10 +1614,10 @@ dialog button[aria-label="Close"]:focus-visible {
     max-width: 22rem;
     max-height: 18rem;
     overflow-y: auto;
-    background: var(--color-bg-elev);
+    background: var(--color-bg-elev-2);
     border: 1px solid var(--color-border);
-    border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.04);
     padding: 0.25rem;
   }
   .nd-searchbar-menu[hidden] {
@@ -1590,11 +1639,11 @@ dialog button[aria-label="Close"]:focus-visible {
     padding: 0.3rem 0.5rem;
     font-size: 0.78rem;
     color: var(--color-fg);
-    border-radius: 4px;
+    border-radius: 6px;
   }
   .nd-sb-menu-item:hover,
   .nd-sb-menu-item.is-active {
-    background: var(--color-bg-elev-2);
+    background: var(--color-bg-elev-3);
     color: var(--color-accent);
   }
   .nd-sb-menu-item.is-selected {
@@ -1632,7 +1681,7 @@ dialog button[aria-label="Close"]:focus-visible {
     color: var(--color-fg);
   }
   .nd-view-btn[aria-pressed="true"] {
-    color: var(--color-bg);
+    color: #06130d;
     background: var(--color-accent);
   }
 }
@@ -1652,10 +1701,10 @@ dialog button[aria-label="Close"]:focus-visible {
 .nd-prop-menu {
   position: absolute; left: 0; top: 100%; margin-top: 0.25rem; z-index: 50;
   min-width: 180px; max-width: 280px;
-  background: var(--color-bg-elev);
+  background: var(--color-bg-elev-2);
   border: 1px solid var(--color-border);
-  border-radius: 0.375rem;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.04);
   padding: 0.25rem 0;
 }
 .nd-prop-menu.hidden { display: none; }
@@ -1674,10 +1723,11 @@ dialog button[aria-label="Close"]:focus-visible {
   display: flex; align-items: center; gap: 0.5rem; width: 100%;
   padding: 0.375rem 0.75rem; font-size: 0.75rem; text-align: left;
   background: transparent; border: 0; cursor: pointer; color: var(--color-fg);
+  border-radius: 6px;
 }
-.nd-prop-option:hover,
+.nd-prop-option:hover { background: var(--color-bg-elev-3); }
 .nd-prop-option:focus,
-.nd-prop-option.nd-opt-active { background: rgba(52, 211, 153, .12); outline: none; }
+.nd-prop-option.nd-opt-active { background: color-mix(in oklab, var(--color-accent) 12%, transparent); outline: none; }
 .nd-prop-option[hidden] { display: none; }
 .nd-prop-current { font-weight: 500; }
 .nd-prop-swatch { width: 0.75rem; height: 0.75rem; flex: 0 0 auto; border-radius: 9999px; }
@@ -1692,7 +1742,7 @@ dialog button[aria-label="Close"]:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: -1px;
   background: color-mix(in oklab, var(--color-accent) 8%, var(--color-bg-elev-2)) !important;
-  transition: outline .1s, background .1s;
+  transition: outline .1s var(--ease-standard), background .1s var(--ease-standard);
 }
 
 /* ---- Inline label picker (list rows) ------------------------------------
@@ -1710,7 +1760,7 @@ dialog button[aria-label="Close"]:focus-visible {
   min-height: 1.25rem;
   border-radius: 4px;
   padding: 0 0.25rem;
-  transition: background .1s;
+  transition: background .1s var(--ease-standard);
 }
 .nd-label-anchor:hover {
   background: var(--color-bg-elev-2);
@@ -1726,10 +1776,10 @@ dialog button[aria-label="Close"]:focus-visible {
   z-index: 50;
   min-width: 180px;
   max-width: 260px;
-  background: var(--color-bg-elev);
+  background: var(--color-bg-elev-2);
   border: 1px solid var(--color-border);
-  border-radius: 0.375rem;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.04);
   padding: 0.25rem 0;
 }
 .nd-label-menu.hidden { display: none; }
@@ -1755,10 +1805,10 @@ dialog button[aria-label="Close"]:focus-visible {
   max-height: 80vh;
   overflow-y: auto;
   padding: .5rem;
-  border: 1px solid color-mix(in oklab, var(--color-border) 82%, var(--color-fg-muted));
-  border-radius: .75rem;
-  background: color-mix(in oklab, var(--color-bg-elev) 96%, black);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .42), 0 0 0 1px rgba(255, 255, 255, .025) inset;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-elev-2);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgb(255 255 255 / 0.04);
 }
 
 .nd-display-section {
@@ -1780,11 +1830,11 @@ dialog button[aria-label="Close"]:focus-visible {
   color: var(--color-fg);
   cursor: pointer;
   user-select: none;
-  transition: background .1s ease;
+  transition: background .1s var(--ease-standard);
 }
 
 .nd-display-prop-row:hover {
-  background: var(--color-bg-elev-2);
+  background: var(--color-bg-elev-3);
 }
 
 .nd-display-prop-row input[type="checkbox"] {
@@ -1843,7 +1893,7 @@ dialog button[aria-label="Close"]:focus-visible {
 .nd-inbox-actions {
   opacity: 0;
   pointer-events: none;
-  transition: opacity .1s;
+  transition: opacity .1s var(--ease-standard);
 }
 .nd-inbox-row:hover .nd-inbox-actions,
 .nd-inbox-row:focus-within .nd-inbox-actions,
@@ -1866,7 +1916,7 @@ dialog button[aria-label="Close"]:focus-visible {
   height: 1.5rem;
   border-radius: 4px;
   color: var(--color-fg-muted);
-  transition: color .1s, background .1s;
+  transition: color .1s var(--ease-standard), background .1s var(--ease-standard);
 }
 .nd-inbox-act:hover {
   color: var(--color-accent);
@@ -1886,7 +1936,7 @@ dialog button[aria-label="Close"]:focus-visible {
    DOM, so 'L' still opens the popover on an empty row). */
 .nd-inbox-row .nd-label-placeholder {
   opacity: 0;
-  transition: opacity .1s;
+  transition: opacity .1s var(--ease-standard);
 }
 .nd-inbox-row:hover .nd-label-placeholder,
 .nd-inbox-row:focus-within .nd-label-placeholder,
@@ -1924,7 +1974,7 @@ dialog button[aria-label="Close"]:focus-visible {
   border: 1px solid color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
   border-top-width: 0;
   border-radius: 0 0 0.375rem 0.375rem;
-  box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.04);
 }
 .nd-capture:focus-within .nd-capture-more {
   display: flex;
@@ -1932,7 +1982,7 @@ dialog button[aria-label="Close"]:focus-visible {
 .nd-capture-submit {
   opacity: 0;
   pointer-events: none;
-  transition: opacity .1s;
+  transition: opacity .1s var(--ease-standard);
 }
 .nd-capture:focus-within .nd-capture-submit {
   opacity: 1;
@@ -1946,7 +1996,7 @@ dialog button[aria-label="Close"]:focus-visible {
   appearance: none;
   -webkit-appearance: none;
   background-color: var(--color-bg-elev-2);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%238b949e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%239298a4' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right .5rem center;
   border: 1px solid var(--color-border);
@@ -1956,11 +2006,19 @@ dialog button[aria-label="Close"]:focus-visible {
   color: var(--color-fg);
   cursor: pointer;
   outline: none;
-  transition: border-color .1s;
+  transition: border-color .1s var(--ease-standard);
 }
 .nd-select:hover {
   border-color: color-mix(in oklab, var(--color-border) 60%, var(--color-fg-muted));
 }
 .nd-select:focus {
   border-color: var(--color-accent);
+}
+
+/* Bare `rounded` is hardcoded to 0.25rem in Tailwind v4 (it does not read a
+   --radius theme token), so this override IS the mechanism that puts the
+   whole app on the 6px base radius. The named sizes (rounded-md/lg/xl) do
+   resolve via the --radius-* tokens in @theme. */
+@layer utilities {
+  .rounded { border-radius: 6px; }
 }

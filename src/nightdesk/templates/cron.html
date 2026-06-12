@@ -4,7 +4,7 @@
 {% block body %}
 
 {% if error %}
-  <div class="mb-4 rounded border border-red-800 bg-red-900/40 px-3 py-2 text-sm text-red-200">
+  <div class="mb-4 rounded border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
     {{ error }}
   </div>
 {% endif %}
@@ -38,7 +38,7 @@
              class="flex flex-col gap-0.5 px-3 py-2 text-sm hover:bg-bg-elev-2
                     {% if selected_id == job.id %}bg-bg-elev-2{% endif %}">
             <span class="flex items-center gap-2 min-w-0">
-              <span class="inline-block w-1.5 h-1.5 rounded-full shrink-0 {{ 'bg-green-400' if job.enabled else 'bg-fg-muted' }}"></span>
+              <span class="inline-block w-1.5 h-1.5 rounded-full shrink-0 {{ 'bg-accent' if job.enabled else 'bg-fg-muted' }}"></span>
               <span class="font-medium text-fg truncate">{{ job.title }}</span>
             </span>
             <span class="text-[10px] text-fg-muted font-mono truncate">{{ job.schedule }} · {{ job.timezone }}</span>

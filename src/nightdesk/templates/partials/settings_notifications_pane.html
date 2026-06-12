@@ -4,7 +4,7 @@
       <h2 class="text-xl font-semibold text-fg">Notifications</h2>
       <p class="mt-1 text-sm text-fg-muted">Send a webhook when runs finish and test the payload without leaving the page.</p>
     </div>
-    {% if saved %}<span class="px-2 py-0.5 text-xs bg-green-900/40 text-green-200 rounded">saved</span>{% endif %}
+    {% if saved %}<span class="px-2 py-0.5 text-xs bg-accent/10 text-accent rounded">saved</span>{% endif %}
   </header>
 
   <form method="post" action="/settings/notifications" class="flex flex-col gap-5" data-settings-form>

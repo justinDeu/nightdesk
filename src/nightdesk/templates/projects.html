@@ -439,7 +439,7 @@
 
 {# ── Create project modal ────────────────────────────────────────────────── #}
 <dialog id="project-create-modal"
-        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[620px] max-w-[calc(100vw-2rem)]"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-[2px] text-fg p-0 w-[620px] max-w-[calc(100vw-2rem)]"
         style="margin:auto; max-height: 92vh;">
   <div class="flex items-center justify-between px-5 py-3 border-b border-border bg-bg-elev sticky top-0 z-10">
     <div>
@@ -457,7 +457,7 @@
 {% for project in projects %}
   {% if not project.archived_at %}
     <dialog id="project-edit-modal-{{ project.id }}"
-            class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[620px] max-w-[calc(100vw-2rem)]"
+            class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-[2px] text-fg p-0 w-[620px] max-w-[calc(100vw-2rem)]"
             style="margin:auto; max-height: 92vh;">
       <div class="flex items-center justify-between px-5 py-3 border-b border-border bg-bg-elev sticky top-0 z-10">
         <div>
