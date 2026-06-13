@@ -7,8 +7,7 @@
 <div class="flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
   {% with sb_id='board-search',
           sb_resource=('run' if _view == 'runs' else 'ticket'),
-          sb_query=query,
-          sb_view=_view %}
+          sb_query=query %}
     {% include "partials/search_bar.html" %}
   {% endwith %}
 
@@ -20,13 +19,19 @@
   {# Board|List view toggle — always present; links preserve current query
      string. JS below also updates the list href after every syncUrl() call
      so live filter changes are reflected without a reload. #}
-  {% set _peer_qs = request.url.query %}
+  {# Peer query string excludes `view`: the Board/List segment hrefs must be
+     correct pre-JS even when this page was loaded with ?view=runs. #}
+  {% set _peer_qs = request.query_params.multi_items() | rejectattr('0', 'equalto', 'view') | list | urlencode %}
   {% set _list_href = '/list' + ('?' + _peer_qs if _peer_qs else '') %}
   <div id="nd-page-view-toggle" class="nd-view-toggle self-end" role="tablist" aria-label="Ticket view">
-    <a class="nd-view-btn" href="{{ '/?'+_peer_qs if _peer_qs else '/' }}" aria-pressed="true"
+    <a class="nd-view-btn" href="{{ '/?'+_peer_qs if _peer_qs else '/' }}"
+       aria-pressed="{{ 'true' if _view != 'runs' else 'false' }}"
        data-view-target="board" data-tooltip="Board view">Board</a>
     <a class="nd-view-btn" href="{{ _list_href }}" aria-pressed="false"
        data-view-target="list" data-tooltip="List view">List</a>
+    <button type="button" class="nd-view-btn"
+            aria-pressed="{{ 'true' if _view == 'runs' else 'false' }}"
+            data-view-target="runs" data-tooltip="Runs view">Runs</button>
   </div>
 
   <div id="board-display-toolbar" class="flex items-center gap-2 text-xs"
@@ -386,14 +391,18 @@
       var sp = new URLSearchParams(location.search);
       sp.delete('view');
       var qs = sp.toString();
-      var boardLink = toggle.querySelector('[data-view-target="board"]');
-      var listLink = toggle.querySelector('[data-view-target="list"]');
-      if (boardLink) boardLink.href = location.pathname + location.search;
+      var boardLink = toggle.querySelector('a[data-view-target="board"]');
+      var listLink = toggle.querySelector('a[data-view-target="list"]');
+      var runsLink = toggle.querySelector('a[data-view-target="runs"]');
+      if (boardLink) boardLink.href = qs ? '/?' + qs : '/';
       if (listLink) listLink.href = qs ? '/list?' + qs : '/list';
+      if (runsLink) runsLink.href = qs ? '/?view=runs&' + qs : '/?view=runs';
     }
     document.getElementById('nd-page-view-toggle').addEventListener('click', function(e) {
       var link = e.target.closest('a');
-      if (link && link.getAttribute('aria-pressed') === 'true') e.preventDefault();
+      if (!link) return;
+      if (link.getAttribute('aria-pressed') === 'true') { e.preventDefault(); return; }
+      if (view === 'runs') stopRunsTimer();
     });
 
     function syncUrl(q) {
@@ -409,7 +418,7 @@
     }
 
     // Persist last-used view and sync toggle hrefs on initial load.
-    localStorage.setItem('nd-tickets-view', 'board');
+    localStorage.setItem('nd-tickets-view', view === 'runs' ? 'runs' : 'board');
     updateToggleHrefs();
 
     // Display popover setters (wired by static/display_options.js). The URL
@@ -454,31 +463,29 @@
       else refreshTickets(q);
     });
 
-    bar.addEventListener('nd:view', function (e) {
-      // The List view is a dedicated page; navigate there carrying the query.
-      if (e.detail.view === 'list') {
-        var lq = e.detail.query || '';
-        window.location = lq ? ('/list?q=' + enc(lq)) : '/list';
-        return;
-      }
-      view = e.detail.view === 'runs' ? 'runs' : 'tickets';
-      var q = e.detail.query || '';
-      if (view === 'runs') {
+    // Runs segment of the page-level toggle: swaps in the runs table without
+    // navigating. Board/List segments are <a> links that navigate normally;
+    // their click handler (above) stops the runs timer before leaving.
+    var runsBtn = document.querySelector('#nd-page-view-toggle [data-view-target="runs"]');
+    if (runsBtn) {
+      runsBtn.addEventListener('click', function () {
+        if (view === 'runs') return; // no-op: already in runs view
+        view = 'runs';
+        document.querySelectorAll('#nd-page-view-toggle .nd-view-btn').forEach(function (b) {
+          b.setAttribute('aria-pressed', b === runsBtn ? 'true' : 'false');
+        });
         grid.hidden = true;
         runs.hidden = false;
         if (displayToolbar) displayToolbar.hidden = true;
         if (window.ndDisplayPopover) window.ndDisplayPopover.close();
+        bar.dataset.resource = 'run';
+        var q = bar.dataset.query || currentQuery || '';
         loadRuns(q);
         startRunsTimer();
-      } else {
-        stopRunsTimer();
-        runs.hidden = true;
-        grid.hidden = false;
-        if (displayToolbar) displayToolbar.hidden = false;
-        refreshTickets(q);
-      }
-      syncUrl(q);
-    });
+        syncUrl(q);
+        localStorage.setItem('nd-tickets-view', 'runs');
+      });
+    }
 
     function setGroupButtons(active) {
       if (!groupBar) return;

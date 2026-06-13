@@ -147,10 +147,10 @@
             <script>
             (function () {
               var v = localStorage.getItem('nd-tickets-view');
-              if (v === 'list') {
-                var el = document.getElementById('nd-tickets-nav');
-                if (el) el.href = '/list';
-              }
+              var el = document.getElementById('nd-tickets-nav');
+              if (!el) return;
+              if (v === 'list') el.href = '/list';
+              else if (v === 'runs') el.href = '/?view=runs';
             })();
             </script>
             {% call sb_item('/archive', 'Archive', active_page == 'archive') %}

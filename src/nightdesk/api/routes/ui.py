@@ -40,52 +40,48 @@ from nightdesk.domain.tickets import (
 )
 
 
-def _parse_toolchain_presets(form) -> dict[str, list[str]]:
-    """Reconstruct {preset_name: [paths]} from the worktrees-pane form.
+def _validate_preset_upsert(
+    new_name: str,
+    paths: list,
+    existing: dict[str, list[str]],
+    *,
+    original_name: str = "",
+) -> dict[str, list[str]]:
+    """Validate and return an updated {name: [paths]} custom-presets map.
 
-    Path inputs aren't submitted directly — each preset card carries a hidden
-    ``preset_paths_json`` field that JS keeps in sync with the visible rows.
-    Card order is preserved by DOM submission order, so the two getlist() calls
-    pair up positionally. Validation goes through the ConfigUpdate validator so
-    the form path and the JSON API path enforce the same rules.
+    Handles rename by removing the old key first. Enforces uniqueness and
+    built-in-name collision rules. The returned dict has only custom presets
+    (built-ins are not stored in config).
     """
-    names = list(form.getlist("preset_name"))
-    paths_jsons = list(form.getlist("preset_paths_json"))
-    raw: dict[str, list[str]] = {}
-    for raw_name, raw_paths in zip(names, paths_jsons):
-        name = str(raw_name or "").strip()
-        if not name:
-            continue
-        # A custom preset name must not shadow a built-in toolchain (which would
-        # silently override its paths) or collide with another custom card.
-        if name in BUILTIN_TOOLCHAINS:
-            raise HTTPException(
-                422, f"preset name {name!r} is reserved by a built-in toolchain"
-            )
-        if name in raw:
-            raise HTTPException(422, f"duplicate preset name {name!r}")
-        try:
-            paths = json.loads(raw_paths or "[]")
-        except json.JSONDecodeError as exc:
-            raise HTTPException(422, f"invalid preset {name!r} paths JSON: {exc.msg}")
-        if not isinstance(paths, list):
-            raise HTTPException(422, f"preset {name!r} paths must be a list")
-        raw[name] = paths
-    if not raw:
-        return {}
+    if not new_name:
+        raise HTTPException(422, "preset name is required")
+    if new_name in BUILTIN_TOOLCHAINS:
+        raise HTTPException(
+            422, f"preset name {new_name!r} is reserved by a built-in toolchain"
+        )
+    if not isinstance(paths, list):
+        raise HTTPException(422, "paths must be a list")
+
+    updated = dict(existing)
+    # Rename: drop the old key so it doesn't persist.
+    if original_name and original_name != new_name:
+        updated.pop(original_name, None)
+    # Duplicate check — skip when updating in place.
+    if new_name in updated and (not original_name or original_name != new_name):
+        raise HTTPException(422, f"duplicate preset name {new_name!r}")
+
+    updated[new_name] = paths
     try:
-        validated = ConfigUpdate(toolchain_presets=raw)
+        validated = ConfigUpdate(toolchain_presets=updated)
     except ValidationError as exc:
         raise HTTPException(422, f"invalid toolchain presets: {exc.errors()[0]['msg']}")
-    presets = validated.toolchain_presets or {}
-    # Reject absolute paths that overlap protected nightdesk directories, the
-    # same guard the ticket/project path inputs use.
-    for name, paths in presets.items():
+    result = validated.toolchain_presets or {}
+    for pname, ppaths in result.items():
         try:
-            assert_paths_not_excluded(paths, field=f"toolchain_presets.{name}")
+            assert_paths_not_excluded(ppaths, field=f"toolchain_presets.{pname}")
         except ValueError as exc:
             raise HTTPException(422, str(exc))
-    return presets
+    return result
 
 
 # Active lifecycle statuses surfaced in the project workspace panes, in pill
@@ -188,7 +184,6 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "scheduling": "partials/settings_scheduling_pane.html",
             "claude": "partials/settings_claude_pane.html",
             "worktrees": "partials/settings_worktrees_pane.html",
-            "external_tools": "partials/settings_external_tools_pane.html",
             "notifications": "partials/settings_notifications_pane.html",
             "projects": "partials/settings_projects_pane.html",
             "labels": "partials/settings_labels_pane.html",
@@ -220,11 +215,45 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             _settings_context(session, category=category, saved=saved),
         )
 
-    def _render_toolsets(request: Request, session: Session, *, saved: bool):
-        ctx = _settings_context(session, category="external_tools", saved=saved)
-        ctx["title"] = "Toolsets"
-        ctx["active_page"] = "toolsets"
-        return templates.TemplateResponse(request, "toolsets.html", ctx)
+    def _render_toolsets(
+        request: Request,
+        session: Session,
+        *,
+        selected_name: str | None = None,
+        pane_mode: str | None = None,
+        error: str | None = None,
+        partial: bool = False,
+    ):
+        cfg = session.get(ConfigRow, 1)
+        all_opts = toolchain_options(cfg)
+        builtin_presets = [o for o in all_opts if o["builtin"]]
+        custom_presets = [o for o in all_opts if not o["builtin"]]
+
+        if selected_name is None and all_opts:
+            selected_name = all_opts[0]["name"]
+
+        preset = next((o for o in all_opts if o["name"] == selected_name), None)
+
+        if pane_mode is None:
+            if preset is None:
+                pane_mode = "empty"
+            elif preset["builtin"]:
+                pane_mode = "builtin"
+            else:
+                pane_mode = "edit"
+
+        ctx = {
+            "title": "Toolsets",
+            "active_page": "toolsets",
+            "builtin_presets": builtin_presets,
+            "custom_presets": custom_presets,
+            "selected_name": selected_name,
+            "pane_mode": pane_mode,
+            "preset": preset,
+            "error": error,
+        }
+        tmpl = "partials/toolset_pane.html" if partial else "toolsets.html"
+        return templates.TemplateResponse(request, tmpl, ctx)
 
     def _render_projects(request: Request, session: Session, *, saved: bool):
         ctx = _settings_context(session, category="projects", saved=saved)
@@ -278,11 +307,6 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             for status in statuses:
                 workspace["by_status"][status] = workspace["by_status"][status][:5]
         return out
-
-    def _save_toolsets(session: Session, form) -> None:
-        cfg = _ensure_cfg(session)
-        cfg.toolchain_presets = _parse_toolchain_presets(form)
-        session.commit()
 
     @router.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request):
@@ -470,29 +494,76 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         return _render_settings(request, session, category="worktrees", saved=True)
 
     @router.get("/toolsets", response_class=HTMLResponse, dependencies=[auth])
-    async def toolsets_page(request: Request, session: Session = Depends(get_session)):
-        return _render_toolsets(request, session, saved=False)
+    async def toolsets_page(
+        request: Request,
+        session: Session = Depends(get_session),
+        selected: str | None = Query(default=None),
+    ):
+        return _render_toolsets(request, session, selected_name=selected)
 
-    @router.post("/toolsets", response_class=HTMLResponse, dependencies=[auth])
-    async def toolsets_save(
+    @router.get("/toolsets/new", response_class=HTMLResponse, dependencies=[auth])
+    async def toolsets_new(request: Request, session: Session = Depends(get_session)):
+        partial = request.headers.get("HX-Request") == "true"
+        return _render_toolsets(request, session, selected_name=None,
+                                pane_mode="new", partial=partial)
+
+    @router.get("/toolsets/pane/{name}", response_class=HTMLResponse, dependencies=[auth])
+    async def toolsets_pane(
+        name: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        cfg = session.get(ConfigRow, 1)
+        opts = toolchain_options(cfg)
+        preset = next((o for o in opts if o["name"] == name), None)
+        if preset is None:
+            raise HTTPException(404, f"toolset {name!r} not found")
+        partial = request.headers.get("HX-Request") == "true"
+        mode = "builtin" if preset["builtin"] else "edit"
+        return _render_toolsets(request, session, selected_name=name,
+                                pane_mode=mode, partial=partial)
+
+    @router.post("/toolsets/preset", dependencies=[auth])
+    async def toolsets_preset_upsert(
         request: Request,
         session: Session = Depends(get_session),
     ):
         form = await request.form()
-        _save_toolsets(session, form)
-        return _render_toolsets(request, session, saved=True)
+        original_name = str(form.get("original_name", "") or "").strip()
+        new_name = str(form.get("preset_name", "") or "").strip()
+        paths_raw = str(form.get("preset_paths_json", "[]") or "[]")
+
+        try:
+            paths = json.loads(paths_raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, f"invalid paths JSON: {exc.msg}")
+
+        cfg = _ensure_cfg(session)
+        existing: dict[str, list[str]] = dict(cfg.toolchain_presets or {})
+        cfg.toolchain_presets = _validate_preset_upsert(
+            new_name, paths, existing, original_name=original_name
+        )
+        session.commit()
+        return RedirectResponse(url=f"/toolsets/pane/{new_name}", status_code=303)
+
+    @router.post("/toolsets/preset/{name}/delete", dependencies=[auth])
+    async def toolsets_preset_delete(
+        name: str,
+        session: Session = Depends(get_session),
+    ):
+        if name in BUILTIN_TOOLCHAINS:
+            raise HTTPException(422, f"cannot delete built-in toolchain {name!r}")
+        cfg = _ensure_cfg(session)
+        existing = dict(cfg.toolchain_presets or {})
+        if name not in existing:
+            raise HTTPException(404, f"toolset preset {name!r} not found")
+        existing.pop(name)
+        cfg.toolchain_presets = existing
+        session.commit()
+        return RedirectResponse(url="/toolsets", status_code=303)
 
     @router.get("/settings/external-tools", response_class=HTMLResponse, dependencies=[auth])
     async def settings_external_tools_page(request: Request, session: Session = Depends(get_session)):
-        return RedirectResponse(url="/toolsets", status_code=303)
-
-    @router.post("/settings/external-tools", response_class=HTMLResponse, dependencies=[auth])
-    async def settings_external_tools_save(
-        request: Request,
-        session: Session = Depends(get_session),
-    ):
-        form = await request.form()
-        _save_toolsets(session, form)
         return RedirectResponse(url="/toolsets", status_code=303)
 
     @router.get("/projects", response_class=HTMLResponse, dependencies=[auth])

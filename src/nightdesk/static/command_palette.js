@@ -403,6 +403,33 @@
     },
   };
 
+  // Pre-stamp the keyboard cursor class onto fragment nodes before DOM insertion.
+  // nd-cursor-active carries an explicit `transition: outline .1s, background .1s`
+  // rule — same mechanism as the bulk-selection fix in bulk_select.js.
+  function stampCursorFragment(fragment) {
+    var sel = desiredBoardSidebarTicketId;
+    if (!sel) {
+      var sidebar = document.getElementById("sidebar");
+      sel = sidebar && sidebar.getAttribute("data-selected-ticket-id");
+    }
+    if (!sel || !fragment) return;
+    var nodes = [];
+    if (fragment.getAttribute && fragment.getAttribute("data-ticket-id")) {
+      nodes.push(fragment);
+    }
+    if (fragment.querySelectorAll) {
+      fragment.querySelectorAll("[data-ticket-id]").forEach(function (n) {
+        nodes.push(n);
+      });
+    }
+    nodes.forEach(function (node) {
+      if (node.getAttribute("data-ticket-id") === sel) {
+        node.setAttribute("data-nd-cursor", "");
+        node.classList.add("nd-cursor-active");
+      }
+    });
+  }
+
   // Re-apply cursor highlight after HTMX swaps replace cards.
   function restoreCursor() {
     if (restorePendingBoardFocus()) return;
@@ -419,7 +446,15 @@
     for (var i = 0; i < cards.length; i++) {
       if (cards[i].getAttribute("data-ticket-id") === sel) {
         cards[i].setAttribute("data-nd-cursor", "");
+        // Fresh node from a non-OOB swap (list page innerHTML poll) the
+        // pre-stamp couldn't reach: nd-cursor-active carries an explicit
+        // `transition: outline .1s, background .1s`, so adding it now after
+        // htmx's mid-swap recalc would animate. Suspend, apply, reflow,
+        // restore so the cursor state is the node's initial state.
+        cards[i].style.transition = "none";
         cards[i].classList.add("nd-cursor-active");
+        void cards[i].offsetWidth;
+        cards[i].style.transition = "";
         return;
       }
     }
@@ -2003,7 +2038,17 @@
       history.replaceState(null, "", clean);
     }
 
-    // Restore cursor highlight after HTMX column swaps on the board or inbox.
+    // Pre-stamp cursor state onto incoming fragments before DOM insertion.
+    // Mirrors the bulk_select.js approach: oobBeforeSwap carries detail.fragment
+    // in htmx 2.0.3; beforeSwap does not, so that call is a no-op.
+    document.body.addEventListener("htmx:oobBeforeSwap", function (evt) {
+      stampCursorFragment(evt.detail && evt.detail.fragment);
+    });
+    document.body.addEventListener("htmx:beforeSwap", function (evt) {
+      stampCursorFragment(evt.detail && evt.detail.fragment);
+    });
+    // Safety-net: restore cursor after every swap (handles inbox and any path
+    // not covered by the pre-stamp).
     document.body.addEventListener("htmx:afterSwap", function () {
       restoreCursor();
       restoreInboxCursor();
