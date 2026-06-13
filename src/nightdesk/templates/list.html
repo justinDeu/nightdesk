@@ -1,10 +1,22 @@
 {% extends "base.html" %}
-{% set active_page = 'list' %}
+{% set active_page = 'tickets' %}
 {% block body %}
 <div class="flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
   {% with sb_id='list-search', sb_resource='ticket', sb_query=query, sb_view='list' %}
     {% include "partials/search_bar.html" %}
   {% endwith %}
+
+  {# Board|List view toggle — mirrors the one on the board page. Board link
+     is updated by JS below after syncUrl() so live filter changes carry
+     across the switch. #}
+  {% set _peer_qs = request.url.query %}
+  {% set _board_href = '/' + ('?' + _peer_qs if _peer_qs else '') %}
+  <div id="nd-page-view-toggle" class="nd-view-toggle self-end" role="tablist" aria-label="Ticket view">
+    <a class="nd-view-btn" href="{{ _board_href }}" aria-pressed="false"
+       data-view-target="board" data-tooltip="Board view">Board</a>
+    <a class="nd-view-btn" href="{{ '/list?'+_peer_qs if _peer_qs else '/list' }}" aria-pressed="true"
+       data-view-target="list" data-tooltip="List view">List</a>
+  </div>
 
   {# Display toolbar: one Display button opening the consolidated popover
      (grouping, ordering, show/hide columns). Everything maps straight onto
@@ -104,10 +116,29 @@
       return p;
     }
 
+    function updateToggleHrefs() {
+      var toggle = document.getElementById('nd-page-view-toggle');
+      if (!toggle) return;
+      var qs = location.search ? location.search.slice(1) : '';
+      var boardLink = toggle.querySelector('[data-view-target="board"]');
+      var listLink = toggle.querySelector('[data-view-target="list"]');
+      if (boardLink) boardLink.href = qs ? '/?' + qs : '/';
+      if (listLink) listLink.href = location.pathname + location.search;
+    }
+    document.getElementById('nd-page-view-toggle').addEventListener('click', function(e) {
+      var link = e.target.closest('a');
+      if (link && link.getAttribute('aria-pressed') === 'true') e.preventDefault();
+    });
+
     function syncUrl() {
       var qs = listParams().toString();
       history.replaceState(null, '', qs ? ('/list?' + qs) : '/list');
+      updateToggleHrefs();
     }
+
+    // Persist last-used view and sync toggle hrefs on initial load.
+    localStorage.setItem('nd-tickets-view', 'list');
+    updateToggleHrefs();
 
     function refreshList() {
       if (typeof htmx === 'undefined') return;

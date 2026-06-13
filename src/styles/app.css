@@ -1684,6 +1684,96 @@ dialog button[aria-label="Close"]:focus-visible {
     color: #06130d;
     background: var(--color-accent);
   }
+
+  /* ---- Two-pane list rail (Projects / Scheduled / Profiles) -----------
+     Three pages share the same left-rail anatomy. Use these component
+     classes on all three to keep them in lockstep. Selected-state
+     highlight uses an inline box-shadow (inset 2px 0 0 var(--color-accent))
+     applied by the server on first render and by JS on click — no
+     separate CSS class needed. */
+  .nd-list-pane {
+    width: 16rem;
+    flex: 0 0 16rem;
+    border-right: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+  }
+  .nd-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-elev);
+    flex-shrink: 0;
+  }
+  .nd-list-nav {
+    flex: 1 1 0%;
+    overflow-y: auto;
+  }
+  /* Row element for two-pane nav lists (Projects, Scheduled, Profiles).
+     Named .nd-pane-row to avoid collision with .nd-list-row, which is the
+     ticket list row in list.html and is scoped separately in this file. */
+  .nd-pane-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.875rem;
+    width: 100%;
+    text-align: left;
+    text-decoration: none;
+    color: inherit;
+  }
+  .nd-pane-row:hover {
+    background: var(--color-bg-elev-2);
+  }
+
+  /* ---- Project workspace tabs (Overview / Tickets / Activity) ----------
+     Underline tab styling: muted by default, jade accent + underline when
+     active (aria-selected="true"), matching the segmented/active language
+     used elsewhere in the app. */
+  .nd-proj-tab {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.82rem;
+    color: var(--color-fg-muted);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color .1s var(--ease-standard), border-color .1s var(--ease-standard);
+  }
+  .nd-proj-tab:hover {
+    color: var(--color-fg);
+  }
+  .nd-proj-tab[aria-selected="true"] {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+  }
+
+  /* Status filter pills inside the Tickets tab. Active pill (aria-pressed)
+     fills with the jade accent; the rest read as quiet outline chips. */
+  .nd-proj-pill {
+    padding: 0.2rem 0.6rem;
+    font-size: 0.74rem;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    color: var(--color-fg-muted);
+    transition: color .1s var(--ease-standard), background .1s var(--ease-standard), border-color .1s var(--ease-standard);
+  }
+  .nd-proj-pill:hover {
+    color: var(--color-fg);
+    border-color: var(--color-fg-muted);
+  }
+  .nd-proj-pill[aria-pressed="true"] {
+    color: #06130d;
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+
+  /* Read-focused ticket rows + activity feed cards: quiet hover affordance. */
+  .nd-proj-ticket-row:hover {
+    background: var(--color-bg-elev);
+  }
 }
 
 /* ---- Shared property picker (nd-prop-*) ---------------------------------
@@ -2013,6 +2103,16 @@ dialog button[aria-label="Close"]:focus-visible {
 }
 .nd-select:focus {
   border-color: var(--color-accent);
+}
+
+/* Auto-growing textarea — field-sizing: content (Chrome 123+, FF 128+).
+   JS fallback for older browsers wired in command_palette.js.
+   rows= attribute sets the initial height; content expands up to max-height. */
+.nd-autogrow {
+  field-sizing: content;
+  max-height: 16rem;
+  overflow-y: auto;
+  resize: none;
 }
 
 /* Bare `rounded` is hardcoded to 0.25rem in Tailwind v4 (it does not read a

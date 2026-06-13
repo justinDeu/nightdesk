@@ -175,8 +175,8 @@
 
 <div class="flex gap-0 min-h-[calc(100vh-6rem)]" data-projects-page>
   {# ── Left rail: project list ─────────────────────────────────────────── #}
-  <aside class="w-64 shrink-0 border-r border-border flex flex-col">
-    <div class="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-border bg-bg-elev">
+  <aside class="nd-list-pane">
+    <div class="nd-list-header">
       <div>
         <h2 class="text-sm font-semibold text-fg">Projects</h2>
         <p class="text-[11px] text-fg-muted">{{ active_projects | length }} active{% if archived_projects %} · {{ archived_projects | length }} archived{% endif %}</p>
@@ -189,12 +189,12 @@
       </button>
     </div>
 
-    <nav class="flex-1 overflow-y-auto divide-y divide-border" id="project-list" aria-label="Projects">
+    <nav class="nd-list-nav divide-y divide-border" id="project-list" aria-label="Projects">
       {% for project in projects %}
         <button type="button"
                 data-project-row="{{ project.id }}"
                 onclick="window.ndSelectProject && window.ndSelectProject('{{ project.id }}')"
-                class="flex w-full flex-col gap-0.5 px-3 py-2.5 text-left text-sm hover:bg-bg-elev-2 {% if loop.first %}bg-bg-elev-2{% endif %}"
+                class="nd-pane-row {% if loop.first %}bg-bg-elev-2{% endif %}"
                 {% if loop.first %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}>
           <span class="flex min-w-0 items-center gap-2">
             <span class="font-medium text-fg truncate">{{ project.name }}</span>
@@ -256,47 +256,49 @@
             </div>
           </div>
 
-          {# ── Quick-nav tab bar ───────────────────────────────────────── #}
+          {# ── Workspace tabs ──────────────────────────────────────────── #}
           <div class="border-b border-border bg-bg shrink-0 px-6">
-            <div class="flex flex-wrap gap-1 py-2">
-              <a href="/?project={{ project.slug | urlencode }}" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">Board</a>
-              <a href="/list?project={{ project.slug | urlencode }}" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">List</a>
-              <a href="/inbox?project={{ project.slug | urlencode }}" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">Inbox</a>
-              <a href="/archive?project={{ project.slug | urlencode }}" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">Archive</a>
-              <a href="/?project={{ project.slug | urlencode }}&group=label" class="rounded px-2.5 py-1 text-sm text-fg-muted hover:bg-bg-elev-2 hover:text-fg">By label</a>
+            <div class="flex gap-1" role="tablist" aria-label="Project workspace">
+              <button type="button" role="tab" data-proj-tab-btn="overview" aria-selected="true"
+                      onclick="window.ndProjectTab('{{ project.id }}', 'overview')"
+                      class="nd-proj-tab">Overview</button>
+              <button type="button" role="tab" data-proj-tab-btn="tickets" aria-selected="false"
+                      onclick="window.ndProjectTab('{{ project.id }}', 'tickets')"
+                      class="nd-proj-tab">Tickets</button>
+              <button type="button" role="tab" data-proj-tab-btn="activity" aria-selected="false"
+                      onclick="window.ndProjectTab('{{ project.id }}', 'activity')"
+                      class="nd-proj-tab">Activity</button>
             </div>
           </div>
 
-          {# ── Status summary strip ────────────────────────────────────── #}
-          <div class="border-b border-border bg-bg-elev/50 px-6 py-3 shrink-0">
+          {# ── Overview pane ───────────────────────────────────────────── #}
+          <div data-proj-pane="overview" data-for="{{ project.id }}">
+
+          {# Status summary strip — counts switch to the Tickets tab in-pane
+             with the matching status filter instead of linking out. #}
+          <div class="border-b border-border bg-bg-elev/50 px-6 py-3">
             <div class="flex flex-wrap gap-2">
-              {% set status_links = [
-                ('inbox',   'Inbox',   '/inbox?project=' ~ (project.slug | urlencode)),
-                ('draft',   'Draft',   '/list?q=' ~ (('project=' ~ project.slug ~ ' status=draft') | urlencode)),
-                ('queued',  'Queued',  '/list?q=' ~ (('project=' ~ project.slug ~ ' status=queued') | urlencode)),
-                ('running', 'Running', '/list?q=' ~ (('project=' ~ project.slug ~ ' status=running') | urlencode)),
-                ('review',  'Review',  '/list?q=' ~ (('project=' ~ project.slug ~ ' status=review') | urlencode)),
-              ] %}
-              {% for status_key, status_label, status_href in status_links %}
+              {% for status_key in ['inbox', 'draft', 'queued', 'running', 'review'] %}
                 {% set scount = workspace.counts[status_key] if workspace else 0 %}
                 {% set smeta = status_meta[status_key] %}
-                <a href="{{ status_href }}"
-                   class="flex items-center gap-1.5 rounded border px-3 py-1.5 text-sm hover:border-fg-muted/60 hover:bg-bg-elev-2 {{ smeta.css }}">
+                <button type="button"
+                        onclick="window.ndProjectTicketsFilter('{{ project.id }}', '{{ status_key }}')"
+                        class="flex items-center gap-1.5 rounded border px-3 py-1.5 text-sm hover:border-fg-muted/60 hover:bg-bg-elev-2 {{ smeta.css }}">
                   <span class="font-semibold tabular-nums">{{ scount }}</span>
-                  <span class="text-xs">{{ status_label }}</span>
-                </a>
+                  <span class="text-xs">{{ smeta.label }}</span>
+                </button>
               {% endfor %}
             </div>
           </div>
 
           {# ── Main content grid ───────────────────────────────────────── #}
-          <div class="flex-1 grid gap-5 p-6 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_26rem] content-start">
+          <div class="grid gap-5 p-6 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_26rem] content-start">
 
             {# Recent tickets list #}
             <section class="rounded border border-border bg-bg overflow-hidden">
               <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-border bg-bg-elev/50">
                 <h3 class="text-sm font-semibold text-fg">Recent tickets</h3>
-                <a href="/list?project={{ project.slug | urlencode }}" class="text-xs text-accent hover:text-accent/80">View all in list</a>
+                <button type="button" onclick="window.ndProjectTicketsFilter('{{ project.id }}', '')" class="text-xs text-accent hover:text-accent/80">View all tickets</button>
               </div>
               {% if recent_tickets %}
                 <div class="divide-y divide-border/50">
@@ -318,9 +320,9 @@
                 {% set total_active = (workspace.counts.values() | sum) if workspace else 0 %}
                 {% if total_active > recent_tickets | length %}
                   <div class="px-4 py-2 border-t border-border bg-bg-elev/30 text-center">
-                    <a href="/list?project={{ project.slug | urlencode }}" class="text-xs text-accent hover:text-accent/80">
-                      + {{ total_active - (recent_tickets | length) }} more — open list view
-                    </a>
+                    <button type="button" onclick="window.ndProjectTicketsFilter('{{ project.id }}', '')" class="text-xs text-accent hover:text-accent/80">
+                      + {{ total_active - (recent_tickets | length) }} more — view all tickets
+                    </button>
                   </div>
                 {% endif %}
               {% else %}
@@ -421,6 +423,19 @@
                 </details>
               {% endif %}
             </div>
+          </div>
+          </div>{# /overview pane #}
+
+          {# ── Tickets pane (lazy: loaded on first activation) ──────────── #}
+          <div data-proj-pane="tickets" data-for="{{ project.id }}"
+               data-proj-pane-url="/projects/{{ project.id }}/tickets-pane" data-loaded="0" hidden>
+            <div class="px-6 py-10 text-center text-sm text-fg-muted">Loading tickets…</div>
+          </div>
+
+          {# ── Activity pane (lazy: loaded on first activation) ─────────── #}
+          <div data-proj-pane="activity" data-for="{{ project.id }}"
+               data-proj-pane-url="/projects/{{ project.id }}/activity-pane" data-loaded="0" hidden>
+            <div class="px-6 py-10 text-center text-sm text-fg-muted">Loading activity…</div>
           </div>
 
         </article>
@@ -551,6 +566,43 @@
     document.querySelectorAll('[data-project-detail]').forEach(function (detail) {
       detail.classList.toggle('hidden', detail.getAttribute('data-project-detail') !== projectId);
     });
+    // Switching projects always lands back on Overview.
+    window.ndProjectTab(projectId, 'overview');
+  };
+
+  // Show one workspace tab within a project's detail article. Tickets/Activity
+  // panes are fetched on first activation (lazy) and cached thereafter.
+  window.ndProjectTab = function (projectId, tab) {
+    var article = document.querySelector('[data-project-detail="' + (window.CSS && CSS.escape ? CSS.escape(projectId) : projectId) + '"]');
+    if (!article) return;
+    article.querySelectorAll('[data-proj-tab-btn]').forEach(function (btn) {
+      btn.setAttribute('aria-selected', btn.getAttribute('data-proj-tab-btn') === tab ? 'true' : 'false');
+    });
+    article.querySelectorAll('[data-proj-pane]').forEach(function (pane) {
+      var on = pane.getAttribute('data-proj-pane') === tab;
+      pane.hidden = !on;
+      if (!on) return;
+      var url = pane.getAttribute('data-proj-pane-url');
+      if (url && pane.getAttribute('data-loaded') === '0' && typeof htmx !== 'undefined') {
+        pane.setAttribute('data-loaded', '1');
+        htmx.ajax('GET', url, { target: pane, swap: 'innerHTML' });
+      }
+    });
+  };
+
+  // Jump from an Overview status count straight into the Tickets tab with that
+  // status filter applied, loading (or reloading) the pane in place.
+  window.ndProjectTicketsFilter = function (projectId, status) {
+    var article = document.querySelector('[data-project-detail="' + (window.CSS && CSS.escape ? CSS.escape(projectId) : projectId) + '"]');
+    if (!article) return;
+    var pane = article.querySelector('[data-proj-pane="tickets"]');
+    if (pane && typeof htmx !== 'undefined') {
+      var base = pane.getAttribute('data-proj-pane-url');
+      var url = status ? (base + '?status=' + encodeURIComponent(status)) : base;
+      pane.setAttribute('data-loaded', '1');  // own the load; suppress the default fetch
+      htmx.ajax('GET', url, { target: pane, swap: 'innerHTML' });
+    }
+    window.ndProjectTab(projectId, 'tickets');
   };
   document.querySelectorAll('[data-project-form]').forEach(function (form) {
     window.ndProjectSlugPreview(form);

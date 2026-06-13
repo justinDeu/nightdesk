@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% set active_page = 'board' %}
+{% set active_page = 'tickets' %}
 {% block body %}
 {% set _view = view | default('tickets') %}
 {% set _group = group | default('status') %}
@@ -17,6 +17,18 @@
      Switching grouping still reloads the board grid: both the grid template
      and the column set change, so a fragment swap can't express it. Hidden in
      the runs view (display options apply to the kanban only). #}
+  {# Board|List view toggle — always present; links preserve current query
+     string. JS below also updates the list href after every syncUrl() call
+     so live filter changes are reflected without a reload. #}
+  {% set _peer_qs = request.url.query %}
+  {% set _list_href = '/list' + ('?' + _peer_qs if _peer_qs else '') %}
+  <div id="nd-page-view-toggle" class="nd-view-toggle self-end" role="tablist" aria-label="Ticket view">
+    <a class="nd-view-btn" href="{{ '/?'+_peer_qs if _peer_qs else '/' }}" aria-pressed="true"
+       data-view-target="board" data-tooltip="Board view">Board</a>
+    <a class="nd-view-btn" href="{{ _list_href }}" aria-pressed="false"
+       data-view-target="list" data-tooltip="List view">List</a>
+  </div>
+
   <div id="board-display-toolbar" class="flex items-center gap-2 text-xs"
        {% if _view == 'runs' %}hidden{% endif %}>
     <div class="relative">
@@ -368,6 +380,22 @@
       }
     });
 
+    function updateToggleHrefs() {
+      var toggle = document.getElementById('nd-page-view-toggle');
+      if (!toggle) return;
+      var sp = new URLSearchParams(location.search);
+      sp.delete('view');
+      var qs = sp.toString();
+      var boardLink = toggle.querySelector('[data-view-target="board"]');
+      var listLink = toggle.querySelector('[data-view-target="list"]');
+      if (boardLink) boardLink.href = location.pathname + location.search;
+      if (listLink) listLink.href = qs ? '/list?' + qs : '/list';
+    }
+    document.getElementById('nd-page-view-toggle').addEventListener('click', function(e) {
+      var link = e.target.closest('a');
+      if (link && link.getAttribute('aria-pressed') === 'true') e.preventDefault();
+    });
+
     function syncUrl(q) {
       var params = new URLSearchParams();
       if (q) params.set('q', q);
@@ -377,7 +405,12 @@
       if (boardProps) params.set('props', boardProps);
       var qs = params.toString();
       history.replaceState(null, '', qs ? ('/?' + qs) : '/');
+      updateToggleHrefs();
     }
+
+    // Persist last-used view and sync toggle hrefs on initial load.
+    localStorage.setItem('nd-tickets-view', 'board');
+    updateToggleHrefs();
 
     // Display popover setters (wired by static/display_options.js). The URL
     // stays the single source of truth: update it, then force a columns poll

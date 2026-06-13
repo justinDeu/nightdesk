@@ -111,33 +111,6 @@
           <kbd class="nd-sb-kbd">/</kbd>
         </button>
 
-        {% if active_page == 'settings' %}
-          {# Settings mode: the app destinations give way to the settings
-             categories so there is never a double sidebar. Each link carries
-             data-settings-nav-link — settings_shell.html's dirty-state guard
-             queries that attribute before navigating away. #}
-          <nav class="nd-sb-nav" aria-label="Settings sections">
-            {% call sb_item('/', 'Back', false) %}
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8H3"/><path d="m7 4-4 4 4 4"/></svg>
-            {% endcall %}
-            <div class="nd-sb-section">Settings</div>
-            {% call sb_item('/settings/scheduling', 'Scheduling', settings_category is defined and settings_category == 'scheduling', 'data-settings-nav-link') %}
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg>
-            {% endcall %}
-            {% call sb_item('/settings/claude', 'Claude Code', settings_category is defined and settings_category == 'claude', 'data-settings-nav-link') %}
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M3 5l10 6M13 5 3 11"/></svg>
-            {% endcall %}
-            {% call sb_item('/settings/worktrees', 'Git worktrees', settings_category is defined and settings_category == 'worktrees', 'data-settings-nav-link') %}
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="4.5" cy="4" r="1.6"/><circle cx="4.5" cy="12" r="1.6"/><circle cx="11.5" cy="6" r="1.6"/><path d="M4.5 5.6v4.8"/><path d="M11.5 7.6c0 2.2-2.4 2.6-4 2.6"/></svg>
-            {% endcall %}
-            {% call sb_item('/settings/labels', 'Labels', settings_category is defined and settings_category == 'labels', 'data-settings-nav-link') %}
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8.5 8 3h4.5V7.5L7 13Z"/><circle cx="10" cy="6" r=".7"/></svg>
-            {% endcall %}
-            {% call sb_item('/settings/notifications', 'Notifications', settings_category is defined and settings_category == 'notifications', 'data-settings-nav-link') %}
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7a3 3 0 0 1 6 0c0 3 1.2 4 1.2 4H3.8S5 10 5 7Z"/><path d="M6.8 13a1.4 1.4 0 0 0 2.4 0"/></svg>
-            {% endcall %}
-          </nav>
-        {% else %}
           {# App mode: every destination is visible at once (no dropdowns). #}
           <nav class="nd-sb-nav" aria-label="Sections">
             {# Inbox carries two unread indicators fed by one poll: the chip at
@@ -158,12 +131,28 @@
                     hx-trigger="load, every 15s"
                     hx-swap="innerHTML"></span>
             </a>
-            {% call sb_item('/', 'Board', active_page in ['', 'board', 'tickets']) %}
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="3" height="10" rx="1"/><rect x="6.5" y="3" width="3" height="10" rx="1"/><rect x="11" y="3" width="3" height="10" rx="1"/></svg>
-            {% endcall %}
-            {% call sb_item('/list', 'List', active_page == 'list') %}
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9M5 8h9M5 12h9M2.6 4h.01M2.6 8h.01M2.6 12h.01"/></svg>
-            {% endcall %}
+            {# Tickets — active on both board (/) and list (/list). The href is
+               rewritten by the inline script below from localStorage so
+               returning users land on their last-used view without a flash. #}
+            <a id="nd-tickets-nav"
+               href="/"
+               class="nd-sb-item{% if active_page == 'tickets' %} is-active{% endif %}"
+               {% if active_page == 'tickets' %}aria-current="page"{% endif %}
+               data-tooltip="Tickets">
+              <span class="nd-sb-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="3" height="10" rx="1"/><rect x="6.5" y="3" width="3" height="10" rx="1"/><rect x="11" y="3" width="3" height="10" rx="1"/></svg>
+              </span>
+              <span class="nd-sb-label">Tickets</span>
+            </a>
+            <script>
+            (function () {
+              var v = localStorage.getItem('nd-tickets-view');
+              if (v === 'list') {
+                var el = document.getElementById('nd-tickets-nav');
+                if (el) el.href = '/list';
+              }
+            })();
+            </script>
             {% call sb_item('/archive', 'Archive', active_page == 'archive') %}
               <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="3" rx="1"/><path d="M3 6v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6"/><path d="M6.5 9h3"/></svg>
             {% endcall %}
@@ -204,7 +193,6 @@
               <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2"/><path d="M8 1.6v1.7M8 12.7v1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M1.6 8h1.7M12.7 8h1.7M3.4 12.6l1.2-1.2M11.4 4.6l1.2-1.2"/></svg>
             {% endcall %}
           </nav>
-        {% endif %}
 
         {# Bottom status cluster — the three live elements keep their ids and
            htmx polling exactly as before; only their location moved here. #}

@@ -1146,7 +1146,7 @@
     cmds.push({ label: "Capture to inbox", shortcut: "Shift C", hint: "quick capture",
       section: "Navigation",
       run: function () { openQuickCapture(); } });
-    cmds.push({ label: "Go to Work", shortcut: "", hint: "Board", section: "Navigation",
+    cmds.push({ label: "Go to Tickets", shortcut: "", hint: "board view", section: "Navigation",
       run: function () { location.href = "/"; } });
     cmds.push({ label: "Go to Insights", shortcut: "g i", hint: "Analytics", section: "Navigation",
       run: function () { location.href = "/analytics"; } });
@@ -1158,9 +1158,9 @@
       run: function () { location.href = "/toolsets"; } });
     cmds.push({ label: "Show keyboard shortcuts", shortcut: "?", hint: "", section: "Navigation",
       run: openCheatSheet });
-    cmds.push({ label: "Go to Work: board", shortcut: "g b", hint: "view", section: "Work views",
+    cmds.push({ label: "Go to Tickets: board view", shortcut: "g b", hint: "view", section: "Work views",
       run: function () { location.href = "/"; } });
-    cmds.push({ label: "Go to Work: list", shortcut: "g l", hint: "view", section: "Work views",
+    cmds.push({ label: "Go to Tickets: list view", shortcut: "g l", hint: "view", section: "Work views",
       run: function () { location.href = "/list"; } });
     cmds.push({ label: "Go to Work: inbox", shortcut: "", hint: "view", section: "Work views",
       run: function () { location.href = "/inbox"; } });
@@ -1424,6 +1424,7 @@
   // loaded on first open so base.html carries no per-page project query.
 
   var _qcProjectsLoaded = false;
+  var _qcLabelsLoaded = false;
 
   function openQuickCapture() {
     var dlg = document.getElementById("nd-quick-capture");
@@ -1442,11 +1443,30 @@
         });
     }
 
+    // Lazy-load label candidates once per page load.
+    var candidatesEl = document.querySelector("#qc-label-picker [data-picker-candidates]");
+    if (candidatesEl && !_qcLabelsLoaded) {
+      fetch("/header/label-candidates", { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (data) {
+          if (candidatesEl) {
+            candidatesEl.textContent = JSON.stringify(data);
+            _qcLabelsLoaded = true;
+          }
+        });
+    }
+
     // Reset form and error state.
     var form = document.getElementById("nd-quick-capture-form");
     if (form) form.reset();
     var err = document.getElementById("nd-quick-capture-error");
     if (err) { err.textContent = ""; err.classList.add("hidden"); }
+    // Clear label picker selections (dynamically added — not reset by form.reset()).
+    var pickerSelected = document.querySelector("#qc-label-picker [data-picker-selected]");
+    if (pickerSelected) pickerSelected.innerHTML = "";
+    // Reset autogrow height for the JS fallback path.
+    var notesReset = document.getElementById("nd-quick-capture-notes");
+    if (notesReset && !CSS.supports("field-sizing", "content")) notesReset.style.height = "";
 
     if (!dlg.open) {
       try { dlg.showModal(); } catch (e) { return; }
@@ -1469,6 +1489,25 @@
     var form = document.getElementById("nd-quick-capture-form");
     if (!form || form.__ndWired) return;
     form.__ndWired = true;
+
+    // Notes textarea: Enter inserts newline (default), Ctrl/Cmd+Enter submits.
+    var notesEl = document.getElementById("nd-quick-capture-notes");
+    if (notesEl) {
+      notesEl.addEventListener("keydown", function (e) {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+          e.preventDefault();
+          if (form.requestSubmit) form.requestSubmit();
+          else form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        }
+      });
+      // JS autogrow fallback for browsers without field-sizing: content.
+      if (!CSS.supports("field-sizing", "content")) {
+        notesEl.addEventListener("input", function () {
+          notesEl.style.height = "auto";
+          notesEl.style.height = Math.min(notesEl.scrollHeight, 256) + "px";
+        });
+      }
+    }
 
     form.addEventListener("submit", function (e) {
       e.preventDefault();
@@ -1526,6 +1565,23 @@
         }
       }).catch(function () {
         if (err) { err.textContent = "Capture failed."; err.classList.remove("hidden"); }
+      });
+    });
+  }
+
+  // ---- autogrow fallback -------------------------------------------------
+  // Wires the input-driven height recalculation for .nd-autogrow textareas
+  // on browsers that don't support field-sizing: content (pre-Chrome 123,
+  // pre-FF 128). Modern browsers use the CSS property directly.
+
+  function wireAutogrowFallback() {
+    if (CSS.supports("field-sizing", "content")) return;
+    document.querySelectorAll("textarea.nd-autogrow").forEach(function (el) {
+      if (el.__ndAutogrow) return;
+      el.__ndAutogrow = true;
+      el.addEventListener("input", function () {
+        el.style.height = "auto";
+        el.style.height = Math.min(el.scrollHeight, 256) + "px";
       });
     });
   }
@@ -1932,6 +1988,7 @@
   function init() {
     wirePaletteInput();
     wireQuickCapture();
+    wireAutogrowFallback();
     document.addEventListener("keydown", onKeydown, true);
 
     // If we landed on the board via the "c" shortcut from another page,

@@ -18,7 +18,7 @@
 {% macro pct(x) -%}{{ '%.0f'|format(x * 100) }}%{%- endmacro %}
 
 {% block body %}
-<section class="max-w-5xl mx-auto space-y-6">
+<section class="space-y-6">
   <header class="flex items-center justify-between flex-wrap gap-2">
     <h1 class="text-xl font-bold">Token &amp; usage analytics</h1>
     <span class="text-xs text-fg-muted">
@@ -42,7 +42,8 @@
     {% endfor %}
   </div>
 
-  {# --- token mix + cache efficiency (last 30 days) ---------------------- #}
+  {# --- token mix + daily chart: 2-up at xl, stacked below that --------- #}
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
   <div class="border border-border rounded-md bg-bg-elev p-4">
     <h2 class="font-semibold mb-3">Token mix &amp; cache efficiency (last 30 days)</h2>
     {% set t = last_30d %}
@@ -122,6 +123,7 @@
     {% else %}
       <p class="text-sm text-fg-muted">No tokens recorded in this window.</p>
     {% endif %}
+  </div>
   </div>
 
   {# --- per-model stats (last 30 days) ----------------------------------- #}

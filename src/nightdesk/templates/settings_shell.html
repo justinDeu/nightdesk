@@ -2,12 +2,79 @@
 {% set title = "Settings" %}
 {% set active_page = 'settings' %}
 {% block body %}
-{# The settings category nav now lives in the left sidebar (settings mode),
-   so the pane takes the full content width here. #}
-<div class="min-h-[calc(100vh-4rem)]">
-  <section class="min-w-0 flex-1" id="settings-pane">
+<div class="flex gap-0 min-h-[calc(100vh-6rem)]">
+
+  {# ---------- Left rail: settings categories ----------------------------- #}
+  <aside class="nd-list-pane">
+    <div class="nd-list-header">
+      <h1 class="text-sm font-semibold text-fg">Settings</h1>
+    </div>
+
+    {# Each link carries data-settings-nav-link so the dirty-state guard
+       below can intercept navigation away from an unsaved form. #}
+    <nav class="nd-list-nav" id="settings-category-nav">
+      <a href="/settings/scheduling"
+         data-settings-nav-link
+         class="nd-pane-row{% if settings_category == 'scheduling' %} bg-bg-elev-2{% endif %}"
+         {% if settings_category == 'scheduling' %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}>
+        <span class="flex items-center gap-2">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg>
+          Scheduling
+        </span>
+      </a>
+      <a href="/settings/claude"
+         data-settings-nav-link
+         class="nd-pane-row{% if settings_category == 'claude' %} bg-bg-elev-2{% endif %}"
+         {% if settings_category == 'claude' %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}>
+        <span class="flex items-center gap-2">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v12M3 5l10 6M13 5 3 11"/></svg>
+          Claude Code
+        </span>
+      </a>
+      <a href="/settings/worktrees"
+         data-settings-nav-link
+         class="nd-pane-row{% if settings_category == 'worktrees' %} bg-bg-elev-2{% endif %}"
+         {% if settings_category == 'worktrees' %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}>
+        <span class="flex items-center gap-2">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.5" cy="4" r="1.6"/><circle cx="4.5" cy="12" r="1.6"/><circle cx="11.5" cy="6" r="1.6"/><path d="M4.5 5.6v4.8"/><path d="M11.5 7.6c0 2.2-2.4 2.6-4 2.6"/></svg>
+          Git worktrees
+        </span>
+      </a>
+      <a href="/settings/labels"
+         data-settings-nav-link
+         class="nd-pane-row{% if settings_category == 'labels' %} bg-bg-elev-2{% endif %}"
+         {% if settings_category == 'labels' %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}>
+        <span class="flex items-center gap-2">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8.5 8 3h4.5V7.5L7 13Z"/><circle cx="10" cy="6" r=".7"/></svg>
+          Labels
+        </span>
+      </a>
+      <a href="/settings/notifications"
+         data-settings-nav-link
+         class="nd-pane-row{% if settings_category == 'notifications' %} bg-bg-elev-2{% endif %}"
+         {% if settings_category == 'notifications' %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}>
+        <span class="flex items-center gap-2">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7a3 3 0 0 1 6 0c0 3 1.2 4 1.2 4H3.8S5 10 5 7Z"/><path d="M6.8 13a1.4 1.4 0 0 0 2.4 0"/></svg>
+          Notifications
+        </span>
+      </a>
+      <a href="/settings/projects"
+         data-settings-nav-link
+         class="nd-pane-row{% if settings_category == 'projects' %} bg-bg-elev-2{% endif %}"
+         {% if settings_category == 'projects' %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}>
+        <span class="flex items-center gap-2">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4.5a1 1 0 0 1 1-1h2.8l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z"/></svg>
+          Projects
+        </span>
+      </a>
+    </nav>
+  </aside>
+
+  {# ---------- Right pane: settings content ------------------------------- #}
+  <section class="min-w-0 flex-1 p-6" id="settings-pane">
     {% include pane_template %}
   </section>
+
 </div>
 
 <script>

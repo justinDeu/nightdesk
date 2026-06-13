@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -14,12 +16,13 @@ from pydantic import ValidationError
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.api.schemas import ConfigUpdate
-from nightdesk.db.models import ConfigRow, ScheduleWindow, Ticket
+from nightdesk.db.models import ConfigRow, Run, ScheduleWindow, Ticket
 from nightdesk.domain.projects import (
     ProjectNameTaken,
     ProjectNotFound,
     archive_project,
     create_project,
+    get_project,
     list_projects,
     preview_defaults,
     update_project,
@@ -83,6 +86,73 @@ def _parse_toolchain_presets(form) -> dict[str, list[str]]:
         except ValueError as exc:
             raise HTTPException(422, str(exc))
     return presets
+
+
+# Active lifecycle statuses surfaced in the project workspace panes, in pill
+# order. Excludes archived/cancelled (the workspace is the live work surface).
+_PANE_STATUSES = ("inbox", "draft", "queued", "running", "review")
+_PANE_STATUS_PILLS = [
+    ("", "All"),
+    ("inbox", "Inbox"),
+    ("draft", "Draft"),
+    ("queued", "Queued"),
+    ("running", "Running"),
+    ("review", "Review"),
+]
+
+
+def _relative_time(dt: datetime | None) -> str:
+    """Compact "Nm ago" relative label (UTC-aware), empty string when absent."""
+    if dt is None:
+        return ""
+    now = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = int((now - dt).total_seconds())
+    if secs < 0:
+        return "just now"
+    if secs < 60:
+        return f"{secs}s ago"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}m ago"
+    hours = mins // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days < 30:
+        return f"{days}d ago"
+    months = days // 30
+    return f"{months}mo ago" if months < 12 else f"{days // 365}y ago"
+
+
+def _run_duration(run: Run) -> str:
+    """Wall-clock duration of a finished run as a compact string ('' if open)."""
+    if run.started_at is None or run.finished_at is None:
+        return ""
+    start = run.started_at
+    end = run.finished_at
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    secs = int((end - start).total_seconds())
+    if secs < 0:
+        return ""
+    if secs < 60:
+        return f"{secs}s"
+    mins, secs = divmod(secs, 60)
+    if mins < 60:
+        return f"{mins}m {secs}s"
+    hours, mins = divmod(mins, 60)
+    return f"{hours}h {mins}m"
+
+
+def _run_outcome(run: Run) -> str:
+    """Display outcome for a run: explicit exit status, else running/none."""
+    if run.exit_status:
+        return run.exit_status
+    return "running" if run.finished_at is None else "none"
 
 
 def _windows_payload(session: Session) -> list[dict[str, str | int]]:
@@ -602,6 +672,94 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         await projects_archive(request, project_id, session)
         return RedirectResponse(url="/projects", status_code=303)
 
+
+    @router.get("/projects/{project_id}/tickets-pane", response_class=HTMLResponse, dependencies=[auth])
+    async def project_tickets_pane(
+        request: Request,
+        project_id: str,
+        status: str = Query(default=""),
+        session: Session = Depends(get_session),
+    ):
+        """Read-focused ticket rows for a project's Tickets tab.
+
+        Filtered to the active lifecycle statuses (or one of them via ?status=)
+        and ordered most-recently-updated first. Rows link to the ticket detail
+        page; no inline editing, drag, or bulk select here by design.
+        """
+        try:
+            project = get_project(session, project_id)
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        active = status.strip().lower()
+        if active and active not in _PANE_STATUSES:
+            active = ""
+        stmt = (
+            select(Ticket)
+            .where(Ticket.project_id == project_id)
+            .where(Ticket.status == active if active else Ticket.status.in_(_PANE_STATUSES))
+            .order_by(Ticket.updated_at.desc())
+        )
+        tickets = list(session.scalars(stmt))
+        # Last-run outcome per ticket, batched so a long list never fans out.
+        run_ids = [t.current_run_id for t in tickets if t.current_run_id]
+        runs_by_id = {
+            r.id: r
+            for r in (session.scalars(select(Run).where(Run.id.in_(run_ids))) if run_ids else [])
+        }
+        run_outcomes = {
+            t.id: _run_outcome(runs_by_id[t.current_run_id])
+            for t in tickets
+            if t.current_run_id and t.current_run_id in runs_by_id
+        }
+        return templates.TemplateResponse(
+            request,
+            "partials/project_tickets_pane.html",
+            {
+                "project": project,
+                "tickets": tickets,
+                "active_status": active,
+                "status_pills": _PANE_STATUS_PILLS,
+                "run_outcomes": run_outcomes,
+            },
+        )
+
+    @router.get("/projects/{project_id}/activity-pane", response_class=HTMLResponse, dependencies=[auth])
+    async def project_activity_pane(
+        request: Request,
+        project_id: str,
+        session: Session = Depends(get_session),
+    ):
+        """Chronological feed of the project's ~30 most recent agent runs."""
+        try:
+            project = get_project(session, project_id)
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        runs = list(session.scalars(
+            select(Run)
+            .join(Ticket, Run.ticket_id == Ticket.id)
+            .where(Ticket.project_id == project_id)
+            .order_by(Run.started_at.desc())
+            .limit(30)
+        ))
+        rows = []
+        for run in runs:
+            ticket = run.ticket
+            if ticket is None:
+                continue
+            tokens = (run.input_tokens or 0) + (run.output_tokens or 0)
+            rows.append({
+                "run": run,
+                "ticket": ticket,
+                "outcome": _run_outcome(run),
+                "duration": _run_duration(run),
+                "tokens": f"{tokens:,}" if tokens else "",
+                "rel": _relative_time(run.started_at),
+            })
+        return templates.TemplateResponse(
+            request,
+            "partials/project_activity_pane.html",
+            {"project": project, "rows": rows},
+        )
 
     @router.get("/settings/notifications", response_class=HTMLResponse, dependencies=[auth])
     async def settings_notifications_page(request: Request, session: Session = Depends(get_session)):
