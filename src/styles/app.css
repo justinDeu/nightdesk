@@ -416,15 +416,51 @@ li[data-ticket-id][data-selected] {
    inbox rows alike — see "Keyboard cursor highlight" below.) */
 
 /* ---- Bulk selection + action bar (board/list management) -------------------
-   Green is reserved for the single active ticket tied to keyboard focus and the
-   sidebar. Batch-selected tickets use blue unless they are also active. */
+   Two independent signals, deliberately split by position + color so they
+   never collapse into one:
+
+   - Perimeter (green) = highlighted/active. Set by the keyboard cursor
+     (.nd-cursor-active) and the sidebar-active card (li[...][data-selected]
+     below). Means "this card has focus / its detail is in the sidebar."
+   - Corner check badge (blue) = selected. Set by .nd-bulk-selected. Means
+     "this card is in the bulk-selection set."
+
+   The badge is a positioned pseudo-element drawn on top (z-index 5), so it
+   stays visible even when the card is also highlighted green — which is the
+   whole point: you can tell a highlighted card that IS selected (green ring +
+   blue check) from one that is NOT (green ring, no check). The blue tint +
+   border are secondary reinforcement for scanning a long run of selections. */
 li[data-ticket-id].nd-bulk-selected {
-  outline: 2px solid var(--color-info);
-  outline-offset: 2px;
+  position: relative;
+  border-color: color-mix(in oklab, var(--color-info) 50%, var(--color-border));
+  background-color: color-mix(in oklab, var(--color-info) 12%, var(--color-bg-elev-2));
 }
-li[data-ticket-id].nd-bulk-selected[data-selected] {
-  outline-color: var(--color-accent);
-  outline-offset: 4px;
+li[data-ticket-id].nd-bulk-selected::before {
+  content: "\2713";
+  position: absolute;
+  top: -7px;
+  left: -7px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-info);
+  color: var(--color-bg);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 2px var(--color-bg-elev);
+  z-index: 5;
+  pointer-events: none;
+}
+/* List rows (div, not li) carry the same class but had no visual; give them
+   a blue left stripe + tint. The stripe sits inside the row, so like the card
+   badge it stays visible under the green cursor highlight. */
+.nd-list-row.nd-bulk-selected {
+  background-color: color-mix(in oklab, var(--color-info) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--color-info);
 }
 
 .nd-bulk-bar {
@@ -523,6 +559,112 @@ li[data-ticket-id].nd-bulk-selected[data-selected] {
 }
 
 @layer components {
+  /* ---- UI primitives: buttons, fields, cards ---------------------- */
+  /* Shared button base. Default size is the compact text-xs / py-1.5
+     used across dialogs and toolbars; .btn-md bumps to text-sm for
+     primary page actions. Every variant shares one focus ring and one
+     transition so the hover/focus language is identical everywhere. */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 500;
+    padding: 0.375rem 0.75rem;
+    border-radius: var(--radius-md);
+    border: 1px solid transparent;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background-color .15s var(--ease-standard),
+                border-color .15s var(--ease-standard),
+                color .15s var(--ease-standard),
+                opacity .15s var(--ease-standard);
+  }
+  .btn:focus-visible {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 30%, transparent);
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .btn-md {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    padding: 0.5rem 0.875rem;
+  }
+
+  .btn-primary {
+    background: var(--color-accent);
+    color: var(--color-bg);
+    font-weight: 600;
+  }
+  .btn-primary:hover {
+    background: var(--color-accent-strong);
+  }
+
+  .btn-secondary {
+    background: var(--color-bg-elev-2);
+    border-color: var(--color-border);
+    color: var(--color-fg);
+  }
+  .btn-secondary:hover {
+    border-color: var(--color-border-strong);
+    background: var(--color-bg-elev-3);
+  }
+
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--color-border);
+    color: var(--color-fg-muted);
+  }
+  .btn-ghost:hover {
+    color: var(--color-fg);
+    border-color: var(--color-fg-muted);
+  }
+
+  .btn-danger {
+    background: transparent;
+    border-color: transparent;
+    color: var(--color-danger);
+  }
+  .btn-danger:hover {
+    background: color-mix(in oklab, var(--color-danger) 14%, transparent);
+  }
+
+  /* Form fields. One recipe replaces ~50 inline copies and standardizes
+     the focus ring to match .btn. Works on input, select, textarea. */
+  .field {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    padding: 0.375rem 0.5rem;
+    background: var(--color-bg-elev-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg);
+    transition: border-color .15s var(--ease-standard),
+                box-shadow .15s var(--ease-standard);
+  }
+  .field::placeholder {
+    color: var(--color-fg-muted);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 30%, transparent);
+  }
+
+  /* Surface card. */
+  .card {
+    background: var(--color-bg-elev);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+  }
+
   /* ---- tool_use cards ---------------------------------------------- */
   .tc-card {
     border: 1px solid var(--color-border);
@@ -1697,6 +1839,10 @@ dialog button[aria-label="Close"]:focus-visible {
     border-right: 1px solid var(--color-border);
     display: flex;
     flex-direction: column;
+    /* min-height:0 lets the rail shrink to the bounded two-pane frame so
+       its inner .nd-list-nav (flex:1; overflow-y:auto) scrolls internally
+       instead of the rail riding the page scroll. */
+    min-height: 0;
   }
   .nd-list-header {
     display: flex;

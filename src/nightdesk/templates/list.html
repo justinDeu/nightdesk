@@ -30,7 +30,7 @@
   <div class="flex items-center gap-2 text-xs text-fg-muted">
     <div class="relative">
       <button type="button" id="nd-display-btn"
-              class="px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
+              class="btn btn-ghost"
               aria-expanded="false" aria-haspopup="true"
               data-tooltip="Display options (Shift+V)">
         Display
@@ -64,7 +64,7 @@
     </div>
     <span class="ml-auto" data-list-count>{{ list_count }} ticket{{ '' if list_count == 1 else 's' }}</span>
     <button type="button"
-            class="px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
+            class="btn btn-ghost"
             onclick="window.ndOpenSaveViewDialog && window.ndOpenSaveViewDialog('list')"
             data-tooltip="Save current filters and display settings as a named view">
       Save view

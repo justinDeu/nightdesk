@@ -21,7 +21,7 @@
     </p>
     <a href="/cron/new"
        hx-get="/cron/new" hx-target="#cron-pane" hx-swap="outerHTML" hx-push-url="true"
-       class="inline-block rounded bg-accent text-bg px-3 py-1.5 text-sm font-semibold hover:brightness-110">
+       class="btn btn-primary btn-md">
       New cron job
     </a>
   </div>
@@ -46,7 +46,7 @@
       <div class="flex items-center gap-1.5">
         <a href="/cron/{{ job.id }}/edit"
            hx-get="/cron/{{ job.id }}/edit" hx-target="#cron-pane" hx-swap="outerHTML" hx-push-url="true"
-           class="px-2 py-1 text-xs border border-border rounded hover:bg-bg-elev-2 text-fg">Edit</a>
+           class="btn btn-secondary">Edit</a>
         <form method="post" action="/cron/{{ job.id }}/fire-now">
           <button type="submit" class="px-2 py-1 text-xs border border-accent text-accent rounded hover:bg-accent hover:text-bg"
                   data-tooltip="Create a queued ticket now; it waits for the normal scheduler window.">Fire now</button>
@@ -57,16 +57,16 @@
         </form>
         {% if job.enabled %}
           <form method="post" action="/cron/{{ job.id }}/disable">
-            <button type="submit" class="px-2 py-1 text-xs border border-border rounded hover:bg-bg-elev-2">Disable</button>
+            <button type="submit" class="btn btn-secondary">Disable</button>
           </form>
         {% else %}
           <form method="post" action="/cron/{{ job.id }}/enable">
-            <button type="submit" class="px-2 py-1 text-xs border border-border rounded hover:bg-bg-elev-2">Enable</button>
+            <button type="submit" class="btn btn-secondary">Enable</button>
           </form>
         {% endif %}
         <form method="post" action="/cron/{{ job.id }}/delete"
               hx-confirm="Delete this cron job? Generated tickets are kept.">
-          <button type="submit" class="px-2 py-1 text-xs border border-danger/40 text-danger rounded hover:bg-danger/10">Delete</button>
+          <button type="submit" class="btn btn-danger">Delete</button>
         </form>
       </div>
     </div>
@@ -148,13 +148,13 @@
       <h2 class="text-lg font-semibold text-fg flex-1">
         {{ 'Edit cron job' if pane_mode == 'edit' else 'New cron job' }}
       </h2>
-      <button type="submit" class="rounded bg-accent text-bg px-3 py-1 text-sm font-semibold hover:brightness-110">Save</button>
+      <button type="submit" class="btn btn-primary btn-md">Save</button>
       {% if pane_mode == 'edit' %}
         <a href="/cron/{{ job.id }}"
            hx-get="/cron/{{ job.id }}" hx-target="#cron-pane" hx-swap="outerHTML" hx-push-url="true"
-           class="rounded border border-border px-3 py-1 text-sm text-fg-muted hover:text-fg">Cancel</a>
+           class="btn btn-ghost btn-md">Cancel</a>
       {% else %}
-        <a href="/cron" class="rounded border border-border px-3 py-1 text-sm text-fg-muted hover:text-fg">Cancel</a>
+        <a href="/cron" class="btn btn-ghost btn-md">Cancel</a>
       {% endif %}
     </div>
     <div class="p-4">

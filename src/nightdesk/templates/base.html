@@ -262,17 +262,16 @@
                  placeholder="e.g. Active backend work"
                  autocomplete="off"
                  required
-                 class="px-2 py-1.5 text-sm bg-bg-elev-2 border border-border rounded focus:outline-none focus:border-accent" />
+                 class="field" />
         </label>
         <p id="nd-save-view-error" class="text-xs text-danger hidden"></p>
         <div class="flex justify-end gap-2">
           <button type="button"
                   onclick="document.getElementById('nd-save-view-dialog').close()"
-                  class="px-3 py-1.5 text-xs rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted transition-colors">
+                  class="btn btn-ghost">
             Cancel
           </button>
-          <button type="submit"
-                  class="px-3 py-1.5 text-xs rounded bg-accent text-bg hover:opacity-90 font-medium transition-opacity">
+          <button type="submit" class="btn btn-primary">
             Save view
           </button>
         </div>

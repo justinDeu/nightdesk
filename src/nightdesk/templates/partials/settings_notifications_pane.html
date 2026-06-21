@@ -22,18 +22,18 @@
         <input id="notify_webhook_url" name="notify_webhook_url" type="url"
                value="{{ (cfg.notify_webhook_url if cfg else '') or '' }}"
                placeholder="https://ntfy.sh/my-topic"
-               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+               class="field font-mono" />
       </div>
       <div class="flex items-center gap-3 mt-4">
         <button type="button" id="test-webhook-btn"
-                class="px-3 py-1 text-xs border border-border rounded text-fg-muted hover:text-fg hover:border-accent transition-colors">
+                class="btn btn-ghost">
           Test webhook
         </button>
         <span id="test-webhook-result" class="text-xs text-fg-muted"></span>
       </div>
     </section>
     <div class="flex justify-end gap-2">
-      <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save notification settings</button>
+      <button type="submit" class="btn btn-primary btn-md">Save notification settings</button>
     </div>
   </form>
 </div>

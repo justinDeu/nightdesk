@@ -19,7 +19,7 @@
         <input id="claude_binary_path" name="claude_binary_path" type="text"
                value="{{ (cfg.claude_binary_path if cfg else '') or '' }}"
                placeholder="{{ path_claude_binary or 'no claude on PATH' }}"
-               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+               class="field font-mono" />
 
         <label for="cc_minimum_version" class="text-fg">
           <div class="font-medium">Minimum CC version</div>
@@ -28,11 +28,11 @@
         <input id="cc_minimum_version" name="cc_minimum_version" type="text"
                value="{{ (cfg.cc_minimum_version if cfg else '2.1.80') }}"
                placeholder="2.1.80"
-               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+               class="field font-mono" />
       </div>
     </section>
     <div class="flex justify-end gap-2">
-      <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save Claude settings</button>
+      <button type="submit" class="btn btn-primary btn-md">Save Claude settings</button>
     </div>
   </form>
 </div>

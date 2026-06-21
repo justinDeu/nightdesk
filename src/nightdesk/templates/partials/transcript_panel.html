@@ -45,7 +45,7 @@
          append() can close newly-arrived events while collapsed. ``ml-auto``
          pushes the control group to the right edge. #}
       <button type="button" id="transcript-toggle-all"
-              class="ml-auto rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev"
+              class="btn btn-ghost ml-auto hover:bg-bg-elev"
               onclick="(function(b){var c=document.getElementById('transcript');if(!c)return;var collapse=c.dataset.collapsed!=='1';c.dataset.collapsed=collapse?'1':'0';c.querySelectorAll('details').forEach(function(d){d.open=!collapse;});b.textContent=collapse?'expand all':'collapse all';})(this)">
         collapse all
       </button>
@@ -53,7 +53,7 @@
          so this lets the user snap to the newest event (handy for live
          tailing). #}
       <button type="button"
-              class="rounded border border-border px-2 py-0.5 text-fg-muted hover:text-fg hover:bg-bg-elev"
+              class="btn btn-ghost hover:bg-bg-elev"
               onclick="(function(){var s=document.getElementById('transcript-scroll');if(!s)return;s.scrollTop=s.scrollHeight;var t=document.getElementById('transcript');var last=t&&t.lastElementChild;if(last&&last.scrollIntoView)last.scrollIntoView({block:'end'});})()">
         jump to end
       </button>

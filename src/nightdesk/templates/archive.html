@@ -15,8 +15,7 @@
   >
     <label class="flex flex-col gap-1">
       <span class="text-fg-muted text-xs uppercase tracking-wide">Outcome</span>
-      <select name="outcome"
-              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg">
+      <select name="outcome" class="field">
         {% for opt in outcomes %}
           <option value="{{ opt }}" {% if filters.outcome == opt %}selected{% endif %}>
             {{ opt }}
@@ -27,8 +26,7 @@
 
     <label class="flex flex-col gap-1">
       <span class="text-fg-muted text-xs uppercase tracking-wide">Profile</span>
-      <select name="profile_id"
-              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg">
+      <select name="profile_id" class="field">
         <option value="" {% if not filters.profile_id %}selected{% endif %}>any</option>
         {% for p in profiles %}
           <option value="{{ p.id }}" {% if filters.profile_id == p.id %}selected{% endif %}>
@@ -40,8 +38,7 @@
 
     <label class="flex flex-col gap-1">
       <span class="text-fg-muted text-xs uppercase tracking-wide">Project</span>
-      <select name="project"
-              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg">
+      <select name="project" class="field">
         <option value="" {% if not filters.project %}selected{% endif %}>any</option>
         <option value="none" {% if filters.project == 'none' %}selected{% endif %}>No project</option>
         {% for p in projects %}
@@ -54,20 +51,17 @@
 
     <label class="flex flex-col gap-1">
       <span class="text-fg-muted text-xs uppercase tracking-wide">Since</span>
-      <input type="date" name="since" value="{{ filters_iso.since }}"
-             class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg" />
+      <input type="date" name="since" value="{{ filters_iso.since }}" class="field" />
     </label>
 
     <label class="flex flex-col gap-1">
       <span class="text-fg-muted text-xs uppercase tracking-wide">Until</span>
-      <input type="date" name="until" value="{{ filters_iso.until }}"
-             class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg" />
+      <input type="date" name="until" value="{{ filters_iso.until }}" class="field" />
     </label>
 
     <label class="flex flex-col gap-1 flex-1 min-w-[200px]">
       <span class="text-fg-muted text-xs uppercase tracking-wide">Search</span>
-      <input type="search" name="q" value="{{ filters.q }}" placeholder="title, prompt"
-             class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg" />
+      <input type="search" name="q" value="{{ filters.q }}" placeholder="title, prompt" class="field" />
     </label>
 
     <button type="submit"

@@ -7,14 +7,14 @@
   <div class="mb-4 rounded border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{{ error }}</div>
 {% endif %}
 
-<div class="flex gap-0 min-h-[calc(100vh-6rem)]">
+<div class="flex gap-0 h-[calc(100vh-2rem)] overflow-hidden">
 
   {# ---------- Left rail: toolset list ------------------------------------- #}
   <aside class="nd-list-pane">
     <div class="nd-list-header">
       <h1 class="text-sm font-semibold text-fg">Toolsets</h1>
       <a href="/toolsets/new"
-         class="rounded bg-accent text-bg px-2 py-0.5 text-xs font-semibold hover:brightness-110"
+         class="btn btn-primary"
          hx-get="/toolsets/new" hx-target="#toolset-pane" hx-swap="outerHTML"
          hx-push-url="true"
          onclick="document.querySelectorAll('[data-toolset-row]').forEach(function(e){e.classList.remove('bg-bg-elev-2');e.style.boxShadow=''})">

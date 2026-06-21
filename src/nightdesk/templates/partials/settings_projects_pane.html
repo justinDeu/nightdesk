@@ -1,4 +1,4 @@
-{% set input_class = "rounded border border-border bg-bg-elev-2 px-2 py-1 text-fg placeholder:text-fg-muted caret-accent focus:border-accent focus:bg-bg-elev-2 focus:text-fg focus:outline-none focus:ring-2 focus:ring-accent/30" %}
+{% set input_class = "field caret-accent" %}
 {% set mono_input_class = input_class ~ " font-mono text-xs" %}
 
 {% macro project_form(action, submit_label, project=None, dialog_id='') %}
@@ -141,9 +141,9 @@
 
     <div class="flex justify-end gap-2 pt-1">
       {% if dialog_id %}
-        <button type="button" onclick="document.getElementById('{{ dialog_id }}').close()" class="rounded border border-border px-3 py-1.5 text-sm text-fg-muted hover:text-fg">Cancel</button>
+        <button type="button" onclick="document.getElementById('{{ dialog_id }}').close()" class="btn btn-ghost btn-md">Cancel</button>
       {% endif %}
-      <button type="submit" class="rounded bg-accent px-3 py-1.5 text-sm font-medium text-bg hover:brightness-110">{{ submit_label }}</button>
+      <button type="submit" class="btn btn-primary btn-md">{{ submit_label }}</button>
     </div>
   </form>
 {% endmacro %}
@@ -166,7 +166,7 @@
         <button type="button"
                 data-create-project-toggle
                 onclick="document.getElementById('project-create-modal').showModal()"
-                class="rounded bg-accent px-2 py-0.5 text-xs font-semibold text-bg hover:brightness-110">
+                class="btn btn-primary">
           + New
         </button>
       </div>
@@ -238,7 +238,7 @@
               <a href="/?project={{ project.slug | urlencode }}&group=label" class="rounded border border-border px-3 py-1.5 text-fg-muted hover:border-accent hover:text-accent">Group by label</a>
               <button type="button"
                       onclick="window.ndOpenCreateTicket && window.ndOpenCreateTicket({project: '{{ project.slug }}'})"
-                      class="rounded bg-accent px-3 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
+                      class="btn btn-primary btn-md">
                 New ticket
               </button>
             </div>
@@ -374,7 +374,7 @@
         <div>
           <h2 class="text-lg font-semibold text-fg">Create your first project</h2>
           <p class="mt-1 text-sm text-fg-muted">Projects hold source paths, workspace defaults, linked repositories, and toolsets for repeat work.</p>
-          <button type="button" data-create-project-toggle onclick="document.getElementById('project-create-modal').showModal()" class="mt-4 rounded bg-accent px-3 py-1.5 text-sm font-semibold text-bg hover:brightness-110">Create project</button>
+          <button type="button" data-create-project-toggle onclick="document.getElementById('project-create-modal').showModal()" class="btn btn-primary btn-md mt-4">Create project</button>
         </div>
       </div>
     {% endif %}

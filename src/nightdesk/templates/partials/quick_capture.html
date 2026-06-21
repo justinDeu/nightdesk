@@ -39,7 +39,7 @@
              placeholder="Capture an idea or request…"
              autocomplete="off"
              required
-             class="px-2 py-1.5 text-sm bg-bg-elev-2 border border-border rounded focus:outline-none focus:border-accent" />
+             class="field" />
     </label>
     <label class="flex flex-col gap-1">
       <span class="text-xs text-fg-muted">Notes <span class="text-fg-muted/60">(Ctrl/Cmd+Enter to submit)</span></span>
@@ -48,7 +48,7 @@
                 rows="3"
                 placeholder="Optional details to flesh out later…"
                 autocomplete="off"
-                class="px-2 py-1.5 text-sm bg-bg-elev-2 border border-border rounded focus:outline-none focus:border-accent nd-autogrow"></textarea>
+                class="field nd-autogrow"></textarea>
     </label>
     <div class="flex flex-wrap items-start gap-3">
       <label class="flex flex-col gap-1">
@@ -70,11 +70,11 @@
     <div class="flex justify-end gap-2">
       <button type="button"
               onclick="document.getElementById('nd-quick-capture').close()"
-              class="px-3 py-1.5 text-xs rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted transition-colors">
+              class="btn btn-ghost">
         Cancel
       </button>
       <button type="submit"
-              class="px-3 py-1.5 text-xs rounded bg-accent text-bg hover:opacity-90 font-medium transition-opacity">
+              class="btn btn-primary">
         Capture
       </button>
     </div>

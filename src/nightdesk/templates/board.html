@@ -38,7 +38,7 @@
        {% if _view == 'runs' %}hidden{% endif %}>
     <div class="relative">
       <button type="button" id="nd-display-btn"
-              class="px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
+              class="btn btn-ghost"
               aria-expanded="false" aria-haspopup="true"
               data-tooltip="Display options (Shift+V)">
         Display
@@ -72,7 +72,7 @@
       </div>
     </div>
     <button type="button"
-            class="ml-auto px-2 py-0.5 rounded border border-border text-fg-muted hover:text-fg hover:border-fg-muted text-xs transition-colors"
+            class="btn btn-ghost ml-auto"
             onclick="window.ndOpenSaveViewDialog && window.ndOpenSaveViewDialog('board')"
             data-tooltip="Save current filters as a named view">
       Save view

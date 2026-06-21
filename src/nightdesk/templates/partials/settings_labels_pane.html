@@ -13,7 +13,7 @@
       <label class="flex-1">
         <span class="text-fg-muted text-[11px] uppercase tracking-wide">Name</span>
         <input name="name" required placeholder="e.g. backend"
-               class="w-full bg-bg border border-border rounded px-2 py-1.5 text-sm text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+               class="field w-full" />
       </label>
       <label class="w-28">
         <span class="text-fg-muted text-[11px] uppercase tracking-wide">Color</span>
@@ -21,7 +21,7 @@
                class="w-full h-[30px] bg-bg border border-border rounded px-1 py-0.5 text-sm text-fg cursor-pointer focus:border-accent focus:outline-none" />
       </label>
       <button type="submit"
-              class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm hover:brightness-110 shrink-0">
+              class="btn btn-primary btn-md shrink-0">
         Add label
       </button>
     </form>
@@ -71,7 +71,7 @@
                   name="name"
                   required
                   value="{{ label.name }}"
-                  class="w-full bg-bg border border-border rounded px-2 py-1.5 text-sm text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                  class="field w-full"
                 />
               </label>
               <label class="w-28">
@@ -86,7 +86,7 @@
               <button
                 type="submit"
                 data-tooltip="Save changes"
-                class="rounded bg-accent text-bg font-medium px-3 py-1.5 text-sm hover:brightness-110 shrink-0"
+                class="btn btn-primary btn-md shrink-0"
               >Save</button>
               <button
                 type="button"
