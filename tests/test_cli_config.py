@@ -76,7 +76,7 @@ class TestWriteConfigKey:
             'bind_host = "127.0.0.1"\n'
             'bind_port = 8765\n'
         )
-        monkeypatch.setattr("nightdesk.cli.DEFAULT_CONFIG_PATH", cfg_file)
+        monkeypatch.setenv("NIGHTDESK_CONFIG", str(cfg_file))
 
         _write_config_key("bind_host", "0.0.0.0")
 
@@ -88,7 +88,7 @@ class TestWriteConfigKey:
     def test_appends_new_key(self, tmp_path, monkeypatch):
         cfg_file = tmp_path / "config.toml"
         cfg_file.write_text('bind_host = "127.0.0.1"\n')
-        monkeypatch.setattr("nightdesk.cli.DEFAULT_CONFIG_PATH", cfg_file)
+        monkeypatch.setenv("NIGHTDESK_CONFIG", str(cfg_file))
 
         _write_config_key("bind_host", "0.0.0.0")
 
@@ -98,7 +98,7 @@ class TestWriteConfigKey:
     def test_writes_integer_for_bind_port(self, tmp_path, monkeypatch):
         cfg_file = tmp_path / "config.toml"
         cfg_file.write_text('bind_host = "127.0.0.1"\nbind_port = 8765\n')
-        monkeypatch.setattr("nightdesk.cli.DEFAULT_CONFIG_PATH", cfg_file)
+        monkeypatch.setenv("NIGHTDESK_CONFIG", str(cfg_file))
 
         _write_config_key("bind_port", "9000")
 
@@ -107,7 +107,7 @@ class TestWriteConfigKey:
 
     def test_fails_if_config_missing(self, tmp_path, monkeypatch):
         missing = tmp_path / "nope.toml"
-        monkeypatch.setattr("nightdesk.cli.DEFAULT_CONFIG_PATH", missing)
+        monkeypatch.setenv("NIGHTDESK_CONFIG", str(missing))
 
         with pytest.raises(SystemExit):
             _write_config_key("bind_host", "0.0.0.0")
@@ -115,7 +115,7 @@ class TestWriteConfigKey:
     def test_invalid_port_value_exits(self, tmp_path, monkeypatch):
         cfg_file = tmp_path / "config.toml"
         cfg_file.write_text('bind_port = 8765\n')
-        monkeypatch.setattr("nightdesk.cli.DEFAULT_CONFIG_PATH", cfg_file)
+        monkeypatch.setenv("NIGHTDESK_CONFIG", str(cfg_file))
 
         with pytest.raises(SystemExit):
             _write_config_key("bind_port", "abc")
@@ -182,8 +182,7 @@ class TestConfigSetCmd:
     def test_writes_file_only_key(self, tmp_path, monkeypatch, capsys):
         cfg_file = tmp_path / "config.toml"
         cfg_file.write_text('bind_host = "127.0.0.1"\nbind_port = 8765\n')
-        monkeypatch.setattr("nightdesk.cli.DEFAULT_CONFIG_PATH", cfg_file)
-        monkeypatch.setattr("nightdesk.config.DEFAULT_CONFIG_PATH", cfg_file)
+        monkeypatch.setenv("NIGHTDESK_CONFIG", str(cfg_file))
 
         monkeypatch.setattr(sys, "argv", ["nightdesk-config", "set", "bind_host", "0.0.0.0"])
         config_cmd()
@@ -230,7 +229,7 @@ class TestConfigSetCmd:
         from nightdesk.config import load_config as _real_load_config
         _fake_cfg = _real_load_config(config_path=cfg_file, secrets_path=secrets_file)
 
-        monkeypatch.setattr("nightdesk.cli.DEFAULT_CONFIG_PATH", cfg_file)
+        monkeypatch.setenv("NIGHTDESK_CONFIG", str(cfg_file))
 
         with patch("nightdesk.cli._api_patch_config", return_value=True) as mock_patch, \
              patch("nightdesk.cli.load_config", return_value=_fake_cfg):
@@ -254,3 +253,38 @@ class TestConfigCmdNoArgs:
         with pytest.raises(SystemExit) as exc_info:
             config_cmd()
         assert exc_info.value.code == 1
+
+
+def test_apply_config_flags_exports_env_and_loads(tmp_path):
+    """_apply_config_flags exports NIGHTDESK_* env vars and load_config reflects them."""
+    import argparse
+    import os
+    from nightdesk.cli import _apply_config_flags
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('bearer_token = "tok"\nbind_host = "127.0.0.1"\nbind_port = 8765\n')
+
+    ns = argparse.Namespace(
+        config=str(cfg_file),
+        secrets=None,
+        data_dir=str(tmp_path),
+        db_path=None,
+        transcript_root=None,
+        worktree_root=None,
+        log_dir=None,
+        bind_host=None,
+        bind_port=9876,
+    )
+    # patch.dict with clear=False reverts every key _apply_config_flags adds,
+    # so the exported NIGHTDESK_* vars never leak into other tests.
+    removed = ["NIGHTDESK_CONFIG", "NIGHTDESK_DATA_DIR", "NIGHTDESK_BIND_PORT",
+               "NIGHTDESK_BIND_HOST"]
+    with patch.dict("os.environ", {}, clear=False):
+        for k in removed:
+            os.environ.pop(k, None)
+        cfg = _apply_config_flags(ns)
+        assert os.environ.get("NIGHTDESK_CONFIG") == str(cfg_file)
+        assert os.environ.get("NIGHTDESK_DATA_DIR") == str(tmp_path)
+        assert os.environ.get("NIGHTDESK_BIND_PORT") == "9876"
+        assert cfg.bind_port == 9876
+        assert cfg.data_dir == tmp_path

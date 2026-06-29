@@ -18,7 +18,9 @@ Design goals (v1):
   only the single ``.credentials.json`` file is bind-mounted in.
 - ``~/.config/nightdesk`` and ``~/.local/share/nightdesk`` are NEVER
   mounted under any condition. The sandboxed run has no path to the
-  bearer token or secrets file on disk.
+  bearer token or secrets file on disk. This protection also covers the
+  live-configured paths (a relocated database, custom data_dir, log_dir,
+  transcript_root) when the config can be loaded — see ``_exclusion_paths``.
 
 Network policy
 --------------
@@ -215,13 +217,42 @@ def _exclusion_paths() -> list[str]:
     bwrap doesn't have a deny-list primitive — exclusion is enforced by
     *not* mounting these and refusing to add a profile-supplied path that
     overlaps. This function is also used by the preflight validator.
+
+    The static list (config dir, default data dir, .claude) is always
+    included. When the live config can be loaded, the actually-configured
+    paths are appended so a relocated database, custom data_dir, or a
+    secrets file relocated via NIGHTDESK_SECRETS is also protected.
     """
     home = os.path.expanduser("~")
-    return [
+    static = [
         os.path.join(home, ".config", "nightdesk"),
         os.path.join(home, ".local", "share", "nightdesk"),
         os.path.join(home, ".claude"),  # except the single creds file (see below)
     ]
+    try:
+        from nightdesk.config import (
+            default_config_path,
+            default_secrets_path,
+            load_config,
+        )
+        cfg = load_config()
+        dynamic = [
+            str(default_config_path().parent),
+            str(default_secrets_path().parent),
+            str(cfg.data_dir),
+            str(cfg.db_path.parent),
+            str(cfg.transcript_root),
+            str(cfg.log_dir),
+        ]
+    except (OSError, ValueError):
+        dynamic = []
+    seen: set[str] = set()
+    result: list[str] = []
+    for p in static + dynamic:
+        if p not in seen:
+            seen.add(p)
+            result.append(p)
+    return result
 
 
 def assert_no_excluded_paths(paths: Iterable[str]) -> None:

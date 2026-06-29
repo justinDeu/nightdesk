@@ -56,7 +56,8 @@ def build_router(*, bearer_token: str, engine: Engine, templates: Jinja2Template
     async def page(request: Request, _admin=admin_dep, session: Session = Depends(get_session)):
         from nightdesk import __version__ as nd_version  # may not exist; handle below
 
-        log_root = Path(os.path.expanduser("~/.local/share/nightdesk/logs"))
+        from nightdesk.config import load_config as _load_config
+        log_root = _load_config().log_dir
         api_log = _tail(log_root / "api.log", LOG_TAIL_LINES)
         worker_log = _tail(log_root / "worker.log", LOG_TAIL_LINES)
         ds = session.get(DaemonStatus, 1)

@@ -190,7 +190,7 @@ def test_setup_dry_run_no_filesystem_changes(tmp_path, capsys):
     fake_config_path = tmp_path / "config.toml"
 
     with (
-        patch.object(cli_mod, "DEFAULT_CONFIG_PATH", fake_config_path),
+        patch.dict("os.environ", {"NIGHTDESK_CONFIG": str(fake_config_path)}, clear=False),
         patch("nightdesk.cli._check_platform"),
         patch("nightdesk.cli._check_bwrap"),
         patch("sys.argv", ["nightdesk-setup", "--dry-run"]),

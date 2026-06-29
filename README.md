@@ -106,12 +106,55 @@ configurable in `~/.config/nightdesk/config.toml`.
 | Optional secrets | `~/.config/nightdesk/secrets.env` |
 | SQLite DB | `~/.local/share/nightdesk/nightdesk.db` |
 | Transcripts | `~/.local/share/nightdesk/transcripts/` |
-| Worktrees | `~/.local/share/nightdesk/work/` |
+| Worktrees | `~/.local/share/nightdesk-worktrees/` |
 | Daemon logs | `~/.local/share/nightdesk/logs/{api,worker}.log` (rotating, 10 MB × 5) |
 | Per-run logs | `~/.local/share/nightdesk/logs/runs/<run-id>.log` |
 | Systemd units | `~/.config/systemd/user/nightdesk-{api,worker}.service` |
 
 `journalctl --user -u nightdesk-api` and `... -u nightdesk-worker` also work.
+
+## Configuration
+
+Every path and bind setting resolves through three layers, lowest priority
+first: built-in defaults, then `config.toml` keys, then `NIGHTDESK_*`
+environment variables, then CLI flags (the flags just export the matching env
+var so spawned subprocesses inherit it). Setting `data_dir` derives `db_path`,
+`transcript_root`, and `log_dir` beneath it unless you set those explicitly.
+
+If you explicitly set a derived key like `db_path` in `config.toml`, setting
+`data_dir` (or `NIGHTDESK_DATA_DIR`) will not override it — only keys you left
+unset are derived from `data_dir`.
+
+| config.toml key | Env var | CLI flag | Default |
+| --- | --- | --- | --- |
+| — | `NIGHTDESK_CONFIG` | `--config` | `~/.config/nightdesk/config.toml` |
+| — | `NIGHTDESK_SECRETS` | `--secrets` | `~/.config/nightdesk/secrets.env` |
+| `data_dir` | `NIGHTDESK_DATA_DIR` | `--data-dir` | `~/.local/share/nightdesk` |
+| `db_path` | `NIGHTDESK_DB_PATH` | `--db-path` | `<data_dir>/nightdesk.db` |
+| `transcript_root` | `NIGHTDESK_TRANSCRIPT_ROOT` | `--transcript-root` | `<data_dir>/transcripts` |
+| `log_dir` | `NIGHTDESK_LOG_DIR` | `--log-dir` | `<data_dir>/logs` |
+| `worktree_root` | `NIGHTDESK_WORKTREE_ROOT` | `--worktree-root` | `~/.local/share/nightdesk-worktrees` |
+| `bind_host` | `NIGHTDESK_BIND_HOST` | `--bind-host` | `127.0.0.1` |
+| `bind_port` | `NIGHTDESK_BIND_PORT` | `--bind-port` | `8765` |
+| `bearer_token` | `NIGHTDESK_BEARER_TOKEN` | — | (random at setup) |
+| `worktree_base_ref` | `NIGHTDESK_WORKTREE_BASE_REF` | — | (unset) |
+
+`nightdesk-config list` prints the resolved values; `nightdesk-config set <key>
+<value>` writes a key back to the active config file.
+
+To run a throwaway second instance with its own database, transcripts, and
+config — no `HOME` override needed:
+
+```bash
+NIGHTDESK_CONFIG=/tmp/nd-test/config.toml NIGHTDESK_DATA_DIR=/tmp/nd-test \
+  nightdesk-init
+NIGHTDESK_CONFIG=/tmp/nd-test/config.toml NIGHTDESK_DATA_DIR=/tmp/nd-test \
+  nightdesk-api --bind-port 9999
+```
+
+The configured `data_dir`, `db_path`, `transcript_root`, and `log_dir` are also
+added to the sandbox exclusion list, so a relocated database is still never
+bind-mounted into a run.
 
 ## Sandbox model
 

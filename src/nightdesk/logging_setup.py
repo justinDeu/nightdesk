@@ -26,6 +26,33 @@ _DEFAULT_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 _PER_RUN_FORMAT = "%(asctime)s %(levelname)s %(name)s [run:%(run_id)s] %(message)s"
 _DEFAULT_LOG_DIR = Path(os.path.expanduser("~/.local/share/nightdesk/logs"))
 
+_log = logging.getLogger(__name__)
+
+
+def _resolve_log_dir(log_dir: Optional[Path]) -> Path:
+    """Resolve the log directory.
+
+    Precedence: explicit arg > load_config() (file + env + data_dir
+    derivation) > built-in default.
+
+    Reading the config file here (rather than re-implementing the env-var
+    branches) keeps a single source of truth for path resolution, so that
+    users who relocate logs via ``data_dir`` / ``log_dir`` in config.toml
+    get the same answer from every caller, not just the ones that pass an
+    explicit ``log_dir``. A lazy import dodges any import-cycle risk, and
+    a narrow except guards callers that hit this before config is
+    readable (tomli errors are ValueError subclasses).
+    """
+    if log_dir is not None:
+        return log_dir
+    try:
+        from nightdesk.config import load_config
+
+        return load_config().log_dir
+    except (OSError, ValueError):
+        _log.warning("could not read log_dir from config; falling back to %s", _DEFAULT_LOG_DIR, exc_info=True)
+        return _DEFAULT_LOG_DIR
+
 
 class RunIdFilter(logging.Filter):
     """Inject ``run_id`` into every log record passing through.
@@ -76,7 +103,7 @@ def configure_root_logging(
     stream._nightdesk = True  # type: ignore[attr-defined]
     root.addHandler(stream)
 
-    log_dir = log_dir or _DEFAULT_LOG_DIR
+    log_dir = _resolve_log_dir(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{component}.log"
     rotating = logging.handlers.RotatingFileHandler(
@@ -101,7 +128,7 @@ def per_run_log_handler(
     run starts and ``root_logger.removeHandler(h); h.close()`` after.
     The file is ``<log_dir>/runs/<run_id>.log``.
     """
-    log_dir = log_dir or _DEFAULT_LOG_DIR
+    log_dir = _resolve_log_dir(log_dir)
     runs_dir = log_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(runs_dir / f"{run_id}.log", encoding="utf-8")
@@ -115,5 +142,5 @@ def per_run_log_handler(
 
 def run_log_path(run_id: str, log_dir: Optional[Path] = None) -> Path:
     """Where the per-run log lives. Used by the UI 'download log' link."""
-    log_dir = log_dir or _DEFAULT_LOG_DIR
+    log_dir = _resolve_log_dir(log_dir)
     return log_dir / "runs" / f"{run_id}.log"

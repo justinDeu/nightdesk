@@ -156,12 +156,21 @@ class TestUninstall:
         """Helper to run uninstall with redirected paths."""
         home = fake_home["home"]
         argv = ["nightdesk-uninstall"] + (extra_args or [])
+        config_path = home / ".config" / "nightdesk" / "config.toml"
+        secrets_path = home / ".config" / "nightdesk" / "secrets.env"
+        data_dir = home / ".local" / "share" / "nightdesk"
+        worktree_dir = home / ".local" / "share" / "nightdesk-worktrees"
 
         with (
             patch("nightdesk.cli.subprocess.run", return_value=MagicMock(stdout="", stderr="", returncode=0)),
             patch("nightdesk.cli.os.path.expanduser", side_effect=_make_expanduser_redirect(home)),
+            patch.dict("os.environ", {
+                "NIGHTDESK_CONFIG": str(config_path),
+                "NIGHTDESK_SECRETS": str(secrets_path),
+                "NIGHTDESK_DATA_DIR": str(data_dir),
+                "NIGHTDESK_WORKTREE_ROOT": str(worktree_dir),
+            }, clear=False),
             patch("sys.argv", argv),
-            patch.object(cli_mod, "DEFAULT_CONFIG_PATH", home / ".config" / "nightdesk" / "config.toml"),
         ):
             cli_mod.uninstall()
 
@@ -228,8 +237,13 @@ class TestUninstall:
         with (
             patch("nightdesk.cli.subprocess.run") as mock_run,
             patch("nightdesk.cli.os.path.expanduser", side_effect=_make_expanduser_redirect(home)),
+            patch.dict("os.environ", {
+                "NIGHTDESK_CONFIG": str(home / ".config" / "nightdesk" / "config.toml"),
+                "NIGHTDESK_SECRETS": str(home / ".config" / "nightdesk" / "secrets.env"),
+                "NIGHTDESK_DATA_DIR": str(home / ".local" / "share" / "nightdesk"),
+                "NIGHTDESK_WORKTREE_ROOT": str(home / ".local" / "share" / "nightdesk-worktrees"),
+            }, clear=False),
             patch("sys.argv", ["nightdesk-uninstall", "--dry-run"]),
-            patch.object(cli_mod, "DEFAULT_CONFIG_PATH", home / ".config" / "nightdesk" / "config.toml"),
         ):
             cli_mod.uninstall()
 
@@ -250,8 +264,13 @@ class TestUninstall:
         with (
             patch("nightdesk.cli.subprocess.run") as mock_run,
             patch("nightdesk.cli.os.path.expanduser", side_effect=_make_expanduser_redirect(home)),
+            patch.dict("os.environ", {
+                "NIGHTDESK_CONFIG": str(home / ".config" / "nightdesk" / "config.toml"),
+                "NIGHTDESK_SECRETS": str(home / ".config" / "nightdesk" / "secrets.env"),
+                "NIGHTDESK_DATA_DIR": str(home / ".local" / "share" / "nightdesk"),
+                "NIGHTDESK_WORKTREE_ROOT": str(home / ".local" / "share" / "nightdesk-worktrees"),
+            }, clear=False),
             patch("sys.argv", ["nightdesk-uninstall", "--dry-run", "--purge-data", "--purge-worktrees"]),
-            patch.object(cli_mod, "DEFAULT_CONFIG_PATH", home / ".config" / "nightdesk" / "config.toml"),
         ):
             cli_mod.uninstall()
 
@@ -293,8 +312,13 @@ class TestUninstall:
         with (
             patch("nightdesk.cli.subprocess.run", side_effect=mock_run),
             patch("nightdesk.cli.os.path.expanduser", side_effect=_make_expanduser_redirect(home)),
+            patch.dict("os.environ", {
+                "NIGHTDESK_CONFIG": str(home / ".config" / "nightdesk" / "config.toml"),
+                "NIGHTDESK_SECRETS": str(home / ".config" / "nightdesk" / "secrets.env"),
+                "NIGHTDESK_DATA_DIR": str(home / ".local" / "share" / "nightdesk"),
+                "NIGHTDESK_WORKTREE_ROOT": str(home / ".local" / "share" / "nightdesk-worktrees"),
+            }, clear=False),
             patch("sys.argv", ["nightdesk-uninstall"]),
-            patch.object(cli_mod, "DEFAULT_CONFIG_PATH", home / ".config" / "nightdesk" / "config.toml"),
         ):
             cli_mod.uninstall()
 

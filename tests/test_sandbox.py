@@ -350,3 +350,51 @@ def test_tool_runtime_root_only_skips_exact_system_bins():
     # Decoy path whose string starts with "/usr/bin" but is a separate dir.
     # The old prefix-string check would falsely return the bin subdir here.
     assert _tool_runtime_root(Path("/usr/binary/pkg/bin/tool")) == Path("/usr/binary/pkg")
+
+
+def test_exclusion_paths_includes_custom_data_dir(monkeypatch, tmp_path):
+    """When NIGHTDESK_DATA_DIR is set, _exclusion_paths includes the custom path."""
+    from nightdesk.worker.sandbox import _exclusion_paths
+
+    monkeypatch.setenv("NIGHTDESK_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("NIGHTDESK_DB_PATH", raising=False)
+    monkeypatch.delenv("NIGHTDESK_TRANSCRIPT_ROOT", raising=False)
+    monkeypatch.delenv("NIGHTDESK_LOG_DIR", raising=False)
+    monkeypatch.delenv("NIGHTDESK_CONFIG", raising=False)
+
+    paths = _exclusion_paths()
+
+    assert str(tmp_path) in paths
+    # Static defaults must always be present.
+    import os
+    home = os.path.expanduser("~")
+    assert os.path.join(home, ".local", "share", "nightdesk") in paths
+    assert os.path.join(home, ".config", "nightdesk") in paths
+
+
+def test_exclusion_paths_includes_relocated_secrets_parent(monkeypatch, tmp_path):
+    """When NIGHTDESK_SECRETS points elsewhere, its parent dir is excluded too.
+
+    In the default case the static ``~/.config/nightdesk`` entry already covers
+    ``secrets.env``. If NIGHTDESK_SECRETS relocates the file, the parent is no
+    longer covered by the static list and must be appended dynamically.
+    load_config tolerates a missing secrets file on disk (it checks
+    ``secrets_path.exists()``), so pointing at a not-yet-created path is fine.
+    """
+    from nightdesk.worker.sandbox import _exclusion_paths
+
+    alt = tmp_path / "alt" / "secrets.env"
+    monkeypatch.setenv("NIGHTDESK_SECRETS", str(alt))
+    monkeypatch.delenv("NIGHTDESK_CONFIG", raising=False)
+    monkeypatch.delenv("NIGHTDESK_DATA_DIR", raising=False)
+    monkeypatch.delenv("NIGHTDESK_DB_PATH", raising=False)
+    monkeypatch.delenv("NIGHTDESK_TRANSCRIPT_ROOT", raising=False)
+    monkeypatch.delenv("NIGHTDESK_LOG_DIR", raising=False)
+
+    paths = _exclusion_paths()
+
+    assert str(tmp_path / "alt") in paths
+    # Static defaults must always be present.
+    home = os.path.expanduser("~")
+    assert os.path.join(home, ".local", "share", "nightdesk") in paths
+    assert os.path.join(home, ".config", "nightdesk") in paths

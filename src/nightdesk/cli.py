@@ -19,6 +19,8 @@ from nightdesk.api.app import create_app
 from nightdesk.config import (
     DEFAULT_CONFIG_PATH,
     NightdeskConfig,
+    default_config_path,
+    default_secrets_path,
     load_config,
 )
 from nightdesk.db.session import make_engine, session_factory
@@ -32,6 +34,8 @@ _DEFAULT_CONFIG_TOML = """\
 bearer_token = ""
 bind_host = "127.0.0.1"
 bind_port = 8765
+# data_dir = "~/.local/share/nightdesk"
+# log_dir = "~/.local/share/nightdesk/logs"
 # db_path = "~/.local/share/nightdesk/nightdesk.db"
 # transcript_root = "~/.local/share/nightdesk/transcripts"
 # worktree_root = "~/.local/share/nightdesk-worktrees"
@@ -191,6 +195,7 @@ def migrate() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(prog="nightdesk-migrate")
+    _add_config_flags(parser)
     sub = parser.add_subparsers(dest="action")
     sub.add_parser("up", help="upgrade to a revision (default head)").add_argument(
         "rev", nargs="?", default="head",
@@ -203,7 +208,7 @@ def migrate() -> None:
     stamp.add_argument("rev")
     args = parser.parse_args()
 
-    cfg = load_config()
+    cfg = _apply_config_flags(args)
     cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     alembic_cfg = _alembic_config(cfg)
@@ -242,16 +247,18 @@ def migrate() -> None:
 
 
 def _init() -> NightdeskConfig:
-    DEFAULT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if not DEFAULT_CONFIG_PATH.exists():
-        DEFAULT_CONFIG_PATH.write_text(_DEFAULT_CONFIG_TOML)
-        print(f"Created default config at {DEFAULT_CONFIG_PATH}")
+    config_path = default_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    if not config_path.exists():
+        config_path.write_text(_DEFAULT_CONFIG_TOML)
+        print(f"Created default config at {config_path}")
 
     cfg = load_config()
 
     cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
     cfg.transcript_root.mkdir(parents=True, exist_ok=True)
     cfg.worktree_root.mkdir(parents=True, exist_ok=True)
+    cfg.log_dir.mkdir(parents=True, exist_ok=True)
 
     _run_migrations(cfg)
     engine = make_engine(cfg.db_path)
@@ -262,6 +269,11 @@ def _init() -> NightdeskConfig:
 
 def init() -> None:
     """CLI entry point: create directories, default config, and run migrations."""
+    import argparse
+    parser = argparse.ArgumentParser(prog="nightdesk-init")
+    _add_config_flags(parser)
+    args = parser.parse_args()
+    _apply_config_flags(args)
     cfg = _init()
     print(f"Ready. DB: {cfg.db_path}")
 
@@ -364,7 +376,7 @@ def _run_claude_version(binary: str) -> str:
 
 def _write_config(token: str, force: bool) -> Path:
     """Write config.toml with the given bearer token. Returns config path."""
-    config_path = DEFAULT_CONFIG_PATH
+    config_path = default_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if config_path.exists() and not force:
         print(f"Config exists at {config_path}, leaving as is.")
@@ -380,17 +392,18 @@ def _write_config(token: str, force: bool) -> Path:
     return config_path
 
 
-def _create_data_dirs(worktree_root: Path) -> Path:
-    """Create the standard data directories. Returns the data root.
+def _create_data_dirs(cfg: NightdeskConfig) -> None:
+    """Create the standard data directories.
 
-    ``worktree_root`` is created separately because it lives outside the data
-    dir (the sandbox cannot bind-mount paths under the data dir).
+    ``cfg.worktree_root`` is created outside the data dir (the sandbox cannot
+    bind-mount paths under the data dir).
     """
-    data_root = Path(os.path.expanduser("~/.local/share/nightdesk"))
-    for sub in ("transcripts", "logs", "logs/runs"):
-        (data_root / sub).mkdir(parents=True, exist_ok=True)
-    worktree_root.mkdir(parents=True, exist_ok=True)
-    return data_root
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    cfg.transcript_root.mkdir(parents=True, exist_ok=True)
+    cfg.log_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.log_dir / "runs").mkdir(parents=True, exist_ok=True)
+    cfg.worktree_root.mkdir(parents=True, exist_ok=True)
+    cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _persist_setup_to_db(cfg: NightdeskConfig, binary: str, version: str) -> None:
@@ -512,6 +525,54 @@ def _open_browser(url: str) -> None:
         print(f"xdg-open not found. Open this URL in your browser:\n  {url}")
 
 
+def _add_config_flags(parser: "argparse.ArgumentParser") -> None:
+    """Register NIGHTDESK_* override flags on parser."""
+    g = parser.add_argument_group("config overrides")
+    g.add_argument("--config", metavar="PATH", default=None,
+                   help="Alternate config.toml path (sets NIGHTDESK_CONFIG).")
+    g.add_argument("--secrets", metavar="PATH", default=None,
+                   help="Alternate secrets.env path (sets NIGHTDESK_SECRETS).")
+    g.add_argument("--data-dir", metavar="PATH", default=None,
+                   help="Data directory root (sets NIGHTDESK_DATA_DIR).")
+    g.add_argument("--db-path", metavar="PATH", default=None,
+                   help="SQLite database path (sets NIGHTDESK_DB_PATH).")
+    g.add_argument("--transcript-root", metavar="PATH", default=None,
+                   help="Transcript directory (sets NIGHTDESK_TRANSCRIPT_ROOT).")
+    g.add_argument("--worktree-root", metavar="PATH", default=None,
+                   help="Git worktree root (sets NIGHTDESK_WORKTREE_ROOT).")
+    g.add_argument("--log-dir", metavar="PATH", default=None,
+                   help="Log directory (sets NIGHTDESK_LOG_DIR).")
+    g.add_argument("--bind-host", metavar="HOST", default=None,
+                   help="API bind host (sets NIGHTDESK_BIND_HOST).")
+    g.add_argument("--bind-port", metavar="PORT", type=int, default=None,
+                   help="API bind port (sets NIGHTDESK_BIND_PORT).")
+
+
+def _apply_config_flags(args: "argparse.Namespace") -> NightdeskConfig:
+    """Export CLI override flags as NIGHTDESK_* env vars, then load config.
+
+    Env vars are set before load_config() runs so uvicorn reload workers,
+    run_dev's subprocess, and nightdesk-run-ticket child processes all
+    inherit the overrides automatically.
+    """
+    _FLAG_ENV = [
+        ("config", "NIGHTDESK_CONFIG"),
+        ("secrets", "NIGHTDESK_SECRETS"),
+        ("data_dir", "NIGHTDESK_DATA_DIR"),
+        ("db_path", "NIGHTDESK_DB_PATH"),
+        ("transcript_root", "NIGHTDESK_TRANSCRIPT_ROOT"),
+        ("worktree_root", "NIGHTDESK_WORKTREE_ROOT"),
+        ("log_dir", "NIGHTDESK_LOG_DIR"),
+        ("bind_host", "NIGHTDESK_BIND_HOST"),
+        ("bind_port", "NIGHTDESK_BIND_PORT"),
+    ]
+    for attr, env_key in _FLAG_ENV:
+        val = getattr(args, attr, None)
+        if val is not None:
+            os.environ[env_key] = str(val)
+    return load_config()
+
+
 # ---------------------------------------------------------------------------
 # `nightdesk setup` command.
 # ---------------------------------------------------------------------------
@@ -529,6 +590,7 @@ def setup() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(prog="nightdesk-setup")
+    _add_config_flags(parser)
     parser.add_argument(
         "--claude-path",
         metavar="PATH",
@@ -545,6 +607,7 @@ def setup() -> None:
         help="Print planned actions without touching the filesystem or systemd.",
     )
     args = parser.parse_args()
+    _apply_config_flags(args)
 
     dry_run: bool = args.dry_run
 
@@ -569,9 +632,10 @@ def setup() -> None:
 
     # -- Config ------------------------------------------------------------
     token = secrets.token_urlsafe(32)
+    config_path = default_config_path()
     if dry_run:
-        print(f"[dry-run] would write {DEFAULT_CONFIG_PATH} with new bearer token (chmod 600)")
-        cfg = load_config() if DEFAULT_CONFIG_PATH.exists() else NightdeskConfig(
+        print(f"[dry-run] would write {config_path} with new bearer token (chmod 600)")
+        cfg = load_config() if config_path.exists() else NightdeskConfig(
             bearer_token=token,
         )
     else:
@@ -583,10 +647,9 @@ def setup() -> None:
 
     # -- Data directories --------------------------------------------------
     if dry_run:
-        data_root = Path(os.path.expanduser("~/.local/share/nightdesk"))
-        print(f"[dry-run] would create: {data_root}/{{transcripts,logs,logs/runs}} and {cfg.worktree_root}")
+        print(f"[dry-run] would create: {cfg.data_dir}/{{transcripts,logs,logs/runs}} and {cfg.worktree_root}")
     else:
-        data_root = _create_data_dirs(cfg.worktree_root)
+        _create_data_dirs(cfg)
 
     # -- Migrations --------------------------------------------------------
     if dry_run:
@@ -630,11 +693,10 @@ def setup() -> None:
         )
 
     # -- Summary -----------------------------------------------------------
-    log_root = data_root / "logs"
     print(
         f"\nnightdesk setup complete.\n"
-        f"  data:   {data_root}\n"
-        f"  logs:   {log_root}\n"
+        f"  data:   {cfg.data_dir}\n"
+        f"  logs:   {cfg.log_dir}\n"
         f"  db:     {cfg.db_path}\n"
         f"  api:    http://{host}:{port}\n"
         f"\nView logs:\n"
@@ -770,12 +832,16 @@ def uninstall() -> None:
     args = parser.parse_args()
 
     dry_run: bool = args.dry_run
-    config_dir = Path(os.path.expanduser("~/.config/nightdesk"))
-    config_path = DEFAULT_CONFIG_PATH
-    secrets_path = Path(os.path.expanduser("~/.config/nightdesk/secrets.env"))
-    data_dir = Path(os.path.expanduser("~/.local/share/nightdesk"))
-    worktree_dir = Path(os.path.expanduser("~/.local/share/nightdesk-worktrees"))
-    cc_sessions_dir = Path(os.path.expanduser("~/.local/share/nightdesk-cc-sessions"))
+
+    # Derive all paths from config; fall back to defaults when no file.
+    cfg = load_config()
+    config_path = default_config_path()
+    secrets_path = default_secrets_path()
+    config_dir = config_path.parent
+    data_dir = cfg.data_dir
+    worktree_dir = cfg.worktree_root
+    # cc-sessions lives as a sibling of the worktree root.
+    cc_sessions_dir = worktree_dir.parent / "nightdesk-cc-sessions"
 
     # -- Guard: stop running services first --------------------------------
     if not dry_run and _is_service_active():
@@ -874,7 +940,11 @@ def login() -> None:
     Reads the bearer from config, calls POST /auth/mint-handshake, then
     opens the result URL with xdg-open (or prints it if unavailable).
     """
-    cfg = load_config()
+    import argparse
+    parser = argparse.ArgumentParser(prog="nightdesk-login")
+    _add_config_flags(parser)
+    args = parser.parse_args()
+    cfg = _apply_config_flags(args)
     if not cfg.bearer_token:
         print(
             "No bearer token in config. Run nightdesk-setup first.",
@@ -908,6 +978,7 @@ def run_api() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(prog="nightdesk-api")
+    _add_config_flags(parser)
     parser.add_argument(
         "--reload",
         action="store_true",
@@ -915,10 +986,10 @@ def run_api() -> None:
     )
     args = parser.parse_args()
 
-    cfg = load_config()
+    cfg = _apply_config_flags(args)
 
     from nightdesk.logging_setup import configure_root_logging
-    configure_root_logging(component="api")
+    configure_root_logging(component="api", log_dir=cfg.log_dir)
 
     # Auto-migrate on every start; exit 70 on failure so systemd won't loop.
     try:
@@ -929,7 +1000,7 @@ def run_api() -> None:
 
     # Alembic's fileConfig resets the root logger level and disables loggers
     # not listed in alembic.ini. Re-apply our config so app logs get through.
-    configure_root_logging(component="api")
+    configure_root_logging(component="api", log_dir=cfg.log_dir)
 
     # CC version check (non-fatal: daemon still boots).
     from nightdesk.domain.cc_check import check_cc_binary, persist_cc_check
@@ -985,9 +1056,14 @@ def run_api() -> None:
 
 
 def run_worker() -> None:
-    cfg = load_config()
+    import argparse
+    parser = argparse.ArgumentParser(prog="nightdesk-worker")
+    _add_config_flags(parser)
+    args = parser.parse_args()
+    cfg = _apply_config_flags(args)
+
     from nightdesk.logging_setup import configure_root_logging
-    configure_root_logging(component="worker")
+    configure_root_logging(component="worker", log_dir=cfg.log_dir)
 
     # Auto-migrate on every start; exit 70 on failure so systemd won't loop.
     try:
@@ -998,7 +1074,7 @@ def run_worker() -> None:
 
     # Alembic's fileConfig resets the root logger level and disables loggers
     # not listed in alembic.ini. Re-apply our config so app logs get through.
-    configure_root_logging(component="worker")
+    configure_root_logging(component="worker", log_dir=cfg.log_dir)
 
     # CC version check (non-fatal: worker still starts; tick loop guards picks).
     from nightdesk.domain.cc_check import check_cc_binary, persist_cc_check
@@ -1050,6 +1126,7 @@ def run_ticket() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(prog="nightdesk-run-ticket")
+    _add_config_flags(parser)
     parser.add_argument("ticket_id")
     parser.add_argument("--dump", action="store_true",
                         help="print the resolved spec and bwrap argv, then exit")
@@ -1060,7 +1137,7 @@ def run_ticket() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    cfg = load_config()
+    cfg = _apply_config_flags(args)
     engine = make_engine(cfg.db_path)
     SessionLocal = session_factory(engine)
 
@@ -1162,6 +1239,11 @@ _FILE_KEYS = {
     "bind_port": int,
     "bearer_token": str,
     "worktree_base_ref": str,
+    "db_path": str,
+    "transcript_root": str,
+    "worktree_root": str,
+    "data_dir": str,
+    "log_dir": str,
 }
 
 # Keys that are runtime-updatable via PATCH /api/v1/config.
@@ -1220,7 +1302,7 @@ def _api_patch_config(cfg: NightdeskConfig, payload: dict) -> bool:
 
 def _write_config_key(key: str, raw_value: str) -> None:
     """Update a single key in config.toml, preserving comments and formatting."""
-    config_path = DEFAULT_CONFIG_PATH
+    config_path = default_config_path()
     if not config_path.exists():
         print(
             f"Config file not found at {config_path}. Run nightdesk-setup first.",
@@ -1288,6 +1370,8 @@ def config_list() -> None:
     cfg = load_config()
 
     # File-based config.
+    print(f"data_dir = {cfg.data_dir}")
+    print(f"log_dir = {cfg.log_dir}")
     print(f"bind_host = {cfg.bind_host}")
     print(f"bind_port = {cfg.bind_port}")
     print(f"bearer_token = {_mask_token(cfg.bearer_token)}")
@@ -1321,6 +1405,7 @@ def config_cmd() -> None:
         prog="nightdesk-config",
         description="Inspect and modify nightdesk configuration.",
     )
+    _add_config_flags(parser)
     sub = parser.add_subparsers(dest="action")
     sub.add_parser("list", help="Show all current config values")
     set_parser = sub.add_parser("set", help="Set a config key")
@@ -1328,6 +1413,7 @@ def config_cmd() -> None:
     set_parser.add_argument("value", help="Value to set")
 
     args = parser.parse_args()
+    _apply_config_flags(args)
 
     if args.action == "list":
         config_list()
@@ -1350,7 +1436,7 @@ def config_cmd() -> None:
 
         if is_file_key:
             _write_config_key(key, value)
-            print(f"Written {key} = {value} to {DEFAULT_CONFIG_PATH}")
+            print(f"Written {key} = {value} to {default_config_path()}")
 
         if is_runtime_key:
             cfg = load_config()
@@ -1581,6 +1667,11 @@ def install_skills() -> None:
 
 
 def run_dev() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(prog="nightdesk-dev")
+    _add_config_flags(parser)
+    args = parser.parse_args()
+    _apply_config_flags(args)
     cfg = _init()
     src_dir = str(Path(__file__).parent)
 

@@ -7,6 +7,19 @@ from nightdesk.api.app import create_app
 from nightdesk.db.models import Base, Profile
 
 
+@pytest.fixture(autouse=True)
+def _isolate_nightdesk_env(monkeypatch):
+    """Clear NIGHTDESK_* env vars so config loading is deterministic per test.
+
+    Tests that need a var set it themselves via monkeypatch.setenv / patch.dict,
+    which layer on top of this clean slate and are restored automatically.
+    """
+    import os
+    for key in list(os.environ):
+        if key.startswith("NIGHTDESK_"):
+            monkeypatch.delenv(key, raising=False)
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
