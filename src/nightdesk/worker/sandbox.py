@@ -445,6 +445,28 @@ def build_bwrap_argv(
             continue
         argv += ["--bind-try", g, g]
 
+    # SSH for sandboxed git over SSH (e.g. a self-hosted GitLab): forward the
+    # host ssh-agent socket and a READ-ONLY known_hosts. Auth flows through the
+    # agent (private keys stay on the host). The socket usually lives under
+    # /run, which is a tmpfs above; a later, more-specific bind shadows it at
+    # the same absolute path.
+    #
+    # The known_hosts mount is a deliberate security boundary: paired with
+    # StrictHostKeyChecking=yes (set via GIT_SSH_COMMAND in run_one._build_env)
+    # it is an ALLOWLIST of the only hosts the sandboxed agent can reach over
+    # SSH. Keep it READ-ONLY so the agent can't append hosts, and do NOT relax
+    # host checking to accept-new — that would let a runaway/injected agent
+    # reach an arbitrary host. It is bound at the host path (~/.ssh/known_hosts)
+    # on purpose: ssh resolves ~ from the passwd entry (getpwuid), not $HOME,
+    # and the sandbox preserves the real uid with /etc/passwd bound, so ssh
+    # reads it there even though HOME is /sandbox-home.
+    ssh_sock = env.get("SSH_AUTH_SOCK")
+    if ssh_sock and os.path.exists(ssh_sock):
+        argv += ["--bind-try", ssh_sock, ssh_sock]
+    _known_hosts = os.path.join(os.path.expanduser("~"), ".ssh", "known_hosts")
+    if os.path.exists(_known_hosts):
+        argv += ["--ro-bind-try", _known_hosts, _known_hosts]
+
     # Environment: clear and re-apply only what we explicitly want.
     argv += ["--clearenv"]
     for k, v in env.items():

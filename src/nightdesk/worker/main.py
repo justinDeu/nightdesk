@@ -246,6 +246,16 @@ class WorkerLoop:
             "inproc" if s.executor is not None else "subprocess",
             s.worktree_root, s.transcript_root,
         )
+        if not os.environ.get("SSH_AUTH_SOCK"):
+            # No ssh-agent in the worker's environment: SSH_AUTH_SOCK forwarding
+            # in run_one._build_env will no-op, so any ticket that pushes/fetches
+            # over SSH (e.g. a self-hosted GitLab remote) will fail to
+            # authenticate. Surface it once at startup so the cause is obvious.
+            log.info(
+                "SSH_AUTH_SOCK not set in the worker environment: sandboxed git "
+                "over SSH will not authenticate. Start the worker from a session "
+                "that has an ssh-agent if your tickets use SSH remotes."
+            )
         session = self._session_factory()
         try:
             recover_orphaned_runs(session, host=self.settings.host)

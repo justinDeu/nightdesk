@@ -376,6 +376,28 @@ def _build_env(
         env["NIGHTDESK_TICKET_ID"] = ticket_id
     if api_url:
         env["NIGHTDESK_API_URL"] = api_url
+
+    # Forward the host ssh-agent so sandboxed `git push`/`fetch` over SSH
+    # (e.g. a self-hosted GitLab) can authenticate. The private key never
+    # enters the sandbox — only the agent socket does (the sandbox layer
+    # bind-mounts the socket and a read-only known_hosts, and ssh inside the
+    # sandbox talks to the agent). SSH_AGENT_PID is deliberately NOT forwarded:
+    # the sandbox has its own PID namespace, so a host PID is meaningless inside
+    # and ssh only needs the socket.
+    ssh_sock = os.environ.get("SSH_AUTH_SOCK")
+    if ssh_sock:
+        env["SSH_AUTH_SOCK"] = ssh_sock
+        # Fail closed. The read-only known_hosts mounted into the sandbox acts
+        # as an ALLOWLIST of the hosts the agent may reach over SSH:
+        # StrictHostKeyChecking=yes refuses any host not already pinned (and any
+        # changed key), so a runaway or prompt-injected agent cannot silently
+        # push to / pull from an attacker-controlled host. BatchMode=yes removes
+        # the interactive prompt surface, so failures are fast and clean instead
+        # of hanging a worker slot. Respect a caller-supplied GIT_SSH_COMMAND.
+        env.setdefault(
+            "GIT_SSH_COMMAND",
+            "ssh -o StrictHostKeyChecking=yes -o BatchMode=yes",
+        )
     return env
 
 
