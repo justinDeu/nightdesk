@@ -2032,10 +2032,41 @@ dialog button[aria-label="Close"]:focus-visible {
    Anchored below the Display button on the board/list toolbars. Hosts the
    group/order controls and the show/hide property checkboxes. Toggled by
    static/display_options.js (button click, Shift+V, Esc, outside click). */
+/* ---- Tickets toolbar (board + list) -------------------------------------
+   One condensed flex row: view switcher + search input + actions, with the
+   search bar's filter chips wrapping to a full-width line below. The search
+   bar wrapper is flattened (display:contents) so its input row and its chips
+   participate in this row directly — safe because search_bar.js queries
+   descendants and anchors the dropdown to the input box ([data-sb-box]), not
+   to the .nd-searchbar wrapper. */
+.nd-ticket-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.nd-ticket-toolbar .nd-searchbar { display: contents; }
+/* Order matters: the chips live inside the searchbar (ahead of the actions in
+   DOM), so without explicit order the 100%-wide chips would push the actions
+   onto their own line. Pin toggle + input + actions to row 1, chips last. */
+.nd-ticket-toolbar #nd-page-view-toggle { order: 0; }
+.nd-ticket-toolbar .nd-searchbar-main { order: 1; flex: 1 1 14rem; min-width: 0; }
+.nd-ticket-toolbar .nd-ticket-actions { order: 2; }
+.nd-ticket-toolbar .nd-searchbar-facets { order: 3; flex: 0 0 100%; }
+/* Tooltips on these controls open downward: the toolbar sits at the top of the
+   page, so the default above-centered tip would clear the top edge. */
+.nd-ticket-toolbar [data-tooltip]::after {
+  bottom: auto;
+  top: calc(100% + 7px);
+}
+.nd-ticket-toolbar [data-tooltip]::before { display: none; }
+
 .nd-display-popover {
   position: absolute;
   top: calc(100% + .45rem);
-  left: 0;
+  /* Anchor to the right: the Display button sits at the right edge of the
+     board/list toolbar, so a left:0 anchor pushed the menu off-screen. */
+  right: 0;
   z-index: 60;
   min-width: 15rem;
   max-height: 80vh;
@@ -2267,4 +2298,399 @@ dialog button[aria-label="Close"]:focus-visible {
    resolve via the --radius-* tokens in @theme. */
 @layer utilities {
   .rounded { border-radius: 6px; }
+}
+
+/* ---- Ticket sidebar: clearly defined sections ---------------------------
+   The board's right-rail ticket viewer (partials/sidebar.html) used to dump
+   Prompt / workspace / toolchain / effective-config as a flat run of terse
+   uppercase labels. .nd-ts-* gives each block a label + a short always-visible
+   definition line, divided by a top border. Prefixed nd-ts- (ticket-sidebar)
+   to avoid colliding with the nav-rail .nd-sb-* classes. Always-visible hints
+   are used instead of tooltips: the rail scrolls and clips absolutely-positioned
+   tips, and hints also read on touch. */
+.nd-ts-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+}
+.nd-ts-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.25rem;
+}
+.nd-ts-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+/* Info badge carrying a section's description as a hover/focus tooltip. Small,
+   muted, low-noise affordance so the descriptions don't clutter the rail. */
+.nd-ts-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  color: color-mix(in oklab, var(--color-fg-muted) 65%, transparent);
+  cursor: default;
+  vertical-align: middle;
+  transition: color 0.12s var(--ease-standard), background 0.12s var(--ease-standard);
+}
+.nd-ts-info:hover,
+.nd-ts-info:focus-visible {
+  color: var(--color-fg);
+  background: var(--color-bg-elev-2);
+}
+/* Sidebar tooltips open downward and are width-capped: the rail is a scroll
+   container (overflow-y-auto / -x-hidden), so the default above-centered tip
+   would clip at the top edge and run past the pane horizontally. Scoped to
+   #sidebar so detail-page / modal tooltips keep their default placement. */
+#sidebar [data-tooltip]::after {
+  bottom: auto;
+  top: calc(100% + 6px);
+  max-width: min(20rem, calc(100vw - 2rem));
+}
+#sidebar [data-tooltip]::before {
+  display: none;
+}
+
+/* Collapsible "Resolved execution context" deep dive. Closed by default so the
+   curated sections stay scannable; the verbose merged config is on demand. */
+.nd-ts-details {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+}
+.nd-ts-details > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  user-select: none;
+}
+.nd-ts-details > summary::-webkit-details-marker { display: none; }
+.nd-ts-chevron {
+  flex: 0 0 auto;
+  color: var(--color-fg-muted);
+  transition: transform 0.12s var(--ease-standard);
+}
+.nd-ts-details[open] > summary .nd-ts-chevron { transform: rotate(90deg); }
+.nd-ts-summary-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+.nd-ts-details > summary:hover .nd-ts-summary-label { color: var(--color-fg); }
+
+/* Dedupe: the sidebar's provenance Toolchain section already shows presets, so
+   hide the effective-config "Toolchain & PATH" group when it's rendered inside
+   the sidebar (the two used to appear back to back). Only scoped to the
+   sidebar wrapper; the detail page / modal previews are unaffected. */
+[data-sidebar-effective-config] [data-config-group="Toolchain & PATH"] {
+  display: none;
+}
+
+/* Quiet trailing provenance caption on toolchain rows. The preset NAME is the
+   item; this tag is metadata (inherited / enabled / disabled / project default)
+   so it's small, uppercase, no fill or border — color alone carries the signal. */
+.nd-tc-tag {
+  flex: 0 0 auto;
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+/* ============================================================
+   MOBILE LAYER
+   Everything below is scoped to viewports narrower than the
+   Tailwind `lg` breakpoint (1024px). At >=1024px none of these
+   rules apply, so the desktop UI renders identically to before.
+
+   The left sidebar becomes an off-canvas drawer. Its open state
+   is <html class="nd-sb-open">, toggled from the mobile top bar
+   (.nd-mobile-bar) and dismissed by the .nd-sb-backdrop tap
+   target. The drawer is always shown expanded on mobile even
+   when the persisted nd-sb-collapsed rail state is set, so the
+   collapsed-mode `display:none` hides are reverted here.
+   ============================================================ */
+/* Page-level horizontal containment at every width. Inner scroll containers
+   (the board swipe in #board-grid, the list rows in #list-body) handle their
+   own scrolling; this only stops stray absolutely-positioned popovers or wide
+   tables from ever forcing a page-wide horizontal scrollbar. overflow-x:clip
+   (not hidden) does NOT create a scroll container, so sticky headers and
+   downward-opening popovers keep working. Harmless on wide desktops, where
+   nothing ever overflows anyway. */
+.nd-main { overflow-x: clip; }
+
+.nd-mobile-bar,
+.nd-sb-backdrop { display: none; }
+
+@media (max-width: 1023px) {
+  /* --- Mobile top bar (hamburger + wordmark + search) ---------------
+     Sticky so it stays pinned while a page scrolls; lives in the content
+     column above <main>. Hidden on desktop via the rule above this block. */
+  .nd-mobile-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    position: sticky;
+    top: 0;
+    z-index: 70;
+    height: 3rem;
+    padding: 0 0.5rem;
+    background: color-mix(in oklab, var(--color-bg-elev) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .nd-mobile-bar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.5rem;
+    border: none;
+    background: transparent;
+    color: var(--color-fg);
+    cursor: pointer;
+  }
+  .nd-mobile-bar-btn:hover { background: var(--color-bg-elev-2); }
+  .nd-mobile-wordmark {
+    font-weight: 700;
+    color: var(--color-accent);
+    font-size: 1rem;
+    text-decoration: none;
+  }
+
+  /* --- Off-canvas drawer ------------------------------------------- */
+  .nd-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    height: 100dvh;
+    flex: none;
+    flex-basis: auto;
+    width: min(84vw, 20rem);
+    max-width: 20rem;
+    z-index: 90;
+    transform: translateX(-100%);
+    transition: transform 0.18s var(--ease-standard);
+    box-shadow: var(--shadow-xl);
+    will-change: transform;
+  }
+  html.nd-sb-open .nd-sidebar { transform: translateX(0); }
+
+  /* Revert every collapsed-rail `display:none` so the drawer always
+     reads as the full nav regardless of persisted collapse state. */
+  html.nd-sb-collapsed .nd-sidebar,
+  .nd-sb-collapsed .nd-sidebar { width: min(84vw, 20rem); flex-basis: auto; }
+  .nd-sb-collapsed .nd-sidebar .nd-sb-label,
+  .nd-sb-collapsed .nd-sidebar .nd-sb-section,
+  .nd-sb-collapsed .nd-sidebar .nd-sb-kbd,
+  .nd-sb-collapsed .nd-sidebar .nd-sb-badge,
+  .nd-sb-collapsed .nd-sidebar .nd-sb-spend,
+  .nd-sb-collapsed .nd-sidebar #nd-views-section { display: revert; }
+  .nd-sb-collapsed .nd-sidebar .nd-sb-brand {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+  .nd-sb-collapsed .nd-sidebar .nd-sb-brand-full { display: inline; }
+  .nd-sb-collapsed .nd-sidebar .nd-sb-brand-mini { display: none; }
+  .nd-sb-collapsed .nd-sidebar .nd-sb-item,
+  .nd-sb-collapsed .nd-sidebar .nd-sb-new,
+  .nd-sb-collapsed .nd-sidebar .nd-sb-search {
+    justify-content: flex-start;
+    gap: 0.6rem;
+    padding-left: 0.55rem;
+    padding-right: 0.55rem;
+  }
+  .nd-sb-collapsed .nd-sidebar .nd-sb-status { align-items: stretch; }
+  /* Rail tooltips never apply in the drawer. */
+  .nd-sb-collapsed .nd-sidebar [data-tooltip]::after,
+  .nd-sb-collapsed .nd-sidebar [data-tooltip]::before { display: none; }
+
+  /* Backdrop: covers the page behind the open drawer, tap to close. */
+  .nd-sb-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 85;
+    background: rgb(0 0 0 / 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s var(--ease-standard);
+  }
+  html.nd-sb-open .nd-sb-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  /* Lock the page scroll while the drawer is open. */
+  html.nd-sb-open { overflow: hidden; }
+  /* The worker-pill hover panel opens at left:100% (off the drawer's right
+     edge); on touch there's no hover anyway, so drop it out of flow harmlessly
+     by letting it render below the pill instead of off-screen. */
+  .nd-sidebar [data-worker-panel] {
+    left: 0;
+    bottom: auto;
+    top: 100%;
+    padding-left: 0;
+    padding-top: 0.35rem;
+  }
+
+  /* --- Content padding --------------------------------------------- */
+  .nd-main {
+    padding: 0.75rem 0.75rem 2rem;
+  }
+
+  /* --- Board + list: horizontal swipe ------------------------------
+     #board-grid is shared by the board (kanban + detail) and the list
+     (list + detail). On mobile it becomes a single swipeable row: each
+     direct child is a ~84vw snap target, so you pan columns into view
+     and swipe to the detail pane. DOM order is unchanged, so all the
+     existing selection / sidebar-sync JS keeps working. */
+  .nd-board-shell {
+    /* Inline style sets height: calc(100vh - 6rem) for the desktop fixed
+       frame; on mobile reserve room for the sticky top bar instead. */
+    height: calc(100dvh - 5.25rem) !important;
+    min-height: 0;
+  }
+  #board-grid {
+    display: flex;
+    grid-template-columns: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0.25rem;
+  }
+  #board-grid > * {
+    flex: 0 0 84vw;
+    min-width: 84vw;
+    max-width: 90vw;
+    scroll-snap-align: start;
+  }
+  /* The board's property-grouping branch already scrolls horizontally via
+     #board-columns-scroll; just widen its columns for the viewport. */
+  #board-columns-scroll > * { min-width: 84vw; flex: 0 0 84vw; }
+
+  /* --- Two-pane management pages: stack ----------------------------
+     Settings / Scheduled / Profiles / Projects / Toolsets all wrap a
+     .nd-list-pane rail + a detail pane in .nd-twopane. On mobile the
+     rail stacks on top (bounded height, scrolls internally) and the
+     detail pane flows beneath on the normal page scroll. */
+  .nd-twopane {
+    flex-direction: column;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+  .nd-twopane .nd-list-pane {
+    width: 100%;
+    flex: 0 0 auto;
+    max-height: 38vh;
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+  /* Detail panes were built to fill a fixed-height flex column with their
+     own internal scroll; on the stacked mobile layout let them expand on the
+     page scroll instead. */
+  .nd-twopane > section,
+  .nd-twopane > div {
+    overflow: visible;
+    max-height: none;
+  }
+
+  /* --- Toolbars wrap instead of overflowing ----------------------- */
+  #board-display-toolbar { flex-wrap: wrap; }
+
+  /* --- Touch-reveal: hover-only affordances ------------------------
+     Several controls reveal on :hover (desktop). Touch has no hover, so
+     they'd be unreachable. Show them by default on mobile. */
+  .nd-inbox-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .nd-inbox-row .nd-inbox-summary { padding-right: 0.5rem; }
+  .nd-inbox-row .nd-label-placeholder { opacity: 1; }
+  .nd-nav-view-item .nd-view-delete-btn { opacity: 1; }
+
+  /* Tooltips are hover/focus-only informational; on touch they'd steal the
+     first tap. Keep them available on focus (keyboard) but they no longer
+     block the primary tap target. (No change needed — :hover simply never
+     fires; left explicit for clarity.) */
+
+  /* --- Containment: kill page-wide horizontal scroll ---------------
+     Two root causes: (1) the swipe rail's flex item defaults to
+     min-width:auto so its columns push the document wide instead of
+     scrolling inside #board-grid; (2) the dense list rows and the fixed
+     two-track form grids ([1fr,16rem], [140px_1fr], …) hold fixed widths
+     that can't compress on a phone. Fix both without touching desktop. */
+
+  /* Release the flex min-content floor so #board-grid's overflow-x clips. */
+  #board-grid { min-width: 0; }
+
+  /* List view: the row table is too dense for an 84vw swipe pane, so stack
+     list-over-detail (like the other two-pane pages) and let the rows scroll
+     sideways inside their own pane. Board is untouched (no #list-body). */
+  #board-grid:has(#list-body) {
+    flex-direction: column;
+    overflow-x: visible;
+    overflow-y: auto;
+    scroll-snap-type: none;
+  }
+  #board-grid:has(#list-body) > * {
+    flex: none;
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    scroll-snap-align: none;
+  }
+  #list-body { overflow-x: auto; }
+
+  /* Collapse the fixed two-track label/value grids to one stacked column.
+     The auto-fit grids already wrap on narrow screens and are left alone. */
+  .grid-cols-\[1fr\,16rem\],
+  .grid-cols-\[1fr\,8rem\],
+  .grid-cols-\[8rem\,1fr\],
+  .grid-cols-\[140px_1fr\],
+  .grid-cols-\[4rem_1fr\],
+  .grid-cols-\[3\.5rem_1fr\],
+  .grid-cols-\[1fr_1fr_200px\],
+  .grid-cols-\[minmax\(0\,1fr\)_22rem\],
+  .grid-cols-\[minmax\(0\,1fr\)_26rem\],
+  .grid-cols-\[minmax\(0\,1fr\)_minmax\(18rem\,24rem\)\] {
+    grid-template-columns: 1fr;
+  }
+  /* Form controls must never exceed their (now full-width) track. */
+  .nd-twopane input,
+  .nd-twopane select,
+  .nd-twopane textarea { max-width: 100%; }
+  /* Let header action clusters wrap (project workspace tabs, etc.). */
+  .nd-twopane .shrink-0 { flex-shrink: 1; }
+
+  /* --- Page-level horizontal containment ---------------------------
+     The global .nd-main { overflow-x: clip } rule above handles this at
+     every width; documented here for the mobile context. */
+
+  /* Dense label/value field rows in the management panes wrap to a stack
+     once they can't fit the pane, instead of overflowing or clipping a
+     control. */
+  .nd-twopane form .flex,
+  .nd-twopane .flex.items-end,
+  .nd-twopane .flex.items-center,
+  .nd-twopane .flex.justify-between { flex-wrap: wrap; }
 }

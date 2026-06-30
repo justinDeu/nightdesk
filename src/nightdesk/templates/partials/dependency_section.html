@@ -6,7 +6,9 @@
   dependencies re-renders just this fragment.
 #}
 <section id="dependency-section" class="flex flex-col gap-1">
-  <span class="text-fg-muted text-xs uppercase tracking-wide">Dependencies</span>
+  {# Header is supplied by the caller (the sidebar's Dependencies section) so
+     it isn't rendered twice. The htmx swap target is this <section>, so the
+     caller's header persists across add/remove re-renders. #}
 
   {% if upstreams %}
     <ul class="flex flex-col gap-1">

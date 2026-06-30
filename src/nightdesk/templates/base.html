@@ -65,6 +65,29 @@
       })();
     </script>
 
+    {# Mobile drawer toggle. The sidebar is an off-canvas drawer under the
+       `lg` breakpoint (see the MOBILE LAYER in app.css). nd-sb-open on <html>
+       slides it in and locks body scroll; the backdrop tap and any nav link
+       dismiss it. No-op on desktop, where .nd-mobile-bar/.nd-sb-backdrop are
+       display:none. #}
+    <script>
+      window.ndOpenMobileSidebar = function (open) {
+        var html = document.documentElement;
+        var next = (typeof open === 'boolean') ? open : !html.classList.contains('nd-sb-open');
+        html.classList.toggle('nd-sb-open', next);
+      };
+      document.addEventListener('click', function (e) {
+        if (!document.documentElement.classList.contains('nd-sb-open')) return;
+        var t = e.target.closest('.nd-sb-backdrop, #nd-sidebar a, #nd-sidebar button');
+        if (t && (t.classList.contains('nd-sb-backdrop') || t.closest('nav'))) {
+          window.ndOpenMobileSidebar(false);
+        }
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') window.ndOpenMobileSidebar(false);
+      });
+    </script>
+
     {# Sidebar nav item. Each destination supplies its own 16x16 inline SVG via
        the call block; the label collapses to a data-tooltip in the icon rail. #}
     {% macro sb_item(href, label, active, extra='') %}
@@ -78,6 +101,10 @@
     {% endmacro %}
 
     <div class="flex min-h-screen">
+      {# Mobile drawer backdrop: display:none on desktop, fixed overlay under
+         1024px. Tap (or Esc / nav click) closes the sidebar. #}
+      <div class="nd-sb-backdrop" aria-hidden="true"
+           onclick="window.ndOpenMobileSidebar && window.ndOpenMobileSidebar(false)"></div>
       <aside id="nd-sidebar" class="nd-sidebar" aria-label="Primary navigation">
         {# Brand + collapse toggle. The wordmark shrinks to "n" in the rail. #}
         <div class="nd-sb-brand">
@@ -225,7 +252,20 @@
         </div>
       </aside>
       <div class="flex-1 min-w-0 flex flex-col">
-        <main class="w-full px-6 py-4 flex-1">
+        {# Mobile-only top chrome: hamburger opens the off-canvas sidebar
+           drawer, search opens the command palette. display:none >=1024px. #}
+        <div class="nd-mobile-bar">
+          <button type="button" class="nd-mobile-bar-btn" aria-label="Open menu"
+                  onclick="window.ndOpenMobileSidebar && window.ndOpenMobileSidebar()">
+            <svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+          </button>
+          <a href="/" class="nd-mobile-wordmark">nightdesk</a>
+          <button type="button" class="nd-mobile-bar-btn ml-auto" aria-label="Search"
+                  onclick="window.ndOpenPalette && window.ndOpenPalette()">
+            <svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4"/><path d="m13 13-3-3"/></svg>
+          </button>
+        </div>
+        <main class="nd-main w-full px-6 py-4 flex-1">
           {% block body %}{% endblock %}
         </main>
       </div>

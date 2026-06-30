@@ -1,74 +1,73 @@
 {% extends "base.html" %}
 {% set active_page = 'tickets' %}
 {% block body %}
-<div class="flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
-  {% with sb_id='list-search', sb_resource='ticket', sb_query=query %}
-    {% include "partials/search_bar.html" %}
-  {% endwith %}
-
-  {# Board|List view toggle — mirrors the one on the board page. Board link
-     is updated by JS below after syncUrl() so live filter changes carry
-     across the switch. #}
-  {# Peer query string excludes `view` (a stray ?view=... carried over from the
-     board would otherwise keep propagating); the Runs href re-adds view=runs. #}
+<div class="nd-board-shell flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
   {% set _peer_qs = request.query_params.multi_items() | rejectattr('0', 'equalto', 'view') | list | urlencode %}
   {% set _board_href = '/' + ('?' + _peer_qs if _peer_qs else '') %}
   {% set _runs_href = '/?view=runs' + ('&' + _peer_qs if _peer_qs else '') %}
-  <div id="nd-page-view-toggle" class="nd-view-toggle self-end" role="tablist" aria-label="Ticket view">
-    <a class="nd-view-btn" href="{{ _board_href }}" aria-pressed="false"
-       data-view-target="board" data-tooltip="Board view">Board</a>
-    <a class="nd-view-btn" href="{{ '/list?'+_peer_qs if _peer_qs else '/list' }}" aria-pressed="true"
-       data-view-target="list" data-tooltip="List view">List</a>
-    <a class="nd-view-btn" href="{{ _runs_href }}" aria-pressed="false"
-       data-view-target="runs" data-tooltip="Runs view">Runs</a>
-  </div>
-
-  {# Display toolbar: one Display button opening the consolidated popover
-     (grouping, ordering, show/hide columns). Everything maps straight onto
-     the ?group= / ?order= / ?props= query params and re-fetches the rows
-     fragment, so the view stays shareable/bookmarkable. #}
-  <div class="flex items-center gap-2 text-xs text-fg-muted">
-    <div class="relative">
-      <button type="button" id="nd-display-btn"
-              class="btn btn-ghost"
-              aria-expanded="false" aria-haspopup="true"
-              data-tooltip="Display options (Shift+V)">
-        Display
-      </button>
-      <div id="nd-display-popover" class="nd-display-popover" hidden>
-        <div class="nd-display-section">Group by</div>
-        <div class="nd-display-select-row">
-          <select id="list-group" aria-label="Group rows by">
-            {% for val, label in group_options %}
-              <option value="{{ val }}" {% if val == group %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="nd-display-section">Order by</div>
-        <div class="nd-display-select-row">
-          <select id="list-order" aria-label="Order rows by">
-            {% for val, label in order_options %}
-              <option value="{{ val }}" {% if val == order %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="nd-display-section">Show columns</div>
-        {% for key, label in (list_property_options if list_property_options is defined else []) %}
-          <label class="nd-display-prop-row">
-            <input type="checkbox" name="list-prop" value="{{ key }}"
-                   {% if show_props is not defined or key in show_props %}checked{% endif %}>
-            {{ label }}
-          </label>
-        {% endfor %}
-      </div>
+  {# One condensed toolbar row (mirrors the board page): view switcher + search
+     (grows to fill) + actions. The search bar's filter chips wrap below it. #}
+  <div class="nd-ticket-toolbar">
+    <div id="nd-page-view-toggle" class="nd-view-toggle" role="tablist" aria-label="Ticket view">
+      <a class="nd-view-btn" href="{{ _board_href }}" aria-pressed="false"
+         data-view-target="board" data-tooltip="Board view">Board</a>
+      <a class="nd-view-btn" href="{{ '/list?'+_peer_qs if _peer_qs else '/list' }}" aria-pressed="true"
+         data-view-target="list" data-tooltip="List view">List</a>
+      <a class="nd-view-btn" href="{{ _runs_href }}" aria-pressed="false"
+         data-view-target="runs" data-tooltip="Runs view">Runs</a>
     </div>
-    <span class="ml-auto" data-list-count>{{ list_count }} ticket{{ '' if list_count == 1 else 's' }}</span>
-    <button type="button"
-            class="btn btn-ghost"
-            onclick="window.ndOpenSaveViewDialog && window.ndOpenSaveViewDialog('list')"
-            data-tooltip="Save current filters and display settings as a named view">
-      Save view
-    </button>
+
+    {% with sb_id='list-search', sb_resource='ticket', sb_query=query %}
+      {% include "partials/search_bar.html" %}
+    {% endwith %}
+
+    {# Display toolbar: one Display button opening the consolidated popover
+       (grouping, ordering, show/hide columns). Everything maps straight onto
+       the ?group= / ?order= / ?props= query params and re-fetches the rows
+       fragment, so the view stays shareable/bookmarkable. #}
+    <div class="nd-ticket-actions flex items-center gap-2 text-xs text-fg-muted">
+      <div class="relative">
+        <button type="button" id="nd-display-btn"
+                class="btn btn-ghost"
+                aria-expanded="false" aria-haspopup="true"
+                data-tooltip="Display options (Shift+V)">
+          Display
+        </button>
+        <div id="nd-display-popover" class="nd-display-popover" hidden>
+          <div class="nd-display-section">Group by</div>
+          <div class="nd-display-select-row">
+            <select id="list-group" aria-label="Group rows by">
+              {% for val, label in group_options %}
+                <option value="{{ val }}" {% if val == group %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="nd-display-section">Order by</div>
+          <div class="nd-display-select-row">
+            <select id="list-order" aria-label="Order rows by">
+              {% for val, label in order_options %}
+                <option value="{{ val }}" {% if val == order %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="nd-display-section">Show columns</div>
+          {% for key, label in (list_property_options if list_property_options is defined else []) %}
+            <label class="nd-display-prop-row">
+              <input type="checkbox" name="list-prop" value="{{ key }}"
+                     {% if show_props is not defined or key in show_props %}checked{% endif %}>
+              {{ label }}
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <span data-list-count>{{ list_count }} ticket{{ '' if list_count == 1 else 's' }}</span>
+      <button type="button"
+              class="btn btn-ghost"
+              onclick="window.ndOpenSaveViewDialog && window.ndOpenSaveViewDialog('list')"
+              data-tooltip="Save current filters and display settings as a named view">
+        Save view
+      </button>
+    </div>
   </div>
 
   {# #board-grid is the gate command_palette.js checks for the keyboard cursor;
@@ -78,7 +77,7 @@
      row opens the same editor. #}
   <div
     id="board-grid"
-    class="grid flex-1 min-h-0 overflow-hidden gap-3 grid-cols-[1fr_480px] grid-rows-1"
+    class="grid flex-1 min-h-0 overflow-hidden gap-3 grid-cols-[1fr_minmax(22.5rem,30rem)] grid-rows-1"
   >
     <div id="list-body" class="overflow-y-auto border border-border rounded-md bg-bg-elev-2/30">
       {% include "partials/list_groups.html" %}

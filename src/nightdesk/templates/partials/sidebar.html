@@ -21,6 +21,23 @@
     'review':   'border-warn/40 text-warn',
     'archived': 'border-border text-fg-muted',
   } %}
+
+{# Section primitive for the read-only view. One uppercase label, one short
+   always-visible definition line (clearer than a tooltip, and it survives the
+   sidebar's scroll/overflow + touch where styled tooltips would clip), then the
+   caller's content — all divided from the previous section by a top border.
+   Uses the .nd-ts-* classes (ticket-sidebar) to avoid colliding with the
+   nav-rail .nd-sb-* classes. #}
+{% macro sb_section(label, hint='') %}
+<div class="nd-ts-section">
+  <div class="nd-ts-head">
+    <span class="nd-ts-label">{{ label }}</span>
+    {% if hint %}<span class="nd-ts-info" data-tooltip="{{ hint }}" data-tip-align="start" tabindex="0" role="img" aria-label="About {{ label }}"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.4v3.6M8 5.2v.02"/></svg></span>{% endif %}
+  </div>
+  {{ caller() }}
+</div>
+{% endmacro %}
+
 <aside
   id="sidebar"
   {% if is_edit %}data-selected-ticket-id="{{ ticket.id }}"{% endif %}
@@ -103,11 +120,6 @@
           {% if ticket_profile %}
             <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">{{ ticket_profile.name }}</span>
           {% endif %}
-          {% if use_worktree %}
-            <span class="rounded-full border border-accent/40 bg-bg-elev-2 px-2 py-0.5 text-accent">git worktree</span>
-          {% else %}
-            <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-fg-muted">in directory</span>
-          {% endif %}
           {# Labels — clickable to open the card's inline label picker. #}
           <span
             role="button"
@@ -131,34 +143,39 @@
         </div>
       </div>
 
-      <div class="flex flex-col gap-1">
-        <span class="text-fg-muted text-xs uppercase tracking-wide">Prompt</span>
+      {# --- Prompt ------------------------------------------------------- #}
+      {% call sb_section('Prompt', 'The task description sent to the agent at the start of every run.') %}
         {% if ticket.prompt %}
           <pre class="whitespace-pre-wrap break-words font-mono text-xs text-fg leading-snug max-h-64 overflow-y-auto rounded border border-border bg-bg-elev-2/40 p-2">{{ ticket.prompt }}</pre>
         {% else %}
           <span class="text-fg-muted/70 text-xs italic">(no prompt)</span>
         {% endif %}
-      </div>
+      {% endcall %}
 
-      <div class="flex flex-col gap-1">
-        <span class="text-fg-muted text-xs uppercase tracking-wide">Primary workspace source</span>
-        <code class="block break-all font-mono text-xs text-fg">{{ primary_ws.source_path if primary_ws and primary_ws.source_path else '—' }}</code>
-      </div>
-
-      <div class="flex flex-col gap-1">
-        <span class="text-fg-muted text-xs uppercase tracking-wide">Workspace</span>
+      {# --- Workspace (consolidated) ------------------------------------- #
+         Primary workspace + linked workspaces + extra dirs used to be three
+         separate sections with terse labels. Merged into one so the relationship
+         (primary checkout vs. extra mounted repos/dirs) reads at a glance. #}
+      {% call sb_section('Workspace', 'Where the agent runs. The primary is its main checkout; linked workspaces and extra dirs add more repos or folders alongside it.') %}
         {% if primary_ws %}
-          <div class="rounded border border-border bg-bg-elev-2/40 p-2 text-xs space-y-1">
-            <div class="text-fg-muted">Mode: <span class="text-fg">{{ primary_ws.kind }}</span></div>
-            {% if primary_ws.worktree_name %}
-              <div class="text-fg-muted">Worktree: <span class="text-fg font-mono">{{ primary_ws.worktree_name }}</span></div>
-            {% endif %}
+          <div class="rounded-md border border-border bg-bg-elev-2/40 p-2 text-xs space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[10px] uppercase tracking-wide text-fg-muted">Primary</span>
+              {% if use_worktree %}
+                <span class="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10px] text-accent">git worktree</span>
+              {% else %}
+                <span class="rounded-full border border-border bg-bg-elev-2 px-2 py-0.5 text-[10px] text-fg-muted">in directory</span>
+              {% endif %}
+            </div>
             {% if primary_ws.branch %}
               <div class="text-fg-muted">Branch: <span class="text-fg font-mono">{{ primary_ws.branch }}</span></div>
             {% endif %}
             {% set ws_path = primary_ws.resolved_path or primary_ws.worktree_path or primary_ws.source_path %}
             {% if ws_path %}
-              <code class="block break-all font-mono text-accent">{{ ws_path }}</code>
+              <code class="block break-all font-mono text-[11px] text-accent">{{ ws_path }}</code>
+            {% endif %}
+            {% if primary_ws.source_path and primary_ws.source_path != ws_path %}
+              <div class="text-fg-muted">Source: <code class="font-mono text-[11px] text-fg/80 break-all">{{ primary_ws.source_path }}</code></div>
             {% endif %}
             {% if primary_ws.state and primary_ws.state != 'active' %}
               <div class="text-fg-muted">State: <span class="text-fg">{{ primary_ws.state }}</span></div>
@@ -167,124 +184,105 @@
         {% else %}
           <code class="block break-all font-mono text-xs text-fg">—</code>
         {% endif %}
-      </div>
 
-      {% if existing_linked_workspaces %}
-        <div class="flex flex-col gap-1">
-          <span class="text-fg-muted text-xs uppercase tracking-wide">Linked workspaces</span>
-          <ul class="flex flex-col gap-1.5 text-xs">
-            {% for w in existing_linked_workspaces %}
-              <li class="rounded border border-border bg-bg-elev-2/40 p-2 space-y-1">
-                <div class="flex items-center gap-1.5">
-                  <span class="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-fg-muted">{{ w.kind }}</span>
-                  <span class="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-fg-muted">{{ w.access }}</span>
-                  {% if w.label %}<span class="text-fg-muted">{{ w.label }}</span>{% endif %}
-                </div>
-                {% if w.branch %}
-                  <div class="text-fg-muted">Branch: <span class="text-fg font-mono">{{ w.branch }}</span></div>
-                {% endif %}
-                <code class="block break-all font-mono text-fg">{{ w.source_path or w.resolved_path or '' }}</code>
-              </li>
-            {% endfor %}
-          </ul>
-        </div>
-      {% endif %}
+        {% if existing_linked_workspaces %}
+          <div class="flex flex-col gap-1">
+            <span class="text-[10px] uppercase tracking-wide text-fg-muted">Linked workspaces</span>
+            <ul class="flex flex-col gap-1.5 text-xs">
+              {% for w in existing_linked_workspaces %}
+                <li class="rounded border border-border bg-bg-elev-2/40 p-2 space-y-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-fg-muted">{{ w.kind }}</span>
+                    <span class="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-fg-muted">{{ w.access }}</span>
+                    {% if w.label %}<span class="text-fg-muted">{{ w.label }}</span>{% endif %}
+                  </div>
+                  {% if w.branch %}
+                    <div class="text-fg-muted">Branch: <span class="text-fg font-mono">{{ w.branch }}</span></div>
+                  {% endif %}
+                  <code class="block break-all font-mono text-fg">{{ w.source_path or w.resolved_path or '' }}</code>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
 
-      {% if existing_dirs %}
-        <div class="flex flex-col gap-1">
-          <span class="text-fg-muted text-xs uppercase tracking-wide">Additional dirs</span>
-          <ul class="flex flex-col gap-0.5 text-xs">
-            {% for d in existing_dirs %}
-              <li><code class="break-all font-mono text-fg">{{ d }}</code></li>
-            {% endfor %}
-          </ul>
-        </div>
-      {% endif %}
+        {% if existing_dirs %}
+          <div class="flex flex-col gap-0.5">
+            <span class="text-[10px] uppercase tracking-wide text-fg-muted">Extra dirs</span>
+            <ul class="flex flex-col gap-0.5 text-xs">
+              {% for d in existing_dirs %}
+                <li><code class="break-all font-mono text-fg">{{ d }}</code></li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+      {% endcall %}
 
-      {# --- Effective execution context (read-only) ----------------------- #
-       # The merged run context with provenance chips, resolved by the shared
-       # effective-config resolver and rendered with the same partial used on
-       # the ticket detail page and in the create/edit preview. Lazily loaded
-       # so the merge only runs when a ticket is actually selected. #}
-      <div class="flex flex-col gap-1">
-        <span class="text-fg-muted text-xs uppercase tracking-wide">Execution context</span>
-        <div data-sidebar-effective-config>
-          {% include "partials/effective_config.html" %}
-        </div>
-      </div>
-
-      {# Toolchain summary — compact provenance display for the sidebar view.
-         Shows which toolchain presets are active (inherited from project or
-         explicitly enabled/disabled on the ticket). Edit the ticket to change. #}
+      {# --- Toolchain (provenance) --------------------------------------- #
+         Which toolchain presets are active and where each comes from
+         (inherited from project / enabled on the ticket / disabled / a project
+         default still in force). The expanded tools + PATH these resolve to
+         live in the "Resolved execution context" below. #}
       {% set _tc_overrides = ticket.toolchain_overrides if is_edit and ticket.toolchain_overrides else {} %}
       {% set _tc_en = _tc_overrides.get('enable') or [] %}
       {% set _tc_dis = _tc_overrides.get('disable') or [] %}
       {% set _tc_extra = _tc_overrides.get('extra_paths') or [] %}
       {% set _tc_proj_defaults = ticket.project.default_toolchains if is_edit and ticket.project and ticket.project.default_toolchains else [] %}
       {% if _tc_en or _tc_dis or _tc_extra or _tc_proj_defaults %}
-        <div class="flex flex-col gap-1">
-          <span class="text-fg-muted text-xs uppercase tracking-wide">Toolchain</span>
-          <div class="space-y-1">
-            {% for name in _tc_en %}
-              {% if name in _tc_proj_defaults %}
-                <div class="flex items-center gap-1.5 text-xs">
-                  <span class="rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">Inherited</span>
-                  <code class="font-mono text-fg">{{ name }}</code>
-                </div>
-              {% else %}
-                <div class="flex items-center gap-1.5 text-xs">
-                  <span class="rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn">Enabled</span>
-                  <code class="font-mono text-fg">{{ name }}</code>
-                </div>
-              {% endif %}
+        {% call sb_section('Toolchain', 'Presets active for this run. Enable or disable whole presets by editing the ticket; the tool rules inside each preset come from the preset and the profile.') %}
+          {# Split: explicit ticket overrides get their own rows (the actionable
+             bits); everything merely inherited from the project collapses into
+             one quiet summary line so passive defaults don't each claim a loud
+             uppercase tag. #}
+          {% set _explicit_en = _tc_en | reject('in', _tc_proj_defaults) | list %}
+          {% set _inherited = _tc_proj_defaults | reject('in', _tc_dis) | list %}
+          <div class="space-y-1.5">
+            {% for name in _explicit_en %}
+              <div class="flex items-center gap-2 text-xs">
+                <code class="font-mono font-medium text-fg flex-1 min-w-0 truncate">{{ name }}</code>
+                <span class="nd-tc-tag text-warn">enabled</span>
+              </div>
             {% endfor %}
             {% for name in _tc_dis %}
-              <div class="flex items-center gap-1.5 text-xs">
-                <span class="rounded border border-danger/40 bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger">Disabled</span>
-                <code class="font-mono text-fg-muted">{{ name }}</code>
+              <div class="flex items-center gap-2 text-xs">
+                <code class="font-mono font-medium text-fg-muted flex-1 min-w-0 truncate">{{ name }}</code>
+                <span class="nd-tc-tag text-danger">disabled</span>
               </div>
             {% endfor %}
             {% for p in _tc_extra %}
-              <div class="flex items-center gap-1.5 text-xs">
-                <span class="rounded border border-border bg-bg-elev-2 px-1.5 py-0.5 text-[10px] font-medium text-fg-muted">Path</span>
-                <code class="font-mono text-fg">{{ p }}</code>
+              <div class="flex items-center gap-2 text-xs">
+                <code class="font-mono font-medium text-fg flex-1 min-w-0 truncate">{{ p }}</code>
+                <span class="nd-tc-tag text-fg-muted">extra path</span>
               </div>
             {% endfor %}
-            {# Project defaults that are not in the ticket's overrides at all
-               (neither enabled nor disabled) — they still apply at run time. #}
-            {% for name in _tc_proj_defaults %}
-              {% if name not in _tc_en and name not in _tc_dis %}
-                <div class="flex items-center gap-1.5 text-xs">
-                  <span class="rounded border border-border bg-bg-elev-2 px-1.5 py-0.5 text-[10px] font-medium text-fg-muted italic">Project default</span>
-                  <code class="font-mono text-fg-muted">{{ name }}</code>
-                </div>
-              {% endif %}
-            {% endfor %}
+            {% if _inherited %}
+              <p class="text-[11px] leading-snug text-fg-muted/70">
+                Inherits from project:
+                <span class="font-mono text-fg-muted">{{ _inherited | join(', ') }}</span>
+              </p>
+            {% endif %}
           </div>
-        </div>
+        {% endcall %}
       {% endif %}
 
-      {# --- Dependencies section ------------------------------------------- #}
-      <div id="dependency-section">
+      {# --- Dependencies ------------------------------------------------- #}
+      {% call sb_section('Dependencies', 'Other tickets this one waits on, or that wait on it. Blocking dependencies must finish before this ticket can run.') %}
         {% if is_edit %}
           {% set upstreams = deps_upstreams if deps_upstreams is defined else [] %}
           {% set downstreams = deps_downstreams if deps_downstreams is defined else [] %}
           {% include "partials/dependency_section.html" %}
         {% else %}
-          <span class="text-fg-muted text-xs uppercase tracking-wide">Dependencies</span>
           <p class="text-fg-muted/70 text-xs italic">Save ticket first to add dependencies.</p>
         {% endif %}
-      </div>
+      {% endcall %}
 
-      {# --- Run history -------------------------------------------------- #
-       # Compact list of the selected ticket's runs. The board sidebar has no
-       # transcript-panel swap target, so each row links to the ticket detail
-       # page (and exposes the worker-log download) rather than wiring an
-       # in-sidebar transcript swap. `runs` may be undefined when the partial
-       # is rendered outside a runs-aware handler — default to empty. #}
+      {# --- Runs --------------------------------------------------------- #
+         Compact list of the selected ticket's runs. The board sidebar has no
+         transcript-panel swap target, so each row links to the ticket detail
+         page (and exposes the worker-log download). `runs` may be undefined
+         when the partial is rendered outside a runs-aware handler. #}
       {% set sidebar_runs = runs if runs is defined and runs else [] %}
-      <div class="flex flex-col gap-1">
-        <span class="text-fg-muted text-xs uppercase tracking-wide">Runs</span>
+      {% call sb_section('Runs', 'Recent executions. Open the detail page for the full transcript.') %}
         {% if sidebar_runs %}
           <ul class="flex flex-col gap-1" data-sidebar-runs>
             {% for r in sidebar_runs %}
@@ -320,7 +318,25 @@
         {% else %}
           <p class="text-fg-muted/70 text-xs italic">no runs yet</p>
         {% endif %}
-      </div>
+      {% endcall %}
+
+      {# --- Resolved execution context (deep dive, collapsed) ------------- #
+         The fully merged run context (project / workspace / backend / tools /
+         network / PATH) after applying global, project, profile, and ticket
+         settings. This is the verbose view; it's collapsed by default so the
+         curated sections above stay scannable. The "Toolchain & PATH" group
+         inside it is hidden here (CSS) because the provenance Toolchain section
+         above already covers presets — that was the back-to-back duplicate. #}
+      <details class="nd-ts-details">
+        <summary class="nd-ts-summary">
+          <svg class="nd-ts-chevron" viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>
+          <span class="nd-ts-summary-label">Resolved execution context</span>
+          <span class="nd-ts-info" data-tooltip="Merged from global, project, profile, and ticket settings. Tool allow/deny rules (e.g. git push) come from the active toolchain preset, profile, or project defaults — change them there, not on the ticket." data-tip-align="start" tabindex="0" role="img" aria-label="About Resolved execution context"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.4v3.6M8 5.2v.02"/></svg></span>
+        </summary>
+        <div data-sidebar-effective-config>
+          {% include "partials/effective_config.html" %}
+        </div>
+      </details>
 
     </section>
   {% else %}

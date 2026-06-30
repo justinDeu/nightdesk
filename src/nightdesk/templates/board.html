@@ -4,79 +4,75 @@
 {% set _view = view | default('tickets') %}
 {% set _group = group | default('status') %}
 {% set _groupable = groupable | default(['status', 'label', 'project', 'priority']) %}
-<div class="flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
-  {% with sb_id='board-search',
-          sb_resource=('run' if _view == 'runs' else 'ticket'),
-          sb_query=query %}
-    {% include "partials/search_bar.html" %}
-  {% endwith %}
-
-  {# Display toolbar: one Display button opening the consolidated popover
-     (group-by buttons, within-column ordering, show/hide card properties).
-     Switching grouping still reloads the board grid: both the grid template
-     and the column set change, so a fragment swap can't express it. Hidden in
-     the runs view (display options apply to the kanban only). #}
-  {# Board|List view toggle — always present; links preserve current query
-     string. JS below also updates the list href after every syncUrl() call
-     so live filter changes are reflected without a reload. #}
-  {# Peer query string excludes `view`: the Board/List segment hrefs must be
-     correct pre-JS even when this page was loaded with ?view=runs. #}
+<div class="nd-board-shell flex min-h-0 flex-col gap-3" style="height: calc(100vh - 6rem);">
   {% set _peer_qs = request.query_params.multi_items() | rejectattr('0', 'equalto', 'view') | list | urlencode %}
   {% set _list_href = '/list' + ('?' + _peer_qs if _peer_qs else '') %}
-  <div id="nd-page-view-toggle" class="nd-view-toggle self-end" role="tablist" aria-label="Ticket view">
-    <a class="nd-view-btn" href="{{ '/?'+_peer_qs if _peer_qs else '/' }}"
-       aria-pressed="{{ 'true' if _view != 'runs' else 'false' }}"
-       data-view-target="board" data-tooltip="Board view">Board</a>
-    <a class="nd-view-btn" href="{{ _list_href }}" aria-pressed="false"
-       data-view-target="list" data-tooltip="List view">List</a>
-    <button type="button" class="nd-view-btn"
-            aria-pressed="{{ 'true' if _view == 'runs' else 'false' }}"
-            data-view-target="runs" data-tooltip="Runs view">Runs</button>
-  </div>
-
-  <div id="board-display-toolbar" class="flex items-center gap-2 text-xs"
-       {% if _view == 'runs' %}hidden{% endif %}>
-    <div class="relative">
-      <button type="button" id="nd-display-btn"
-              class="btn btn-ghost"
-              aria-expanded="false" aria-haspopup="true"
-              data-tooltip="Display options (Shift+V)">
-        Display
-      </button>
-      <div id="nd-display-popover" class="nd-display-popover" hidden>
-        <div class="nd-display-section">Group by</div>
-        <div class="px-2 pb-1">
-          <div id="board-group-bar" class="nd-view-toggle" role="tablist" aria-label="Group board by">
-            {% for g in _groupable %}
-              <button type="button" class="nd-view-btn" data-board-group="{{ g }}"
-                      aria-pressed="{{ 'true' if _group == g else 'false' }}">{{ g | capitalize }}</button>
-            {% endfor %}
-          </div>
-        </div>
-        <div class="nd-display-section">Order by</div>
-        <div class="nd-display-select-row">
-          <select id="nd-board-order" aria-label="Order cards within columns by">
-            {% for val, label in (order_options if order_options is defined else [('manual', 'Manual')]) %}
-              <option value="{{ val }}" {% if val == (order | default('manual')) %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="nd-display-section">Show on cards</div>
-        {% for key, label in (card_property_options if card_property_options is defined else []) %}
-          <label class="nd-display-prop-row">
-            <input type="checkbox" name="card-prop" value="{{ key }}"
-                   {% if show_props is not defined or key in show_props %}checked{% endif %}>
-            {{ label }}
-          </label>
-        {% endfor %}
-      </div>
+  {# One condensed toolbar row: view switcher + search (grows to fill, no longer
+     full width on its own line) + actions. The search bar's filter chips wrap
+     below it within its own column. JS updates the list href after every
+     syncUrl() so live filter changes carry across the view switch. #}
+  <div class="nd-ticket-toolbar">
+    <div id="nd-page-view-toggle" class="nd-view-toggle" role="tablist" aria-label="Ticket view">
+      <a class="nd-view-btn" href="{{ '/?'+_peer_qs if _peer_qs else '/' }}"
+         aria-pressed="{{ 'true' if _view != 'runs' else 'false' }}"
+         data-view-target="board" data-tooltip="Board view">Board</a>
+      <a class="nd-view-btn" href="{{ _list_href }}" aria-pressed="false"
+         data-view-target="list" data-tooltip="List view">List</a>
+      <button type="button" class="nd-view-btn"
+              aria-pressed="{{ 'true' if _view == 'runs' else 'false' }}"
+              data-view-target="runs" data-tooltip="Runs view">Runs</button>
     </div>
-    <button type="button"
-            class="btn btn-ghost ml-auto"
-            onclick="window.ndOpenSaveViewDialog && window.ndOpenSaveViewDialog('board')"
-            data-tooltip="Save current filters as a named view">
-      Save view
-    </button>
+
+    {% with sb_id='board-search',
+            sb_resource=('run' if _view == 'runs' else 'ticket'),
+            sb_query=query %}
+      {% include "partials/search_bar.html" %}
+    {% endwith %}
+
+    <div id="board-display-toolbar" class="nd-ticket-actions flex items-center gap-2 text-xs"
+         {% if _view == 'runs' %}hidden{% endif %}>
+      <div class="relative">
+        <button type="button" id="nd-display-btn"
+                class="btn btn-ghost"
+                aria-expanded="false" aria-haspopup="true"
+                data-tooltip="Display options (Shift+V)">
+          Display
+        </button>
+        <div id="nd-display-popover" class="nd-display-popover" hidden>
+          <div class="nd-display-section">Group by</div>
+          <div class="px-2 pb-1">
+            <div id="board-group-bar" class="nd-view-toggle" role="tablist" aria-label="Group board by">
+              {% for g in _groupable %}
+                <button type="button" class="nd-view-btn" data-board-group="{{ g }}"
+                        aria-pressed="{{ 'true' if _group == g else 'false' }}">{{ g | capitalize }}</button>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="nd-display-section">Order by</div>
+          <div class="nd-display-select-row">
+            <select id="nd-board-order" aria-label="Order cards within columns by">
+              {% for val, label in (order_options if order_options is defined else [('manual', 'Manual')]) %}
+                <option value="{{ val }}" {% if val == (order | default('manual')) %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="nd-display-section">Show on cards</div>
+          {% for key, label in (card_property_options if card_property_options is defined else []) %}
+            <label class="nd-display-prop-row">
+              <input type="checkbox" name="card-prop" value="{{ key }}"
+                     {% if show_props is not defined or key in show_props %}checked{% endif %}>
+              {{ label }}
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <button type="button"
+              class="btn btn-ghost"
+              onclick="window.ndOpenSaveViewDialog && window.ndOpenSaveViewDialog('board')"
+              data-tooltip="Save current filters as a named view">
+        Save view
+      </button>
+    </div>
   </div>
 
   {% if _group == 'status' %}
@@ -86,7 +82,7 @@
   <div
     {% if _view == 'runs' %}hidden{% endif %}
     id="board-grid"
-    class="grid flex-1 min-h-0 overflow-hidden gap-3 grid-cols-[1fr_1fr_1fr_1fr_480px] grid-rows-1"
+    class="grid flex-1 min-h-0 overflow-hidden gap-3 grid-cols-[1fr_1fr_1fr_1fr_minmax(22.5rem,30rem)] grid-rows-1"
   >
     {% for col in columns %}
       {% set column = col %}
@@ -111,7 +107,7 @@
         {% include "partials/board_column.html" %}
       {% endfor %}
     </div>
-    <div class="w-[480px] shrink-0 min-h-0">
+    <div class="w-[clamp(22.5rem,32vw,30rem)] shrink-0 min-h-0">
       {% include "partials/sidebar.html" %}
     </div>
   </div>
