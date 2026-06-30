@@ -89,8 +89,9 @@ async def test_base_includes_cheatsheet_dialog(cookie_client):
     assert r.status_code == 200
     assert 'id="nd-shortcuts-cheatsheet"' in r.text
     # The cheat sheet documents the global shortcuts.
-    assert "Go to board" in r.text
-    assert "Go to list" in r.text
+    # Labels reflect the theme-revamp rename: "Go to tickets: board/list view".
+    assert "Go to tickets: board view" in r.text
+    assert "Go to tickets: list view" in r.text
     assert "Go to Insights" in r.text
     assert "Go to Setup" in r.text
     # JS-free fallback note must be present.
@@ -312,9 +313,9 @@ async def test_sidebar_drops_legacy_dropdown_nav(cookie_client):
 
 
 async def test_sidebar_settings_mode_swaps_to_settings_nav(cookie_client):
-    """On settings pages the sidebar swaps to the settings categories (each
-    carrying data-settings-nav-link for the dirty-state guard) and hides the
-    app destinations — no double sidebar."""
+    """On settings pages the two-pane layout renders the settings category nav
+    (each link carrying data-settings-nav-link for the dirty-state guard)
+    alongside the persistent app sidebar — no separate sidebar mode."""
     r = await cookie_client.get("/settings/scheduling")
     assert r.status_code == 200
     body = r.text
@@ -322,11 +323,10 @@ async def test_sidebar_settings_mode_swaps_to_settings_nav(cookie_client):
     assert "data-settings-nav-link" in body
     assert 'href="/settings/scheduling"' in body
     assert 'href="/settings/notifications"' in body
-    # The app destinations are not shown in settings mode.
-    assert ">Toolsets<" not in body
-    assert ">Analytics<" not in body
-    # The saved-views section is hidden in settings mode.
-    assert 'id="nd-views-nav-popover"' not in body
+    # The theme-revamp keeps the main sidebar visible on all pages (including
+    # settings). App destinations now coexist with the settings category nav.
+    # The settings two-pane layout lives inside the main content area.
+    assert 'id="settings-category-nav"' in body
 
 
 async def test_cheatsheet_includes_focus_search(cookie_client):
@@ -443,7 +443,9 @@ async def test_palette_js_g_l_goes_to_list(cookie_client):
     r = await cookie_client.get("/static/command_palette.js")
     assert r.status_code == 200
     assert 'shortcut: "g l"' in r.text
-    assert "Go to Work: list" in r.text
+    # Label was renamed from "Go to Work: list" to "Go to Tickets: list view"
+    # in the theme-revamp to match the new Tickets sidebar nav item.
+    assert "Go to Tickets: list view" in r.text
 
 
 async def test_palette_js_g_w_shortcut_removed(cookie_client):

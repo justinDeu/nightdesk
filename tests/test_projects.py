@@ -355,7 +355,8 @@ async def test_projects_page_creates_project(app, session):
         assert 'name="slug"' not in page.text
         assert 'data-slug-preview' in page.text
         assert 'name="color"' not in page.text
-        assert "focus:bg-bg-elev-2" in page.text
+        # theme-revamp: form inputs use the .field primitive + caret-accent token.
+        assert "caret-accent" in page.text
         assert 'name="default_workspace_mode"' in page.text
         assert 'data-worktree-template-fields' in page.text
         assert 'data-linked-workspaces' in page.text
@@ -464,11 +465,13 @@ async def test_projects_page_renders_operational_workspace(app, session):
     assert "workspace-running" in body
     assert "workspace-review" in body
     assert f'/?project={project.slug}' in body
-    assert f'/?project={project.slug}&group=label' in body
-    assert f'/list?project={project.slug}' in body
-    assert f'/inbox?project={project.slug}' in body
-    assert f'/archive?project={project.slug}' in body
+    # theme-revamp: quick-link shortcuts (group=label, /list, /inbox, /archive)
+    # were removed in favour of the tab-based project workspace. The "Open board"
+    # link still carries the project filter; other views are reached via tabs.
     assert "Project settings" in body
+    # The new tab bar (Overview / Tickets / Activity) replaced the link strip.
+    assert 'data-proj-tab-btn="overview"' in body
+    assert 'data-proj-tab-btn="tickets"' in body
 
 
 async def test_projects_page_edits_existing_project(app, session):

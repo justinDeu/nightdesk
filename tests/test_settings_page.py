@@ -399,12 +399,13 @@ async def test_toolsets_page_renders_preset_cards(cookie_client, session):
     r = await cookie_client.get("/toolsets")
     assert r.status_code == 200
     body = r.text
-    assert 'data-preset-card' in body
-    assert 'name="preset_name"' in body
-    assert 'name="preset_paths_json"' in body
+    # theme-revamp: the card-grid form was replaced by a two-pane layout.
+    # The left rail lists presets with data-toolset-row; the right pane
+    # (toolset_pane.html) shows detail for a selected preset.
+    assert 'data-toolset-row' in body
     assert 'go-user-tools' in body
+    # Custom preset left-rail entry shows first path inline.
     assert '~/go/bin' in body
-    assert '/opt/go/bin' in body
 
 
 async def test_settings_external_tools_redirects_to_toolsets(cookie_client, session):
@@ -423,11 +424,15 @@ async def test_toolsets_page_lists_builtin_presets(cookie_client, session):
     r = await cookie_client.get("/toolsets")
     assert r.status_code == 200
     body = r.text
-    assert "Built-in presets" in body
+    # theme-revamp: the heading "Built-in presets" was removed; the left rail
+    # shows each preset with a "built-in" badge and its key + path count.
+    # Actual bin paths only appear in the detail pane when a preset is selected.
+    assert "built-in" in body
     assert "user-python-tools" in body
-    assert "~/.local/bin" in body
     assert "rust-user-tools" in body
-    assert "~/.cargo/bin" in body
+    # Built-in labels are shown (label comes from toolchain_options metadata).
+    assert "User local tools" in body
+    assert "Cargo-installed tools" in body
 
 
 async def test_toolsets_post_persists_presets_from_card_form(cookie_client, session):
@@ -436,17 +441,31 @@ async def test_toolsets_post_persists_presets_from_card_form(cookie_client, sess
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
+    # theme-revamp: the batch card form at /toolsets was replaced by a single-
+    # preset upsert at /toolsets/preset (one call per preset, redirects 303).
     r = await cookie_client.post(
-        "/toolsets",
+        "/toolsets/preset",
         data={
-            "preset_name": ["go-user-tools", "node-user-tools"],
-            "preset_paths_json": [
-                json.dumps(["~/go/bin", "/opt/go/bin"]),
-                json.dumps(["~/.npm-global/bin"]),
-            ],
+            "preset_name": "go-user-tools",
+            "preset_paths_json": json.dumps(["~/go/bin", "/opt/go/bin"]),
         },
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 303, r.text
+    session.expire_all()
+    cfg = session.get(ConfigRow, 1)
+    assert cfg.toolchain_presets == {
+        "go-user-tools": ["~/go/bin", "/opt/go/bin"],
+    }
+
+    # A second call adds without overwriting the first.
+    r = await cookie_client.post(
+        "/toolsets/preset",
+        data={
+            "preset_name": "node-user-tools",
+            "preset_paths_json": json.dumps(["~/.npm-global/bin"]),
+        },
+    )
+    assert r.status_code == 303, r.text
     session.expire_all()
     cfg = session.get(ConfigRow, 1)
     assert cfg.toolchain_presets == {
@@ -454,34 +473,30 @@ async def test_toolsets_post_persists_presets_from_card_form(cookie_client, sess
         "node-user-tools": ["~/.npm-global/bin"],
     }
 
-    # Submitting with no preset cards clears the dict.
-    r = await cookie_client.post("/toolsets", data={})
-    assert r.status_code == 200
-    session.expire_all()
-    cfg = session.get(ConfigRow, 1)
-    assert cfg.toolchain_presets == {}
-
 
 async def test_toolsets_post_rejects_invalid_preset_paths_json(cookie_client, session):
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
+    # theme-revamp: validation endpoint is now /toolsets/preset (single upsert).
     r = await cookie_client.post(
-        "/toolsets",
+        "/toolsets/preset",
         data={
-            "preset_name": ["broken"],
-            "preset_paths_json": ["{not json"],
+            "preset_name": "broken",
+            "preset_paths_json": "{not json",
         },
     )
     assert r.status_code == 422
-    assert "broken" in r.text
+    # The single-preset endpoint returns a FastAPI JSON error with the parse
+    # description; the preset name is not echoed back in the detail field.
+    assert "json" in r.text.lower()
 
     # Non-list payload is also rejected.
     r = await cookie_client.post(
-        "/toolsets",
+        "/toolsets/preset",
         data={
-            "preset_name": ["shape"],
-            "preset_paths_json": ['"a string"'],
+            "preset_name": "shape",
+            "preset_paths_json": '"a string"',
         },
     )
     assert r.status_code == 422
@@ -511,11 +526,12 @@ async def test_toolsets_post_rejects_builtin_preset_name(cookie_client, session)
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
+    # theme-revamp: validation endpoint is now /toolsets/preset.
     r = await cookie_client.post(
-        "/toolsets",
+        "/toolsets/preset",
         data={
-            "preset_name": ["user-python-tools"],
-            "preset_paths_json": [json.dumps(["~/x/bin"])],
+            "preset_name": "user-python-tools",
+            "preset_paths_json": json.dumps(["~/x/bin"]),
         },
     )
     assert r.status_code == 422
@@ -528,11 +544,22 @@ async def test_toolsets_post_rejects_duplicate_preset_name(cookie_client, sessio
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
+    # theme-revamp: duplicates are detected server-side. Create the first entry,
+    # then attempt a second POST with the same name (no original_name edit token).
     r = await cookie_client.post(
-        "/toolsets",
+        "/toolsets/preset",
         data={
-            "preset_name": ["dupe", "dupe"],
-            "preset_paths_json": [json.dumps(["~/a/bin"]), json.dumps(["~/b/bin"])],
+            "preset_name": "dupe",
+            "preset_paths_json": json.dumps(["~/a/bin"]),
+        },
+    )
+    assert r.status_code == 303
+
+    r = await cookie_client.post(
+        "/toolsets/preset",
+        data={
+            "preset_name": "dupe",
+            "preset_paths_json": json.dumps(["~/b/bin"]),
         },
     )
     assert r.status_code == 422
@@ -546,12 +573,13 @@ async def test_toolsets_post_rejects_protected_path(cookie_client, session):
     session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
     session.commit()
 
+    # theme-revamp: validation endpoint is now /toolsets/preset.
     protected = os.path.expanduser("~/.claude")
     r = await cookie_client.post(
-        "/toolsets",
+        "/toolsets/preset",
         data={
-            "preset_name": ["snoop"],
-            "preset_paths_json": [json.dumps([protected])],
+            "preset_name": "snoop",
+            "preset_paths_json": json.dumps([protected]),
         },
     )
     assert r.status_code == 422
@@ -568,17 +596,27 @@ async def test_toolsets_post_skips_unnamed_preset_cards(cookie_client, session):
     ))
     session.commit()
 
+    # theme-revamp: the batch card form was replaced by /toolsets/preset (single
+    # upsert). An empty preset_name is now an explicit 422 rather than a silent
+    # skip. A valid named POST is additive — existing presets are kept.
     r = await cookie_client.post(
-        "/toolsets",
+        "/toolsets/preset",
         data={
-            "preset_name": ["", "kept"],
-            "preset_paths_json": [
-                json.dumps(["~/orphan/bin"]),
-                json.dumps(["~/kept/bin"]),
-            ],
+            "preset_name": "",
+            "preset_paths_json": json.dumps(["~/orphan/bin"]),
         },
     )
-    assert r.status_code == 200
+    assert r.status_code == 422
+
+    # A named preset saves correctly and does not clear pre-existing ones.
+    r = await cookie_client.post(
+        "/toolsets/preset",
+        data={
+            "preset_name": "kept",
+            "preset_paths_json": json.dumps(["~/kept/bin"]),
+        },
+    )
+    assert r.status_code == 303
     session.expire_all()
     cfg = session.get(ConfigRow, 1)
-    assert cfg.toolchain_presets == {"kept": ["~/kept/bin"]}
+    assert cfg.toolchain_presets == {"stale": ["~/old"], "kept": ["~/kept/bin"]}
