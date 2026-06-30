@@ -574,6 +574,13 @@ async def test_detail_page_archive_button_uses_cookie_auth_route(
     # Navigation is success-gated, not unconditional.
     assert "if (event.detail.successful) window.location='/archive'" in body
     assert "hx-on::after-request=\"window.location='/'\"" not in body
+    # The hx-on handler must use htmx's documented double-colon namespaced-event
+    # shorthand: hx-on::after-request listens for "htmx:after-request".
+    # hx-on::htmx:after-request expands to a listener for the never-emitted
+    # "htmx:htmx:after-request", so the redirect would be dead. Guard the
+    # attribute name itself, not just the inner JS substring.
+    assert "hx-on::after-request=\"if (event.detail.successful)" in body
+    assert "hx-on::htmx:after-request" not in body
 
 
 async def test_detail_page_delete_button_uses_cookie_auth_route(

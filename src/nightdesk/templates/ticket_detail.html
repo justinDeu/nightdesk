@@ -108,7 +108,7 @@
           <button type="button"
                   hx-post="/tickets/{{ ticket.id }}/archive"
                   hx-swap="none"
-                  hx-on::htmx:after-request="if (event.detail.successful) window.location='/archive'"
+                  hx-on::after-request="if (event.detail.successful) window.location='/archive'"
                   class="border border-border text-fg-muted px-3 py-1 rounded text-sm">Archive</button>
         {% endif %}
         {% if ticket.status != 'running' %}
