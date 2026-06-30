@@ -1,9 +1,76 @@
 {% extends "base.html" %}
 {% set title = "Toolsets" %}
 {% set active_page = "toolsets" %}
-
 {% block body %}
-<div class="mx-auto max-w-5xl">
-  {% include "partials/settings_external_tools_pane.html" %}
+
+{% if error %}
+  <div class="mb-4 rounded border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{{ error }}</div>
+{% endif %}
+
+<div class="nd-twopane flex gap-0 h-[calc(100vh-2rem)] overflow-hidden">
+
+  {# ---------- Left rail: toolset list ------------------------------------- #}
+  <aside class="nd-list-pane">
+    <div class="nd-list-header">
+      <h1 class="text-sm font-semibold text-fg">Toolsets</h1>
+      <a href="/toolsets/new"
+         class="btn btn-primary"
+         hx-get="/toolsets/new" hx-target="#toolset-pane" hx-swap="outerHTML"
+         hx-push-url="true"
+         onclick="document.querySelectorAll('[data-toolset-row]').forEach(function(e){e.classList.remove('bg-bg-elev-2');e.style.boxShadow=''})">
+        + New
+      </a>
+    </div>
+
+    <nav class="nd-list-nav divide-y divide-border" id="toolset-list">
+      {# Built-in presets first #}
+      {% for p in builtin_presets %}
+        <a href="/toolsets/pane/{{ p.name }}"
+           data-toolset-row="{{ p.name }}"
+           hx-get="/toolsets/pane/{{ p.name }}"
+           hx-target="#toolset-pane"
+           hx-swap="outerHTML"
+           hx-push-url="true"
+           onclick="document.querySelectorAll('[data-toolset-row]').forEach(function(e){e.classList.remove('bg-bg-elev-2');e.style.boxShadow=''});this.classList.add('bg-bg-elev-2');this.style.boxShadow='inset 2px 0 0 var(--color-accent)'"
+           {% if selected_name == p.name %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}
+           class="nd-pane-row {% if selected_name == p.name %}bg-bg-elev-2{% endif %}">
+          <span class="flex min-w-0 items-center gap-2">
+            <span class="font-medium text-fg truncate">{{ p.label }}</span>
+            <span class="rounded border border-border px-1 py-0.5 text-[10px] text-fg-muted shrink-0">built-in</span>
+          </span>
+          <span class="text-[11px] text-fg-muted font-mono truncate">{{ p.name }} · {{ p.paths | length }} path{{ '' if p.paths | length == 1 else 's' }}</span>
+        </a>
+      {% endfor %}
+
+      {# Custom presets #}
+      {% for p in custom_presets %}
+        <a href="/toolsets/pane/{{ p.name }}"
+           data-toolset-row="{{ p.name }}"
+           hx-get="/toolsets/pane/{{ p.name }}"
+           hx-target="#toolset-pane"
+           hx-swap="outerHTML"
+           hx-push-url="true"
+           onclick="document.querySelectorAll('[data-toolset-row]').forEach(function(e){e.classList.remove('bg-bg-elev-2');e.style.boxShadow=''});this.classList.add('bg-bg-elev-2');this.style.boxShadow='inset 2px 0 0 var(--color-accent)'"
+           {% if selected_name == p.name %}style="box-shadow: inset 2px 0 0 var(--color-accent);"{% endif %}
+           class="nd-pane-row {% if selected_name == p.name %}bg-bg-elev-2{% endif %}">
+          <span class="font-medium text-fg truncate">{{ p.name }}</span>
+          <span class="text-[11px] text-fg-muted truncate">
+            {%- if p.paths -%}
+              {{ p.paths[0] }}{% if p.paths | length > 1 %} +{{ p.paths | length - 1 }} more{% endif %}
+            {%- else -%}no paths{%- endif -%}
+          </span>
+        </a>
+      {% endfor %}
+
+      {% if not builtin_presets and not custom_presets %}
+        <div class="px-3 py-4 text-xs text-fg-muted">No toolsets defined.</div>
+      {% endif %}
+    </nav>
+  </aside>
+
+  {# ---------- Right pane: detail / edit / new ----------------------------- #}
+  {% include "partials/toolset_pane.html" %}
+
 </div>
+
 {% endblock %}

@@ -12,19 +12,19 @@
   <label class="flex flex-col gap-1 text-sm">
     <span class="text-fg-muted text-xs uppercase tracking-wide">Title</span>
     <input type="text" name="title" required value="{{ job.title if job else '' }}"
-           class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none" />
+           class="field" />
   </label>
 
   <label class="flex flex-col gap-1 text-sm">
     <span class="text-fg-muted text-xs uppercase tracking-wide">Prompt</span>
     <textarea name="prompt" rows="8"
-              class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none">{{ job.prompt if job else '' }}</textarea>
+              class="field font-mono text-xs">{{ job.prompt if job else '' }}</textarea>
   </label>
 
   <label class="flex flex-col gap-1 text-sm">
     <span class="text-fg-muted text-xs uppercase tracking-wide">Profile</span>
     <select name="profile_id" required
-            class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
+            class="field">
       {% for p in profiles %}
         <option value="{{ p.id }}" {% if job and job.profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
       {% endfor %}
@@ -54,17 +54,17 @@
 
       <div data-fields="minutes" hidden class="flex items-center gap-2 text-sm">
         every <input type="number" data-f="minutes" min="1" max="59" value="15"
-                     class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> minutes
+                     class="field w-16 font-mono" /> minutes
       </div>
       <div data-fields="hourly" hidden class="flex items-center gap-2 text-sm">
         every <input type="number" data-f="hours" min="1" max="23" value="1"
-                     class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> hours, at minute
+                     class="field w-16 font-mono" /> hours, at minute
         <input type="number" data-f="atMinute" min="0" max="59" value="0"
-               class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+               class="field w-16 font-mono" />
       </div>
       <div data-fields="daily" hidden class="flex items-center gap-2 text-sm">
         at <input type="time" data-f="time"
-                  class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+                  class="field font-mono" />
       </div>
       <div data-fields="weekly" hidden class="flex flex-col gap-2 text-sm">
         <div class="flex flex-wrap gap-1">
@@ -74,14 +74,14 @@
         </div>
         <div class="flex items-center gap-2">at
           <input type="time" data-f="time"
-                 class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+                 class="field font-mono" />
         </div>
       </div>
       <div data-fields="monthly" hidden class="flex items-center gap-2 text-sm">
         on day <input type="number" data-f="dom" min="1" max="31" value="1"
-                      class="w-16 px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" /> at
+                      class="field w-16 font-mono" /> at
         <input type="time" data-f="time"
-               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+               class="field font-mono" />
       </div>
 
       <div data-cron-description class="text-xs text-fg"></div>
@@ -91,7 +91,7 @@
         <summary class="cursor-pointer text-fg-muted select-none">Advanced (raw cron)</summary>
         <input type="text" name="schedule" data-cron-raw required value="{{ job.schedule if job else '' }}"
                placeholder="*/15 * * * *  (min hour dom month dow)"
-               class="mt-1 w-full px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+               class="field mt-1 w-full font-mono" />
       </details>
     </div>
 
@@ -100,7 +100,7 @@
       {# Full IANA list. New jobs carry data-tz-auto so the builder JS preselects
          the browser zone; editing keeps the job's saved zone. #}
       <select name="timezone" {% if not job %}data-tz-auto{% endif %}
-              class="rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+              class="field text-xs font-mono">
         {% set current_tz = job.timezone if job else 'UTC' %}
         {% for tz in timezones %}
           <option value="{{ tz }}" {% if tz == current_tz %}selected{% endif %}>{{ tz }}</option>
@@ -148,7 +148,7 @@
                onfocus="window.ndPathSuggest && window.ndPathSuggest(this, 'cron-source-path-suggest')"
                onblur="window.ndPathSuggestClose && window.ndPathSuggestClose('cron-source-path-suggest')"
                onkeydown="window.ndPathSuggestKey && window.ndPathSuggestKey(event, this, 'cron-source-path-suggest')"
-               class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+               class="field w-full text-xs font-mono" />
         <div id="cron-source-path-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
       </div>
       <div class="grid grid-cols-2 gap-2">
@@ -188,12 +188,12 @@
                 class="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-border text-[9px] font-semibold leading-none text-fg-muted normal-case hover:border-accent hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">?</span>
         </span>
         <input type="number" name="priority" value="{{ job.priority if job else 0 }}"
-               class="px-2 py-1.5 bg-bg border border-border rounded text-fg font-mono text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+               class="field font-mono text-xs" />
       </label>
       <label class="flex flex-col gap-1 text-sm">
         <span class="text-fg-muted text-[11px] uppercase tracking-wide">Overlap</span>
         <select name="overlap_policy"
-                class="px-2 py-1.5 bg-bg border border-border rounded text-fg text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+                class="field text-xs">
           {% set op = job.overlap_policy if job else 'skip_if_active' %}
           <option value="skip_if_active" {% if op == 'skip_if_active' %}selected{% endif %}>skip if previous still active</option>
           <option value="always" {% if op == 'always' %}selected{% endif %}>always fire</option>

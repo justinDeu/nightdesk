@@ -15,7 +15,6 @@ Additional coverage for this ticket (palette context + shortcut hints):
 from __future__ import annotations
 
 import shutil
-import re
 from pathlib import Path
 
 import pytest
@@ -258,44 +257,76 @@ async def test_cheatsheet_includes_view_section(cookie_client):
     assert "View" in r.text or "Display" in r.text or "view" in r.text
 
 
-async def test_primary_nav_collapses_to_ia_groups(cookie_client):
-    """The header exposes Work, Insights, and Setup as top-level nav."""
+async def test_sidebar_lists_every_destination(cookie_client):
+    """The persistent sidebar shows every app destination at once — no
+    dropdowns to hide pages behind. The Inbox badge + dot wraps and the saved-
+    views container keep their contract ids, and the create-ticket button and
+    palette-search affordance are wired."""
     r = await cookie_client.get("/")
     assert r.status_code == 200
+    body = r.text
 
-    nav_html = r.text.split('<nav class="flex items-center gap-1 text-sm" aria-label="Primary">', 1)[1]
-    nav_html = nav_html.split("</nav>", 1)[0]
+    assert 'id="nd-sidebar"' in body
+    # Every destination is a visible label (no nested dropdown).
+    for label in ("Inbox", "Board", "List", "Archive", "Projects",
+                  "Scheduled", "Analytics", "Profiles", "Toolsets", "Settings"):
+        assert ">" + label + "<" in body
+    # Inbox unread indicators: badge chip (poll) + corner dot (OOB target).
+    assert 'id="nd-inbox-badge-wrap"' in body
+    assert 'hx-get="/header/inbox-badge"' in body
+    assert 'id="nd-inbox-dot-wrap"' in body
+    # Saved-views container keeps its hard-contract id.
+    assert 'id="nd-views-nav-popover"' in body
+    assert 'hx-get="/views/menu"' in body
+    # Create-ticket button + palette search affordance.
+    assert "ndOpenCreateTicket" in body
+    assert "ndOpenPalette" in body
+    # Bottom status cluster keeps its live elements + polling.
+    assert 'id="worker-pill"' in body
+    assert 'hx-get="/header/worker-pill"' in body
+    assert 'id="spend-chip"' in body
 
-    summary_labels = re.findall(r"<summary[^>]*>\s*<span>([^<]+)</span>", nav_html, re.S)
-    assert summary_labels == ["Work", "Insights", "Setup", "Views"]
-    assert ">Board<" in nav_html
-    assert ">Projects<" in nav_html
-    assert ">Inbox<" in nav_html
-    assert ">Scheduled<" in nav_html
-    assert ">Analytics<" in nav_html
-    assert ">Profiles<" in nav_html
-    assert ">Toolsets<" in nav_html
-    assert ">External tools<" not in nav_html
-    assert nav_html.index(">Projects<") < nav_html.index(">List<")
-    assert '<button type="button"' in nav_html
 
-
-async def test_primary_nav_uses_hover_open_menus(cookie_client):
+async def test_sidebar_collapse_controls_present(cookie_client):
+    """The rail collapses to icons: a toggle button calls ndToggleSidebar, and
+    the pre-paint script reads/writes the persisted localStorage key."""
     r = await cookie_client.get("/")
     assert r.status_code == 200
-    assert "pointerenter" in r.text
-    assert "openMenu(menu)" in r.text
-    assert "ev.preventDefault()" in r.text
-    assert "1700" not in r.text
+    body = r.text
+    assert 'class="nd-sb-toggle"' in body
+    assert "ndToggleSidebar" in body
+    assert "nd-sidebar-collapsed" in body  # localStorage key, pre-paint script
 
 
-async def test_primary_nav_does_not_expose_legacy_labels_as_top_level(cookie_client):
-    """Legacy destinations stay in groups, not as first-level header links."""
+async def test_sidebar_drops_legacy_dropdown_nav(cookie_client):
+    """The retired dropdown nav markup is gone, and app pages show app nav
+    rather than the settings categories."""
     r = await cookie_client.get("/")
     assert r.status_code == 200
+    body = r.text
+    assert "nd-nav-menu" not in body
+    assert "nd-nav-trigger" not in body
+    assert "nd-nav-chevron" not in body
+    # App mode never renders the settings dirty-state links.
+    assert "data-settings-nav-link" not in body
 
-    summaries = re.findall(r"<summary[^>]*>\s*<span>([^<]+)</span>", r.text, re.S)
-    assert summaries == ["Work", "Insights", "Setup", "Views"]
+
+async def test_sidebar_settings_mode_swaps_to_settings_nav(cookie_client):
+    """On settings pages the sidebar swaps to the settings categories (each
+    carrying data-settings-nav-link for the dirty-state guard) and hides the
+    app destinations — no double sidebar."""
+    r = await cookie_client.get("/settings/scheduling")
+    assert r.status_code == 200
+    body = r.text
+    assert 'id="nd-sidebar"' in body
+    assert "data-settings-nav-link" in body
+    assert 'href="/settings/scheduling"' in body
+    assert 'href="/settings/notifications"' in body
+    # The app destinations are not shown in settings mode.
+    assert ">Toolsets<" not in body
+    assert ">Analytics<" not in body
+    # The saved-views section is hidden in settings mode.
+    assert 'id="nd-views-nav-popover"' not in body
 
 
 async def test_cheatsheet_includes_focus_search(cookie_client):

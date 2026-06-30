@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, joinedload
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import ConfigRow, Run, ScheduleWindow, Ticket, WorkerHeartbeat
 from nightdesk.domain.analytics import compute_spend_status
+from nightdesk.domain.labels import list_labels
 from nightdesk.domain.projects import list_projects
 from nightdesk.domain.query import parse_query, search_tickets, suggest_values
 from nightdesk.domain.search import hit_from_ticket
@@ -253,5 +254,15 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             )
             parts.append(f'<option value="{p.id}">{name}</option>')
         return HTMLResponse("\n".join(parts))
+
+    @router.get("/header/label-candidates", dependencies=[auth])
+    async def header_label_candidates(session: Session = Depends(get_session)):
+        """Label JSON for the quick-capture dialog picker.
+
+        Fetched lazily on first open so base.html carries no per-page label
+        query. Returns the same shape as data-picker-candidates script tags.
+        """
+        labels = list_labels(session)
+        return [{"id": lbl.id, "name": lbl.name, "color": lbl.color} for lbl in labels]
 
     return router

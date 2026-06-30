@@ -63,10 +63,54 @@
 
   // ---- visual ------------------------------------------------------------
 
+  // Stamp selection state directly onto nodes in an incoming htmx fragment
+  // before they are inserted into the DOM.  Called from oobBeforeSwap (and
+  // beforeSwap for non-OOB card-container swaps).  htmx 2.0.3 exposes
+  // event.detail.fragment on oobBeforeSwap; beforeSwap does not carry a
+  // fragment, so that call is a no-op — the afterSwap safety net picks it up.
+  //
+  // Pre-stamping is essential because the card <li> elements carry
+  // `transition-colors` (Tailwind v4, which includes `outline-color`).  If
+  // nodes arrive in the DOM without the class, the browser starts a 150 ms
+  // CSS outline-fade even though the class is added synchronously in
+  // oobAfterSwap.  With the class already present, the browser establishes
+  // the selected visual state as the element's initial state — no transition
+  // fires.
+  function stampFragment(fragment) {
+    if (!fragment) return;
+    var nodes = [];
+    if (fragment.getAttribute && fragment.getAttribute("data-ticket-id")) {
+      nodes.push(fragment);
+    }
+    if (fragment.querySelectorAll) {
+      fragment.querySelectorAll("[data-ticket-id]").forEach(function (n) {
+        nodes.push(n);
+      });
+    }
+    nodes.forEach(function (node) {
+      if (selected.has(node.getAttribute("data-ticket-id"))) {
+        node.classList.add("nd-bulk-selected");
+        node.setAttribute("data-nd-bulk-selected", "");
+      }
+    });
+  }
+
   function applyVisual() {
     allCards().forEach(function (card) {
       var on = selected.has(card.getAttribute("data-ticket-id"));
-      card.classList.toggle("nd-bulk-selected", on);
+      if (on && !card.classList.contains("nd-bulk-selected")) {
+        // Fresh node from a non-OOB swap (the list page's 4 s innerHTML
+        // poll) that the pre-stamp couldn't reach: htmx forces a style
+        // recalc mid-swap, so adding the class now would animate the
+        // card's `transition-colors`.  Suspend transitions, apply, reflow
+        // to commit the selected state, then restore.
+        card.style.transition = "none";
+        card.classList.add("nd-bulk-selected");
+        void card.offsetWidth;
+        card.style.transition = "";
+      } else {
+        card.classList.toggle("nd-bulk-selected", on);
+      }
       if (on) card.setAttribute("data-nd-bulk-selected", "");
       else card.removeAttribute("data-nd-bulk-selected");
     });
@@ -665,9 +709,19 @@
   function init() {
     wireBar();
     sync();
-    // Re-apply the selection highlight after HTMX swaps replace cards (the 3s
-    // column poll OOB-swaps every <li>, dropping the class). The Set is keyed
-    // by ticket id so selection survives by id.
+    // Pre-stamp selection state onto incoming fragments BEFORE they hit the DOM.
+    // oobBeforeSwap (htmx 2.0.3) exposes event.detail.fragment for OOB swaps —
+    // the board's 3 s column poll uses these.  beforeSwap does not carry a
+    // fragment for non-OOB swaps (list's 4 s innerHTML poll), so that listener
+    // is a no-op; the afterSwap safety net below covers that path.
+    document.body.addEventListener("htmx:oobBeforeSwap", function (evt) {
+      stampFragment(evt.detail && evt.detail.fragment);
+    });
+    document.body.addEventListener("htmx:beforeSwap", function (evt) {
+      stampFragment(evt.detail && evt.detail.fragment);
+    });
+    // Safety-net: re-apply after every swap so the bar stays wired and any
+    // path not covered by the pre-stamp (e.g. list innerHTML swaps) is fixed.
     document.body.addEventListener("htmx:afterSwap", function () {
       wireBar(); applyVisual();
     });

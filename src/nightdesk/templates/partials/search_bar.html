@@ -6,12 +6,11 @@
     sb_resource    'ticket' (default) | 'run' — drives facet set + suggest API
     sb_query       current query string to prefill
     sb_placeholder input placeholder text
-    sb_view        when set ('tickets'|'runs'), renders the Tickets/Runs toggle
-
   Behaviour is attached by static/search_bar.js, which reads the data-* attrs
-  and emits `nd:search` (detail.query) and `nd:view` (detail.view) events the
-  host page listens for. The bar owns the query string, the inline filter chips,
-  and the dropdowns; the host owns the effect.
+  and emits `nd:search` (detail.query) events the host page listens for.
+  The bar owns the query string, the inline filter chips, and the dropdowns;
+  the host owns the effect. View switching is handled by the page-level
+  #nd-page-view-toggle (Board | List | Runs segments).
 #}
 {% set _resource = sb_resource | default('ticket') %}
 {% set _facets = (
@@ -55,16 +54,6 @@
       <button type="button" class="nd-searchbar-clear" data-sb-clear hidden
               aria-label="Clear search">✕</button>
     </div>
-    {% if sb_view is defined and sb_view %}
-    <div class="nd-view-toggle" role="tablist" aria-label="Board view">
-      <button type="button" class="nd-view-btn" data-sb-view="tickets"
-              aria-pressed="{{ 'true' if sb_view == 'tickets' else 'false' }}">Tickets</button>
-      <button type="button" class="nd-view-btn" data-sb-view="list"
-              aria-pressed="{{ 'true' if sb_view == 'list' else 'false' }}">List</button>
-      <button type="button" class="nd-view-btn" data-sb-view="runs"
-              aria-pressed="{{ 'true' if sb_view == 'runs' else 'false' }}">Runs</button>
-    </div>
-    {% endif %}
   </div>
 
   <div class="nd-searchbar-facets">

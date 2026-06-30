@@ -67,12 +67,12 @@
                   hx-post="/tickets/{{ ticket.id }}/run-now"
                   hx-swap="none"
                   hx-on::after-request="window.ndRunNowFeedback && window.ndRunNowFeedback(this, event)"
-                  class="bg-accent text-bg font-medium px-3 py-1 rounded text-sm">Run now</button>
+                  class="btn btn-primary btn-md">Run now</button>
         {% endif %}
         {% if ticket.status in ('review', 'archived') %}
           <button type="button"
                   onclick="document.getElementById('run-again-modal').showModal()"
-                  class="bg-accent text-bg font-medium px-3 py-1 rounded text-sm">Run again…</button>
+                  class="btn btn-primary btn-md">Run again…</button>
           <form method="post" action="/tickets/{{ ticket.id }}/requeue">
             <button class="border border-border text-fg px-3 py-1 rounded text-sm">Requeue</button>
           </form>
@@ -122,7 +122,7 @@
                   hx-delete="/board/tickets/{{ ticket.id }}"
                   hx-confirm="Delete this ticket? This cannot be undone."
                   hx-swap="none"
-                  class="border border-danger text-danger px-3 py-1 rounded text-sm ml-auto">Delete</button>
+                  class="btn btn-danger btn-md ml-auto">Delete</button>
         {% endif %}
       </div>
 
@@ -176,13 +176,13 @@
         <form method="post" action="/tickets/{{ ticket.id }}/dependencies"
               class="mt-2 flex gap-2 items-center">
           <select name="depends_on_id" required
-                  class="flex-1 min-w-0 bg-bg-elev-2 border border-border rounded px-2 py-1 text-xs text-fg focus:border-accent outline-none">
+                  class="field flex-1 min-w-0 text-xs">
             <option value="">-- add a dependency --</option>
             {% for c in dep_candidates %}
               <option value="{{ c.id }}">{{ c.title }} ({{ c.status }})</option>
             {% endfor %}
           </select>
-          <button type="submit" class="shrink-0 bg-accent text-bg font-medium px-3 py-1 rounded text-xs">Add</button>
+          <button type="submit" class="btn btn-primary shrink-0">Add</button>
         </form>
         {% endif %}
       </div>
@@ -252,9 +252,9 @@
               class="mt-2 flex gap-2 items-center">
           <input type="text" name="path" placeholder="/absolute/path"
                  required pattern="/.*"
-                 class="flex-1 bg-bg-elev-2 border border-border rounded px-2 py-1 text-sm font-mono text-fg placeholder:text-fg-muted" />
+                 class="field flex-1 font-mono" />
           <input type="hidden" name="mode" value="rw" />
-          <button type="submit" class="bg-accent text-bg font-medium px-3 py-1 rounded text-sm">Add</button>
+          <button type="submit" class="btn btn-primary btn-md">Add</button>
         </form>
       </div>
     </section>
@@ -468,7 +468,7 @@
  #}
 {% if ticket.status in ('review', 'archived') %}
 <dialog id="run-again-modal"
-        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/55 p-0 w-[480px] max-w-[calc(100vw-2rem)] text-fg"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-[2px] p-0 w-[480px] max-w-[calc(100vw-2rem)] text-fg"
         style="margin: auto; max-height: 92vh;">
   <form id="run-again-form" method="post" action="" class="p-4 space-y-4 max-h-[92vh] overflow-y-auto">
     <div class="flex items-center justify-between">
@@ -526,7 +526,7 @@
         Optional message for next run
       </span>
       <textarea name="next_run_context" rows="3"
-                class="w-full bg-bg-elev-2 border border-border rounded p-2 text-sm font-mono placeholder:text-fg-muted"
+                class="field w-full font-mono"
                 placeholder="One-shot instructions for the next run…">{{ ticket.next_run_context or '' }}</textarea>
     </label>
 
@@ -535,23 +535,23 @@
     <div class="flex items-center justify-between gap-2 pt-1 border-t border-border">
       <div class="flex flex-wrap gap-2 text-xs">
         <button type="submit" formaction="/tickets/{{ ticket.id }}/clone" formnovalidate
-                class="border border-border text-fg-muted hover:text-fg px-2 py-1 rounded">
+                class="btn btn-ghost">
           Clone to new ticket
         </button>
         <button type="submit" formaction="/tickets/{{ ticket.id }}/merge-next-run-context" formnovalidate
-                class="border border-border text-fg-muted hover:text-fg px-2 py-1 rounded">
+                class="btn btn-ghost">
           Merge message into prompt
         </button>
       </div>
       <div class="flex gap-2">
         <button type="button"
                 onclick="document.getElementById('run-again-modal').close()"
-                class="border border-border text-fg-muted hover:text-fg px-3 py-1 rounded text-sm">
+                class="btn btn-ghost btn-md">
           Cancel
         </button>
         <button type="submit"
                 onclick="return window.ndSubmitRunAgain && window.ndSubmitRunAgain(this.form)"
-                class="bg-accent text-bg font-medium px-3 py-1 rounded text-sm">
+                class="btn btn-primary btn-md">
           Run again
         </button>
       </div>

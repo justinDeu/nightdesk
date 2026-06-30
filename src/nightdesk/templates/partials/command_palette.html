@@ -18,7 +18,7 @@
 {# --- Command palette ---------------------------------------------------- #}
 <dialog id="nd-command-palette"
         aria-label="Command palette"
-        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[640px] max-w-[calc(100vw-2rem)]"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-[2px] text-fg p-0 w-[640px] max-w-[calc(100vw-2rem)]"
         style="margin: 12vh auto auto auto;">
   <div class="flex flex-col max-h-[70vh]">
     <div class="px-3 py-2 border-b border-border">
@@ -31,7 +31,7 @@
              aria-controls="nd-cmdk-list"
              aria-autocomplete="list"
              placeholder="Search, filter (project=nightdesk latest_status=failed), or run a command…"
-             class="w-full bg-bg-elev-2 border border-border rounded px-2 py-1.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent" />
+             class="field w-full text-fg placeholder:text-fg-muted" />
     </div>
     <ul id="nd-cmdk-list"
         role="listbox"
@@ -49,7 +49,7 @@
 {# --- Keyboard shortcuts cheat sheet -------------------------------------- #}
 <dialog id="nd-shortcuts-cheatsheet"
         aria-label="Keyboard shortcuts"
-        class="bg-bg-elev border border-border rounded-xl shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[1120px] max-w-[calc(100vw-2rem)]"
+        class="bg-bg-elev border border-border rounded-xl shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-[2px] text-fg p-0 w-[1120px] max-w-[calc(100vw-2rem)]"
         style="margin: auto;">
   <div tabindex="-1" autofocus class="focus:outline-none max-h-[min(760px,calc(100vh-4rem))] flex flex-col">
   <div class="flex shrink-0 items-center justify-between px-5 py-3 border-b border-border bg-bg-elev-2/50">
@@ -69,8 +69,9 @@
       ('c', 'New ticket'),
       ('Shift + C', 'Capture to inbox'),
       ('/', 'Focus search'),
-      ('g then b', 'Go to board'),
-      ('g then l', 'Go to list'),
+      ('[', 'Toggle sidebar'),
+      ('g then b', 'Go to tickets: board view'),
+      ('g then l', 'Go to tickets: list view'),
       ('g then v', 'Jump to saved view'),
       ('g then i', 'Go to Insights'),
       ('g then s', 'Go to Setup'),
@@ -136,7 +137,7 @@
       </div>
       <div class="space-y-3">
         {{ shortcut_card('Board navigation', _nav_shortcuts) }}
-        {{ shortcut_card('View & display', _view_shortcuts, 'Use Work for Board/List display modes plus Inbox, Archive, and Scheduled views.') }}
+        {{ shortcut_card('View & display', _view_shortcuts, 'Use Tickets for Board/List display modes plus Inbox, Archive, and Scheduled views.') }}
       </div>
       <div class="space-y-3">
         {{ shortcut_card('Inbox triage', _inbox_shortcuts, 'Active on the Inbox page (/inbox). S is reserved for future snooze support.') }}

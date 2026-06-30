@@ -4,7 +4,7 @@
       <h2 class="text-xl font-semibold text-fg">Git worktrees</h2>
       <p class="mt-1 text-sm text-fg-muted">Set the default branch or ref used when tickets create new worktrees.</p>
     </div>
-    {% if saved %}<span class="px-2 py-0.5 text-xs bg-green-900/40 text-green-200 rounded">saved</span>{% endif %}
+    {% if saved %}<span class="px-2 py-0.5 text-xs bg-accent/10 text-accent rounded">saved</span>{% endif %}
   </header>
 
   <form method="post" action="/settings/worktrees" class="flex flex-col gap-5" data-settings-form>
@@ -17,11 +17,11 @@
         <input id="worktree_base_ref" name="worktree_base_ref" type="text"
                value="{{ (cfg.worktree_base_ref if cfg else '') or '' }}"
                placeholder="HEAD"
-               class="px-2 py-1 bg-bg-elev-2 border border-border rounded text-fg font-mono" />
+               class="field font-mono" />
       </div>
     </section>
     <div class="flex justify-end gap-2">
-      <button type="submit" class="px-4 py-1 bg-accent text-bg rounded hover:opacity-90 font-medium">Save worktree settings</button>
+      <button type="submit" class="btn btn-primary btn-md">Save worktree settings</button>
     </div>
   </form>
 </div>

@@ -104,7 +104,6 @@
     var lastEmitted = "";       // the query currently applied to results
     var basePlaceholder = input.getAttribute("placeholder") || "";
     var facetBtns = Array.prototype.slice.call(bar.querySelectorAll("[data-sb-facet]"));
-    var viewBtns = Array.prototype.slice.call(bar.querySelectorAll("[data-sb-view]"));
 
     var filters = [];           // [{field, op, value, neg}]
     var debounceTimer = null;
@@ -585,20 +584,6 @@
         input.focus();
       });
     }
-
-    // ---- view toggle ----------------------------------------------------- //
-    viewBtns.forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var view = btn.dataset.sbView;
-        viewBtns.forEach(function (b) {
-          b.setAttribute("aria-pressed", b === btn ? "true" : "false");
-        });
-        bar.dataset.resource = view === "runs" ? "run" : "ticket";
-        bar.dispatchEvent(new CustomEvent("nd:view", {
-          detail: { view: view, query: buildQuery() }, bubbles: true,
-        }));
-      });
-    });
 
     // Reposition (don't close) on scroll/resize: a board refresh re-mounts the
     // columns and fires spurious scroll events, which must not dismiss an open

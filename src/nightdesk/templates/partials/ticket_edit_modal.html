@@ -47,7 +47,7 @@
 {% set _project_default_toolchains = _tc_project.default_toolchains if _tc_project and _tc_project.default_toolchains else [] %}
 
 <dialog id="{{ _mid }}"
-        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 text-fg p-0 w-[820px] max-w-[calc(100vw-2rem)]"
+        class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-[2px] text-fg p-0 w-[820px] max-w-[calc(100vw-2rem)]"
         style="margin: auto; max-height: 92vh;">
   <form method="post"
         action="{{ _form_action }}"
@@ -116,13 +116,13 @@
         <span class="text-fg-muted text-xs uppercase tracking-wide">Title{% if 'title' in _missing %} <span class="text-warn">• required</span>{% endif %}</span>
         <input name="title" required value="{{ ticket.title if _is_edit else '' }}"
                data-title-input
-               class="bg-bg-elev-2 border rounded px-2 py-1 text-fg focus:border-accent outline-none {% if 'title' in _missing %}border-warn ring-1 ring-warn/40{% else %}border-border{% endif %}" />
+               class="field {% if 'title' in _missing %}border-warn ring-1 ring-warn/40{% endif %}" />
       </label>
 
       <label class="flex flex-col gap-1 text-sm">
         <span class="text-fg-muted text-xs uppercase tracking-wide">Prompt</span>
         <textarea name="prompt" rows="10"
-                  class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg font-mono text-xs focus:border-accent outline-none">{{ ticket.prompt if _is_edit and ticket.prompt else '' }}</textarea>
+                  class="field font-mono text-xs">{{ ticket.prompt if _is_edit and ticket.prompt else '' }}</textarea>
       </label>
 
       <div class="flex flex-col gap-1 text-sm">
@@ -176,7 +176,7 @@
         <select name="project_id"
                 data-project-select
                 onchange="window.ndProjectChanged(this)"
-                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
+                class="field">
           <option value="" {% if not _project_id %}selected{% endif %}>No project</option>
           {% for p in _projects %}
             <option value="{{ p.id }}" {% if _project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
@@ -186,13 +186,13 @@
           {% if _is_edit %}
             <button type="button"
                     onclick="window.ndConfirmResetProjectWorkspaceDefaults(this)"
-                    class="rounded border border-border px-2 py-1 text-[11px] text-fg-muted hover:border-accent hover:text-fg">
+                    class="btn btn-ghost text-[11px]">
               Reset workspaces to project defaults
             </button>
           {% else %}
             <button type="button"
                     onclick="window.ndResetProjectWorkspaceDefaults(this)"
-                    class="rounded border border-border px-2 py-1 text-[11px] text-fg-muted hover:border-accent hover:text-fg">
+                    class="btn btn-ghost text-[11px]">
               Copy project workspaces again
             </button>
           {% endif %}
@@ -214,7 +214,7 @@
       <label class="flex flex-col gap-1 text-sm">
         <span class="text-fg-muted text-xs uppercase tracking-wide">Priority</span>
         <select name="priority"
-                class="bg-bg-elev-2 border border-border rounded px-2 py-1 text-fg focus:border-accent outline-none">
+                class="field">
           {% for level in PRIORITY_SCALE %}
             <option value="{{ level.value }}" {% if _is_edit and ticket.priority == level.value %}selected{% elif not _is_edit and level.value == 0 %}selected{% endif %}>{{ level.label }}</option>
           {% endfor %}
@@ -353,7 +353,7 @@
                          onfocus="window.ndPathSuggest(this, '{{ _tcp }}-suggest')"
                          onblur="window.ndPathSuggestClose('{{ _tcp }}-suggest')"
                          onkeydown="window.ndPathSuggestKey(event, this, '{{ _tcp }}-suggest')"
-                         class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                         class="field w-full font-mono text-xs" />
                   <div id="{{ _tcp }}-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
                 </div>
                 <button type="button"
@@ -391,7 +391,7 @@
                  onfocus="window.ndDepSearch(this)"
                  onkeydown="window.ndDepSearchKey(event, this)"
                  onblur="window.ndDepSearchClose(this)"
-                 class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                 class="field w-full text-xs" />
           <div data-dep-suggest class="absolute left-0 right-0 z-50 mt-1 hidden max-h-48 overflow-y-auto rounded border border-border bg-bg-elev shadow-lg"></div>
         </div>
         <ul data-dep-selected class="mt-2 space-y-1">
@@ -443,7 +443,7 @@
                    onfocus="window.ndPathSuggest(this, '{{ _mid }}-source-path-suggest')"
                    onblur="window.ndPathSuggestClose('{{ _mid }}-source-path-suggest')"
                    onkeydown="window.ndPathSuggestKey(event, this, '{{ _mid }}-source-path-suggest')"
-                   class="w-full rounded border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 {% if 'workspace' in _missing %}border-warn ring-1 ring-warn/40{% else %}border-border{% endif %}" />
+                   class="field w-full font-mono text-xs {% if 'workspace' in _missing %}border-warn ring-1 ring-warn/40{% endif %}" />
             <div id="{{ _mid }}-source-path-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
           </div>
           <div class="grid grid-cols-2 gap-2">
@@ -451,7 +451,7 @@
               <span class="text-fg-muted text-[11px] uppercase tracking-wide">Kind</span>
               <select name="primary_kind"
                       onchange="window.ndSyncPrimaryWorkspaceKind && window.ndSyncPrimaryWorkspaceKind(this)"
-                      class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+                      class="field text-xs">
                 <option value="directory" {% if not _use_worktree %}selected{% endif %}>Directory</option>
                 <option value="git_worktree" {% if _use_worktree %}selected{% endif %}>Git worktree</option>
               </select>
@@ -486,7 +486,7 @@
                      value="{{ _primary_ws.worktree_name if _primary_ws and _primary_ws.worktree_name else '' }}"
                      {% if not _use_worktree %}disabled{% endif %} data-worktree-field
                      oninput="var f = this.closest('[data-ticket-form]'); window.ndScheduleWorktreePreview(250, f); window.ndSyncWorktreeNameHint(f)"
-                     class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45" />
+                     class="field w-full font-mono text-xs disabled:cursor-not-allowed disabled:opacity-45" />
             </label>
             <label class="flex flex-col gap-1">
               <div class="flex items-baseline justify-between">
@@ -500,7 +500,7 @@
                      value="{{ _primary_ws.base_ref if _primary_ws and _primary_ws.base_ref else (_selected_project.default_base_ref if _selected_project and _selected_project.default_base_ref else '') }}"
                      {% if not _use_worktree %}disabled{% endif %} data-worktree-field data-base-ref-input
                      oninput="window.ndScheduleWorktreePreview(250, this.closest('[data-ticket-form]'))"
-                     class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45" />
+                     class="field w-full font-mono text-xs disabled:cursor-not-allowed disabled:opacity-45" />
               <span class="text-[10px] text-fg-muted/60">Leave blank to branch from <code>HEAD</code>. Use an existing branch, tag, or commit.</span>
             </label>
             <label class="flex flex-col gap-1">
@@ -518,7 +518,7 @@
                        onfocus="window.ndPathSuggest(this, '{{ _mid }}-wt-path-suggest')"
                        onblur="window.ndPathSuggestClose('{{ _mid }}-wt-path-suggest')"
                        onkeydown="window.ndPathSuggestKey(event, this, '{{ _mid }}-wt-path-suggest')"
-                       class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-45" />
+                       class="field w-full font-mono text-xs disabled:cursor-not-allowed disabled:opacity-45" />
                 <div id="{{ _mid }}-wt-path-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
               </div>
             </label>
@@ -553,7 +553,7 @@
                        onfocus="window.ndPathSuggest(this, '{{ _lid }}-suggest')"
                        onblur="window.ndPathSuggestClose('{{ _lid }}-suggest')"
                        onkeydown="window.ndPathSuggestKey(event, this, '{{ _lid }}-suggest')"
-                       class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                       class="field w-full font-mono text-xs" />
                 <div id="{{ _lid }}-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
               </div>
               <div class="grid grid-cols-2 gap-2">
@@ -561,7 +561,7 @@
                   <span class="text-fg-muted text-[11px] uppercase tracking-wide">Kind</span>
                   <select name="linked_workspace_kind"
                           onchange="window.ndSyncLinkedWorkspaceRow(this.closest('[data-linked-workspace-row]'));"
-                          class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+                          class="field text-xs">
                     <option value="directory" {% if w.kind == 'directory' %}selected{% endif %}>Directory</option>
                     <option value="git_worktree" {% if w.kind == 'git_worktree' %}selected{% endif %}>Git worktree</option>
                   </select>
@@ -569,7 +569,7 @@
                 <label class="flex flex-col gap-1" data-linked-access-field>
                   <span class="text-fg-muted text-[11px] uppercase tracking-wide">Access</span>
                   <select name="linked_workspace_access"
-                          class="rounded border border-border bg-bg px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30">
+                          class="field text-xs">
                     <option value="read_only" {% if w.access == 'read_only' %}selected{% endif %}>Read-only</option>
                     <option value="read_write" {% if w.access == 'read_write' %}selected{% endif %}>Read/write</option>
                   </select>
@@ -595,7 +595,7 @@
                            onfocus="window.ndPathSuggest(this, '{{ _lid }}-path-override-suggest')"
                            onblur="window.ndPathSuggestClose('{{ _lid }}-path-override-suggest')"
                            onkeydown="window.ndPathSuggestKey(event, this, '{{ _lid }}-path-override-suggest')"
-                           class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                           class="field w-full font-mono text-xs" />
                     <div id="{{ _lid }}-path-override-suggest" class="nd-suggest-host fixed z-50 hidden"></div>
                   </div>
                 </label>
@@ -640,7 +640,7 @@
     <div class="flex justify-end gap-2 px-5 py-3 border-t border-border bg-bg-elev">
       <button type="button"
               onclick="document.getElementById('{{ _mid }}').close()"
-              class="border border-border text-fg-muted hover:text-fg px-3 py-1.5 rounded text-sm">
+              class="btn btn-ghost btn-md">
         Cancel
       </button>
       {% if _promote %}
@@ -656,12 +656,12 @@
       </button>
       <button type="submit" name="target" value="queued"
               data-promote-queue
-              class="bg-accent text-bg font-medium px-3 py-1.5 rounded text-sm hover:brightness-110">
+              class="btn btn-primary btn-md">
         Accept &amp; queue
       </button>
       {% else %}
       <button type="submit"
-              class="bg-accent text-bg font-medium px-3 py-1.5 rounded text-sm hover:brightness-110">
+              class="btn btn-primary btn-md">
         Save
       </button>
       {% endif %}
@@ -719,7 +719,7 @@
         ' onfocus="window.ndPathSuggest(this, \'' + id + '-suggest\')"' +
         ' onblur="window.ndPathSuggestClose(\'' + id + '-suggest\')"' +
         ' onkeydown="window.ndPathSuggestKey(event, this, \'' + id + '-suggest\')"' +
-        ' class="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" />' +
+        ' class="field w-full text-xs font-mono" />' +
         '<div id="' + id + '-suggest" class="nd-suggest-host fixed z-50 hidden"></div>' +
         '</div>' +
         '<button type="button" onclick="this.closest(&quot;[data-toolchain-extra-path-row]&quot;).remove()" class="shrink-0 rounded px-2 py-1 text-xs text-fg-muted hover:text-danger" title="Remove path">&times;</button>';

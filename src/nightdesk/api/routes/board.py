@@ -428,11 +428,32 @@ def reconcile_labels_from_form(session: Session, tid: str, form) -> None:
 
     Only acts when the label section was part of the submission
     (``labels_form=1``); an empty selection then means "clear all".
+    Supports label_ids (existing labels) and label_names (inline-create):
+    each label_names entry is created on the fly, falling back to the
+    existing label by that name on LabelNameTaken.
     """
     if form.get("labels_form") != "1":
         return
-    from nightdesk.domain.labels import set_ticket_labels as _sl
+    from nightdesk.domain.labels import (
+        LabelNameTaken,
+        create_label,
+        set_ticket_labels as _sl,
+    )
     label_ids = [v for v in form.getlist("label_ids") if v.strip()]
+
+    seen: set[str] = set()
+    for raw in form.getlist("label_names"):
+        name = raw.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        try:
+            lbl = create_label(session, name=name)
+        except LabelNameTaken:
+            lbl = session.scalar(select(Label).where(Label.name == name))
+        if lbl is not None:
+            label_ids.append(lbl.id)
+
     try:
         _sl(session, tid, label_ids)
     except Exception:
@@ -882,7 +903,7 @@ def build_router(
             request,
             "board.html",
             {
-                "title": "Board",
+                "title": "Tickets",
                 "columns": ctx["columns"],
                 "group": ctx["group"],
                 "groupable": _GROUPABLE,
@@ -976,7 +997,7 @@ def build_router(
             request,
             "list.html",
             {
-                "title": "List",
+                "title": "Tickets",
                 "groups": ctx["groups"],
                 "group": ctx["group"],
                 "order": ctx["order"],

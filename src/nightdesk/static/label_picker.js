@@ -12,12 +12,17 @@
  * Each picker instance reads its candidates from a sibling
  * `<script type="application/json" data-picker-candidates>` block.
  *
+ * Inline-create: when the search query has no exact match, a "Create" row
+ * appears. Selecting it adds a chip with no id — the hidden input renders
+ * as name="label_names" value="<name>" instead of label_ids. The server
+ * reconciles these via create_label in reconcile_labels_from_form.
+ *
  * Public API (all on `window`):
- *   ndPickerSearch(input)        — show suggestions matching input value
+ *   ndPickerSearch(input)           — show suggestions matching input value
  *   ndPickerSearchKey(event, input) — keyboard nav (up/down/enter/esc)
- *   ndPickerSearchClose(input)   — hide suggestions
- *   ndPickerRemove(btn)          — remove a selected item
- *   ndPickerAdd(pickerEl, item)  — add a candidate to the selected list
+ *   ndPickerSearchClose(input)      — hide suggestions
+ *   ndPickerRemove(btn)             — remove a selected item
+ *   ndPickerAdd(pickerEl, item)     — add a candidate to the selected list
  */
 (function () {
   function _picker(input) {
@@ -30,12 +35,22 @@
     try { return JSON.parse(script.textContent); } catch (e) { return []; }
   }
 
+  // Returns ids of chips with a known label id (existing labels only).
   function _selectedIds(picker) {
     var ids = [];
-    picker.querySelectorAll("[data-picker-item]").forEach(function (el) {
+    picker.querySelectorAll("[data-picker-item][data-item-id]").forEach(function (el) {
       ids.push(el.getAttribute("data-item-id"));
     });
     return ids;
+  }
+
+  // Returns names of chips created inline (no existing label id).
+  function _selectedNewNames(picker) {
+    var names = [];
+    picker.querySelectorAll("[data-picker-item][data-item-name]").forEach(function (el) {
+      names.push(el.getAttribute("data-item-name"));
+    });
+    return names;
   }
 
   function _name(picker) {
@@ -47,10 +62,14 @@
   }
 
   function _renderItem(picker, item) {
-    var name = _name(picker);
+    var isNew = item.id === null || item.id === undefined;
     var span = document.createElement("span");
     span.setAttribute("data-picker-item", "");
-    span.setAttribute("data-item-id", item.id);
+    if (!isNew) {
+      span.setAttribute("data-item-id", item.id);
+    } else {
+      span.setAttribute("data-item-name", item.name);
+    }
     span.className = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border group";
     if (item.color) {
       span.style.backgroundColor = item.color + "22";
@@ -61,10 +80,12 @@
       span.style.borderColor = "var(--color-border)";
       span.style.color = "var(--color-fg-muted)";
     }
+    var inputName = isNew ? "label_names" : _name(picker);
+    var inputValue = isNew ? item.name : item.id;
     span.innerHTML =
       '<span>' + _esc(item.name) + '</span>' +
       '<button type="button" onclick="window.ndPickerRemove(this)" class="opacity-40 hover:opacity-100 leading-none">&times;</button>' +
-      '<input type="hidden" name="' + _esc(name) + '" value="' + _esc(item.id) + '" />';
+      '<input type="hidden" name="' + _esc(inputName) + '" value="' + _esc(String(inputValue)) + '" />';
     return span;
   }
 
@@ -80,16 +101,23 @@
     var suggest = picker.querySelector("[data-picker-suggest]");
     if (!suggest) return;
 
-    var q = (input.value || "").trim().toLowerCase();
+    var rawQ = (input.value || "").trim();
+    var q = rawQ.toLowerCase();
     var selected = _selectedIds(picker);
     var all = _candidates(picker);
     var items = all.filter(function (c) {
-      if (selected.indexOf(c.id) !== -1) return false;
+      if (selected.indexOf(String(c.id)) !== -1) return false;
       if (!q) return true;
       return c.name.toLowerCase().indexOf(q) !== -1;
     });
 
-    if (!items.length) {
+    // Show "Create" row when query is non-empty, no exact match, and not
+    // already added as an inline chip.
+    var exactMatch = rawQ && all.some(function (c) { return c.name.toLowerCase() === q; });
+    var newNames = _selectedNewNames(picker);
+    var showCreate = rawQ && !exactMatch && newNames.indexOf(rawQ) === -1;
+
+    if (!items.length && !showCreate) {
       suggest.classList.add("hidden");
       return;
     }
@@ -112,6 +140,25 @@
       });
       suggest.appendChild(div);
     });
+
+    if (showCreate) {
+      var createDiv = document.createElement("div");
+      createDiv.className = "px-2 py-1.5 text-xs cursor-pointer hover:bg-bg-elev-2 text-fg-muted flex items-center gap-1.5";
+      createDiv.setAttribute("data-picker-candidate-id", "__create__");
+      createDiv.innerHTML =
+        '<span class="text-fg-muted/70">+</span> Create "' + _esc(rawQ) + '"';
+      (function (name) {
+        createDiv.addEventListener("mousedown", function (e) {
+          e.preventDefault();
+          window.ndPickerAdd(picker, { id: null, name: name, color: null });
+          input.value = "";
+          window.ndPickerSearch(input);
+          input.focus();
+        });
+      })(rawQ);
+      suggest.appendChild(createDiv);
+    }
+
     // Pre-highlight the top match so a bare Enter commits it — typing a
     // label name and hitting Enter must Just Work without an ArrowDown.
     var first = suggest.querySelector("[data-picker-candidate-id]");
@@ -171,9 +218,11 @@
   window.ndPickerAdd = function (picker, item) {
     var container = picker.querySelector("[data-picker-selected]");
     if (!container) return;
-    // Don't add duplicates
-    var existing = _selectedIds(picker);
-    if (existing.indexOf(item.id) !== -1) return;
+    if (item.id !== null && item.id !== undefined) {
+      if (_selectedIds(picker).indexOf(String(item.id)) !== -1) return;
+    } else {
+      if (_selectedNewNames(picker).indexOf(item.name) !== -1) return;
+    }
     container.appendChild(_renderItem(picker, item));
   };
 })();

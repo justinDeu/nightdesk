@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -14,12 +16,13 @@ from pydantic import ValidationError
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.api.schemas import ConfigUpdate
-from nightdesk.db.models import ConfigRow, ScheduleWindow, Ticket
+from nightdesk.db.models import ConfigRow, Run, ScheduleWindow, Ticket
 from nightdesk.domain.projects import (
     ProjectNameTaken,
     ProjectNotFound,
     archive_project,
     create_project,
+    get_project,
     list_projects,
     preview_defaults,
     update_project,
@@ -37,52 +40,115 @@ from nightdesk.domain.tickets import (
 )
 
 
-def _parse_toolchain_presets(form) -> dict[str, list[str]]:
-    """Reconstruct {preset_name: [paths]} from the worktrees-pane form.
+def _validate_preset_upsert(
+    new_name: str,
+    paths: list,
+    existing: dict[str, list[str]],
+    *,
+    original_name: str = "",
+) -> dict[str, list[str]]:
+    """Validate and return an updated {name: [paths]} custom-presets map.
 
-    Path inputs aren't submitted directly — each preset card carries a hidden
-    ``preset_paths_json`` field that JS keeps in sync with the visible rows.
-    Card order is preserved by DOM submission order, so the two getlist() calls
-    pair up positionally. Validation goes through the ConfigUpdate validator so
-    the form path and the JSON API path enforce the same rules.
+    Handles rename by removing the old key first. Enforces uniqueness and
+    built-in-name collision rules. The returned dict has only custom presets
+    (built-ins are not stored in config).
     """
-    names = list(form.getlist("preset_name"))
-    paths_jsons = list(form.getlist("preset_paths_json"))
-    raw: dict[str, list[str]] = {}
-    for raw_name, raw_paths in zip(names, paths_jsons):
-        name = str(raw_name or "").strip()
-        if not name:
-            continue
-        # A custom preset name must not shadow a built-in toolchain (which would
-        # silently override its paths) or collide with another custom card.
-        if name in BUILTIN_TOOLCHAINS:
-            raise HTTPException(
-                422, f"preset name {name!r} is reserved by a built-in toolchain"
-            )
-        if name in raw:
-            raise HTTPException(422, f"duplicate preset name {name!r}")
-        try:
-            paths = json.loads(raw_paths or "[]")
-        except json.JSONDecodeError as exc:
-            raise HTTPException(422, f"invalid preset {name!r} paths JSON: {exc.msg}")
-        if not isinstance(paths, list):
-            raise HTTPException(422, f"preset {name!r} paths must be a list")
-        raw[name] = paths
-    if not raw:
-        return {}
+    if not new_name:
+        raise HTTPException(422, "preset name is required")
+    if new_name in BUILTIN_TOOLCHAINS:
+        raise HTTPException(
+            422, f"preset name {new_name!r} is reserved by a built-in toolchain"
+        )
+    if not isinstance(paths, list):
+        raise HTTPException(422, "paths must be a list")
+
+    updated = dict(existing)
+    # Rename: drop the old key so it doesn't persist.
+    if original_name and original_name != new_name:
+        updated.pop(original_name, None)
+    # Duplicate check — skip when updating in place.
+    if new_name in updated and (not original_name or original_name != new_name):
+        raise HTTPException(422, f"duplicate preset name {new_name!r}")
+
+    updated[new_name] = paths
     try:
-        validated = ConfigUpdate(toolchain_presets=raw)
+        validated = ConfigUpdate(toolchain_presets=updated)
     except ValidationError as exc:
         raise HTTPException(422, f"invalid toolchain presets: {exc.errors()[0]['msg']}")
-    presets = validated.toolchain_presets or {}
-    # Reject absolute paths that overlap protected nightdesk directories, the
-    # same guard the ticket/project path inputs use.
-    for name, paths in presets.items():
+    result = validated.toolchain_presets or {}
+    for pname, ppaths in result.items():
         try:
-            assert_paths_not_excluded(paths, field=f"toolchain_presets.{name}")
+            assert_paths_not_excluded(ppaths, field=f"toolchain_presets.{pname}")
         except ValueError as exc:
             raise HTTPException(422, str(exc))
-    return presets
+    return result
+
+
+# Active lifecycle statuses surfaced in the project workspace panes, in pill
+# order. Excludes archived/cancelled (the workspace is the live work surface).
+_PANE_STATUSES = ("inbox", "draft", "queued", "running", "review")
+_PANE_STATUS_PILLS = [
+    ("", "All"),
+    ("inbox", "Inbox"),
+    ("draft", "Draft"),
+    ("queued", "Queued"),
+    ("running", "Running"),
+    ("review", "Review"),
+]
+
+
+def _relative_time(dt: datetime | None) -> str:
+    """Compact "Nm ago" relative label (UTC-aware), empty string when absent."""
+    if dt is None:
+        return ""
+    now = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = int((now - dt).total_seconds())
+    if secs < 0:
+        return "just now"
+    if secs < 60:
+        return f"{secs}s ago"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}m ago"
+    hours = mins // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days < 30:
+        return f"{days}d ago"
+    months = days // 30
+    return f"{months}mo ago" if months < 12 else f"{days // 365}y ago"
+
+
+def _run_duration(run: Run) -> str:
+    """Wall-clock duration of a finished run as a compact string ('' if open)."""
+    if run.started_at is None or run.finished_at is None:
+        return ""
+    start = run.started_at
+    end = run.finished_at
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    secs = int((end - start).total_seconds())
+    if secs < 0:
+        return ""
+    if secs < 60:
+        return f"{secs}s"
+    mins, secs = divmod(secs, 60)
+    if mins < 60:
+        return f"{mins}m {secs}s"
+    hours, mins = divmod(mins, 60)
+    return f"{hours}h {mins}m"
+
+
+def _run_outcome(run: Run) -> str:
+    """Display outcome for a run: explicit exit status, else running/none."""
+    if run.exit_status:
+        return run.exit_status
+    return "running" if run.finished_at is None else "none"
 
 
 def _windows_payload(session: Session) -> list[dict[str, str | int]]:
@@ -118,7 +184,6 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             "scheduling": "partials/settings_scheduling_pane.html",
             "claude": "partials/settings_claude_pane.html",
             "worktrees": "partials/settings_worktrees_pane.html",
-            "external_tools": "partials/settings_external_tools_pane.html",
             "notifications": "partials/settings_notifications_pane.html",
             "projects": "partials/settings_projects_pane.html",
             "labels": "partials/settings_labels_pane.html",
@@ -150,11 +215,45 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             _settings_context(session, category=category, saved=saved),
         )
 
-    def _render_toolsets(request: Request, session: Session, *, saved: bool):
-        ctx = _settings_context(session, category="external_tools", saved=saved)
-        ctx["title"] = "Toolsets"
-        ctx["active_page"] = "toolsets"
-        return templates.TemplateResponse(request, "toolsets.html", ctx)
+    def _render_toolsets(
+        request: Request,
+        session: Session,
+        *,
+        selected_name: str | None = None,
+        pane_mode: str | None = None,
+        error: str | None = None,
+        partial: bool = False,
+    ):
+        cfg = session.get(ConfigRow, 1)
+        all_opts = toolchain_options(cfg)
+        builtin_presets = [o for o in all_opts if o["builtin"]]
+        custom_presets = [o for o in all_opts if not o["builtin"]]
+
+        if selected_name is None and all_opts:
+            selected_name = all_opts[0]["name"]
+
+        preset = next((o for o in all_opts if o["name"] == selected_name), None)
+
+        if pane_mode is None:
+            if preset is None:
+                pane_mode = "empty"
+            elif preset["builtin"]:
+                pane_mode = "builtin"
+            else:
+                pane_mode = "edit"
+
+        ctx = {
+            "title": "Toolsets",
+            "active_page": "toolsets",
+            "builtin_presets": builtin_presets,
+            "custom_presets": custom_presets,
+            "selected_name": selected_name,
+            "pane_mode": pane_mode,
+            "preset": preset,
+            "error": error,
+        }
+        tmpl = "partials/toolset_pane.html" if partial else "toolsets.html"
+        return templates.TemplateResponse(request, tmpl, ctx)
 
     def _render_projects(request: Request, session: Session, *, saved: bool):
         ctx = _settings_context(session, category="projects", saved=saved)
@@ -208,11 +307,6 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             for status in statuses:
                 workspace["by_status"][status] = workspace["by_status"][status][:5]
         return out
-
-    def _save_toolsets(session: Session, form) -> None:
-        cfg = _ensure_cfg(session)
-        cfg.toolchain_presets = _parse_toolchain_presets(form)
-        session.commit()
 
     @router.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request):
@@ -400,29 +494,76 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         return _render_settings(request, session, category="worktrees", saved=True)
 
     @router.get("/toolsets", response_class=HTMLResponse, dependencies=[auth])
-    async def toolsets_page(request: Request, session: Session = Depends(get_session)):
-        return _render_toolsets(request, session, saved=False)
+    async def toolsets_page(
+        request: Request,
+        session: Session = Depends(get_session),
+        selected: str | None = Query(default=None),
+    ):
+        return _render_toolsets(request, session, selected_name=selected)
 
-    @router.post("/toolsets", response_class=HTMLResponse, dependencies=[auth])
-    async def toolsets_save(
+    @router.get("/toolsets/new", response_class=HTMLResponse, dependencies=[auth])
+    async def toolsets_new(request: Request, session: Session = Depends(get_session)):
+        partial = request.headers.get("HX-Request") == "true"
+        return _render_toolsets(request, session, selected_name=None,
+                                pane_mode="new", partial=partial)
+
+    @router.get("/toolsets/pane/{name}", response_class=HTMLResponse, dependencies=[auth])
+    async def toolsets_pane(
+        name: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        cfg = session.get(ConfigRow, 1)
+        opts = toolchain_options(cfg)
+        preset = next((o for o in opts if o["name"] == name), None)
+        if preset is None:
+            raise HTTPException(404, f"toolset {name!r} not found")
+        partial = request.headers.get("HX-Request") == "true"
+        mode = "builtin" if preset["builtin"] else "edit"
+        return _render_toolsets(request, session, selected_name=name,
+                                pane_mode=mode, partial=partial)
+
+    @router.post("/toolsets/preset", dependencies=[auth])
+    async def toolsets_preset_upsert(
         request: Request,
         session: Session = Depends(get_session),
     ):
         form = await request.form()
-        _save_toolsets(session, form)
-        return _render_toolsets(request, session, saved=True)
+        original_name = str(form.get("original_name", "") or "").strip()
+        new_name = str(form.get("preset_name", "") or "").strip()
+        paths_raw = str(form.get("preset_paths_json", "[]") or "[]")
+
+        try:
+            paths = json.loads(paths_raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, f"invalid paths JSON: {exc.msg}")
+
+        cfg = _ensure_cfg(session)
+        existing: dict[str, list[str]] = dict(cfg.toolchain_presets or {})
+        cfg.toolchain_presets = _validate_preset_upsert(
+            new_name, paths, existing, original_name=original_name
+        )
+        session.commit()
+        return RedirectResponse(url=f"/toolsets/pane/{new_name}", status_code=303)
+
+    @router.post("/toolsets/preset/{name}/delete", dependencies=[auth])
+    async def toolsets_preset_delete(
+        name: str,
+        session: Session = Depends(get_session),
+    ):
+        if name in BUILTIN_TOOLCHAINS:
+            raise HTTPException(422, f"cannot delete built-in toolchain {name!r}")
+        cfg = _ensure_cfg(session)
+        existing = dict(cfg.toolchain_presets or {})
+        if name not in existing:
+            raise HTTPException(404, f"toolset preset {name!r} not found")
+        existing.pop(name)
+        cfg.toolchain_presets = existing
+        session.commit()
+        return RedirectResponse(url="/toolsets", status_code=303)
 
     @router.get("/settings/external-tools", response_class=HTMLResponse, dependencies=[auth])
     async def settings_external_tools_page(request: Request, session: Session = Depends(get_session)):
-        return RedirectResponse(url="/toolsets", status_code=303)
-
-    @router.post("/settings/external-tools", response_class=HTMLResponse, dependencies=[auth])
-    async def settings_external_tools_save(
-        request: Request,
-        session: Session = Depends(get_session),
-    ):
-        form = await request.form()
-        _save_toolsets(session, form)
         return RedirectResponse(url="/toolsets", status_code=303)
 
     @router.get("/projects", response_class=HTMLResponse, dependencies=[auth])
@@ -602,6 +743,94 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         await projects_archive(request, project_id, session)
         return RedirectResponse(url="/projects", status_code=303)
 
+
+    @router.get("/projects/{project_id}/tickets-pane", response_class=HTMLResponse, dependencies=[auth])
+    async def project_tickets_pane(
+        request: Request,
+        project_id: str,
+        status: str = Query(default=""),
+        session: Session = Depends(get_session),
+    ):
+        """Read-focused ticket rows for a project's Tickets tab.
+
+        Filtered to the active lifecycle statuses (or one of them via ?status=)
+        and ordered most-recently-updated first. Rows link to the ticket detail
+        page; no inline editing, drag, or bulk select here by design.
+        """
+        try:
+            project = get_project(session, project_id)
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        active = status.strip().lower()
+        if active and active not in _PANE_STATUSES:
+            active = ""
+        stmt = (
+            select(Ticket)
+            .where(Ticket.project_id == project_id)
+            .where(Ticket.status == active if active else Ticket.status.in_(_PANE_STATUSES))
+            .order_by(Ticket.updated_at.desc())
+        )
+        tickets = list(session.scalars(stmt))
+        # Last-run outcome per ticket, batched so a long list never fans out.
+        run_ids = [t.current_run_id for t in tickets if t.current_run_id]
+        runs_by_id = {
+            r.id: r
+            for r in (session.scalars(select(Run).where(Run.id.in_(run_ids))) if run_ids else [])
+        }
+        run_outcomes = {
+            t.id: _run_outcome(runs_by_id[t.current_run_id])
+            for t in tickets
+            if t.current_run_id and t.current_run_id in runs_by_id
+        }
+        return templates.TemplateResponse(
+            request,
+            "partials/project_tickets_pane.html",
+            {
+                "project": project,
+                "tickets": tickets,
+                "active_status": active,
+                "status_pills": _PANE_STATUS_PILLS,
+                "run_outcomes": run_outcomes,
+            },
+        )
+
+    @router.get("/projects/{project_id}/activity-pane", response_class=HTMLResponse, dependencies=[auth])
+    async def project_activity_pane(
+        request: Request,
+        project_id: str,
+        session: Session = Depends(get_session),
+    ):
+        """Chronological feed of the project's ~30 most recent agent runs."""
+        try:
+            project = get_project(session, project_id)
+        except ProjectNotFound:
+            raise HTTPException(404, "project not found")
+        runs = list(session.scalars(
+            select(Run)
+            .join(Ticket, Run.ticket_id == Ticket.id)
+            .where(Ticket.project_id == project_id)
+            .order_by(Run.started_at.desc())
+            .limit(30)
+        ))
+        rows = []
+        for run in runs:
+            ticket = run.ticket
+            if ticket is None:
+                continue
+            tokens = (run.input_tokens or 0) + (run.output_tokens or 0)
+            rows.append({
+                "run": run,
+                "ticket": ticket,
+                "outcome": _run_outcome(run),
+                "duration": _run_duration(run),
+                "tokens": f"{tokens:,}" if tokens else "",
+                "rel": _relative_time(run.started_at),
+            })
+        return templates.TemplateResponse(
+            request,
+            "partials/project_activity_pane.html",
+            {"project": project, "rows": rows},
+        )
 
     @router.get("/settings/notifications", response_class=HTMLResponse, dependencies=[auth])
     async def settings_notifications_page(request: Request, session: Session = Depends(get_session)):

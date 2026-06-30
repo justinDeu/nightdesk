@@ -18,7 +18,7 @@
 {% macro pct(x) -%}{{ '%.0f'|format(x * 100) }}%{%- endmacro %}
 
 {% block body %}
-<section class="max-w-5xl mx-auto space-y-6">
+<section class="space-y-6">
   <header class="flex items-center justify-between flex-wrap gap-2">
     <h1 class="text-xl font-bold">Token &amp; usage analytics</h1>
     <span class="text-xs text-fg-muted">
@@ -42,7 +42,8 @@
     {% endfor %}
   </div>
 
-  {# --- token mix + cache efficiency (last 30 days) ---------------------- #}
+  {# --- token mix + daily chart: 2-up at xl, stacked below that --------- #}
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
   <div class="border border-border rounded-md bg-bg-elev p-4">
     <h2 class="font-semibold mb-3">Token mix &amp; cache efficiency (last 30 days)</h2>
     {% set t = last_30d %}
@@ -56,16 +57,16 @@
              data-tooltip="Input · {{ fmt_tokens(t.input_tokens) }} ({{ '%.0f'|format(inp) }}%)"></div>
         <div class="bg-accent-strong" style="width: {{ out }}%"
              data-tooltip="Output · {{ fmt_tokens(t.output_tokens) }} ({{ '%.0f'|format(out) }}%)"></div>
-        <div class="bg-green-500" style="width: {{ cr }}%"
+        <div class="bg-accent" style="width: {{ cr }}%"
              data-tooltip="Cache read · {{ fmt_tokens(t.cache_read_tokens) }} ({{ '%.0f'|format(cr) }}%)"></div>
-        <div class="bg-amber-500 last:rounded-r-full" style="width: {{ cw }}%"
+        <div class="bg-warn last:rounded-r-full" style="width: {{ cw }}%"
              data-tooltip="Cache write · {{ fmt_tokens(t.cache_write_tokens) }} ({{ '%.0f'|format(cw) }}%)"></div>
       </div>
       <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm font-mono">
         <div><div class="text-xs text-fg-muted">Input</div><div>{{ fmt_tokens(t.input_tokens) }}</div></div>
         <div><div class="text-xs text-fg-muted">Output</div><div>{{ fmt_tokens(t.output_tokens) }}</div></div>
-        <div><div class="text-xs text-fg-muted">Cache read</div><div class="text-green-400">{{ fmt_tokens(t.cache_read_tokens) }}</div></div>
-        <div><div class="text-xs text-fg-muted">Cache write</div><div class="text-amber-400">{{ fmt_tokens(t.cache_write_tokens) }}</div></div>
+        <div><div class="text-xs text-fg-muted">Cache read</div><div class="text-accent">{{ fmt_tokens(t.cache_read_tokens) }}</div></div>
+        <div><div class="text-xs text-fg-muted">Cache write</div><div class="text-warn">{{ fmt_tokens(t.cache_write_tokens) }}</div></div>
         <div><div class="text-xs text-fg-muted">Cache hit</div><div class="text-lg font-bold leading-tight">{{ pct(t.cache_hit_rate) }}</div></div>
       </div>
     {% else %}
@@ -123,6 +124,7 @@
       <p class="text-sm text-fg-muted">No tokens recorded in this window.</p>
     {% endif %}
   </div>
+  </div>
 
   {# --- per-model stats (last 30 days) ----------------------------------- #}
   <div class="border border-border rounded-md bg-bg-elev p-4">
@@ -146,7 +148,7 @@
               <td class="py-1 text-right text-fg-muted">{{ row.run_count }}</td>
               <td class="py-1 text-right">{{ fmt_tokens(row.total_tokens) }}</td>
               <td class="py-1 text-right text-fg-muted">{{ fmt_tokens(row.input_tokens) }} / {{ fmt_tokens(row.output_tokens) }}</td>
-              <td class="py-1 text-right text-green-400">{{ pct(row.cache_hit_rate) }}</td>
+              <td class="py-1 text-right text-accent">{{ pct(row.cache_hit_rate) }}</td>
               <td class="py-1 text-right text-fg-muted">${{ '%.2f'|format(row.cost) }}</td>
             </tr>
           {% endfor %}
@@ -192,7 +194,7 @@
               <tr class="border-t border-border/50">
                 <td class="py-1 truncate">{{ row.name }}</td>
                 <td class="py-1 text-right text-fg-muted">{{ row.run_count }}</td>
-                <td class="py-1 text-right text-green-400">{{ pct(row.cache_hit_rate) }}</td>
+                <td class="py-1 text-right text-accent">{{ pct(row.cache_hit_rate) }}</td>
                 <td class="py-1 text-right">{{ fmt_tokens(row.total_tokens) }}</td>
               </tr>
             {% endfor %}

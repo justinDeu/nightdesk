@@ -6,7 +6,9 @@
   dependencies re-renders just this fragment.
 #}
 <section id="dependency-section" class="flex flex-col gap-1">
-  <span class="text-fg-muted text-xs uppercase tracking-wide">Dependencies</span>
+  {# Header is supplied by the caller (the sidebar's Dependencies section) so
+     it isn't rendered twice. The htmx swap target is this <section>, so the
+     caller's header persists across add/remove re-renders. #}
 
   {% if upstreams %}
     <ul class="flex flex-col gap-1">
@@ -55,7 +57,7 @@
              id="dep-search-{{ ticket.id }}"
              placeholder="Search ticket to depend on..."
              autocomplete="off"
-             class="flex-1 bg-bg-elev-2 border border-border rounded px-2 py-1 text-xs font-mono text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+             class="field flex-1 font-mono text-xs"
              oninput="window.ndDepSearch(this, '{{ ticket.id }}')"
              onfocus="window.ndDepSearch(this, '{{ ticket.id }}')"
              onblur="setTimeout(function(){ document.getElementById('dep-results-{{ ticket.id }}').classList.add('hidden'); }, 200)"
