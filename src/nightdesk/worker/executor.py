@@ -25,6 +25,14 @@ class ExecutionRequest:
     # conversation's full message history instead of starting fresh. None for
     # every other intent (and when a continue fell back to fresh context).
     resume_session_id: Optional[str] = None
+    # The user's typed continue message (``continue`` intent). When set, the
+    # executor writes it as a ``user_message`` event at the very start of this
+    # run's transcript so the continuity boundary is visible — the resumed run
+    # reads "the user typed this to continue". The message itself is carried as
+    # the next user turn via the SDK prompt (see build_continue_prompt), not via
+    # this field; this field is only the transcript affordance. None for every
+    # non-continue intent and for a textless continue (the header button).
+    continue_message: Optional[str] = None
 
 
 @dataclass

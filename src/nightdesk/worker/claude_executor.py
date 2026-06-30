@@ -123,6 +123,21 @@ class ClaudeExecutor:
                     "seq": next_seq(seq_counter),
                     "ticket_id": req.ticket_id,
                 })
+                # ``continue`` intent: persist the user's typed message as the
+                # first real event so the resumed transcript shows it at the
+                # continuity boundary ("the user typed this to continue"). The
+                # message reaches the SDK as the next user turn via the prompt
+                # (build_continue_prompt); this event is the transcript
+                # affordance only. ``continued_session`` flags whether the run
+                # genuinely resumed a prior session (vs. a fresh-context
+                # fallback) so the renderer can label the boundary honestly.
+                if req.continue_message:
+                    write_event(f, {
+                        "type": "user_message", "ts": now_iso(),
+                        "seq": next_seq(seq_counter),
+                        "text": req.continue_message,
+                        "continued_session": bool(req.resume_session_id),
+                    })
                 # Chunked read so a single oversized JSON event can't trip
                 # asyncio's StreamReader line limit (default 64 KiB).
                 while True:

@@ -122,6 +122,76 @@ async def test_claude_executor_writes_transcript_and_final_summary(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_executor_writes_user_message_event_at_boundary_for_continue(tmp_path):
+    """A continue run opens its transcript with the user's typed message so the
+    continuity boundary is visible. The event lands right after the meta header
+    (before any agent output) and carries ``continued_session`` reflecting
+    whether the run genuinely resumed a prior SDK session."""
+    transcript = tmp_path / "t.log"
+    lines = [
+        json.dumps({"type": "assistant", "content": "picking it back up"}).encode() + b"\n",
+        json.dumps({"type": "result", "subtype": "success",
+                    "result": "continued ok"}).encode() + b"\n",
+    ]
+    fake = FakeProc(stdout_lines=lines, returncode=0)
+
+    async def fake_spawn(argv):
+        return fake
+
+    with patch("nightdesk.worker.claude_executor._spawn_sdk_subprocess", new=fake_spawn):
+        from nightdesk.worker.claude_executor import ClaudeExecutor
+        spec = PermissionSpec()
+        req = ExecutionRequest(
+            ticket_id="t1", prompt="hi", working_dir=tmp_path,
+            transcript_path=transcript,
+            bwrap_argv=["bwrap"], env={}, permission_spec=spec,
+            resume_session_id="sess-parent-9",
+            continue_message="Now add the touch variant",
+        )
+        res = await ClaudeExecutor().run(req)
+    assert res.exit_status == "success"
+
+    events = [json.loads(ln) for ln in transcript.read_text().splitlines() if ln.strip()]
+    types = [e.get("type") for e in events]
+    # meta first, then the user_message boundary event, then agent output.
+    assert types[0] == "meta"
+    assert types[1] == "user_message"
+    assert "user_message" not in types[2:]
+    um = events[1]
+    assert um["text"] == "Now add the touch variant"
+    # Genuine resume: continued_session flags a real resumed session.
+    assert um["continued_session"] is True
+
+
+@pytest.mark.anyio
+async def test_executor_omits_user_message_event_without_continue_message(tmp_path):
+    """Every non-continue intent (and a textless continue) sends no
+    continue_message, so no user_message event is written — the transcript
+    opens straight into meta + agent output."""
+    transcript = tmp_path / "t.log"
+    lines = [
+        json.dumps({"type": "assistant", "content": "working"}).encode() + b"\n",
+        json.dumps({"type": "result", "subtype": "success",
+                    "result": "done"}).encode() + b"\n",
+    ]
+    fake = FakeProc(stdout_lines=lines, returncode=0)
+
+    async def fake_spawn(argv):
+        return fake
+
+    with patch("nightdesk.worker.claude_executor._spawn_sdk_subprocess", new=fake_spawn):
+        from nightdesk.worker.claude_executor import ClaudeExecutor
+        req = ExecutionRequest(
+            ticket_id="t1", prompt="hi", working_dir=tmp_path,
+            transcript_path=transcript,
+            bwrap_argv=["bwrap"], env={}, permission_spec=PermissionSpec(),
+        )
+        await ClaudeExecutor().run(req)
+    events = [json.loads(ln) for ln in transcript.read_text().splitlines() if ln.strip()]
+    assert all(e.get("type") != "user_message" for e in events)
+
+
+@pytest.mark.anyio
 async def test_usage_model_taken_from_assistant_stream(tmp_path):
     """The result event carries no model, so the model the agent actually used
     is captured from the assistant messages — not left NULL ("unknown")."""

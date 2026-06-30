@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from nightdesk.api.app import create_app
 from nightdesk.domain.profiles import create_profile
-from nightdesk.domain.runs import start_run
+from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import create_ticket, get_ticket, transition_status
 _PROC_DIR_KW = "c" "wd"
 
@@ -492,6 +492,98 @@ async def test_review_ticket_shows_continue_run_button_with_tooltip(
     # The hover detail explains the continue-vs-resume distinction.
     assert "full Claude Code conversation" in body
     assert "data-tooltip=" in body
+
+
+async def test_review_ticket_with_prior_run_shows_end_of_transcript_continue_box(
+    cookie_client, session, tmp_path,
+):
+    """A review ticket with a prior run renders the chat-style continue composer
+    at the end of the transcript. It posts the typed text to the existing
+    /continue route as next_run_context (which the worker carries as the next
+    user turn), and its hint reflects that the prior session is resumable."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="rerun", prompt="fix it",
+                       priority=0, profile_id=p.id, status="queued",
+                       run_now=False, source_path="/tmp")
+    transition_status(session, t.id, "running")
+    log = tmp_path / "transcripts" / "prior.log"
+    run = start_run(session, ticket_id=t.id, worktree_path="/tmp/w",
+                    transcript_path=str(log), pid=None, host="testhost")
+    finish_run(session, run.id, exit_status="success", error_summary=None,
+               session_id="sess-prior-1")
+    transition_status(session, t.id, "review")
+
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # The end-of-transcript composer is present and targets /continue.
+    assert 'class="continue-box"' in body
+    assert f'action="/tickets/{t.id}/continue"' in body
+    assert 'name="next_run_context"' in body
+    assert "Type a message to continue this run" in body
+    # The prior run recorded a session id, so the hint promises a real resume.
+    assert "Continues this conversation with full history" in body
+    # The composer sits after the transcript scroll area, not inside it: it
+    # appears exactly once.
+    assert body.count('class="continue-box"') == 1
+
+
+async def test_continue_box_hidden_when_not_continuable(cookie_client, session):
+    """The composer only appears for continuable state (review/archived) with a
+    prior run. A running ticket and a review ticket with no prior run both
+    degrade without the box (and without a confusing 'continue' affordance)."""
+    p = _make_profile(session)
+
+    # (a) Running ticket: not continuable.
+    t_run = create_ticket(session, title="running", prompt="p",
+                          priority=0, profile_id=p.id, status="running",
+                          run_now=False, source_path="/tmp")
+    rr = await cookie_client.get(f"/tickets/{t_run.id}")
+    assert 'class="continue-box"' not in rr.text
+
+    # (b) Review ticket with NO prior run: nothing to continue from.
+    t_review = create_ticket(session, title="review-no-run", prompt="p",
+                             priority=0, profile_id=p.id, status="queued",
+                             run_now=False, source_path="/tmp")
+    transition_status(session, t_review.id, "running")
+    transition_status(session, t_review.id, "review")
+    r2 = await cookie_client.get(f"/tickets/{t_review.id}")
+    assert 'class="continue-box"' not in r2.text
+
+
+async def test_canonical_transcript_renders_user_message_at_boundary(
+    cookie_client, session, tmp_path,
+):
+    """A continued run's transcript opens with the user's typed message so the
+    continuity boundary is visible — rendered as a user bubble flagged
+    'continued from prior run', not as raw JSON."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="t", prompt="p",
+                       priority=0, profile_id=p.id, run_now=False, source_path="/tmp")
+    log = tmp_path / "transcripts" / "run-cont.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"type": "meta", "ts": "2026-06-30T00:00:00Z", "seq": 0, "ticket_id": t.id},
+        {"type": "user_message", "ts": "2026-06-30T00:00:01Z", "seq": 1,
+         "text": "Now also fix the touch variant", "continued_session": True},
+        {"type": "assistant_text", "ts": "2026-06-30T00:00:02Z", "seq": 2,
+         "text": "On it — picking up where we left off."},
+        {"type": "result", "ts": "2026-06-30T00:00:03Z", "seq": 3,
+         "subtype": "success", "summary": "done"},
+    ]
+    log.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    start_run(session, ticket_id=t.id, worktree_path=str(tmp_path / "work"),
+              transcript_path=str(log), pid=None, host="testhost")
+
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+    # The typed message renders as a user bubble at the boundary.
+    assert "Now also fix the touch variant" in body
+    assert 'class="user-message"' in body
+    assert "continued from prior run" in body
+    # Rendered, not the raw JSON fallback.
+    assert '"type":"user_message"' not in body
 
 
 async def test_project_settings_warning_renders_inside_header_card(

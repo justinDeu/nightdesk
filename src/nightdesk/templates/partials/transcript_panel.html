@@ -108,6 +108,36 @@
       {% endif %}
     </div>
 
+    {# End-of-transcript continue composer: a chat-style input box at the point
+       the conversation visually stops, so continuing reads as "type to resume
+       this run" rather than a detached header button or modal. Shown only when
+       this run is continuable (review/archived, a prior run exists, and the
+       latest run is in view) — ``can_continue`` is computed by the route. The
+       typed text POSTs to the existing /continue route as next_run_context;
+       the worker carries it as the next user turn on top of the resumed
+       conversation (build_continue_prompt). #}
+    {% if can_continue is defined and can_continue %}
+      {% if selected_run and selected_run.session_id %}
+        {% set continue_hint = "Continues this conversation with full history — the agent keeps all prior context. Enter to send, Shift+Enter for a newline." %}
+      {% else %}
+        {% set continue_hint = "No resumable session was recorded for the prior run — continuing starts fresh on this workspace with your message. Enter to send, Shift+Enter for a newline." %}
+      {% endif %}
+      <form class="continue-box" method="post" action="/tickets/{{ ticket.id }}/continue"
+            autocomplete="off">
+        <div class="continue-box-row">
+          <textarea name="next_run_context" rows="1"
+                    class="continue-box-input"
+                    placeholder="Type a message to continue this run…"
+                    aria-label="Message to continue this run"
+                    oninput="var t=this;t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'"
+                    onkeydown="if((event.metaKey||event.ctrlKey)&&event.key==='Enter'){event.preventDefault();this.form.requestSubmit();}"></textarea>
+          <button type="submit" class="btn btn-primary continue-box-submit"
+                  data-tooltip="Continue the prior conversation with this message (⌘/Ctrl+Enter)">Continue</button>
+        </div>
+        <div class="continue-box-hint">{{ continue_hint }}</div>
+      </form>
+    {% endif %}
+
     <script>
     (function () {
       const sidebar = document.getElementById('transcript-sidebar');
@@ -689,6 +719,16 @@
             const ts = escapeHtml(evt.ts || '');
             return el(`<div class="text-fg-muted text-xs font-mono py-1">run ${escapeHtml((evt.run_id || '').slice(0,8))} started <span data-ts="${ts}">${ts}</span></div>`);
           }
+          if (t === 'user_message') {
+            // Mirror evt_user_message in transcript_event.html: the user's typed
+            // continue message at the continuity boundary. Drop empty text.
+            const text = evt.text || '';
+            if (!text.trim()) return null;
+            const cont = evt.continued_session
+              ? '<span class="user-message-continuation"> · continued from prior run</span>'
+              : '<span class="user-message-continuation"> · fresh context</span>';
+            return el('<div class="user-message"><div class="user-message-author">user' + cont + '</div><div class="user-message-body">' + escapeHtml(text) + '</div></div>');
+          }
           if (t === 'assistant_text') {
             // Mirror evt_assistant_text in transcript_event.html: skip
             // empty-text events so we don't render a bare "claude" chip
@@ -1213,7 +1253,7 @@
         function advance(evt) {
           if (typeof evt.seq === 'number' && evt.seq > lastSeq) lastSeq = evt.seq;
         }
-        ['meta', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error', 'rate_limit', 'cancelled', 'subagent'].forEach(function (t) {
+        ['meta', 'user_message', 'assistant_text', 'thinking', 'tool_use', 'tool_result', 'result', 'worker_error', 'rate_limit', 'cancelled', 'subagent'].forEach(function (t) {
           es.addEventListener(t, function (e) {
             const evt = parse(e);
             if (!evt) return;

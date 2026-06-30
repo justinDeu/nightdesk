@@ -650,6 +650,53 @@ async def test_run_one_continue_threads_resume_session_id_and_seeds_sandbox(
 
 
 @pytest.mark.anyio
+async def test_run_one_continue_with_message_makes_it_the_user_turn(
+    session, sample_profile, tmp_path,
+):
+    """Requirement: typing a continue message must carry it as a NEW user turn
+    on top of the resumed SDK conversation — not fold it into a reconstructed
+    prompt as NEXT RUN CONTEXT. For a genuine continue (parent session seeded),
+    the SDK prompt is built around the typed message, resume_session_id is
+    threaded, and the message is also surfaced on the request so the executor
+    can write it at the transcript boundary."""
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    ticket = create_ticket(
+        session, title="cont", prompt="Fix it", status="queued",
+        priority=0, profile_id=sample_profile.id, source_path=str(primary),
+    )
+    parent_sid = "sess-parent-msg-1"
+    prior = _stage_parent_run(session, ticket, tmp_path, session_id=parent_sid)
+    _write_parent_session_file(tmp_path, prior.id, parent_sid)
+    follow_up = "Now also cover the touch-screen variant"
+    base_prompt = ticket.prompt  # capture before run_one closes its session
+    continue_ticket(session, ticket.id, next_run_context=follow_up)
+    transition_status(session, ticket.id, "running")
+
+    executor = CapturingExecutor()
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(worktree_root=tmp_path / "work",
+                     transcript_root=tmp_path / "transcripts",
+                     secrets={}, host="testhost", executor=executor),
+        ticket.id,
+    )
+    assert result.exit_status == "success"
+    assert executor.request is not None
+    # The typed message is the next user turn on the resumed conversation...
+    assert "USER MESSAGE\n" + follow_up in executor.request.prompt
+    # ...NOT folded into the reconstructed headless blob.
+    assert "NEXT RUN CONTEXT" not in executor.request.prompt
+    assert "BASE TICKET PROMPT" not in executor.request.prompt
+    # The prior base prompt is in the resumed history already, so it is not
+    # re-sent as part of this turn.
+    assert base_prompt not in executor.request.prompt
+    # The resume target + transcript affordance are threaded onto the request.
+    assert executor.request.resume_session_id == parent_sid
+    assert executor.request.continue_message == follow_up
+
+
+@pytest.mark.anyio
 async def test_run_one_continue_falls_back_when_session_file_missing(
     session, sample_profile, tmp_path,
 ):

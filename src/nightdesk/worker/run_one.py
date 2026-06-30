@@ -42,6 +42,7 @@ from nightdesk.transcript import append_event, append_worker_error
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult, Executor
 from nightdesk.worker.headless_prompt import (
     HEADLESS_POLICY_VERSION,
+    build_continue_prompt,
     build_headless_prompt,
 )
 from nightdesk.worker.sandbox import (
@@ -696,27 +697,52 @@ async def run_one(
             )
             log.debug("building headless prompt for ticket %s run %s", ticket.id, run.id)
             _setup_phase = "prompt_build"
-            # When a ``continue`` fell back to fresh context, the agent is NOT
-            # resuming the prior conversation, so don't hand it the
-            # "resuming the prior conversation" instruction — use the honest
-            # resume (fresh-context) wording instead. The Run.intent DB column
-            # still records "continue" for traceability.
-            prompt_intent = "resume" if fell_back_to_fresh_context else run_intent
-            prompt = build_headless_prompt(
-                ticket_id=ticket.id,
-                ticket_title=ticket.title,
-                base_prompt=ticket.prompt,
-                run_intent=prompt_intent,
-                workspace_path=str(ws.path),
-                next_run_context=next_run_context,
-                last_run_summary=(parent_run.error_summary or parent_run.exit_status) if parent_run is not None else None,
+            # ``continue`` intent: when the user typed a message AND we are
+            # genuinely resuming the prior SDK conversation, send that message
+            # as the next user turn on top of the resumed history — not buried
+            # as "NEXT RUN CONTEXT" inside the reconstructed headless blob. The
+            # base ticket prompt plus every prior turn are already in the
+            # resumed session, so build_continue_prompt emits the user's text as
+            # the body of the SDK prompt, which the SDK appends verbatim as the
+            # next user message. Textless continues (the header button) and
+            # every fresh-context fallback keep the existing reconstructed prompt.
+            continue_message = (next_run_context or "").strip() if run_intent == "continue" else ""
+            genuine_continue = bool(
+                run_intent == "continue" and resume_session_id and continue_message
             )
+            if genuine_continue:
+                prompt = build_continue_prompt(
+                    ticket_id=ticket.id,
+                    ticket_title=ticket.title,
+                    user_message=continue_message,
+                    workspace_path=str(ws.path),
+                )
+            else:
+                # When a ``continue`` fell back to fresh context, the agent is NOT
+                # resuming the prior conversation, so don't hand it the
+                # "resuming the prior conversation" instruction — use the honest
+                # resume (fresh-context) wording instead. The Run.intent DB column
+                # still records "continue" for traceability.
+                prompt_intent = "resume" if fell_back_to_fresh_context else run_intent
+                prompt = build_headless_prompt(
+                    ticket_id=ticket.id,
+                    ticket_title=ticket.title,
+                    base_prompt=ticket.prompt,
+                    run_intent=prompt_intent,
+                    workspace_path=str(ws.path),
+                    next_run_context=next_run_context,
+                    last_run_summary=(parent_run.error_summary or parent_run.exit_status) if parent_run is not None else None,
+                )
             request = ExecutionRequest(
                 ticket_id=ticket.id, prompt=prompt,
                 working_dir=ws.path, transcript_path=Path(run.transcript_path),
                 bwrap_argv=argv, env=env, permission_spec=spec,
                 cancel_event=cancel_event,
                 resume_session_id=resume_session_id,
+                # Surface the typed continue message at the transcript boundary
+                # for any continue that carried one (genuine resume or fallback),
+                # so the resumed run visibly opens with what the user typed.
+                continue_message=continue_message or None,
             )
 
             watcher = asyncio.create_task(

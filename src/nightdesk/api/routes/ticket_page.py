@@ -78,6 +78,13 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             selected_run.transcript_path if selected_run else None
         )
 
+        # The end-of-transcript continue composer is shown only when the ticket
+        # is continuable (review/archived) and the latest run is in view — at
+        # page load the latest run is always the preselected one.
+        can_continue = (
+            t.status in ("review", "archived") and selected_run is not None
+        )
+
         # Map run_id → TicketWorkspace so the template can show per-run
         # worktree info (branch, resolved_path) without N+1 queries.
         run_workspaces: dict = {}
@@ -124,6 +131,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
             "runs": runs,
             "selected_run": selected_run,
             "live": selected_run is not None and selected_run.finished_at is None,
+            "can_continue": can_continue,
             "transcript_events": events,
             "transcript_raw": raw_text,
             "project_settings_paths": project_settings_paths,
@@ -160,11 +168,20 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         if run.ticket_id != tid:
             raise HTTPException(404, "run not on this ticket")
         events, raw_text = _load_transcript(run.transcript_path)
+        # The continue composer belongs at the end of the LATEST run's
+        # transcript; an older run picked from history is not continuable, so
+        # suppress it there (continuing always resumes from the latest run).
+        latest = list_runs(session, ticket_id=tid)
+        is_latest = bool(latest) and latest[0].id == run.id
+        can_continue = (
+            t.status in ("review", "archived") and is_latest
+        )
         return templates.TemplateResponse(
             request, "partials/transcript_panel.html", {
                 "ticket": t,
                 "selected_run": run,
                 "live": run.finished_at is None,
+                "can_continue": can_continue,
                 "transcript_events": events,
                 "transcript_raw": raw_text,
             },

@@ -18,6 +18,25 @@
   </div>
 {% endmacro %}
 
+{# user_message: the user's typed continue message, written at the very start of
+   a continued run's transcript so the continuity boundary is obvious — it reads
+   as "the user typed this to resume the conversation". Distinct from the
+   opening user_prompt (the base ticket prompt): that is the original task; this
+   is the new turn the user added on top of the resumed conversation. When
+   continued_session is true the run genuinely resumed a prior SDK session; when
+   false it fell back to fresh context (a sibling continue_session_unavailable
+   breadcrumb explains why), and we say so instead of claiming a continuation.
+   The JS live-tail in transcript_panel.html mirrors this shape. #}
+{% macro evt_user_message(evt) %}
+  {% set text = evt.get('text','') %}
+  {% if text and text.strip() %}
+    <div class="user-message">
+      <div class="user-message-author">user{% if evt.get('continued_session') %}<span class="user-message-continuation"> · continued from prior run</span>{% else %}<span class="user-message-continuation"> · fresh context</span>{% endif %}</div>
+      <div class="user-message-body">{{ text }}</div>
+    </div>
+  {% endif %}
+{% endmacro %}
+
 {# assistant_text: first-class block (left accent border, elevated bg,
    author chip) so the model's prose stands out from surrounding tool
    cards. Non-code segments are markdown, rendered to safe HTML by
@@ -264,6 +283,7 @@
 {% macro render_event(evt, paired_result=None) %}
   {% set t = evt.get('type','') %}
   {% if t == 'meta' %}{{ evt_meta(evt) }}
+  {% elif t == 'user_message' %}{{ evt_user_message(evt) }}
   {% elif t == 'assistant_text' %}{{ evt_assistant_text(evt) }}
   {% elif t == 'thinking' %}{{ evt_thinking(evt) }}
   {% elif t == 'tool_use' %}{{ evt_tool_use(evt, paired_result) }}
