@@ -20,7 +20,7 @@ from nightdesk.domain.effective_config import resolve_for_ticket
 from nightdesk.domain.profiles import list_profiles
 from nightdesk.domain.labels import list_labels
 from nightdesk.domain.query import Cmp, parse_query, search_runs, search_tickets
-from nightdesk.domain.runs import get_run, list_runs
+from nightdesk.domain.runs import list_runs
 from nightdesk.domain.toolchains import current_config, toolchain_options
 from nightdesk.domain.priority import (
     priority_css,
@@ -587,6 +587,31 @@ def _list_labels_sidebar(session: Session) -> list:
     return _ll(session)
 
 
+def _batched_run_outcomes(session: Session, tickets: list) -> dict[str, str]:
+    """Map ticket_id -> active-conversation-latest-turn exit status, N+1-free.
+
+    ``ticket.current_run_id`` always points at the latest turn of the ticket's
+    active conversation, so this is the board card outcome source. One query
+    fetches every referenced turn; tickets with no current run are absent.
+    Only concrete exit statuses are surfaced (no 'running' inference here —
+    the board outcome chip is for review tickets whose turn finished).
+    """
+    from nightdesk.db.models import Run as _Run
+
+    run_ids = [t.current_run_id for t in tickets if getattr(t, "current_run_id", None)]
+    if not run_ids:
+        return {}
+    rows = session.scalars(select(_Run).where(_Run.id.in_(run_ids))).all()
+    by_id = {r.id: r for r in rows}
+    out: dict[str, str] = {}
+    for t in tickets:
+        rid = getattr(t, "current_run_id", None)
+        run = by_id.get(rid) if rid else None
+        if run is not None and run.exit_status:
+            out[t.id] = run.exit_status
+    return out
+
+
 def _list_run_outcomes(session: Session, tickets: list) -> dict[str, str]:
     """Map ticket_id -> last-run status for the list view's "last run" column.
 
@@ -719,15 +744,12 @@ def _gather_board(session: Session, *, q: str = "", group: str = "status", order
     raw["queued"] = real_queued
     raw["running"] = run_now_queued + raw["running"]
 
-    review_run_outcomes: dict[str, str] = {}
-    for t in raw["review"]:
-        if t.current_run_id:
-            try:
-                run = get_run(session, t.current_run_id)
-                if run.exit_status:
-                    review_run_outcomes[t.id] = run.exit_status
-            except Exception:
-                pass
+    # Board card outcome chip: sourced from the active conversation's latest
+    # turn. ``ticket.current_run_id`` always points at exactly that turn (the
+    # just-finished turn of ``current_conversation_id``), so batching by it is
+    # both correct and N+1-free (one query for the whole review column, not one
+    # ``get_run`` per ticket).
+    review_run_outcomes = _batched_run_outcomes(session, raw["review"])
 
     # Build a map of ticket_id -> list of upstream titles for blocked indicators.
     dep_titles: dict[str, list[str]] = {}

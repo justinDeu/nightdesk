@@ -122,6 +122,12 @@ class Ticket(Base):
     run_now: Mapped[bool] = mapped_column(Boolean, default=False)
     scheduled_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     current_run_id: Mapped[Optional[str]] = mapped_column(ForeignKey("runs.id"), nullable=True)
+    # The active conversation (1 ticket : N conversations, ordered). Exactly one
+    # is active at a time; selecting/continuing an older conversation re-points
+    # this at it. Nullable for tickets that have never run.
+    current_conversation_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("conversations.id", use_alter=True), nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
     next_run_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -130,6 +136,15 @@ class Ticket(Base):
     project: Mapped[Optional["Project"]] = relationship(back_populates="tickets")
     profile: Mapped[Optional["Profile"]] = relationship(lazy="joined")
     runs: Mapped[list["Run"]] = relationship(back_populates="ticket", foreign_keys="Run.ticket_id")
+    conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="ticket",
+        foreign_keys="Conversation.ticket_id",
+        cascade="all, delete-orphan",
+        order_by="Conversation.position",
+    )
+    current_conversation: Mapped[Optional["Conversation"]] = relationship(
+        foreign_keys=[current_conversation_id], post_update=True,
+    )
     workspaces: Mapped[list["TicketWorkspace"]] = relationship(
         back_populates="ticket",
         cascade="all, delete-orphan",
@@ -179,11 +194,82 @@ class TicketDependency(Base):
     )
 
 
+class Conversation(Base):
+    """A conversation: the primary unit of work.
+
+    A Ticket owns many Conversations (1:N, ordered by ``position``); exactly
+    one is active (``ticket.current_conversation_id``). A Conversation owns
+    many Turns (the existing ``Run`` rows, kept in place) and is bound to one
+    runtime via ``profile_id`` plus a ``backend`` string snapshot that survives
+    profile renames and acts as the runtime lock.
+
+    The authoritative resume handle (``session_id``) lives HERE, lifted off the
+    per-turn Run. A Run keeps the ``session_id`` it observed for traceability.
+    Cost/token totals are CUMULATIVE and equal the LAST turn's reported totals
+    (the SDK reports cumulative-since-process-start tokens, which after a resume
+    include the replayed prefix — summing per-turn would double-count cache-read).
+    One transcript file per conversation (``transcript_path``) with a single
+    monotonic seq space, appended per turn.
+    """
+
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    ticket_id: Mapped[str] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    profile_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("profiles.id"), nullable=True,
+    )
+    # Backend string snapshot frozen at creation (e.g. claude_sdk, opencode).
+    # Survives profile renames and is the runtime lock: the active
+    # conversation's runtime cannot be changed by reassigning the ticket's
+    # profile (that only affects the NEXT new conversation).
+    backend: Mapped[str] = mapped_column(String, default="claude_sdk", nullable=False)
+    # The authoritative resume handle, persisted eagerly on the first
+    # session-bearing event. Null means the conversation is not resumable.
+    session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="active", nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # One transcript file per conversation (shared by every turn in it).
+    transcript_path: Mapped[str] = mapped_column(String, nullable=False)
+    # Cumulative totals == the LAST turn's reported totals (NOT a sum).
+    cost_usd: Mapped[Optional[float]] = mapped_column(sa_Float, nullable=True)
+    input_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cache_read_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cache_write_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    model_used: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    ticket: Mapped["Ticket"] = relationship(
+        back_populates="conversations", foreign_keys=[ticket_id],
+    )
+    profile: Mapped[Optional["Profile"]] = relationship(lazy="joined")
+    runs: Mapped[list["Run"]] = relationship(
+        back_populates="conversation",
+        foreign_keys="Run.conversation_id",
+        order_by="Run.position",
+    )
+    workspaces: Mapped[list["TicketWorkspace"]] = relationship(back_populates="conversation")
+
+
 class Run(Base):
     __tablename__ = "runs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"))
+    # The conversation this turn belongs to. Nullable only for rows created
+    # before this column existed; backfilled by the 0019 migration. Every run
+    # created through ``start_run`` gets one.
+    conversation_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("conversations.id"), nullable=True, index=True,
+    )
+    # Order within the conversation (0-based).
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     exit_status: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -214,6 +300,9 @@ class Run(Base):
     sandbox_tool_paths: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     ticket: Mapped["Ticket"] = relationship(back_populates="runs", foreign_keys=[ticket_id])
+    conversation: Mapped[Optional["Conversation"]] = relationship(
+        back_populates="runs", foreign_keys=[conversation_id],
+    )
 
 
 
@@ -223,6 +312,12 @@ class TicketWorkspace(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), index=True)
     run_id: Mapped[Optional[str]] = mapped_column(ForeignKey("runs.id"), nullable=True, index=True)
+    # A Conversation owns its workspaces (1:N), not the ticket. Required so
+    # continuing an OLD conversation restores the tree it ran against, not one
+    # a newer conversation mutated.
+    conversation_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("conversations.id"), nullable=True, index=True,
+    )
     role: Mapped[str] = mapped_column(String, default="linked", nullable=False)
     label: Mapped[str] = mapped_column(String, default="", nullable=False)
     kind: Mapped[str] = mapped_column(String, nullable=False)
@@ -249,6 +344,7 @@ class TicketWorkspace(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     ticket: Mapped["Ticket"] = relationship(back_populates="workspaces")
+    conversation: Mapped[Optional["Conversation"]] = relationship(back_populates="workspaces")
 
 class ConfigRow(Base):
     __tablename__ = "config"

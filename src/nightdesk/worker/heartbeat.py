@@ -63,6 +63,7 @@ def recover_orphaned_runs(session: Session, *, host: str) -> int:
     """
     now = datetime.now(timezone.utc)
     from sqlalchemy import exists
+    from nightdesk.domain.conversations import sync_conversation_from_turn
     host_run_subq = (
         select(Run.id)
         .where(Run.ticket_id == Ticket.id, Run.finished_at.is_(None), Run.host == host)
@@ -78,29 +79,31 @@ def recover_orphaned_runs(session: Session, *, host: str) -> int:
         ))
         any_alive = False
         for r in local_runs:
-            # Per-run liveness check via Run.pid. Without this, an every-
-            # tick orphan sweep would kill any Run row whose subprocess
-            # the *daemon* doesn't know about — for example, runs spawned
-            # by a manually-invoked ``nightdesk-run-ticket`` CLI on the
-            # same host. We only mark crashed when the pid is provably
-            # dead.
+            # Per-turn liveness check via Run.pid (a Turn is one execution within
+            # a conversation). Without this, an every-tick orphan sweep would
+            # kill any Run row whose subprocess the *daemon* doesn't know about
+            # — for example, runs spawned by a manually-invoked
+            # ``nightdesk-run-ticket`` CLI on the same host. We only mark crashed
+            # when the pid is provably dead.
             if _pid_alive(r.pid):
                 any_alive = True
                 continue
-            log.info("marking orphaned run %s as worker_crash (ticket %s, pid %s)",
+            log.info("marking orphaned turn %s as worker_crash (ticket %s, pid %s)",
                      r.id, t.id, r.pid)
             r.finished_at = now
             r.exit_status = "worker_crash"
             r.error_summary = "worker process died before run completed"
             count += 1
+            # Sync the active conversation's status/totals off the crashed turn.
+            sync_conversation_from_turn(session, r)
         if any_alive:
-            # Some local run is still in flight; don't touch the ticket.
+            # Some local turn is still in flight; don't touch the ticket.
             continue
         other_in_flight = session.scalar(
             select(Run).where(Run.ticket_id == t.id, Run.finished_at.is_(None), Run.host != host)
         )
         if other_in_flight is None:
-            # v2: any run-completion lands the ticket in 'review' so the
+            # v2: any turn-completion lands the ticket in 'review' so the
             # user can inspect the failure and requeue.
             log.info("transitioning orphaned ticket %s from running to review", t.id)
             t.status = "review"
@@ -136,6 +139,12 @@ def recover_orphaned_runs(session: Session, *, host: str) -> int:
         log.info("resetting runless ticket %s from running to queued", t.id)
         t.status = "queued"
         t.current_run_id = None
+        # NOTE: deliberately do NOT clear current_conversation_id. Pass 2
+        # clears the in-flight TURN (current_run_id), not the active
+        # conversation itself — the conversation is history, revisit-able and
+        # re-continuable. (With the turn row now created before workspace prep,
+        # this runless branch rarely fires; it remains a safety net for tickets
+        # wedged into 'running' outside the worker, e.g. a manual DB poke.)
         # Don't reset run_now — the user originally asked for it; let the
         # scheduler bypass capacity on the next tick.
     session.commit()

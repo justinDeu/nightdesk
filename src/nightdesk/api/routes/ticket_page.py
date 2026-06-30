@@ -31,9 +31,9 @@ from nightdesk.domain.toolchains import current_config, toolchain_options
 from nightdesk.domain.labels import list_labels
 from nightdesk.domain.tickets import (
     add_dependency, clone_ticket, continue_ticket, get_ticket, list_dependencies, list_dependents,
-    list_tickets, merge_next_run_context_into_prompt, remove_dependency, restart_ticket,
-    resume_ticket, retry_ticket, set_next_run_context, update_ticket,
-    CyclicDependency, DependencyNotFound, TicketNotFound,
+    list_tickets, merge_next_run_context_into_prompt, new_conversation_ticket, remove_dependency,
+    restart_ticket, resume_ticket, retry_ticket, set_next_run_context, update_ticket,
+    CyclicDependency, DependencyNotFound, InvalidTransition, TicketNotFound,
 )
 from nightdesk.logging_setup import run_log_path
 from nightdesk.transcript import is_canonical, read_events
@@ -207,7 +207,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
         if run.ticket_id != tid:
             raise HTTPException(404, "run not on this ticket")
 
-        ws = select_diff_workspace(_run_workspaces(session, rid, run.ticket_id))
+        ws = select_diff_workspace(_run_workspaces(session, run))
         diff_result = compute_workspace_diff(
             ws,
             transcript_root=Path(run.transcript_path).parent,
@@ -288,20 +288,58 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
     async def continue_form(
         tid: str,
         next_run_context: str = Form(""),
+        conversation_id: str = Form(""),
         session: Session = Depends(get_session),
     ):
-        """Continue the prior run's Claude Code conversation.
+        """Continue a conversation: append the typed message as the next user
+        turn on the resumed SDK session, keeping full prior context.
 
-        Distinct from /resume: resume starts a fresh-context agent on the same
-        worktree (no message history); continue replays the parent run's SDK
-        session id so the new run resumes the full prior conversation. Falls
-        back to a fresh-context resume transparently when no session is
-        available.
+        Defaults to the ticket's active conversation; a non-empty
+        ``conversation_id`` continues a selected (possibly older) conversation,
+        re-activating it. A conversation with no resumable session is refused
+        (409) with a message routing to New conversation.
         """
         try:
-            continue_ticket(session, tid, next_run_context=next_run_context)
+            continue_ticket(
+                session, tid,
+                next_run_context=next_run_context,
+                conversation_id=conversation_id or None,
+            )
         except TicketNotFound:
             raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        except Exception as e:
+            raise HTTPException(409, str(e))
+        return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
+
+    @router.post("/tickets/{tid}/new-conversation", dependencies=[auth])
+    async def new_conversation_form(
+        tid: str,
+        next_run_context: str = Form(""),
+        profile_id: str = Form(""),
+        workspace: str = Form("keep"),
+        session: Session = Depends(get_session),
+    ):
+        """Start a NEW conversation: fresh memory by definition (new session).
+
+        A picker chooses runtime (profile; default the ticket's current profile;
+        switching runtime always starts a new conversation because sessions are
+        not portable) and workspace (``keep`` current files or ``fresh``
+        worktree). This absorbs the old retry/resume (keep) and restart (fresh)
+        verbs — those disappear from the UI.
+        """
+        try:
+            new_conversation_ticket(
+                session, tid,
+                next_run_context=next_run_context or None,
+                profile_id=profile_id or None,
+                workspace_policy="fresh" if workspace == "fresh" else None,
+            )
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
         except Exception as e:
             raise HTTPException(409, str(e))
         return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
@@ -444,23 +482,34 @@ def _remove_dir(session: Session, tid: str, path: str):
     return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
 
 
-def _run_workspaces(session: Session, run_id: str, ticket_id: str) -> list:
-    """Candidate workspaces for a run, run-scoped rows first.
+def _run_workspaces(session: Session, run) -> list:
+    """Candidate workspaces for a run's diff, conversation-scoped first.
 
-    Prefer workspaces bound to this run; fall back to the ticket's workspaces
-    (legacy rows without a stamped run_id). The caller selects the diffable one
-    via ``select_diff_workspace`` -- identical to the JSON API path so the two
-    surfaces agree for every workspace kind.
+    A Conversation owns its workspaces (1:N), so the diff for any turn in it is
+    computed against the tree THAT conversation ran against — not one a newer
+    conversation mutated. Preference order: the run's conversation's workspaces;
+    then run-scoped rows (legacy); then the ticket's workspaces (older legacy
+    rows with no conversation/run stamp). The caller selects the diffable one
+    via ``select_diff_workspace``.
     """
+    conversation_id = getattr(run, "conversation_id", None)
+    if conversation_id:
+        conv_scoped = list(session.execute(
+            select(TicketWorkspace)
+            .where(TicketWorkspace.conversation_id == conversation_id)
+            .order_by(TicketWorkspace.position)
+        ).scalars())
+        if conv_scoped:
+            return conv_scoped
     run_scoped = list(session.execute(
         select(TicketWorkspace)
-        .where(TicketWorkspace.run_id == run_id)
+        .where(TicketWorkspace.run_id == run.id)
         .order_by(TicketWorkspace.position)
     ).scalars())
     if run_scoped:
         return run_scoped
     return list(session.execute(
         select(TicketWorkspace)
-        .where(TicketWorkspace.ticket_id == ticket_id)
+        .where(TicketWorkspace.ticket_id == run.ticket_id)
         .order_by(TicketWorkspace.position)
     ).scalars())

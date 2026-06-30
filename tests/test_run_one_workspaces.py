@@ -744,11 +744,15 @@ async def test_run_one_continue_falls_back_when_session_file_missing(
 
 
 @pytest.mark.anyio
-async def test_run_one_continue_falls_back_when_parent_has_no_session_id(
+async def test_continue_refuses_when_conversation_has_no_session_id(
     session, sample_profile, tmp_path,
 ):
-    """A parent that crashed before capturing a session id has nothing to
-    resume; continue falls back to fresh-context resume."""
+    """A conversation whose first turn crashed before capturing a session id is
+    not resumable: Continue is REFUSED (routing to New conversation) rather than
+    silently falling back to a fresh-context run. This is the null-session fix:
+    the user is told explicitly instead of getting a context-less 'continue'."""
+    from nightdesk.domain.tickets import ConversationNotResumable
+
     primary = tmp_path / "primary"
     primary.mkdir()
     ticket = create_ticket(
@@ -757,20 +761,94 @@ async def test_run_one_continue_falls_back_when_parent_has_no_session_id(
     )
     # No session_id recorded on the parent (e.g. crashed before init).
     _stage_parent_run(session, ticket, tmp_path, session_id=None)
-    continue_ticket(session, ticket.id, next_run_context="keep going")
-    transition_status(session, ticket.id, "running")
+    with pytest.raises(ConversationNotResumable):
+        continue_ticket(session, ticket.id, next_run_context="keep going")
+    # The ticket stayed in review (no run was staged/dispatched).
+    session.refresh(ticket)
+    assert ticket.status == "review"
 
-    executor = CapturingExecutor()
-    result = await run_one(
-        lambda: session,
-        RunOneConfig(worktree_root=tmp_path / "work",
-                     transcript_root=tmp_path / "transcripts",
-                     secrets={}, host="testhost", executor=executor),
-        ticket.id,
+
+@pytest.mark.anyio
+async def test_run_one_continue_appends_turn_to_same_conversation_and_transcript(
+    session, sample_profile, tmp_path,
+):
+    """Acceptance #1 + #7: continuing a conversation appends a turn to the SAME
+    conversation (one conversation, many turns) and to the SAME transcript file
+    with ONE monotonic seq space (turn 2's events continue above turn 1's, so
+    the live-tail lastSeq dedup never collides)."""
+
+    class EmittingExecutor:
+        """Writes a meta + assistant_text event using the request's seq seed and
+        reports a shared session id so finish_run lifts it onto the conversation."""
+        def __init__(self):
+            self.requests = []
+
+        async def run(self, req):
+            from nightdesk.transcript import write_event, next_seq, now_iso
+            from nightdesk.worker.executor import ExecutionResult
+            from nightdesk.domain.cost import RunUsage
+            self.requests.append(req)
+            seq = [req.seq_start]
+            with req.transcript_path.open("ab") as f:
+                write_event(f, {"type": "meta", "ts": now_iso(),
+                                "seq": next_seq(seq), "ticket_id": req.ticket_id})
+                write_event(f, {"type": "assistant_text", "ts": now_iso(),
+                                "seq": next_seq(seq), "text": "turn output"})
+            return ExecutionResult(
+                exit_status="success", session_id="sess-shared",
+                usage=RunUsage(model="claude-sonnet-4", input_tokens=10,
+                               output_tokens=5, cache_read_tokens=0,
+                               cache_write_tokens=0, cost_usd=0.001),
+            )
+
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    ticket = create_ticket(
+        session, title="c", prompt="Fix it", status="queued",
+        priority=0, profile_id=sample_profile.id, source_path=str(primary),
     )
-    assert result.exit_status == "success"
-    assert executor.request.resume_session_id is None
-    assert "RUN INTENT: resume" in executor.request.prompt
+    ticket_id = ticket.id
+    cfg = RunOneConfig(worktree_root=tmp_path / "work",
+                       transcript_root=tmp_path / "transcripts",
+                       secrets={}, host="testhost", executor=EmittingExecutor())
+
+    # Turn 1 (first_run): creates the conversation + its transcript file.
+    transition_status(session, ticket_id, "running")
+    await run_one(lambda: session, cfg, ticket_id)
+    session.expire_all()
+    t1 = session.get(Ticket, ticket_id)
+    run1 = session.get(Run, t1.current_run_id)
+    conv_id = run1.conversation_id
+    tpath = run1.transcript_path
+    assert conv_id is not None
+    assert run1.position == 0
+
+    # Continue -> turn 2 in the SAME conversation.
+    continue_ticket(session, ticket_id, next_run_context="next turn")
+    transition_status(session, ticket_id, "running")
+    await run_one(lambda: session, cfg, ticket_id)
+    session.expire_all()
+    t2 = session.get(Ticket, ticket_id)
+    run2 = session.get(Run, t2.current_run_id)
+
+    # One conversation, many turns; one shared transcript file.
+    assert run2.conversation_id == conv_id
+    assert run2.transcript_path == tpath
+    assert run2.position == 1
+    # The authoritative session id is lifted onto the conversation.
+    from nightdesk.domain.conversations import get_conversation
+    assert get_conversation(session, conv_id).session_id == "sess-shared"
+
+    # Single monotonic seq space: every seq is unique and file-ordered, and
+    # turn 2's events continue strictly above turn 1's (turn 1 wrote seq 0,1).
+    # (A continue-fallback breadcrumb may append one extra system event after;
+    # what matters is no collisions and turn 2 continues the same space.)
+    from nightdesk.transcript import read_events
+    seqs = [e["seq"] for e in read_events(tpath) if isinstance(e.get("seq"), int)]
+    assert seqs == sorted(seqs)                 # monotonic in file order
+    assert len(set(seqs)) == len(seqs)          # no collisions across turns
+    assert 0 in seqs and 1 in seqs              # turn 1's two events
+    assert any(s >= 2 for s in seqs)            # turn 2 continued above turn 1
 
 
 @pytest.mark.anyio

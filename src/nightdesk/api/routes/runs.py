@@ -50,7 +50,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except RunNotFound:
             raise HTTPException(404, "not found")
 
-        ws = select_diff_workspace(_run_workspaces(session, rid, run.ticket_id))
+        ws = select_diff_workspace(_run_workspaces(session, run))
         result = compute_workspace_diff(
             ws,
             transcript_root=Path(run.transcript_path).parent,
@@ -93,23 +93,34 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     return router
 
 
-def _run_workspaces(session: Session, run_id: str, ticket_id: str) -> list:
-    """Candidate workspaces for a run, run-scoped rows first.
+def _run_workspaces(session: Session, run) -> list:
+    """Candidate workspaces for a run's diff, conversation-scoped first.
 
-    Prefer workspaces directly bound to this run; fall back to the ticket's
-    workspaces (legacy rows that never got a run_id stamped). The caller picks
-    the diffable one via ``select_diff_workspace``.
+    A Conversation owns its workspaces (1:N), so the diff for any turn in it is
+    computed against the tree THAT conversation ran against. Preference order:
+    the run's conversation's workspaces; then run-scoped rows (legacy); then the
+    ticket's workspaces (older legacy rows). The caller picks the diffable one
+    via ``select_diff_workspace``. Mirrors the HTMX ticket-page path.
     """
+    conversation_id = getattr(run, "conversation_id", None)
+    if conversation_id:
+        conv_scoped = list(session.execute(
+            select(TicketWorkspace)
+            .where(TicketWorkspace.conversation_id == conversation_id)
+            .order_by(TicketWorkspace.position)
+        ).scalars())
+        if conv_scoped:
+            return conv_scoped
     run_scoped = list(session.execute(
         select(TicketWorkspace)
-        .where(TicketWorkspace.run_id == run_id)
+        .where(TicketWorkspace.run_id == run.id)
         .order_by(TicketWorkspace.position)
     ).scalars())
     if run_scoped:
         return run_scoped
     return list(session.execute(
         select(TicketWorkspace)
-        .where(TicketWorkspace.ticket_id == ticket_id)
+        .where(TicketWorkspace.ticket_id == run.ticket_id)
         .order_by(TicketWorkspace.position)
     ).scalars())
 

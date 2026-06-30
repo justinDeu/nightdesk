@@ -60,6 +60,13 @@ class IncompleteTicket(InvalidTransition):
         super().__init__("; ".join(reasons) or "ticket is incomplete")
 
 
+class ConversationNotResumable(InvalidTransition):
+    """Raised when Continue is requested on a conversation that has no
+    resumable session (session_id is null — e.g. its first turn crashed before
+    the SDK emitted a session). Continue must route to New conversation instead.
+    A subclass of ``InvalidTransition`` so route handlers map it to HTTP 409."""
+
+
 _WORKSPACE_KINDS = {"directory", "git_worktree"}
 
 
@@ -94,7 +101,17 @@ def _clean_toolchain_overrides(value: object) -> Optional[dict]:
 
 
 def _stage_next_run(ticket: Ticket, *, intent: str,
-                    workspace_policy: Optional[str] = None) -> None:
+                    workspace_policy: Optional[str] = None,
+                    conversation_id: Optional[str] = None,
+                    new_conversation: bool = False) -> None:
+    """Stage the next run's intent + conversation target on permission_overrides.
+
+    The worker (run_one) reads these ephemeral keys to decide whether the next
+    turn CONTINUES an existing conversation (``conversation_id`` set, resumes
+    its session_id) or starts a NEW one (``new_conversation`` set, fresh
+    session). ``nightdesk_parent_run_id`` is retained for accounting/traceability
+    even though the resume source is now the conversation's session_id.
+    """
     overrides = dict(ticket.permission_overrides or {})
     overrides["nightdesk_run_intent"] = intent
     overrides["nightdesk_parent_run_id"] = ticket.current_run_id
@@ -102,6 +119,14 @@ def _stage_next_run(ticket: Ticket, *, intent: str,
         overrides.pop("nightdesk_restart_workspace_policy", None)
     else:
         overrides["nightdesk_restart_workspace_policy"] = workspace_policy
+    if conversation_id is None:
+        overrides.pop("nightdesk_conversation_id", None)
+    else:
+        overrides["nightdesk_conversation_id"] = conversation_id
+    if new_conversation:
+        overrides["nightdesk_new_conversation"] = True
+    else:
+        overrides.pop("nightdesk_new_conversation", None)
     ticket.permission_overrides = overrides
 def _validate_workspace_specs(workspace_specs: list[dict]) -> list[dict]:
     primaries = [w for w in workspace_specs if w.get("role") == "primary"]
@@ -584,41 +609,93 @@ def merge_next_run_context_into_prompt(session: Session, ticket_id: str) -> Tick
     return t
 
 
-def continue_ticket(session: Session, ticket_id: str, *, next_run_context: Optional[str]) -> Ticket:
-    """Continue the prior run's Claude Code conversation.
+def continue_ticket(session: Session, ticket_id: str, *,
+                    next_run_context: Optional[str],
+                    conversation_id: Optional[str] = None) -> Ticket:
+    """Continue a conversation: append the typed message as the next user turn
+    on the resumed SDK session, keeping full prior context.
 
-    Unlike ``resume_ticket`` (which starts a fresh-context agent on the same
-    worktree with only a one-line last-run summary), ``continue`` reuses the
-    parent run's SDK ``session_id`` so the new run resumes the full prior
-    message history. The session-id resolution and sandbox seeding happen in
-    the worker (``run_one``); this helper only stages the intent and parent
-    run id exactly like resume/retry/restart. Falls back to fresh-context
-    resume transparently when the parent has no usable session.
+    The target conversation is ``conversation_id`` (a selected conversation in
+    the rail) or, by default, the ticket's active conversation. Continuing a
+    non-active conversation re-activates it (it becomes current and the ticket
+    flips back to running). A conversation with no ``session_id`` is not
+    resumable — Continue is refused with a clear message routing to New
+    conversation (``ConversationNotResumable``).
     """
+    from nightdesk.domain.conversations import active_conversation, get_conversation
     t = set_next_run_context(session, ticket_id, next_run_context) if next_run_context is not None else get_ticket(session, ticket_id)
     if t.status not in ("review", "archived"):
         raise InvalidTransition(f"cannot continue from {t.status}")
-    _stage_next_run(t, intent="continue")
+    if conversation_id is not None:
+        conv = get_conversation(session, conversation_id)
+        if conv.ticket_id != t.id:
+            raise InvalidTransition("conversation does not belong to this ticket")
+    else:
+        conv = active_conversation(session, t)
+    if conv is None:
+        raise ConversationNotResumable(
+            "no conversation to continue; start a new conversation")
+    if not conv.session_id:
+        raise ConversationNotResumable(
+            "this conversation has no resumable session (its first turn did not "
+            "record one); start a new conversation instead")
+    # Re-activate: continuing (possibly an older) conversation makes it current.
+    t.current_conversation_id = conv.id
+    _stage_next_run(t, intent="continue", conversation_id=conv.id)
+    session.commit()
+    session.refresh(t)
+    return request_run_now(session, ticket_id)
+
+
+def new_conversation_ticket(session: Session, ticket_id: str, *,
+                            next_run_context: Optional[str] = None,
+                            profile_id: Optional[str] = None,
+                            workspace_policy: Optional[str] = None) -> Ticket:
+    """Start a NEW conversation: fresh memory by definition (new session).
+
+    Absorbs the old retry/resume (keep workspace) and restart (fresh worktree)
+    verbs — those disappear from the UI but their intent values remain
+    internally. ``workspace_policy`` of ``"fresh"`` maps to the restart intent
+    (fresh worktree path); anything else keeps the current files (retry intent).
+    ``profile_id`` switches the runtime for the NEXT new conversation only
+    (the active conversation's runtime is frozen at its creation); switching
+    runtime always starts a new conversation because sessions are not portable.
+    """
+    t = get_ticket(session, ticket_id)
+    if t.status not in ("review", "archived"):
+        raise InvalidTransition(f"cannot start a new conversation from {t.status}")
+    if next_run_context is not None:
+        t = set_next_run_context(session, ticket_id, next_run_context)
+    if profile_id is not None:
+        # Only changes the default for the NEXT new conversation.
+        t = update_ticket_profile(session, ticket_id, profile_id)
+    if workspace_policy == "fresh":
+        _stage_next_run(t, intent="restart", workspace_policy="fresh_path",
+                        new_conversation=True)
+    else:
+        _stage_next_run(t, intent="retry", new_conversation=True)
     session.commit()
     session.refresh(t)
     return request_run_now(session, ticket_id)
 
 
 def resume_ticket(session: Session, ticket_id: str, *, next_run_context: Optional[str]) -> Ticket:
+    """Fresh-context agent on the same worktree — a NEW conversation internally."""
     t = set_next_run_context(session, ticket_id, next_run_context) if next_run_context is not None else get_ticket(session, ticket_id)
     if t.status not in ("review", "archived"):
         raise InvalidTransition(f"cannot resume from {t.status}")
-    _stage_next_run(t, intent="resume")
+    _stage_next_run(t, intent="resume", new_conversation=True)
     session.commit()
     session.refresh(t)
     return request_run_now(session, ticket_id)
 
 
 def retry_ticket(session: Session, ticket_id: str, *, next_run_context: Optional[str]) -> Ticket:
+    """Re-attempt on the same worktree, fresh context — a NEW conversation internally."""
     t = set_next_run_context(session, ticket_id, next_run_context) if next_run_context is not None else get_ticket(session, ticket_id)
     if t.status not in ("review", "archived"):
         raise InvalidTransition(f"cannot retry from {t.status}")
-    _stage_next_run(t, intent="retry")
+    _stage_next_run(t, intent="retry", new_conversation=True)
     session.commit()
     session.refresh(t)
     return request_run_now(session, ticket_id)
@@ -626,12 +703,14 @@ def retry_ticket(session: Session, ticket_id: str, *, next_run_context: Optional
 
 def restart_ticket(session: Session, ticket_id: str, *, next_run_context: Optional[str],
                    workspace_policy: Optional[str]) -> Ticket:
+    """Fresh worktree, fresh context — a NEW conversation internally."""
     if workspace_policy not in ("recreate_in_place", "fresh_path"):
         raise ValueError("restart workspace policy is required")
     t = set_next_run_context(session, ticket_id, next_run_context) if next_run_context is not None else get_ticket(session, ticket_id)
     if t.status not in ("review", "archived"):
         raise InvalidTransition(f"cannot restart from {t.status}")
-    _stage_next_run(t, intent="restart", workspace_policy=workspace_policy)
+    _stage_next_run(t, intent="restart", workspace_policy=workspace_policy,
+                    new_conversation=True)
     session.commit()
     session.refresh(t)
     return request_run_now(session, ticket_id)
@@ -824,14 +903,20 @@ def check_dependencies_satisfied(session: Session, ticket_id: str) -> tuple[bool
 
 
 def _is_dependency_satisfied(session: Session, upstream: Ticket) -> tuple[bool, str]:
-    """Check if a single upstream dependency is satisfied."""
+    """Check if a single upstream dependency is satisfied.
+
+    Satisfied when the upstream's ACTIVE CONVERSATION latest turn succeeded and
+    the upstream is in review/archived. (Previously this read the latest run by
+    started_at; it now reads through current_conversation_id to that
+    conversation's last turn by position — the conversation model's source of
+    truth for "the latest turn".)
+    """
     if upstream.status in ("review", "archived"):
-        # Check the most recent run.
-        from nightdesk.domain.runs import list_runs
-        runs = list_runs(session, ticket_id=upstream.id)
-        if not runs:
+        from nightdesk.domain.conversations import active_conversation, latest_turn
+        conv = active_conversation(session, upstream)
+        latest = latest_turn(session, conv.id if conv else None)
+        if latest is None:
             return False, "upstream has no runs"
-        latest = runs[0]  # list_runs orders by started_at DESC
         if latest.exit_status == "success":
             return True, ""
         return False, f"upstream last run exited with '{latest.exit_status}'"

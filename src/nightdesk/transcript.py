@@ -214,6 +214,24 @@ def read_events(path: str | Path) -> Iterator[dict]:
                 yield evt
 
 
+def next_transcript_seq(path: str | Path) -> int:
+    """The NEXT available ``seq`` for a transcript file: max(seq)+1, or 0 if the
+    file is empty/missing/has no integer seqs.
+
+    Used to seed a turn's seq counter so a conversation's single transcript
+    file keeps ONE monotonic seq space across turns: turn N+1 continues ABOVE
+    max(seq) rather than restarting at 0 (which would collide with turn N's
+    events and break the live-tail lastSeq dedup). Mirrors the next-seq rule
+    ``append_event`` already uses for out-of-band event writes.
+    """
+    highest = -1
+    for evt in read_events(path):
+        seq = evt.get("seq")
+        if isinstance(seq, int) and seq > highest:
+            highest = seq
+    return highest + 1
+
+
 def append_event(path: str | Path, event: dict, *, _type: str | None = None) -> None:
     """Append a single canonical event to a transcript file.
 

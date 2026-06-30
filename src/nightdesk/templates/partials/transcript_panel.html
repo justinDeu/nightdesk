@@ -130,9 +130,9 @@
                     placeholder="Type a message to continue this run…"
                     aria-label="Message to continue this run"
                     oninput="var t=this;t.style.height='auto';t.style.height=Math.min(t.scrollHeight,220)+'px'"
-                    onkeydown="if((event.metaKey||event.ctrlKey)&&event.key==='Enter'){event.preventDefault();this.form.requestSubmit();}"></textarea>
+                    onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!event.metaKey&&!event.ctrlKey){event.preventDefault();this.form.requestSubmit();}"></textarea>
           <button type="submit" class="btn btn-primary continue-box-submit"
-                  data-tooltip="Continue the prior conversation with this message (⌘/Ctrl+Enter)">Continue</button>
+                  data-tooltip="Continue the prior conversation with this message (Enter)">Continue</button>
         </div>
         <div class="continue-box-hint">{{ continue_hint }}</div>
       </form>

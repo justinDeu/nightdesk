@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 from nightdesk.domain.permissions import PermissionSpec
 
@@ -33,6 +33,18 @@ class ExecutionRequest:
     # this field; this field is only the transcript affordance. None for every
     # non-continue intent and for a textless continue (the header button).
     continue_message: Optional[str] = None
+    # Seq counter seed for this turn. A conversation shares ONE transcript file
+    # across turns with a single monotonic seq space, so turn N+1 must continue
+    # from the file's current max seq instead of restarting at 0. Defaults to 0
+    # (a fresh file / first turn).
+    seq_start: int = 0
+    # Eager session-id persistence: invoked once with the Claude session id the
+    # moment it is first observed (the init event), OUT OF BAND relative to
+    # run completion. The worker wires this to persist the authoritative
+    # conversation.session_id immediately so a cancel/crash after that point
+    # never leaves the conversation null-session. Best-effort; errors swallowed
+    # by the caller. None when no callback is wired (e.g. tests).
+    on_session_id: Optional[Callable[[str], None]] = None
 
 
 @dataclass

@@ -362,14 +362,15 @@ async def test_run_now_toggle_endpoint_removed(cookie_client, session):
     assert r.status_code == 404
 
 
-async def test_review_ticket_shows_run_again_modal(cookie_client, session):
-    """Review/archived tickets surface a 'Run again' modal in the header.
+async def test_review_ticket_shows_new_conversation_modal(cookie_client, session):
+    """Review/archived tickets surface a 'New conversation' modal in the header.
 
-    The modal carries the two-axis picker (workspace × conversation) plus
-    secondary clone/merge actions. The JS submit handler maps the picked
-    combination to the /continue, /retry, or /restart endpoints, so
-    the route URLs appear in the inline script even though no static <form>
-    targets them.
+    The four re-run verbs (continue/resume/retry/restart) collapse to two
+    user-facing actions: Continue (the transcript-trailing input box) and New
+    conversation (this modal). The modal carries a runtime picker (profile)
+    plus a workspace picker (keep current files / fresh worktree) and the
+    secondary clone/merge actions. The old resume/retry/restart endpoints no
+    longer appear in the UI — New conversation covers them.
     """
     p = _make_profile(session)
     t = create_ticket(session, title="rerun", prompt="fix it",
@@ -380,21 +381,20 @@ async def test_review_ticket_shows_run_again_modal(cookie_client, session):
     r = await cookie_client.get(f"/tickets/{t.id}")
     assert r.status_code == 200
     body = r.text
-    # Header surfaces a single primary "Run again…" trigger.
-    assert "Run again" in body
+    # Header + modal surface the New conversation action.
+    assert "New conversation" in body
     assert 'id="run-again-modal"' in body
-    # Modal exposes both axes plus a free-form message field.
+    # Modal exposes the runtime + workspace pickers plus a free-form message.
+    assert 'name="profile_id"' in body
     assert 'name="workspace"' in body
-    assert 'name="conversation"' in body
     assert 'name="next_run_context"' in body
-    # All four primary-action targets are reachable from the modal. The JS
-    # builds continue/retry/restart paths by concatenating the ticket id onto
-    # path fragments, so the literal full URL never appears in the body —
-    # just the fragments. Clone/merge use static formaction attributes.
-    assert f'var TID = "{t.id}"' in body
-    assert "/continue'" in body
-    assert "/retry'" in body
-    assert "/restart'" in body
+    # The form targets the new-conversation endpoint (absorbs retry/restart).
+    assert f'action="/tickets/{t.id}/new-conversation"' in body
+    # The old re-run verbs are gone from the UI.
+    assert "/retry'" not in body
+    assert "/restart'" not in body
+    assert 'name="conversation"' not in body
+    # Clone/merge secondary actions remain.
     assert f'formaction="/tickets/{t.id}/clone"' in body
     assert f'formaction="/tickets/{t.id}/merge-next-run-context"' in body
 
@@ -451,12 +451,18 @@ async def test_continue_route_queues_ticket_and_stages_continue_intent(
     cookie_client, session,
 ):
     """The distinct /continue action queues a run-now and stages the continue
-    intent (not resume), so the worker resumes the prior SDK conversation."""
+    intent (not resume), so the worker resumes the prior SDK conversation.
+    Requires a prior resumable conversation (a turn that recorded a session id);
+    a null-session conversation refuses Continue and routes to New conversation."""
     p = _make_profile(session)
     t = create_ticket(session, title="rerun", prompt="fix it",
                        priority=0, profile_id=p.id, status="queued",
                        run_now=False, source_path="/tmp")
     transition_status(session, t.id, "running")
+    prior = start_run(session, ticket_id=t.id, worktree_path="/tmp/w",
+                      transcript_path="/tmp/p.log", pid=None, host="h")
+    finish_run(session, prior.id, exit_status="success", error_summary=None,
+               session_id="sess-prior-1")
     transition_status(session, t.id, "review")
     r = await cookie_client.post(
         f"/tickets/{t.id}/continue",
@@ -470,6 +476,52 @@ async def test_continue_route_queues_ticket_and_stages_continue_intent(
     assert refreshed.run_now is True
     assert refreshed.next_run_context == "Keep the conversation"
     assert refreshed.permission_overrides["nightdesk_run_intent"] == "continue"
+
+
+async def test_continue_route_refuses_null_session_conversation(cookie_client, session):
+    """A conversation whose turn never recorded a session id is not resumable:
+    Continue returns 409 (routing to New conversation) instead of silently
+    staging a context-less run. This is the null-session fix (acceptance #4)."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="rerun", prompt="fix it",
+                       priority=0, profile_id=p.id, status="queued",
+                       run_now=False, source_path="/tmp")
+    transition_status(session, t.id, "running")
+    prior = start_run(session, ticket_id=t.id, worktree_path="/tmp/w",
+                      transcript_path="/tmp/p.log", pid=None, host="h")
+    finish_run(session, prior.id, exit_status="failed", error_summary="crashed",
+               session_id=None)
+    transition_status(session, t.id, "review")
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/continue",
+        data={"next_run_context": "Keep going"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 409
+    assert "new conversation" in r.text.lower()
+
+
+async def test_new_conversation_route_queues_ticket(cookie_client, session):
+    """The New conversation action starts a fresh conversation (new session),
+    absorbing the old retry/restart verbs. It queues a run-now and stages the
+    new-conversation flag so the worker creates a fresh conversation."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="rerun", prompt="fix it",
+                       priority=0, profile_id=p.id, status="queued",
+                       run_now=False, source_path="/tmp")
+    transition_status(session, t.id, "running")
+    transition_status(session, t.id, "review")
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/new-conversation",
+        data={"workspace": "keep", "next_run_context": "Try again fresh"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    session.expire_all()
+    refreshed = get_ticket(session, t.id)
+    assert refreshed.status == "queued"
+    assert refreshed.run_now is True
+    assert refreshed.permission_overrides.get("nightdesk_new_conversation") is True
 
 
 async def test_review_ticket_shows_continue_run_button_with_tooltip(

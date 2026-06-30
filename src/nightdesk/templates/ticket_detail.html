@@ -83,7 +83,7 @@
           </form>
           <button type="button"
                   onclick="document.getElementById('run-again-modal').showModal()"
-                  class="btn btn-primary btn-md">Run again…</button>
+                  class="btn btn-primary btn-md">New conversation</button>
           <form method="post" action="/tickets/{{ ticket.id }}/requeue">
             <button class="border border-border text-fg px-3 py-1 rounded text-sm">Requeue</button>
           </form>
@@ -469,22 +469,26 @@
  #}
 {% include "partials/ticket_edit_modal.html" %}
 
-{# --- Run again modal --------------------------------------------------- #
- # Replaces the inline "Next run" section. Two axes: workspace policy and
- # conversation policy. The submit handler maps the chosen combination to
- # the /continue, /retry, or /restart endpoints. "Conversation: keep" resumes
- # the prior SDK session (full message history) via /continue; "fresh" drops
- # it and re-attempts via /retry. "Conversation: keep" only applies when
- # staying in the same worktree; for wipe / new-worktree we lock it to fresh
- # because restart_ticket always drops the session id.
+{# --- New conversation modal -------------------------------------------- #
+ # Replaces the old "Run again…" modal. The four re-run verbs
+ # (continue/resume/retry/restart) collapse to two user-facing actions:
+ #   • Continue  — the transcript-trailing input box (resumes the active
+ #     conversation's session with full history). Lives in transcript_panel.
+ #   • New conversation — THIS modal. Fresh memory by definition (new session).
+ # A picker chooses runtime (profile; default the ticket's current profile) and
+ # workspace (keep current files or fresh worktree). Switching runtime always
+ # starts a new conversation because sessions are not portable. The old
+ # retry/resume (keep workspace) and restart (fresh) verbs are absorbed here.
  #}
 {% if ticket.status in ('review', 'archived') %}
 <dialog id="run-again-modal"
         class="bg-bg-elev border border-border rounded-lg shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-[2px] p-0 w-[480px] max-w-[calc(100vw-2rem)] text-fg"
         style="margin: auto; max-height: 92vh;">
-  <form id="run-again-form" method="post" action="" class="p-4 space-y-4 max-h-[92vh] overflow-y-auto">
+  <form id="run-again-form" method="post"
+        action="/tickets/{{ ticket.id }}/new-conversation"
+        class="p-4 space-y-4 max-h-[92vh] overflow-y-auto">
     <div class="flex items-center justify-between">
-      <h2 class="text-base font-semibold">Run again</h2>
+      <h2 class="text-base font-semibold">New conversation</h2>
       <button type="button"
               onclick="document.getElementById('run-again-modal').close()"
               class="text-fg-muted hover:text-fg text-lg leading-none"
@@ -492,57 +496,46 @@
     </div>
 
     <fieldset class="space-y-1.5">
+      <legend class="text-xs font-semibold uppercase tracking-wide text-fg-muted mb-1">Runtime</legend>
+      <select name="profile_id" class="field w-full text-sm">
+        <option value="" selected>
+          Current — {{ ticket.profile.name if ticket.profile else 'none' }}
+        </option>
+        {% for p in profiles %}
+          {% if not ticket.profile or p.id != ticket.profile.id %}
+            <option value="{{ p.id }}">{{ p.name }} ({{ p.backend }})</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+      <p class="text-[11px] text-fg-muted">
+        Switching runtime starts a new conversation — sessions are not portable
+        across runtimes. The active conversation's runtime is frozen at its
+        creation; this only sets the default for the next one.
+      </p>
+    </fieldset>
+
+    <fieldset class="space-y-1.5">
       <legend class="text-xs font-semibold uppercase tracking-wide text-fg-muted mb-1">Workspace</legend>
       <label class="flex items-start gap-2 text-sm cursor-pointer">
-        <input type="radio" name="workspace" value="same" checked
-               class="mt-0.5"
-               onchange="window.ndUpdateRunAgainModal && window.ndUpdateRunAgainModal()" />
-        <span><span class="text-fg">Continue in same worktree</span>
-          <span class="block text-xs text-fg-muted">Pick up the existing worktree where it left off.</span></span>
+        <input type="radio" name="workspace" value="keep" checked class="mt-0.5" />
+        <span><span class="text-fg">Keep current files</span>
+          <span class="block text-xs text-fg-muted">Run on the existing worktree where it left off (fresh memory).</span></span>
       </label>
       <label class="flex items-start gap-2 text-sm cursor-pointer">
-        <input type="radio" name="workspace" value="wipe"
-               class="mt-0.5"
-               onchange="window.ndUpdateRunAgainModal && window.ndUpdateRunAgainModal()" />
-        <span><span class="text-fg">Delete existing & start fresh</span>
-          <span class="block text-xs text-fg-muted">Wipe and recreate the worktree at the same path.</span></span>
-      </label>
-      <label class="flex items-start gap-2 text-sm cursor-pointer">
-        <input type="radio" name="workspace" value="new"
-               class="mt-0.5"
-               onchange="window.ndUpdateRunAgainModal && window.ndUpdateRunAgainModal()" />
-        <span><span class="text-fg">New worktree (keep old)</span>
+        <input type="radio" name="workspace" value="fresh" class="mt-0.5" />
+        <span><span class="text-fg">Fresh worktree (keep old)</span>
           <span class="block text-xs text-fg-muted">Run in a fresh path; the prior worktree is preserved.</span></span>
       </label>
     </fieldset>
 
-    <fieldset class="space-y-1.5" id="run-again-conv-group">
-      <legend class="text-xs font-semibold uppercase tracking-wide text-fg-muted mb-1">Conversation</legend>
-      <label class="flex items-start gap-2 text-sm cursor-pointer">
-        <input type="radio" name="conversation" value="keep" checked class="mt-0.5" />
-        <span><span class="text-fg">Keep entire conversation</span>
-          <span class="block text-xs text-fg-muted">Resume from the last session id.</span></span>
-      </label>
-      <label class="flex items-start gap-2 text-sm cursor-pointer">
-        <input type="radio" name="conversation" value="fresh" class="mt-0.5" />
-        <span><span class="text-fg">Fresh conversation</span>
-          <span class="block text-xs text-fg-muted">Drop the prior session and start clean.</span></span>
-      </label>
-      <p id="run-again-conv-note" class="text-[11px] text-warn hidden">
-        Conversation is reset automatically when the worktree is replaced.
-      </p>
-    </fieldset>
-
     <label class="block text-sm">
       <span class="block text-xs font-semibold uppercase tracking-wide text-fg-muted mb-1">
-        Optional message for next run
+        Optional message for the new conversation
       </span>
       <textarea name="next_run_context" rows="3"
                 class="field w-full font-mono"
-                placeholder="One-shot instructions for the next run…">{{ ticket.next_run_context or '' }}</textarea>
+                placeholder="One-shot instructions for the new conversation…">{{ ticket.next_run_context or '' }}</textarea>
     </label>
-
-    <input type="hidden" name="workspace_policy" value="" />
 
     <div class="flex items-center justify-between gap-2 pt-1 border-t border-border">
       <div class="flex flex-wrap gap-2 text-xs">
@@ -561,10 +554,8 @@
                 class="btn btn-ghost btn-md">
           Cancel
         </button>
-        <button type="submit"
-                onclick="return window.ndSubmitRunAgain && window.ndSubmitRunAgain(this.form)"
-                class="btn btn-primary btn-md">
-          Run again
+        <button type="submit" class="btn btn-primary btn-md">
+          Start new conversation
         </button>
       </div>
     </div>
@@ -572,54 +563,9 @@
 </dialog>
 <script>
   (function () {
-    var TID = "{{ ticket.id }}";
-    var form = document.getElementById('run-again-form');
-    if (!form) return;
-
-    function selected(name) {
-      var el = form.querySelector('input[name="' + name + '"]:checked');
-      return el ? el.value : null;
-    }
-
-    window.ndUpdateRunAgainModal = function () {
-      var ws = selected('workspace');
-      var convGroup = document.getElementById('run-again-conv-group');
-      var convNote = document.getElementById('run-again-conv-note');
-      var convInputs = form.querySelectorAll('input[name="conversation"]');
-      var disabled = ws !== 'same';
-      convInputs.forEach(function (el) {
-        el.disabled = disabled;
-        if (disabled && el.value === 'keep') el.checked = false;
-        if (disabled && el.value === 'fresh') el.checked = true;
-      });
-      convGroup.classList.toggle('opacity-50', disabled);
-      convNote.classList.toggle('hidden', !disabled);
-    };
-
-    window.ndSubmitRunAgain = function (f) {
-      var ws = selected('workspace');
-      var conv = selected('conversation');
-      var policyInput = f.querySelector('input[name="workspace_policy"]');
-      if (ws === 'same' && conv === 'keep') {
-        f.action = '/tickets/' + TID + '/continue';
-        policyInput.disabled = true;
-      } else if (ws === 'same' && conv === 'fresh') {
-        f.action = '/tickets/' + TID + '/retry';
-        policyInput.disabled = true;
-      } else if (ws === 'wipe') {
-        f.action = '/tickets/' + TID + '/restart';
-        policyInput.value = 'recreate_in_place';
-        policyInput.disabled = false;
-      } else if (ws === 'new') {
-        f.action = '/tickets/' + TID + '/restart';
-        policyInput.value = 'fresh_path';
-        policyInput.disabled = false;
-      }
-      return true;
-    };
-
     // Backdrop click closes the dialog (native <dialog> doesn't do this).
     var dlg = document.getElementById('run-again-modal');
+    if (!dlg) return;
     dlg.addEventListener('click', function (e) {
       if (e.target === dlg) dlg.close();
     });

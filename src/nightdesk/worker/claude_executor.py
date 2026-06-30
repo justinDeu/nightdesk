@@ -109,7 +109,20 @@ class ClaudeExecutor:
         # seen and use it as the authoritative model for usage/cost.
         seen_model: Optional[str] = None
 
-        seq_counter: list[int] = [0]
+        # Seed from the conversation's current max seq so this turn continues
+        # the shared transcript's single monotonic seq space (see req.seq_start).
+        seq_counter: list[int] = [getattr(req, "seq_start", 0) or 0]
+        session_id_persisted = False
+
+        def _maybe_persist_session(sid: Optional[str]) -> None:
+            """Fire the eager on_session_id callback once, on first capture."""
+            nonlocal session_id_persisted
+            if sid and not session_id_persisted and getattr(req, "on_session_id", None):
+                session_id_persisted = True
+                try:
+                    req.on_session_id(str(sid))
+                except Exception:
+                    log.exception("on_session_id callback failed for ticket %s", req.ticket_id)
 
         async def _drain() -> None:
             nonlocal final, exit_status, error, last_result_event, assistant_tail, session_id, seen_model
@@ -187,6 +200,7 @@ class ClaudeExecutor:
                 sid = (evt.get("data") or {}).get("session_id")
                 if sid:
                     session_id = str(sid)
+                    _maybe_persist_session(session_id)
             # The model rides on assistant messages, not the result event.
             if evt.get("type") == "assistant":
                 m = evt.get("model")
@@ -198,6 +212,7 @@ class ClaudeExecutor:
                 sid = evt.get("session_id")
                 if sid:
                     session_id = str(sid)
+                    _maybe_persist_session(session_id)
                 if evt.get("subtype") == "success":
                     final = evt.get("result")
                 else:

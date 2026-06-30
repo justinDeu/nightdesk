@@ -28,6 +28,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import ConfigRow, Run, Ticket
+from nightdesk.domain.conversations import (
+    create_conversation, get_conversation, latest_turn, sync_conversation_from_turn,
+)
 from nightdesk.domain.permissions import PermissionSpec, merge_permissions
 from nightdesk.domain.profile_secrets import ProfileSecretBox
 from nightdesk.domain.run_tokens import issue_run_token, revoke_for_run
@@ -38,7 +41,7 @@ from nightdesk.domain.notifications import (
 from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import transition_status
 from nightdesk.domain.toolchains import resolve_tool_paths
-from nightdesk.transcript import append_event, append_worker_error
+from nightdesk.transcript import append_event, append_worker_error, next_transcript_seq
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult, Executor
 from nightdesk.worker.headless_prompt import (
     HEADLESS_POLICY_VERSION,
@@ -411,6 +414,38 @@ def _resolve_executor(backend: str, override: Optional[Executor]) -> Executor:
     return get_executor(backend)
 
 
+def _make_session_id_persister(
+    session_factory: Callable[[], Session], run_id: str, conversation_id: str,
+) -> Callable[[str], None]:
+    """Build the eager on_session_id callback for the executor.
+
+    Persists the authoritative ``conversation.session_id`` (and the per-turn
+    ``run.session_id``) the instant the SDK emits a session id — OUT OF BAND
+    relative to run completion — on a fresh session. Best-effort: a failure
+    here must never abort the run; it only means session_id lands at finish.
+    """
+    from nightdesk.domain.conversations import set_conversation_session
+
+    def _persist(sid: str) -> None:
+        s = session_factory()
+        try:
+            r = s.get(Run, run_id)
+            if r is not None and not r.session_id:
+                r.session_id = sid
+            set_conversation_session(s, conversation_id, sid)
+            s.commit()
+        except Exception:
+            log.exception("eager session_id persist failed for run %s", run_id)
+            try:
+                s.rollback()
+            except Exception:
+                pass
+        finally:
+            s.close()
+
+    return _persist
+
+
 async def _cancel_watcher(
     session_factory: Callable[[], Session],
     ticket_id: str,
@@ -516,18 +551,59 @@ async def run_one(
             run_intent = str(overrides.get("nightdesk_run_intent") or "first_run")
             parent_run_id = overrides.get("nightdesk_parent_run_id")
             restart_workspace_policy = overrides.get("nightdesk_restart_workspace_policy")
-            parent_run = session.get(Run, parent_run_id) if isinstance(parent_run_id, str) else None
+            staged_conversation_id = overrides.get("nightdesk_conversation_id")
+            # nightdesk_new_conversation is explicit documentation of a fresh
+            # conversation; the default (no staging) also starts a new one.
             next_run_context = ticket.next_run_context
             workspace_specs = _workspace_specs_for_ticket(ticket)
+            cfg.transcript_root.mkdir(parents=True, exist_ok=True)
+
+            # Capture whether a prior turn/worktree exists BEFORE we create the
+            # new run row (early turn creation below sets current_run_id).
+            had_prior_turn = ticket.current_run_id is not None
+
+            # --- Resolve / create the Conversation (BEFORE workspace prep) ----
+            # A turn always belongs to a conversation. Continue targets an
+            # existing conversation (re-activating it); everything else starts a
+            # fresh conversation (new session by definition).
+            _setup_phase = "conversation_resolve"
+            if staged_conversation_id:
+                conversation = get_conversation(session, staged_conversation_id)
+                if conversation.ticket_id != ticket.id:
+                    raise RuntimeError("staged conversation does not belong to ticket")
+                ticket.current_conversation_id = conversation.id
+            else:
+                profile = ticket.profile
+                backend = (getattr(profile, "backend", None) or "claude_sdk") if profile else "claude_sdk"
+                conversation = create_conversation(
+                    session,
+                    ticket_id=ticket.id,
+                    profile_id=ticket.profile_id,
+                    backend=backend,
+                    transcript_path="",  # placeholder; set once we have the id
+                )
+                conversation.transcript_path = str(
+                    cfg.transcript_root / f"{conversation.id}.log"
+                )
+                ticket.current_conversation_id = conversation.id
+                session.flush()
+            transcript_path = conversation.transcript_path
+            # The prior turn of THIS conversation — the resume seeding source
+            # and the last_run_summary reference. (parent_run is kept only as a
+            # seeding fallback for legacy data.)
+            prior_turn = latest_turn(session, conversation.id)
+            parent_run = session.get(Run, parent_run_id) if isinstance(parent_run_id, str) else None
+            if prior_turn is None and parent_run is not None:
+                prior_turn = parent_run
+
             # A ticket in review/archived/queued may already have a resolved
-            # worktree from a prior run.  If the intent is first_run (the
-            # default, set by bare run-now / scheduler pick) and any workspace
-            # is a git_worktree, reuse it instead of failing with
+            # worktree from a prior run. If the intent is first_run and any
+            # workspace is a git_worktree, reuse it instead of failing with
             # "worktree_path already exists".
             has_existing_worktree = (
                 run_intent == "first_run"
                 and any(s.kind == "git_worktree" for s in workspace_specs)
-                and ticket.current_run_id is not None
+                and had_prior_turn
             )
             if run_intent == "restart":
                 for spec in workspace_specs:
@@ -535,6 +611,34 @@ async def run_one(
                         spec.branch = None
                 if restart_workspace_policy == "recreate_in_place":
                     _cleanup_recorded_worktrees(ticket, delete_branches=True)
+
+            # --- Create the turn (Run) row BEFORE workspace prep ------------
+            # Closing the 30s debounce race: the row existing means orphan
+            # recovery's "running + no unfinished Run" pass never fires while
+            # the subprocess is still in workspace prep (which can take longer
+            # than the grace window). worktree_path is resolved after prep.
+            _setup_phase = "turn_create"
+            started_as_run_now = bool(ticket.run_now)
+            run_id = str(uuid.uuid4())
+            run = start_run(
+                session,
+                id=run_id,
+                ticket_id=ticket.id,
+                worktree_path="",  # placeholder; set after workspace prep
+                transcript_path=transcript_path,
+                pid=os.getpid(),
+                host=cfg.host,
+                started_as_run_now=started_as_run_now,
+                intent=run_intent,
+                parent_run_id=parent_run.id if parent_run is not None else None,
+                conversation_id=conversation.id,
+                headless_policy_version=HEADLESS_POLICY_VERSION,
+                restart_workspace_policy=restart_workspace_policy,
+                prompt=ticket.prompt,
+            )
+            log.info("turn %s started (conversation %s) for ticket %s: intent=%s",
+                     run.id, conversation.id, ticket.id, run_intent)
+
             log.debug("preparing workspace bundle for ticket %s", ticket.id)
             _setup_phase = "workspace_prep"
             bundle = prepare_workspace_bundle(
@@ -547,7 +651,14 @@ async def run_one(
                 fresh_worktree_paths=run_intent == "restart" and restart_workspace_policy == "fresh_path",
             )
             ws = bundle.primary
+            run.worktree_path = str(ws.worktree_path or ws.path)
             _record_workspace_resolution(ticket, bundle)
+            # Bind this conversation's workspaces to it (1:N conversation
+            # ownership) so continuing an OLD conversation restores the tree it
+            # ran against, not one a newer conversation mutated.
+            for row in (ticket.workspaces or []):
+                if row.conversation_id is None:
+                    row.conversation_id = conversation.id
             _setup_phase = "profile_spec"
             spec = _apply_workspace_permissions(
                 _profile_to_spec(
@@ -564,41 +675,22 @@ async def run_one(
                 base_path=str(ws.path),
             )
             spec = replace(spec, tool_paths=tool_paths)
-            cfg.transcript_root.mkdir(parents=True, exist_ok=True)
+            run.sandbox_tool_paths = tool_paths
+            session.commit()
 
             # ``run_now`` is set only by an explicit user queue-bypass
             # (request_run_now/set_run_now/drag-to-running). The queued->running
             # transition no longer mutates it, so this flag accurately reflects
             # whether the user ran-now; normal scheduler picks read False here.
-            started_as_run_now = bool(ticket.run_now)
             if ticket.run_now:
                 ticket.run_now = False
-            overrides.pop("nightdesk_run_intent", None)
-            overrides.pop("nightdesk_parent_run_id", None)
-            overrides.pop("nightdesk_restart_workspace_policy", None)
+            for _k in ("nightdesk_run_intent", "nightdesk_parent_run_id",
+                       "nightdesk_restart_workspace_policy",
+                       "nightdesk_conversation_id", "nightdesk_new_conversation"):
+                overrides.pop(_k, None)
             ticket.permission_overrides = overrides or None
             ticket.next_run_context = None
             ticket.next_run_context_updated_at = None
-
-            run_id = str(uuid.uuid4())
-            run = start_run(
-                session,
-                id=run_id,
-                ticket_id=ticket.id,
-                worktree_path=str(ws.worktree_path or ws.path),
-                transcript_path=str(cfg.transcript_root / f"{run_id}.log"),
-                pid=os.getpid(),
-                host=cfg.host,
-                started_as_run_now=started_as_run_now,
-                intent=run_intent,
-                parent_run_id=parent_run.id if parent_run is not None else None,
-                headless_policy_version=HEADLESS_POLICY_VERSION,
-                restart_workspace_policy=restart_workspace_policy,
-                prompt=ticket.prompt,
-                sandbox_tool_paths=tool_paths,
-            )
-            log.info("run %s started for ticket %s: transcript=%s intent=%s",
-                     run.id, ticket.id, run.transcript_path, run_intent)
 
             # Snapshot non-git workspace trees now, before the agent touches
             # anything, so the per-run Changes view can diff filesystem state
@@ -644,46 +736,55 @@ async def run_one(
             cc_sessions_root = cfg.worktree_root.parent / "nightdesk-cc-sessions"
             cc_sessions_dir = run_cc_sessions_dir(str(cc_sessions_root), run.id)
 
-            # ``continue`` intent: resume the parent run's Claude Code
-            # conversation by replaying its session id into the SDK. Each run
-            # gets an isolated per-run session store bound over the sandbox's
-            # CLAUDE_CONFIG_DIR/projects, so the parent's session file must be
-            # seeded into THIS run's store for the SDK's ``resume=<id>`` to
-            # resolve inside the sandbox. If the parent has no session id or
-            # the file is gone, fall back to a fresh-context resume (same
-            # worktree, no conversation history) and record that we did so.
+            # ``continue`` intent: resume the CONVERSATION's Claude Code
+            # conversation by replaying its authoritative session id into the
+            # SDK. Each run gets an isolated per-run session store bound over
+            # the sandbox's CLAUDE_CONFIG_DIR/projects, so the prior turn's
+            # session file must be seeded into THIS run's store for the SDK's
+            # ``resume=<id>`` to resolve inside the sandbox. If the conversation
+            # has no session id or the file is gone, fall back to a fresh-context
+            # resume (same worktree, no conversation history) and record it.
             resume_session_id: Optional[str] = None
             fell_back_to_fresh_context = False
             if run_intent == "continue":
-                parent_sid = parent_run.session_id if parent_run is not None else None
-                if parent_sid and parent_run is not None:
+                conv_sid = conversation.session_id
+                seed_source = prior_turn.id if prior_turn is not None else None
+                if conv_sid and seed_source is not None:
                     seeded = seed_cc_session(
                         cc_sessions_dir,
-                        parent_sid,
+                        conv_sid,
                         [
-                            run_cc_sessions_dir(str(cc_sessions_root), parent_run.id),
+                            run_cc_sessions_dir(str(cc_sessions_root), seed_source),
                             os.path.expanduser("~/.claude/projects"),
                         ],
                     )
                     if seeded is not None:
-                        resume_session_id = parent_sid
+                        resume_session_id = conv_sid
                         log.info(
-                            "continue run %s: resuming parent session %s (seeded %s)",
-                            run.id, parent_sid, seeded,
+                            "continue turn %s: resuming conversation session %s (seeded %s)",
+                            run.id, conv_sid, seeded,
                         )
                     else:
                         fell_back_to_fresh_context = True
                         log.warning(
-                            "continue run %s: parent session %s not found in any "
-                            "store; falling back to fresh-context resume",
-                            run.id, parent_sid,
+                            "continue turn %s: conversation session %s not found "
+                            "in any store; falling back to fresh-context resume",
+                            run.id, conv_sid,
                         )
+                elif conv_sid:
+                    # Session id present but no prior turn to seed from; the SDK
+                    # may still resolve it from the published host store.
+                    resume_session_id = conv_sid
                 else:
                     fell_back_to_fresh_context = True
                     log.warning(
-                        "continue run %s: parent run has no session_id; falling "
-                        "back to fresh-context resume", run.id,
+                        "continue turn %s: conversation has no session_id; "
+                        "falling back to fresh-context resume", run.id,
                     )
+
+            # Seed this turn's seq counter from the shared conversation
+            # transcript so the file keeps ONE monotonic seq space across turns.
+            seq_start = next_transcript_seq(transcript_path)
 
             log.debug("building bwrap argv for ticket %s run %s", ticket.id, run.id)
             _setup_phase = "bwrap_build"
@@ -731,7 +832,7 @@ async def run_one(
                     run_intent=prompt_intent,
                     workspace_path=str(ws.path),
                     next_run_context=next_run_context,
-                    last_run_summary=(parent_run.error_summary or parent_run.exit_status) if parent_run is not None else None,
+                    last_run_summary=(prior_turn.error_summary or prior_turn.exit_status) if prior_turn is not None else None,
                 )
             request = ExecutionRequest(
                 ticket_id=ticket.id, prompt=prompt,
@@ -743,6 +844,13 @@ async def run_one(
                 # for any continue that carried one (genuine resume or fallback),
                 # so the resumed run visibly opens with what the user typed.
                 continue_message=continue_message or None,
+                seq_start=seq_start,
+                # Eagerly persist the conversation.session_id the moment the SDK
+                # emits it (init event), so a cancel/crash afterward never leaves
+                # the conversation null-session.
+                on_session_id=_make_session_id_persister(
+                    session_factory, run.id, conversation.id,
+                ),
             )
 
             watcher = asyncio.create_task(
@@ -828,6 +936,12 @@ async def run_one(
                     fresh_run.cache_write_tokens = usage.cache_write_tokens
                     fresh_run.cost_usd = usage.cost_usd
                     session.commit()
+            # Sync the conversation's CUMULATIVE totals to this (latest) turn's
+            # reported totals. Per the cost rule the conversation equals the
+            # LAST turn, not a sum (the SDK reports cumulative-since-process-
+            # start tokens, which would double-count cache-read if summed).
+            if run.conversation_id is not None:
+                sync_conversation_from_turn(session, session.get(Run, run.id))
 
             session.expire_all()
             cur = session.get(Ticket, ticket.id)
