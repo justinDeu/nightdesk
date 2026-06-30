@@ -157,7 +157,7 @@ Tickets support a `workspaces` list — the primary workspace plus any additiona
 | `worktree_name` | string | optional branch/worktree name for git_worktree kind |
 | `worktree_path` | absolute path | explicit worktree path (server resolves if omitted) |
 | `branch` | string | branch to check out |
-| `base_ref` | string | base ref for diffing |
+| `base_ref` | string | ref the new git_worktree branch is cut from (`git worktree add -b <branch> <target> <base_ref>`); defaults to HEAD. See "Dependent / stacked tickets" below |
 | `retention` | `preserve`, `cleanup_on_success`, `cleanup_after_review` | default `preserve` |
 
 ```bash
@@ -201,6 +201,122 @@ curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
 `TicketOut.workspaces` is a list of resolved `TicketWorkspaceOut` objects with additional server-populated fields: `resolved_path`, `repo_root`, `git_common_dir`, `relative_path`, `base_sha`, `head_sha`, `state` (`pending` / `ready` / `error`), `position`.
 
 Top-level `worktree_name` and `worktree_path` fields on the ticket are convenience aliases for the primary workspace — prefer setting them via `workspaces` for clarity.
+
+## Dependencies
+
+List, add, and remove dependency edges. A dependency edge gates **execution order only**: the scheduler won't run the dependent ticket until the prerequisite reaches a done state.
+
+```bash
+# List a ticket's dependencies
+curl -s "${AUTH[@]}" "$BASE/api/v1/tickets/$TID/dependencies" | jq .
+
+# Add an edge: $TID depends on $PREREQ_TID (won't run until $PREREQ_TID finishes)
+curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
+  -X POST "$BASE/api/v1/tickets/$TID/dependencies" \
+  -d '{"depends_on_id": "'"$PREREQ_TID"'"}' | jq .   # 201; 422 on cycle
+
+# Remove an edge
+curl -s "${AUTH[@]}" -X DELETE "$BASE/api/v1/tickets/$TID/dependencies/$PREREQ_TID"  # 204
+```
+
+The POST body is a `DependencyCreate` (`{"depends_on_id": "<prerequisite_tid>"}`). A cycle returns `422`; an unknown ticket returns `404`.
+
+## Dependent / stacked tickets (`base_ref`)
+
+When ticket **B** depends on ticket **A** *and* B's work must **build on** A's code changes (not merely run after it), do **both** of the following:
+
+1. **Add a dependency edge** so B won't start until A finishes (see "Dependencies" above):
+   `POST /api/v1/tickets/<B>/dependencies` with `{"depends_on_id": "<A>"}`.
+2. **Set B's primary workspace `base_ref` to A's branch name** so B's git_worktree is cut from A's committed work instead of from `main`/HEAD.
+
+### Why both are needed
+
+- The **dependency edge** only gates *execution order*. On its own, B's worktree still branches off HEAD and would **not** contain A's changes.
+- **`base_ref`** is what actually makes the worktree build on A. nightdesk provisions a git_worktree with `git worktree add -b <branch> <target> [base_ref]` (see `_create_git_worktree` in `src/nightdesk/worker/workspace.py`): when `base_ref` is set, the new branch is cut from that ref instead of HEAD. Pointing it at A's branch means B's agent opens **on top of A's commits**, so it can't produce work that semantically conflicts with A — eliminating painful end-of-run rebases.
+- They **compose**: the dep edge guarantees A has already run and committed its branch, so the branch named in B's `base_ref` exists in the (bare) repo by the time B provisions.
+
+### Set `base_ref` at creation
+
+Put A's branch name in B's primary workspace entry alongside the usual `kind`/`source_path`/`worktree_name`/`role`/`label`/`access`:
+
+```bash
+# B builds on A's branch. Assumes $PREREQ_BRANCH is the branch A commits to
+# (e.g. the worktree_name you gave ticket A) and $A_TID is A's ticket id.
+cat > /tmp/ticket.json <<'JSON'
+{
+  "title": "B — builds on A",
+  "prompt": "Extend the work from ticket A. Your worktree is already branched off A's branch.",
+  "workspaces": [
+    {
+      "kind": "git_worktree",
+      "role": "primary",
+      "access": "read_write",
+      "label": "",
+      "source_path": "/home/thor/fun/nightdesk",
+      "worktree_name": "feat/b-on-top-of-a",
+      "base_ref": "__PREREQ_BRANCH__"
+    }
+  ]
+}
+JSON
+
+# Inject profile_id (and substitute the prereq branch) with Python — never jq,
+# which chokes on backticks/non-ASCII in prompts.
+PREREQ_BRANCH="feat/a-prerequisite"
+python3 -c "
+import json, os
+with open('/tmp/ticket.json') as f:
+    t = json.load(f)
+t['profile_id'] = '<uuid>'
+t['workspaces'][0]['base_ref'] = os.environ['PREREQ_BRANCH']
+with open('/tmp/ticket.full.json', 'w') as f:
+    json.dump(t, f)
+"
+curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
+  -X POST "$BASE/api/v1/tickets" --data @/tmp/ticket.full.json | jq '{id, title, status}'
+
+# Then add the dependency edge so B waits for A:
+curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
+  -X POST "$BASE/api/v1/tickets/$B_TID/dependencies" \
+  -d '{"depends_on_id": "'"$A_TID"'"}' | jq .
+```
+
+### Patch `base_ref` onto an existing draft/pending ticket
+
+`base_ref` can also be set later via PATCH, **as long as B is still `draft`/`pending` (before its worktree provisions)**. PATCH `workspaces` with the full primary entry — a sparse PATCH replaces the workspaces list, so include the existing kind/source_path/worktree_name/role/label/access fields, not just `base_ref`:
+
+```bash
+cat > /tmp/patch.json <<'JSON'
+{
+  "workspaces": [
+    {
+      "kind": "git_worktree",
+      "role": "primary",
+      "access": "read_write",
+      "label": "",
+      "source_path": "/home/thor/fun/nightdesk",
+      "worktree_name": "feat/b-on-top-of-a",
+      "base_ref": "feat/a-prerequisite"
+    }
+  ]
+}
+JSON
+curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
+  -X PATCH "$BASE/api/v1/tickets/$B_TID" --data @/tmp/patch.json | jq '{id, status}'
+```
+
+### Caveats
+
+- The `base_ref` branch **must exist** in the repo when B's worktree provisions. The dependency edge ensures this (A runs and commits its branch first). Never point `base_ref` at a branch nothing creates — provisioning will fail.
+- **Don't delete a prerequisite branch** until every dependent that bases on it has provisioned/landed — it's both the worktree base *and* the rebase reference point.
+- **Chains stack transitively** (A ← B ← C): each link's `base_ref` is the immediately-preceding branch (B's `base_ref` = A's branch, C's `base_ref` = B's branch), and each link gets its own dependency edge.
+- **Merge-time reconciliation.** Stacking happens at *work* time, not necessarily *merge* time. If the host project squash-merges, B's branch carries A's individual commits while `main` has them squashed. To land only B's own delta, rebase with:
+
+  ```bash
+  git rebase --onto main <A-branch-tip> <B-branch>
+  ```
+
+  This drops the redundant prerequisite commits and replays only B's. Land each branch's own MR onto `main` independently, **in dependency order** (A, then B, then C).
 
 ## Fetch / list
 

@@ -98,4 +98,7 @@ See `src/nightdesk/domain/conversations.py` for the model and `nightdesk-ticket-
 
 ## Sister skill
 
-For concrete ticket recipes (create, transition, run-now, comments, archive, transcript stream), use `nightdesk-ticket-ops`.
+For concrete ticket recipes (create, transition, run-now, comments, archive, transcript stream), use `nightdesk-ticket-ops`. That skill also covers:
+
+- **Dependency edges** — `GET`/`POST`/`DELETE /api/v1/tickets/{tid}/dependencies` (gate execution order so a dependent ticket waits for its prerequisite).
+- **Stacked / dependent tickets** — set a workspace's `base_ref` (a field on `TicketWorkspaceIn`, see `src/nightdesk/api/schemas.py`) to a prerequisite's branch so the dependent's git_worktree is cut from that branch instead of HEAD, building directly on the prerequisite's commits.
