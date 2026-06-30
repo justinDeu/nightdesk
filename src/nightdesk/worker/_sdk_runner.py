@@ -371,6 +371,16 @@ def _event_to_dict(evt: Any) -> dict[str, Any] | None:
 # Baked in at the runner so individual profiles cannot accidentally re-enable.
 _HEADLESS_DISALLOWED = ("AskUserQuestion", "EnterPlanMode", "ExitPlanMode")
 
+# The Claude Agent SDK defaults to a 1 MB stdout buffer per JSON message.
+# High-fidelity screenshots and large file reads routinely exceed that and
+# raise CLIJSONDecodeError. Raise it to 64 MB so those reads succeed.
+_MAX_STDOUT_BUFFER_BYTES = 64 * 1024 * 1024
+
+# Maximum number of times we attempt to resume a session after a
+# CLIJSONDecodeError (oversized tool result). After this many retries we
+# emit a final error event and stop rather than looping indefinitely.
+_MAX_BUFFER_RECOVERIES = 3
+
 
 async def _run(spec: dict[str, Any]) -> int:
     # All events go through the async emitter so drain()-based backpressure
@@ -404,6 +414,15 @@ async def _run_query(spec: dict[str, Any], emit: Any) -> int:
         await emit({"type": "result", "subtype": "error",
                     "result": f"failed to import claude_agent_sdk: {exc}"})
         return 1
+    # CLIJSONDecodeError was added in a later SDK release. Import it alongside
+    # query/ClaudeAgentOptions but fall back to a private sentinel so older SDK
+    # versions and test stubs that don't export it still work — the except
+    # clause below simply never fires for the sentinel.
+    try:
+        from claude_agent_sdk import CLIJSONDecodeError  # type: ignore
+    except ImportError:
+        class CLIJSONDecodeError(Exception):  # type: ignore[no-redef]
+            """Sentinel: SDK does not export CLIJSONDecodeError; recovery disabled."""
 
     opts_kwargs: dict[str, Any] = {}
     if spec.get("working_dir"):
@@ -439,6 +458,10 @@ async def _run_query(spec: dict[str, Any], emit: Any) -> int:
     # without a brainstorm, etc. "project" still loads any in-repo
     # .claude/settings.json and CLAUDE.md, which is desirable.
     opts_kwargs["setting_sources"] = ["project"]
+    # Raise the per-message stdout buffer above the SDK default (1 MB) so large
+    # tool results (e.g. high-fidelity screenshots) don't trip CLIJSONDecodeError.
+    # A per-spec override is supported for forward-compatibility.
+    opts_kwargs["max_buffer_size"] = spec.get("max_buffer_size") or _MAX_STDOUT_BUFFER_BYTES
 
     try:
         options = ClaudeAgentOptions(**opts_kwargs)
@@ -449,22 +472,83 @@ async def _run_query(spec: dict[str, Any], emit: Any) -> int:
         return 1
 
     rc = 0
+    session_id: str | None = None
+    attempt = 0
+    # Nudge sent when resuming after a CLIJSONDecodeError so the agent does
+    # not retry the exact oversized read.
+    _NUDGE = (
+        "Your previous tool result was too large to read and was dropped "
+        "(it exceeded the output buffer). Do not retry that exact read. "
+        "Take a smaller approach: re-capture/read at lower resolution, "
+        "read a slice, or summarize instead."
+    )
+
     log.info("SDK query starting: model=%s working_dir=%s",
              opts_kwargs.get("model"), spec.get("working_dir"))
-    try:
-        async for evt in query(prompt=spec.get("prompt", ""), options=options):
-            d = _event_to_dict(evt)
-            if d is None:
-                continue
-            await emit(d)
-            if d.get("type") == "result" \
-                    and d.get("subtype") not in (None, "success"):
+    while True:
+        if attempt == 0:
+            current_prompt = spec.get("prompt", "")
+            current_options = options
+        else:
+            current_prompt = _NUDGE
+            current_options = ClaudeAgentOptions(**{**opts_kwargs, "resume": session_id})
+
+        try:
+            async for evt in query(prompt=current_prompt, options=current_options):
+                # Capture session_id from raw events as early as possible so
+                # the CLIJSONDecodeError recovery path can resume the session.
+                sid = getattr(evt, "session_id", None) or \
+                    (getattr(evt, "data", None) or {}).get("session_id")
+                if sid:
+                    session_id = str(sid)
+                d = _event_to_dict(evt)
+                if d is None:
+                    continue
+                await emit(d)
+                if d.get("type") == "result" \
+                        and d.get("subtype") not in (None, "success"):
+                    rc = 1
+            break  # normal completion — exit the recovery loop
+        except CLIJSONDecodeError:
+            attempt += 1
+            if session_id and attempt <= _MAX_BUFFER_RECOVERIES:
+                # Emit a benign system breadcrumb (type "system" is not rendered
+                # by the translator, so it won't alarm the user; it is still
+                # written to the transcript file for post-hoc debugging).
+                await emit({
+                    "type": "system",
+                    "subtype": "buffer_overflow_skip",
+                    "data": {
+                        "session_id": session_id,
+                        "attempt": attempt,
+                        "message": (
+                            "A tool result exceeded the output buffer and was "
+                            "dropped; resuming session."
+                        ),
+                    },
+                })
+                # Continue the while loop — next iteration resumes the session.
+            else:
+                log.error(
+                    "SDK query: unrecoverable CLIJSONDecodeError after %d attempt(s) "
+                    "(session_id=%s)", attempt, session_id)
+                await emit({
+                    "type": "result",
+                    "subtype": "error",
+                    "result": (
+                        f"Run could not recover from repeated oversized tool output "
+                        f"(exceeded buffer after {attempt} attempt(s))."
+                    ),
+                })
                 rc = 1
-    except Exception as exc:
-        log.exception("SDK query crashed")
-        await emit({"type": "result", "subtype": "error",
-                    "result": f"query crashed: {exc}"})
-        rc = 1
+                break
+        except Exception as exc:
+            log.exception("SDK query crashed")
+            await emit({"type": "result", "subtype": "error",
+                        "result": f"query crashed: {exc}"})
+            rc = 1
+            break
+
     log.info("SDK query finished: rc=%d", rc)
     return rc
 
