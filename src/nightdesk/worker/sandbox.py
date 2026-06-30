@@ -102,6 +102,64 @@ def publish_cc_session(store_dir: str, session_id: str) -> Optional[str]:
     except Exception:
         log.exception("failed to publish CC session %s from %s", session_id, store_dir)
         return None
+
+
+def seed_cc_session(
+    target_store_dir: str,
+    session_id: str,
+    source_dirs: "Iterable[str] | str | None",
+) -> Optional[str]:
+    """Copy a prior run's session file into a new run's session store.
+
+    A ``continue`` run resumes the parent's Claude Code conversation, but each
+    run gets an isolated per-run session store bound over
+    ``CLAUDE_CONFIG_DIR/projects`` (so a run can never see another run's
+    sessions). For the SDK's ``resume=<session_id>`` to resolve inside the new
+    sandbox, the prior session jsonl must be readable there — so we copy it
+    from a *source* store (the parent run's per-run store, with the host's
+    ``~/.claude/projects`` as a published fallback) into the new run's store
+    before the sandbox is built.
+
+    The store layout mirrors ``~/.claude/projects`` exactly
+    (``<encoded-workdir>/<session-id>.jsonl``); we mirror the file's
+    path-relative-to-source into the target so the relative layout is preserved
+    regardless of the encoded-workdir name. Best-effort: never raises. Returns
+    the destination path on success, ``None`` if the session file could not be
+    found in any source (the caller treats that as "no usable session" and
+    falls back to a fresh-context resume).
+    """
+    import glob
+
+    if not session_id or not target_store_dir:
+        return None
+    if isinstance(source_dirs, str):
+        source_dirs = [source_dirs]
+    for src_root in source_dirs or []:
+        if not src_root:
+            continue
+        try:
+            matches = glob.glob(
+                os.path.join(src_root, "**", f"{session_id}.jsonl"),
+                recursive=True,
+            )
+        except Exception:
+            matches = []
+        if not matches:
+            continue
+        src = matches[0]
+        try:
+            rel = os.path.relpath(src, src_root)
+            dst = os.path.join(target_store_dir, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+            return dst
+        except Exception:
+            log.exception(
+                "failed to seed CC session %s from %s into %s",
+                session_id, src_root, target_store_dir,
+            )
+            continue
+    return None
 # Keep this OUTSIDE any blanket ro mount (/usr, /opt). bwrap can't create the
 # destination file inside an already-mounted read-only tree, so a path like
 # /usr/local/bin/claude fails with "Read-only file system" the moment /usr

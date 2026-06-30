@@ -71,6 +71,10 @@ class ClaudeExecutor:
         }
         if system_prompt:
             d["system_prompt"] = system_prompt
+        # Resume the prior Claude Code conversation (``continue`` intent). The
+        # runner turns this into ``resume=<id>`` on ClaudeAgentOptions.
+        if req.resume_session_id:
+            d["resume"] = req.resume_session_id
         return d
 
     async def run(self, req: ExecutionRequest) -> ExecutionResult:

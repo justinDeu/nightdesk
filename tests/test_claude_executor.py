@@ -321,6 +321,29 @@ def test_runner_spec_omits_system_prompt_when_empty(tmp_path):
         assert "system_prompt" not in runner, f"expected absent for system_prompt={sp!r}"
 
 
+def test_runner_spec_carries_resume_session_id(tmp_path):
+    """A continue run's resume_session_id lands in the runner spec as ``resume``
+    so _sdk_runner wires it into ClaudeAgentOptions."""
+    from nightdesk.worker.claude_executor import ClaudeExecutor
+    spec = PermissionSpec()
+    req = ExecutionRequest(
+        ticket_id="t1", prompt="hi", working_dir=tmp_path,
+        transcript_path=tmp_path / "t.log",
+        bwrap_argv=["bwrap"], env={}, permission_spec=spec,
+        resume_session_id="sess-parent-42",
+    )
+    runner = ClaudeExecutor()._build_runner_spec(req)
+    assert runner.get("resume") == "sess-parent-42"
+
+
+def test_runner_spec_omits_resume_when_absent(tmp_path):
+    """No resume_session_id (every non-continue intent) must not put ``resume``
+    in the spec, so _sdk_runner starts a fresh session."""
+    spec = PermissionSpec()
+    runner = _runner_spec_for(spec, tmp_path)
+    assert "resume" not in runner
+
+
 @pytest.mark.anyio
 async def test_sdk_runner_wires_system_prompt_as_preset_append(tmp_path):
     """system_prompt in the runner spec must reach ClaudeAgentOptions as a

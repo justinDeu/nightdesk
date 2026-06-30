@@ -584,6 +584,26 @@ def merge_next_run_context_into_prompt(session: Session, ticket_id: str) -> Tick
     return t
 
 
+def continue_ticket(session: Session, ticket_id: str, *, next_run_context: Optional[str]) -> Ticket:
+    """Continue the prior run's Claude Code conversation.
+
+    Unlike ``resume_ticket`` (which starts a fresh-context agent on the same
+    worktree with only a one-line last-run summary), ``continue`` reuses the
+    parent run's SDK ``session_id`` so the new run resumes the full prior
+    message history. The session-id resolution and sandbox seeding happen in
+    the worker (``run_one``); this helper only stages the intent and parent
+    run id exactly like resume/retry/restart. Falls back to fresh-context
+    resume transparently when the parent has no usable session.
+    """
+    t = set_next_run_context(session, ticket_id, next_run_context) if next_run_context is not None else get_ticket(session, ticket_id)
+    if t.status not in ("review", "archived"):
+        raise InvalidTransition(f"cannot continue from {t.status}")
+    _stage_next_run(t, intent="continue")
+    session.commit()
+    session.refresh(t)
+    return request_run_now(session, ticket_id)
+
+
 def resume_ticket(session: Session, ticket_id: str, *, next_run_context: Optional[str]) -> Ticket:
     t = set_next_run_context(session, ticket_id, next_run_context) if next_run_context is not None else get_ticket(session, ticket_id)
     if t.status not in ("review", "archived"):

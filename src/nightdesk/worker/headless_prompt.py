@@ -41,6 +41,11 @@ def build_headless_prompt(
     if last_run_summary:
         parts.append("LAST RUN SUMMARY\n" + last_run_summary.strip())
     parts.append({
+        "continue": (
+            "You are resuming the prior Claude Code conversation on this ticket, "
+            "with its full message history loaded. Pick up exactly where that "
+            "session left off and keep working toward the goal."
+        ),
         "resume": "Continue from the current workspace state.",
         "retry": "Re-attempt from the current workspace state. Do not trust prior conclusions.",
         "restart": "Start fresh. Ignore prior agent reasoning unless restated above.",

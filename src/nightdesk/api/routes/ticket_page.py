@@ -30,7 +30,7 @@ from nightdesk.domain.runs import get_run, list_runs, RunNotFound
 from nightdesk.domain.toolchains import current_config, toolchain_options
 from nightdesk.domain.labels import list_labels
 from nightdesk.domain.tickets import (
-    add_dependency, clone_ticket, get_ticket, list_dependencies, list_dependents,
+    add_dependency, clone_ticket, continue_ticket, get_ticket, list_dependencies, list_dependents,
     list_tickets, merge_next_run_context_into_prompt, remove_dependency, restart_ticket,
     resume_ticket, retry_ticket, set_next_run_context, update_ticket,
     CyclicDependency, DependencyNotFound, TicketNotFound,
@@ -266,6 +266,28 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> 
     ):
         return _remove_dir(session, tid, path)
 
+
+    @router.post("/tickets/{tid}/continue", dependencies=[auth])
+    async def continue_form(
+        tid: str,
+        next_run_context: str = Form(""),
+        session: Session = Depends(get_session),
+    ):
+        """Continue the prior run's Claude Code conversation.
+
+        Distinct from /resume: resume starts a fresh-context agent on the same
+        worktree (no message history); continue replays the parent run's SDK
+        session id so the new run resumes the full prior conversation. Falls
+        back to a fresh-context resume transparently when no session is
+        available.
+        """
+        try:
+            continue_ticket(session, tid, next_run_context=next_run_context)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except Exception as e:
+            raise HTTPException(409, str(e))
+        return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
 
     @router.post("/tickets/{tid}/resume", dependencies=[auth])
     async def resume_form(

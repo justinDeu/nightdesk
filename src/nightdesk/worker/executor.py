@@ -20,6 +20,11 @@ class ExecutionRequest:
     permission_spec: PermissionSpec = field(default_factory=PermissionSpec)
     final_summary_marker: str = "<<<NIGHTDESK_FINAL_SUMMARY>>>"
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # Claude session id to resume (``continue`` intent). When set, the SDK is
+    # launched with ``resume=<id>`` so the new run carries the prior
+    # conversation's full message history instead of starting fresh. None for
+    # every other intent (and when a continue fell back to fresh context).
+    resume_session_id: Optional[str] = None
 
 
 @dataclass

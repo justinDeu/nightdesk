@@ -214,6 +214,53 @@ def read_events(path: str | Path) -> Iterator[dict]:
                 yield evt
 
 
+def append_event(path: str | Path, event: dict, *, _type: str | None = None) -> None:
+    """Append a single canonical event to a transcript file.
+
+    Safe to call when the transcript file does not yet exist (creates the
+    parent directory and the file). The ``seq`` is taken from the highest
+    seen ``seq`` in the existing file so the event lands after agent output,
+    not in the middle of it. ``ts`` is stamped if absent. Failures to write
+    are swallowed — losing a transcript event is worse than crashing the
+    worker again on top of it, but a write failure here is itself logged via
+    the standard logging module.
+
+    ``_type`` optionally forces ``event["type"]`` (used by ``append_worker_error``
+    so callers can construct the payload without naming the type).
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    p = Path(path)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log.exception("could not create transcript dir for event: %s", p)
+        return
+
+    next_seq_value = 0
+    if p.exists():
+        try:
+            for evt in read_events(p):
+                seq = evt.get("seq")
+                if isinstance(seq, int) and seq >= next_seq_value:
+                    next_seq_value = seq + 1
+        except Exception:
+            log.exception("failed to read transcript while appending event: %s", p)
+
+    out = dict(event)
+    if _type is not None:
+        out["type"] = _type
+    out.setdefault("ts", now_iso())
+    out["seq"] = next_seq_value
+
+    try:
+        with p.open("ab") as f:
+            write_event(f, out)
+    except OSError:
+        log.exception("failed to append event to transcript: %s", p)
+
+
 def append_worker_error(
     path: str | Path,
     *,
@@ -230,41 +277,13 @@ def append_worker_error(
     error event is worse than crashing the worker again on top of it, but a
     write failure here is itself logged via the standard logging module.
     """
-    import logging
-
-    log = logging.getLogger(__name__)
-    p = Path(path)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        log.exception("could not create transcript dir for worker_error: %s", p)
-        return
-
-    next_seq_value = 0
-    if p.exists():
-        try:
-            for evt in read_events(p):
-                seq = evt.get("seq")
-                if isinstance(seq, int) and seq >= next_seq_value:
-                    next_seq_value = seq + 1
-        except Exception:
-            log.exception("failed to read transcript while appending worker_error: %s", p)
-
     event: dict[str, object] = {
-        "type": "worker_error",
-        "ts": now_iso(),
-        "seq": next_seq_value,
         "kind": kind,
         "summary": summary,
     }
     if traceback_text:
         event["traceback"] = traceback_text
-
-    try:
-        with p.open("ab") as f:
-            write_event(f, event)
-    except OSError:
-        log.exception("failed to append worker_error to transcript: %s", p)
+    append_event(path, event, _type="worker_error")
 
 
 def is_canonical(path: str | Path) -> bool:

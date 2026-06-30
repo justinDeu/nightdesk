@@ -154,6 +154,68 @@ def test_publish_cc_session_missing_is_noop(tmp_path, monkeypatch):
     assert publish_cc_session(str(tmp_path / "empty-store"), "nope") is None
 
 
+def test_seed_cc_session_copies_prior_session_into_new_store(tmp_path):
+    """A continue run's session store is seeded with the parent's session jsonl
+    so the SDK's resume=<id> resolves inside the new sandbox. The relative
+    <encoded-workdir>/<session>.jsonl layout is preserved."""
+    from nightdesk.worker.sandbox import seed_cc_session
+
+    parent_store = tmp_path / "nightdesk-cc-sessions" / "parent-run"
+    enc = "-home-thor-fun-nightdesk"
+    sess = "sess-continue-1"
+    src = parent_store / enc / f"{sess}.jsonl"
+    src.parent.mkdir(parents=True)
+    src.write_text('{"v":1}\n')
+
+    new_store = tmp_path / "nightdesk-cc-sessions" / "new-run"
+    dst = seed_cc_session(str(new_store), sess, [str(parent_store)])
+
+    expected = new_store / enc / f"{sess}.jsonl"
+    assert dst == str(expected)
+    assert expected.read_text() == '{"v":1}\n'
+
+
+def test_seed_cc_session_falls_back_to_published_host_store(tmp_path):
+    """When the parent's per-run store is gone, the published ~/.claude/projects
+    copy is the fallback source."""
+    from nightdesk.worker.sandbox import seed_cc_session
+
+    enc = "-enc"
+    sess = "sess-fallback-2"
+    published = tmp_path / "host-claude" / "projects"
+    src = published / enc / f"{sess}.jsonl"
+    src.parent.mkdir(parents=True)
+    src.write_text('{"v":2}\n')
+
+    new_store = tmp_path / "new-store"
+    # First source dir has nothing; published fallback has the file.
+    dst = seed_cc_session(
+        str(new_store), sess,
+        [str(tmp_path / "gone-parent-store"), str(published)],
+    )
+    assert dst is not None
+    assert (new_store / enc / f"{sess}.jsonl").read_text() == '{"v":2}\n'
+
+
+def test_seed_cc_session_returns_none_when_unavailable(tmp_path):
+    """No usable parent session -> None so the caller falls back to fresh resume."""
+    from nightdesk.worker.sandbox import seed_cc_session
+
+    new_store = tmp_path / "new-store"
+    assert seed_cc_session(
+        str(new_store), "sess-missing",
+        [str(tmp_path / "empty-1"), str(tmp_path / "empty-2")],
+    ) is None
+    # Nothing written.
+    assert not new_store.exists() or not any(new_store.rglob("*.jsonl"))
+
+
+def test_seed_cc_session_noop_without_session_id(tmp_path):
+    from nightdesk.worker.sandbox import seed_cc_session
+
+    assert seed_cc_session(str(tmp_path / "store"), "", [str(tmp_path)]) is None
+
+
 def test_default_worktree_root_survives_the_sandbox_guard():
     # Regression: git_worktree-mode tickets resolve under cfg.worktree_root and
     # that path gets bind-mounted into the sandbox. If the default worktree_root

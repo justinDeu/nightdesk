@@ -2,8 +2,9 @@ import pytest
 
 from tests.conftest import workspace_payload
 
+from nightdesk.domain.runs import start_run, finish_run
 from nightdesk.domain.tickets import (
-    clone_ticket, create_ticket, get_ticket, list_tickets, merge_next_run_context_into_prompt,
+    clone_ticket, continue_ticket, create_ticket, get_ticket, list_tickets, merge_next_run_context_into_prompt,
     request_run_now, requeue, resume_ticket, restart_ticket, retry_ticket, set_next_run_context,
     set_run_now, transition_status, transition_with_position, reorder_in_column,
     archive, unarchive, update_ticket, delete_ticket, TicketNotFound, InvalidTransition,
@@ -189,6 +190,36 @@ def test_resume_ticket_queues_run_with_transient_context(session, sample_profile
     assert out.run_now is True
     assert out.next_run_context == "Use polling, not SSE"
     assert out.permission_overrides["nightdesk_run_intent"] == "resume"
+
+
+def test_continue_ticket_stages_continue_intent_and_parent_run(session, sample_profile):
+    """continue_ticket mirrors resume/retry staging: it queues a run-now and
+    stages intent='continue' plus the parent run id so the worker can resolve
+    the parent's session id. Distinct from resume (intent='resume')."""
+    from nightdesk.db.models import Ticket
+    t = make_ticket(session, sample_profile, status="queued")
+    transition_status(session, t.id, "running")
+    prior = start_run(
+        session, ticket_id=t.id, worktree_path="/tmp/w", transcript_path="/tmp/p.log",
+        pid=None, host="h",
+    )
+    finish_run(session, prior.id, exit_status="success", error_summary=None,
+               session_id="sess-parent-1")
+    transition_status(session, t.id, "review")
+    out = continue_ticket(session, t.id, next_run_context="Keep the conversation")
+    assert out.status == "queued"
+    assert out.run_now is True
+    assert out.next_run_context == "Keep the conversation"
+    overrides = out.permission_overrides
+    assert overrides["nightdesk_run_intent"] == "continue"
+    assert overrides["nightdesk_parent_run_id"] == prior.id
+
+
+def test_continue_ticket_rejected_from_non_review_state(session, sample_profile):
+    """continue is only valid from review/archived — same boundary as resume."""
+    t = make_ticket(session, sample_profile, status="queued")
+    with pytest.raises(InvalidTransition):
+        continue_ticket(session, t.id, next_run_context=None)
 
 
 def test_retry_ticket_queues_run_with_transient_context(session, sample_profile):

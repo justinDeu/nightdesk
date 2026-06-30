@@ -6,9 +6,10 @@ import subprocess
 import pytest
 from sqlalchemy.orm import Session
 
-from nightdesk.db.models import Ticket
-from nightdesk.domain.runs import finish_run, start_run
+from nightdesk.db.models import Ticket, Run
+from nightdesk.domain.runs import finish_run, get_run, start_run
 from nightdesk.domain.tickets import (
+    continue_ticket,
     create_ticket,
     restart_ticket,
     resume_ticket,
@@ -567,3 +568,190 @@ async def test_run_one_finishes_run_when_setup_fails_after_start(session, tmp_pa
     assert run.finished_at is not None
     assert run.exit_status == "failed"
     assert "setup error" in (run.error_summary or "")
+
+
+# --- continue intent: resume the prior SDK conversation ---------------------
+
+def _stage_parent_run(session, ticket, tmp_path, *, session_id):
+    """Drive a ticket through one completed run so it has a resumable parent,
+    then leave it in 'review' ready for a continue stage. Returns the parent
+    Run row."""
+    transition_status(session, ticket.id, "running")
+    prior = start_run(
+        session, ticket_id=ticket.id,
+        worktree_path=str(tmp_path / "primary"),
+        transcript_path=str(tmp_path / "transcripts" / "prior.log"),
+        pid=None, host="testhost",
+    )
+    finish_run(
+        session, prior.id, exit_status="success",
+        error_summary=None, session_id=session_id,
+    )
+    transition_status(session, ticket.id, "review")
+    return prior
+
+
+def _write_parent_session_file(tmp_path, parent_run_id, session_id):
+    """Drop a session jsonl into the parent run's per-run cc-sessions store
+    (the canonical source run_one seeds from)."""
+    store = tmp_path / "nightdesk-cc-sessions" / parent_run_id
+    enc = store / "-encoded-workdir"
+    enc.mkdir(parents=True, exist_ok=True)
+    (enc / f"{session_id}.jsonl").write_text('{"type":"summary"}\n')
+    return store
+
+
+@pytest.mark.anyio
+async def test_run_one_continue_threads_resume_session_id_and_seeds_sandbox(
+    session, sample_profile, tmp_path,
+):
+    """continue intent: the parent's session id is threaded onto the
+    ExecutionRequest (resume_session_id) AND its session file is seeded into
+    the new run's isolated sandbox store so the SDK's resume=<id> resolves."""
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    ticket = create_ticket(
+        session, title="cont", prompt="Fix it", status="queued",
+        priority=0, profile_id=sample_profile.id, source_path=str(primary),
+    )
+    parent_sid = "sess-parent-continue-1"
+    prior = _stage_parent_run(session, ticket, tmp_path, session_id=parent_sid)
+    prior_id = prior.id
+    _write_parent_session_file(tmp_path, prior_id, parent_sid)
+    continue_ticket(session, ticket.id, next_run_context="keep going")
+    transition_status(session, ticket.id, "running")
+    ticket_id = ticket.id
+    bind = session.get_bind()
+
+    executor = CapturingExecutor()
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(worktree_root=tmp_path / "work",
+                     transcript_root=tmp_path / "transcripts",
+                     secrets={}, host="testhost", executor=executor),
+        ticket.id,
+    )
+    assert result.exit_status == "success"
+    assert executor.request is not None
+    # Spec threading: the parent session id reached the SDK-bound request.
+    assert executor.request.resume_session_id == parent_sid
+    # run_one closes its session; verify DB state on a fresh session.
+    with Session(bind) as verify:
+        new_run_id = verify.get(Ticket, ticket_id).current_run_id
+        assert new_run_id is not None and new_run_id != prior_id
+    # Sandbox availability: the session file was seeded into the NEW run's
+    # isolated store (bound over the sandbox's CLAUDE_CONFIG_DIR/projects).
+    seeded = list((tmp_path / "nightdesk-cc-sessions" / new_run_id).rglob(
+        f"{parent_sid}.jsonl"))
+    assert seeded, "parent session was not seeded into the new run's store"
+    # The continue prompt is honest about resuming the conversation.
+    assert "RUN INTENT: continue" in executor.request.prompt
+    assert "resuming the prior Claude Code conversation" in executor.request.prompt
+
+
+@pytest.mark.anyio
+async def test_run_one_continue_falls_back_when_session_file_missing(
+    session, sample_profile, tmp_path,
+):
+    """When the parent session file is gone, continue falls back to a
+    fresh-context resume: no resume_session_id threaded, the prompt reads as a
+    fresh-context resume, the fallback is recorded on the transcript, and the
+    Run.intent still records 'continue'."""
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    ticket = create_ticket(
+        session, title="cont", prompt="Fix it", status="queued",
+        priority=0, profile_id=sample_profile.id, source_path=str(primary),
+    )
+    parent_sid = "sess-parent-gone-2"
+    prior = _stage_parent_run(session, ticket, tmp_path, session_id=parent_sid)
+    # NOTE: deliberately do NOT write the parent session file.
+    continue_ticket(session, ticket.id, next_run_context="keep going")
+    transition_status(session, ticket.id, "running")
+    ticket_id = ticket.id
+    bind = session.get_bind()
+
+    executor = CapturingExecutor()
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(worktree_root=tmp_path / "work",
+                     transcript_root=tmp_path / "transcripts",
+                     secrets={}, host="testhost", executor=executor),
+        ticket.id,
+    )
+    assert result.exit_status == "success"
+    assert executor.request is not None
+    # Fell back: nothing to resume.
+    assert executor.request.resume_session_id is None
+    # Honest fresh-context prompt (not the "resuming prior conversation" text).
+    assert "RUN INTENT: resume" in executor.request.prompt
+    assert "resuming the prior Claude Code conversation" not in executor.request.prompt
+    # Recorded on the run's transcript artifact + Run.intent stays 'continue'.
+    with Session(bind) as verify:
+        new_run = verify.get(Run, verify.get(Ticket, ticket_id).current_run_id)
+        assert new_run is not None
+        assert new_run.intent == "continue"
+        transcript_path = new_run.transcript_path
+    transcript = Path(transcript_path).read_text()
+    assert "continue_session_unavailable" in transcript
+
+
+@pytest.mark.anyio
+async def test_run_one_continue_falls_back_when_parent_has_no_session_id(
+    session, sample_profile, tmp_path,
+):
+    """A parent that crashed before capturing a session id has nothing to
+    resume; continue falls back to fresh-context resume."""
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    ticket = create_ticket(
+        session, title="cont", prompt="Fix it", status="queued",
+        priority=0, profile_id=sample_profile.id, source_path=str(primary),
+    )
+    # No session_id recorded on the parent (e.g. crashed before init).
+    _stage_parent_run(session, ticket, tmp_path, session_id=None)
+    continue_ticket(session, ticket.id, next_run_context="keep going")
+    transition_status(session, ticket.id, "running")
+
+    executor = CapturingExecutor()
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(worktree_root=tmp_path / "work",
+                     transcript_root=tmp_path / "transcripts",
+                     secrets={}, host="testhost", executor=executor),
+        ticket.id,
+    )
+    assert result.exit_status == "success"
+    assert executor.request.resume_session_id is None
+    assert "RUN INTENT: resume" in executor.request.prompt
+
+
+@pytest.mark.anyio
+async def test_run_one_resume_does_not_thread_resume_session_id(
+    session, sample_profile, tmp_path,
+):
+    """Regression guard: the existing resume intent stays fresh-context — it
+    must NOT thread a resume_session_id even when the parent has one."""
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    ticket = create_ticket(
+        session, title="res", prompt="Fix it", status="queued",
+        priority=0, profile_id=sample_profile.id, source_path=str(primary),
+    )
+    parent_sid = "sess-parent-resume-3"
+    prior = _stage_parent_run(session, ticket, tmp_path, session_id=parent_sid)
+    _write_parent_session_file(tmp_path, prior.id, parent_sid)
+    resume_ticket(session, ticket.id, next_run_context="fresh context please")
+    transition_status(session, ticket.id, "running")
+
+    executor = CapturingExecutor()
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(worktree_root=tmp_path / "work",
+                     transcript_root=tmp_path / "transcripts",
+                     secrets={}, host="testhost", executor=executor),
+        ticket.id,
+    )
+    assert result.exit_status == "success"
+    assert executor.request.resume_session_id is None
+    assert "RUN INTENT: resume" in executor.request.prompt

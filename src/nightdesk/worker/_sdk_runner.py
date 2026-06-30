@@ -451,6 +451,12 @@ async def _run_query(spec: dict[str, Any], emit: Any) -> int:
             "preset": "claude_code",
             "append": spec["system_prompt"],
         }
+    # Resume a prior Claude Code conversation (``continue`` intent). The host
+    # seeds the parent run's session file into this run's sandbox session store
+    # so the SDK can find it; without that the SDK starts a fresh session even
+    # though resume= was passed. ``resume`` is the canonical SDK option name.
+    if spec.get("resume"):
+        opts_kwargs["resume"] = spec["resume"]
     # Isolate the worker from the user's global Claude Code config. Without
     # this, ~/.claude/settings.json + plugins (e.g. superpowers SessionStart
     # hooks, the brainstorming skill) get auto-loaded and push the agent into

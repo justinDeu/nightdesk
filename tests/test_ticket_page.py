@@ -367,7 +367,7 @@ async def test_review_ticket_shows_run_again_modal(cookie_client, session):
 
     The modal carries the two-axis picker (workspace × conversation) plus
     secondary clone/merge actions. The JS submit handler maps the picked
-    combination to the existing /resume, /retry, or /restart endpoints, so
+    combination to the /continue, /retry, or /restart endpoints, so
     the route URLs appear in the inline script even though no static <form>
     targets them.
     """
@@ -388,11 +388,11 @@ async def test_review_ticket_shows_run_again_modal(cookie_client, session):
     assert 'name="conversation"' in body
     assert 'name="next_run_context"' in body
     # All four primary-action targets are reachable from the modal. The JS
-    # builds resume/retry/restart paths by concatenating the ticket id onto
+    # builds continue/retry/restart paths by concatenating the ticket id onto
     # path fragments, so the literal full URL never appears in the body —
     # just the fragments. Clone/merge use static formaction attributes.
     assert f'var TID = "{t.id}"' in body
-    assert "/resume'" in body
+    assert "/continue'" in body
     assert "/retry'" in body
     assert "/restart'" in body
     assert f'formaction="/tickets/{t.id}/clone"' in body
@@ -445,6 +445,53 @@ async def test_resume_route_queues_ticket_and_stores_context(cookie_client, sess
     assert refreshed.status == "queued"
     assert refreshed.run_now is True
     assert refreshed.next_run_context == "Use polling"
+
+
+async def test_continue_route_queues_ticket_and_stages_continue_intent(
+    cookie_client, session,
+):
+    """The distinct /continue action queues a run-now and stages the continue
+    intent (not resume), so the worker resumes the prior SDK conversation."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="rerun", prompt="fix it",
+                       priority=0, profile_id=p.id, status="queued",
+                       run_now=False, source_path="/tmp")
+    transition_status(session, t.id, "running")
+    transition_status(session, t.id, "review")
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/continue",
+        data={"next_run_context": "Keep the conversation"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    session.expire_all()
+    refreshed = get_ticket(session, t.id)
+    assert refreshed.status == "queued"
+    assert refreshed.run_now is True
+    assert refreshed.next_run_context == "Keep the conversation"
+    assert refreshed.permission_overrides["nightdesk_run_intent"] == "continue"
+
+
+async def test_review_ticket_shows_continue_run_button_with_tooltip(
+    cookie_client, session,
+):
+    """The Continue run action is a distinct, always-visible control on
+    review/archived tickets, with a [data-tooltip] explaining how it differs
+    from the fresh-context Run-again options."""
+    p = _make_profile(session)
+    t = create_ticket(session, title="rerun", prompt="fix it",
+                       priority=0, profile_id=p.id, status="queued",
+                       run_now=False, source_path="/tmp")
+    transition_status(session, t.id, "running")
+    transition_status(session, t.id, "review")
+    r = await cookie_client.get(f"/tickets/{t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert "Continue run" in body
+    assert f'action="/tickets/{t.id}/continue"' in body
+    # The hover detail explains the continue-vs-resume distinction.
+    assert "full Claude Code conversation" in body
+    assert "data-tooltip=" in body
 
 
 async def test_project_settings_warning_renders_inside_header_card(

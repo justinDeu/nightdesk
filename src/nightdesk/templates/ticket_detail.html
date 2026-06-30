@@ -70,6 +70,17 @@
                   class="btn btn-primary btn-md">Run now</button>
         {% endif %}
         {% if ticket.status in ('review', 'archived') %}
+          {# Continue: replays the prior run's SDK session id so the new run
+             resumes the FULL prior conversation (message history included),
+             on the same worktree. Distinct from the "Run again…" modal's
+             Resume, which starts a fresh-context agent on the same worktree
+             with only a one-line last-run summary. Falls back to that
+             fresh-context resume automatically if no prior session exists. #}
+          <form method="post" action="/tickets/{{ ticket.id }}/continue">
+            <button type="submit"
+                    data-tooltip="Resume the prior run's full Claude Code conversation — same worktree, with complete message history. Falls back to a fresh-context resume if no prior session exists."
+                    class="border border-accent/60 text-accent px-3 py-1 rounded text-sm">Continue run</button>
+          </form>
           <button type="button"
                   onclick="document.getElementById('run-again-modal').showModal()"
                   class="btn btn-primary btn-md">Run again…</button>
@@ -461,10 +472,11 @@
 {# --- Run again modal --------------------------------------------------- #
  # Replaces the inline "Next run" section. Two axes: workspace policy and
  # conversation policy. The submit handler maps the chosen combination to
- # the existing /resume, /retry, or /restart endpoints — no new server-side
- # routes needed. "Conversation: keep" only applies when staying in the
- # same worktree; for wipe / new-worktree we lock it to fresh because
- # restart_ticket always drops the session id.
+ # the /continue, /retry, or /restart endpoints. "Conversation: keep" resumes
+ # the prior SDK session (full message history) via /continue; "fresh" drops
+ # it and re-attempts via /retry. "Conversation: keep" only applies when
+ # staying in the same worktree; for wipe / new-worktree we lock it to fresh
+ # because restart_ticket always drops the session id.
  #}
 {% if ticket.status in ('review', 'archived') %}
 <dialog id="run-again-modal"
@@ -589,7 +601,7 @@
       var conv = selected('conversation');
       var policyInput = f.querySelector('input[name="workspace_policy"]');
       if (ws === 'same' && conv === 'keep') {
-        f.action = '/tickets/' + TID + '/resume';
+        f.action = '/tickets/' + TID + '/continue';
         policyInput.disabled = true;
       } else if (ws === 'same' && conv === 'fresh') {
         f.action = '/tickets/' + TID + '/retry';

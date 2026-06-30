@@ -133,6 +133,70 @@ def test_event_to_dict_user_no_parent_when_top_level():
     assert "parent_tool_use_id" not in d["message"]["content"][0]
 
 
+def test_run_query_passes_resume_into_options():
+    """A spec carrying ``resume`` (the continue intent) is threaded into
+    ClaudeAgentOptions as ``resume=<id>`` on the very first query call, so the
+    new run resumes the prior Claude Code conversation instead of starting
+    fresh."""
+    import asyncio
+    import sys
+    from types import ModuleType
+
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    captured: list[dict] = []
+
+    async def fake_query(prompt: str, options: FakeOptions):  # type: ignore[return]
+        captured.append(dict(options.kwargs))
+
+        class ResultMessage:
+            session_id = "sess-parent-7"
+            subtype = "success"
+            result = "continued"
+            is_error = False
+            usage = None
+            model = None
+        yield ResultMessage()
+
+    sdk_mod = ModuleType("claude_agent_sdk")
+    sdk_mod.query = fake_query  # type: ignore[attr-defined]
+    sdk_mod.ClaudeAgentOptions = FakeOptions  # type: ignore[attr-defined]
+    # Provide a sentinel CLIJSONDecodeError so the import guard is satisfied.
+    class _SentinelDecodeError(Exception):
+        pass
+    sdk_mod.CLIJSONDecodeError = _SentinelDecodeError  # type: ignore[attr-defined]
+
+    emitted: list[dict] = []
+
+    async def emit(evt: dict) -> None:
+        emitted.append(evt)
+
+    saved_sdk = sys.modules.pop("claude_agent_sdk", None)
+    saved_runner = sys.modules.pop("nightdesk.worker._sdk_runner", None)
+    try:
+        sys.modules["claude_agent_sdk"] = sdk_mod
+        from nightdesk.worker._sdk_runner import _run_query
+        rc = asyncio.run(_run_query(
+            {"prompt": "keep going", "resume": "sess-parent-7"}, emit,
+        ))
+    finally:
+        sys.modules.pop("claude_agent_sdk", None)
+        sys.modules.pop("nightdesk.worker._sdk_runner", None)
+        if saved_sdk is not None:
+            sys.modules["claude_agent_sdk"] = saved_sdk
+        if saved_runner is not None:
+            sys.modules["nightdesk.worker._sdk_runner"] = saved_runner
+
+    assert rc == 0, f"expected rc=0, got {rc}; emitted={emitted}"
+    assert captured, "query was never called"
+    # The first (and only) query call must carry resume=<parent session id>.
+    assert captured[0].get("resume") == "sess-parent-7", (
+        f"resume not wired into options: {captured[0]}"
+    )
+
+
 def test_run_query_recovers_on_cli_json_decode_error():
     """CLIJSONDecodeError mid-stream triggers a resume and the run succeeds.
 

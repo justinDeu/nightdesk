@@ -38,7 +38,7 @@ from nightdesk.domain.notifications import (
 from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import transition_status
 from nightdesk.domain.toolchains import resolve_tool_paths
-from nightdesk.transcript import append_worker_error
+from nightdesk.transcript import append_event, append_worker_error
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult, Executor
 from nightdesk.worker.headless_prompt import (
     HEADLESS_POLICY_VERSION,
@@ -49,6 +49,7 @@ from nightdesk.worker.sandbox import (
     build_bwrap_argv,
     publish_cc_session,
     run_cc_sessions_dir,
+    seed_cc_session,
 )
 from nightdesk.worker.workspace import (
     Workspace, WorkspaceBundle, WorkspaceSpec, cleanup_workspace,
@@ -539,7 +540,9 @@ async def run_one(
                 ticket_id=ticket.id,
                 root=cfg.worktree_root,
                 specs=workspace_specs,
-                reuse_existing_worktrees=run_intent in {"resume", "retry"} or has_existing_worktree,
+                # resume/retry/continue all reuse the existing worktree (continue
+                # resumes the prior SDK conversation on the same worktree).
+                reuse_existing_worktrees=run_intent in {"resume", "retry", "continue"} or has_existing_worktree,
                 fresh_worktree_paths=run_intent == "restart" and restart_workspace_policy == "fresh_path",
             )
             ws = bundle.primary
@@ -639,6 +642,48 @@ async def run_one(
             # bind-mounted into the sandbox (same reason worktrees live there).
             cc_sessions_root = cfg.worktree_root.parent / "nightdesk-cc-sessions"
             cc_sessions_dir = run_cc_sessions_dir(str(cc_sessions_root), run.id)
+
+            # ``continue`` intent: resume the parent run's Claude Code
+            # conversation by replaying its session id into the SDK. Each run
+            # gets an isolated per-run session store bound over the sandbox's
+            # CLAUDE_CONFIG_DIR/projects, so the parent's session file must be
+            # seeded into THIS run's store for the SDK's ``resume=<id>`` to
+            # resolve inside the sandbox. If the parent has no session id or
+            # the file is gone, fall back to a fresh-context resume (same
+            # worktree, no conversation history) and record that we did so.
+            resume_session_id: Optional[str] = None
+            fell_back_to_fresh_context = False
+            if run_intent == "continue":
+                parent_sid = parent_run.session_id if parent_run is not None else None
+                if parent_sid and parent_run is not None:
+                    seeded = seed_cc_session(
+                        cc_sessions_dir,
+                        parent_sid,
+                        [
+                            run_cc_sessions_dir(str(cc_sessions_root), parent_run.id),
+                            os.path.expanduser("~/.claude/projects"),
+                        ],
+                    )
+                    if seeded is not None:
+                        resume_session_id = parent_sid
+                        log.info(
+                            "continue run %s: resuming parent session %s (seeded %s)",
+                            run.id, parent_sid, seeded,
+                        )
+                    else:
+                        fell_back_to_fresh_context = True
+                        log.warning(
+                            "continue run %s: parent session %s not found in any "
+                            "store; falling back to fresh-context resume",
+                            run.id, parent_sid,
+                        )
+                else:
+                    fell_back_to_fresh_context = True
+                    log.warning(
+                        "continue run %s: parent run has no session_id; falling "
+                        "back to fresh-context resume", run.id,
+                    )
+
             log.debug("building bwrap argv for ticket %s run %s", ticket.id, run.id)
             _setup_phase = "bwrap_build"
             argv = build_bwrap_argv(
@@ -651,11 +696,17 @@ async def run_one(
             )
             log.debug("building headless prompt for ticket %s run %s", ticket.id, run.id)
             _setup_phase = "prompt_build"
+            # When a ``continue`` fell back to fresh context, the agent is NOT
+            # resuming the prior conversation, so don't hand it the
+            # "resuming the prior conversation" instruction — use the honest
+            # resume (fresh-context) wording instead. The Run.intent DB column
+            # still records "continue" for traceability.
+            prompt_intent = "resume" if fell_back_to_fresh_context else run_intent
             prompt = build_headless_prompt(
                 ticket_id=ticket.id,
                 ticket_title=ticket.title,
                 base_prompt=ticket.prompt,
-                run_intent=run_intent,
+                run_intent=prompt_intent,
                 workspace_path=str(ws.path),
                 next_run_context=next_run_context,
                 last_run_summary=(parent_run.error_summary or parent_run.exit_status) if parent_run is not None else None,
@@ -665,6 +716,7 @@ async def run_one(
                 working_dir=ws.path, transcript_path=Path(run.transcript_path),
                 bwrap_argv=argv, env=env, permission_spec=spec,
                 cancel_event=cancel_event,
+                resume_session_id=resume_session_id,
             )
 
             watcher = asyncio.create_task(
@@ -704,6 +756,26 @@ async def run_one(
                     summary=result.error_summary,
                     traceback_text=executor_error_tb,
                 )
+
+            # Record a continue→fresh-context fallback on the transcript so the
+            # reason is discoverable from the run's own artifact (a ``system``
+            # event is persisted but not rendered as an error card). Paired with
+            # the WARNING log line above; best-effort, never fails the run.
+            if fell_back_to_fresh_context:
+                try:
+                    append_event(run.transcript_path, {
+                        "type": "system",
+                        "subtype": "continue_session_unavailable",
+                        "data": {
+                            "message": (
+                                "Continue was requested but the prior run had no "
+                                "resumable Claude session; ran as a fresh-context "
+                                "resume on the same worktree instead."
+                            ),
+                        },
+                    })
+                except Exception:
+                    log.exception("could not record continue-fallback breadcrumb for run %s", run.id)
 
             finish_run(session, run.id, exit_status=result.exit_status,
                        error_summary=result.error_summary,
