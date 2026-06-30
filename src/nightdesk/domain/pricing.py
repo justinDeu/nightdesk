@@ -15,7 +15,7 @@ can say "live prices · fetched <date>" / "cached prices · …" / "bundled pric
 
 Endpoint format
 ---------------
-The endpoint may return any of three JSON shapes; :func:`normalize_endpoint_json`
+The endpoint may return any of several JSON shapes; :func:`normalize_endpoint_json`
 accepts them all so the URL can point at any compatible source:
 
 * **canonical** (our cache shape)::
@@ -27,14 +27,26 @@ accepts them all so the URL can point at any compatible source:
 * **registry aggregate** (e.g. models.dev ``models.json``, keyed by
   ``provider/model`` with a ``cost`` block)::
 
-      {"anthropic/claude-opus-4-7": {"cost": {"input": 5.0, "output": 25.0,
+      {"anthropic/claude-opus-4-4-7": {"cost": {"input": 5.0, "output": 25.0,
                                               "cache_read": 0.5, "cache_write": 6.25}, ...}}
 
 * **flat** (prefix → prices directly)::
 
       {"claude-opus-4": {"input": 5.0, "output": 25.0, ...}}
 
-Prices are USD per 1M tokens, matching :func:`nightdesk.domain.cost.compute_cost`.
+* **list under ``data``** (e.g. OpenRouter ``/api/v1/models``, each entry has
+  an ``id`` plus a ``pricing`` sub-block)::
+
+      {"data": [{"id": "anthropic/claude-opus-4", "pricing": {
+          "prompt": 1.5e-05, "completion": 7.5e-05,
+          "input_cache_read": 1.5e-06, "input_cache_write": 1.875e-05}}]}
+
+All prices are normalized to **USD per 1M tokens** before they leave the
+parser, matching :func:`nightdesk.domain.cost.compute_cost`. Sources that
+publish per-token prices (LiteLLM ``*_cost_per_token`` / OpenRouter
+``pricing.prompt`` etc.) are scaled by 1e6 inside :func:`_coerce_block`; the
+canonical/registry/flat shapes already publish per-1M values and pass through
+unchanged.
 """
 from __future__ import annotations
 
@@ -55,7 +67,16 @@ log = logging.getLogger(__name__)
 
 # Public model-pricing registry. Override via config (``pricing_url``) or the
 # ``NIGHTDESK_PRICING_URL`` env var to point at any compatible JSON source.
-DEFAULT_PRICING_URL = "https://models.dev/models.json"
+#
+# LiteLLM's community price file is the default because it (a) is actively
+# maintained, (b) publishes per-token USD pricing INCLUDING prompt-cache
+# read/write fields, and (c) carries first-party Anthropic entries keyed by
+# the SDK's hyphenated model ids (``claude-opus-4-5`` etc.), which line up with
+# the longest-prefix matching used here and with the bundled fallback table.
+DEFAULT_PRICING_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/"
+    "model_prices_and_context_window.json"
+)
 
 # On-disk cache filename (lives under the nightdesk data dir).
 PRICE_CACHE_FILENAME = "model_prices.json"
@@ -67,9 +88,22 @@ DEFAULT_TTL = timedelta(hours=24)
 # hang the analytics page — we fail fast and fall through to the cache/table.
 DEFAULT_TIMEOUT_SECONDS = 3.0
 
-# Field-name aliases we accept for each price component across registries.
-_INPUT_ALIASES = ("input", "input_price", "prompt")
-_OUTPUT_ALIASES = ("output", "output_price", "completion")
+# Per-token field names (USD per single token). When a block carries one of
+# these, its value is scaled by 1e6 to reach the per-1M unit the rest of the
+# system expects. Checked BEFORE the per-1M aliases so a mixed block resolves
+# to a single consistent unit.
+_INPUT_PER_TOKEN_ALIASES = ("input_cost_per_token", "prompt")
+_OUTPUT_PER_TOKEN_ALIASES = ("output_cost_per_token", "completion")
+_CACHE_READ_PER_TOKEN_ALIASES = ("cache_read_input_token_cost", "input_cache_read")
+_CACHE_WRITE_PER_TOKEN_ALIASES = (
+    "cache_creation_input_token_cost",
+    "input_cache_write",
+    "cache_creation_input_token_cost_per_token",
+)
+
+# Per-1M field names (USD per 1M tokens) — pass through unscaled.
+_INPUT_ALIASES = ("input", "input_price")
+_OUTPUT_ALIASES = ("output", "output_price")
 _CACHE_READ_ALIASES = ("cache_read", "cached_read", "read_cache", "cache_hit")
 _CACHE_WRITE_ALIASES = (
     "cache_write",
@@ -144,61 +178,94 @@ def table_prices() -> dict[str, dict[str, float]]:
 
 
 # --------------------------------------------------------------------------
-# Endpoint normalization (canonical / registry-aggregate / flat).
+# Endpoint normalization (canonical / registry-aggregate / flat / list-data).
 # --------------------------------------------------------------------------
+def _finite_float(block: Mapping[str, object], aliases: tuple[str, ...]) -> Optional[float]:
+    """First finite float in ``block`` under any of ``aliases``, else None."""
+    for name in aliases:
+        if name in block:
+            try:
+                val = float(block[name])  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if val == val and val not in (float("inf"), float("-inf")):  # finite
+                return val
+    return None
+
+
 def _coerce_block(block: Mapping[str, object]) -> Optional[dict[str, float]]:
-    """Pull the four price components out of one model's block, or None."""
+    """Pull the four per-1M price components out of one model's block, or None.
+
+    Per-token sources (LiteLLM ``*_cost_per_token``, OpenRouter
+    ``pricing.prompt`` etc.) are detected by field name and scaled by 1e6 so
+    the result is always USD per 1M tokens. When a block mixes per-token and
+    per-1M fields, the per-token fields win (they are checked first) so a
+    block resolves to one consistent unit.
+    """
     if not isinstance(block, Mapping):
         return None
 
-    def pick(aliases) -> Optional[float]:
-        for name in aliases:
-            if name in block:
-                try:
-                    val = float(block[name])  # type: ignore[arg-type]
-                except (TypeError, ValueError):
-                    continue
-                if val == val and val not in (float("inf"), float("-inf")):  # finite
-                    return val
-        return None
+    def component(per_token: tuple[str, ...], per_1m: tuple[str, ...]) -> Optional[float]:
+        val = _finite_float(block, per_token)
+        if val is not None:
+            return val * 1_000_000.0
+        return _finite_float(block, per_1m)
 
     out = {
-        "input": pick(_INPUT_ALIASES),
-        "output": pick(_OUTPUT_ALIASES),
-        "cache_read": pick(_CACHE_READ_ALIASES),
-        "cache_write": pick(_CACHE_WRITE_ALIASES),
+        "input": component(_INPUT_PER_TOKEN_ALIASES, _INPUT_ALIASES),
+        "output": component(_OUTPUT_PER_TOKEN_ALIASES, _OUTPUT_ALIASES),
+        "cache_read": component(_CACHE_READ_PER_TOKEN_ALIASES, _CACHE_READ_ALIASES),
+        "cache_write": component(_CACHE_WRITE_PER_TOKEN_ALIASES, _CACHE_WRITE_ALIASES),
     }
     if any(v is None for v in out.values()):
         return None
     return out  # type: ignore[return-value]
 
 
-def normalize_endpoint_json(data: object) -> dict[str, dict[str, float]]:
-    """Normalize any supported endpoint shape into prefix → price dict.
+# Providers (under ``litellm_provider`` or a similar discriminator) whose
+# entries we treat as first-party Anthropic prices when present. Reseller /
+# cloud copies (bedrock, vertex_ai, azure_ai, openrouter, ...) are skipped so
+# they cannot shadow or duplicate the canonical model ids. Empty means "accept
+# all" (preserves the flat/registry shapes that carry no provider tag).
+_ANTHROPIC_PROVIDERS = frozenset({"anthropic"})
 
-    Models are keyed by prefix (a ``provider/`` prefix on the key, as in
-    models.dev's ``anthropic/claude-opus-4-7``, is stripped). Each model's
-    prices may live under a ``cost``/``pricing``/``price`` sub-block (registry
-    shape) or directly on the entry (flat shape).
+
+def _is_anthropic(key: str, entry: Mapping[str, object]) -> bool:
+    """True if ``entry`` / ``key`` looks like a first-party Anthropic model.
+
+    Honors an explicit ``litellm_provider`` / ``provider`` field when present
+    (LiteLLM), else falls back to the ``provider/`` prefix on the key
+    (OpenRouter-style ``anthropic/claude-opus-4``). Entries with no
+    discriminator at all (flat/canonical shapes) are accepted as-is.
     """
-    out: dict[str, dict[str, float]] = {}
-    if isinstance(data, Mapping):
-        # Canonical shape wraps the map under "prices".
-        src = data["prices"] if isinstance(data.get("prices"), Mapping) else data
-    else:
-        return out
+    if not _ANTHROPIC_PROVIDERS:
+        return True
+    prov = entry.get("litellm_provider") or entry.get("provider")
+    if prov is not None:
+        return str(prov).lower() in _ANTHROPIC_PROVIDERS
+    # No provider field: trust the "anthropic/" id prefix if one is present.
+    if "/" in key:
+        return key.split("/", 1)[0].lower() in _ANTHROPIC_PROVIDERS
+    return True  # no discriminator → assume first-party (flat/canonical)
 
+
+def _price_block_from_entry(val: Mapping[str, object]) -> Optional[Mapping[str, object]]:
+    """The price sub-block of a model entry, or the entry itself if flat."""
+    for sub in ("cost", "pricing", "price"):
+        cand = val.get(sub)
+        if isinstance(cand, Mapping):
+            return cand
+    return val
+
+
+def _normalize_keyed(src: Mapping[str, object]) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
     for key, val in src.items():
         if not isinstance(key, str) or not isinstance(val, Mapping):
             continue
-        block = None
-        for sub in ("cost", "pricing", "price"):
-            cand = val.get(sub)
-            if isinstance(cand, Mapping):
-                block = cand
-                break
-        if block is None:
-            block = val  # flat shape
+        if not _is_anthropic(key, val):
+            continue
+        block = _price_block_from_entry(val)
         prices = _coerce_block(block)
         if prices is None:
             continue
@@ -206,6 +273,46 @@ def normalize_endpoint_json(data: object) -> dict[str, dict[str, float]]:
         if prefix:
             out[prefix] = prices
     return out
+
+
+def normalize_endpoint_json(data: object) -> dict[str, dict[str, float]]:
+    """Normalize any supported endpoint shape into prefix → per-1M price dict.
+
+    Supported shapes:
+
+    * **canonical** ``{"prices": {prefix: {...}}}``
+    * **registry aggregate** keyed by ``provider/model`` with a
+      ``cost``/``pricing``/``price`` sub-block (e.g. models.dev, LiteLLM)
+    * **flat** ``{prefix: {...}}``
+    * **list under ``data``** (e.g. OpenRouter ``/api/v1/models``): each entry
+      has an ``id`` (a ``provider/`` prefix is stripped) and a price block
+
+    A ``litellm_provider`` / ``provider`` field is honored when present: only
+    first-party Anthropic entries are kept, so cloud-reseller copies (bedrock,
+    vertex_ai, ...) do not shadow the canonical model ids.
+
+    All returned prices are USD per 1M tokens regardless of the source's unit.
+    """
+    if not isinstance(data, Mapping):
+        return {}
+
+    # Canonical shape wraps the map under "prices".
+    if isinstance(data.get("prices"), Mapping):
+        return _normalize_keyed(data["prices"])  # type: ignore[arg-type]
+
+    # List under "data" (OpenRouter). Key each entry by its id.
+    data_list = data.get("data")
+    if isinstance(data_list, list):
+        remapped: dict[str, Mapping[str, object]] = {}
+        for entry in data_list:
+            if isinstance(entry, Mapping):
+                eid = entry.get("id")
+                if isinstance(eid, str) and eid:
+                    remapped[eid] = entry
+        return _normalize_keyed(remapped)
+
+    # Dict-keyed (registry aggregate or flat).
+    return _normalize_keyed(data)
 
 
 # --------------------------------------------------------------------------

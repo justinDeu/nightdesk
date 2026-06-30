@@ -59,7 +59,8 @@ class NightdeskConfig:
     # explicit base_ref branch from this ref instead of HEAD.
     worktree_base_ref: Optional[str] = None
     # Live model-pricing endpoint (JSON). Override to point at any compatible
-    # source; see domain/pricing.py for accepted shapes. Defaults to models.dev.
+    # source; see domain/pricing.py for accepted shapes. Defaults to the
+    # LiteLLM community price file (per-token USD, normalized to per-1M).
     pricing_url: str = DEFAULT_PRICING_URL
     secrets: dict[str, str] = field(default_factory=dict)
 

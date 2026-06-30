@@ -9,17 +9,18 @@ keeps the *shipped* cache from drifting months behind real pricing: run it
 before cutting a release so the cache file committed/installed alongside the app
 is recent, and the bundled fallback table stays current.
 
-It fetches the configured pricing endpoint (default: models.dev; override with
-``pricing_url`` in config.toml, the ``NIGHTDESK_PRICING_URL`` env var, or
-``--url``) and writes the cache. With ``--regenerate`` it additionally rewrites
-the in-repo ``_PRICE_TABLE`` / ``PRICES_AS_OF`` in ``domain/cost.py`` from the
-fetched prices so the last-resort fallback is also up to date — commit that
-change.
+It fetches the configured pricing endpoint (default: the LiteLLM community
+price file; override with ``pricing_url`` in config.toml, the
+``NIGHTDESK_PRICING_URL`` env var, or ``--url``) and writes the cache. With
+``--regenerate`` it additionally rewrites the in-repo ``_PRICE_TABLE`` /
+``PRICES_AS_OF`` in ``domain/cost.py`` from the fetched prices so the
+last-resort fallback is also up to date — commit that change.
 
 The endpoint may return any shape ``pricing.normalize_endpoint_json`` accepts:
 our canonical ``{"prices": {prefix: {...}}}``, a registry aggregate keyed by
-``provider/model`` with a ``cost`` block (e.g. models.dev), or a flat
-``{prefix: {...}}`` map. Prices are USD per 1M tokens.
+``provider/model`` with a ``cost`` block (e.g. LiteLLM), a flat
+``{prefix: {...}}`` map, or a list under ``data`` (e.g. OpenRouter). Prices
+are normalized to USD per 1M tokens regardless of the source's unit.
 
 Usage::
 

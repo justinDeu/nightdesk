@@ -1,5 +1,7 @@
 """Live model pricing: normalization, cache, and the live→cache→table chain."""
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -229,3 +231,100 @@ def test_fetch_live_prices_fails_soft_on_unreachable():
 
 def test_fetch_live_prices_empty_url_returns_none():
     assert pricing.fetch_live_prices("") is None
+
+
+# --- default source: must carry real Anthropic pricing -------------------
+def test_default_pricing_url_is_not_the_broken_models_dev_endpoint():
+    # Regression guard for the original bug: models.dev/models.json carries no
+    # pricing, so fetch_live_prices silently returned an empty map and the UI
+    # fell through to the bundled table. The default must point at a source
+    # that actually publishes per-token USD pricing for Claude models.
+    assert "models.dev" not in pricing.DEFAULT_PRICING_URL
+    assert pricing.DEFAULT_PRICING_URL.startswith(("http://", "https://"))
+
+
+def test_default_url_live_fetch_returns_real_anthropic_prices():
+    # Hits the REAL default endpoint. This is the test the original bug
+    # lacked: it would have failed when models.dev yielded zero price entries.
+    out = pricing.fetch_live_prices(pricing.DEFAULT_PRICING_URL, timeout_seconds=8.0)
+    if out is None:
+        pytest.skip("network unavailable — cannot verify the live default source")
+    assert out, "default endpoint returned no prices (the original regression)"
+    # Must contain Claude models.
+    claude_keys = [k for k in out if "claude" in k.lower()]
+    assert claude_keys, "no Claude models in default endpoint output"
+    # Every price finite and in a sane per-1M range.
+    for prefix, p in out.items():
+        assert all(isinstance(v, (int, float)) for v in p.values()), prefix
+        assert 0.1 <= p["input"] <= 200.0, (prefix, p)
+        assert 0.5 <= p["output"] <= 200.0, (prefix, p)
+        assert 0.0 < p["cache_read"] < p["input"], (prefix, p)
+        assert 0.0 < p["cache_write"] <= p["input"] * 2.0, (prefix, p)
+
+
+# --- parser: dict-keyed (LiteLLM) + list-under-data (OpenRouter) ---------
+DATA_DIR = Path(__file__).parent / "data"
+
+
+def _load_fixture(name: str) -> object:
+    return json.loads((DATA_DIR / name).read_text())
+
+
+def test_normalize_litellm_dict_keyed_scales_per_token_to_per_1m():
+    data = _load_fixture("litellm_prices_sample.json")
+    out = pricing.normalize_endpoint_json(data)
+    # First-party anthropic entries survive; bedrock/openrouter resellers dropped.
+    assert "claude-opus-4-5" in out
+    assert "claude-opus-4-7" in out
+    assert "claude-sonnet-4-5" in out
+    # Reseller copies filtered out by litellm_provider.
+    bedrock_key = "claude-opus-4-5-20251101-v1:0"
+    openrouter_key = "claude-opus-4.5"
+    assert bedrock_key not in out
+    assert openrouter_key not in out
+    # Per-token (5e-06) scaled to per-1M (5.0).
+    p = out["claude-opus-4-5"]
+    assert p == {
+        "input": 5.0, "output": 25.0,
+        "cache_read": 0.5, "cache_write": 6.25,
+    }
+
+
+def test_normalize_openrouter_list_under_data_scales_per_token_to_per_1m():
+    data = _load_fixture("openrouter_models_sample.json")
+    out = pricing.normalize_endpoint_json(data)
+    # anthropic/ entries kept (provider/ prefix stripped); google/ dropped.
+    assert "claude-opus-4.5" in out
+    assert "claude-sonnet-4.5" in out
+    assert not any(k.startswith("gemini") for k in out), "non-Anthropic leaked through"
+    # OpenRouter publishes string per-token values; coerced + scaled to per-1M.
+    p = out["claude-opus-4.5"]
+    assert p["input"] == pytest.approx(5.0)
+    assert p["output"] == pytest.approx(25.0)
+    assert p["cache_read"] == pytest.approx(0.5)
+    assert p["cache_write"] == pytest.approx(6.25)
+
+
+def test_normalize_per_token_alias_mapping_is_complete():
+    # Both alias families must round-trip every component when only the
+    # per-token fields are present (no per-1M fallback).
+    litellm = {"claude-opus-4-7": {
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 25e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 6.25e-06,
+        "litellm_provider": "anthropic",
+    }}
+    out = pricing.normalize_endpoint_json(litellm)
+    assert out["claude-opus-4-7"] == {
+        "input": 5.0, "output": 25.0,
+        "cache_read": 0.5, "cache_write": 6.25,
+    }
+
+    openrouter = {"data": [{"id": "anthropic/claude-opus-4.7", "pricing": {
+        "prompt": "0.000005", "completion": "0.000025",
+        "input_cache_read": "0.0000005", "input_cache_write": "0.00000625",
+    }}]}
+    out = pricing.normalize_endpoint_json(openrouter)
+    assert out["claude-opus-4.7"]["input"] == pytest.approx(5.0)
+    assert out["claude-opus-4.7"]["cache_write"] == pytest.approx(6.25)
