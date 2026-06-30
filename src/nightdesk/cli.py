@@ -1051,6 +1051,8 @@ def run_api() -> None:
         worktree_root=cfg.worktree_root,
         bind_host=cfg.bind_host,
         bind_port=cfg.bind_port,
+        data_dir=cfg.data_dir,
+        pricing_url=cfg.pricing_url,
     )
     uvicorn.run(app, host=cfg.bind_host, port=cfg.bind_port, log_level="info")
 
