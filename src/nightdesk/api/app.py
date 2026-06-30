@@ -31,6 +31,7 @@ from nightdesk.api.routes import tickets as tickets_routes
 from nightdesk.api.routes import transcript as transcript_routes
 from nightdesk.api.routes import saved_views as saved_views_routes
 from nightdesk.api.routes import ui as ui_routes
+from nightdesk.domain.pricing import DEFAULT_PRICING_URL
 
 
 def create_app(
@@ -43,16 +44,15 @@ def create_app(
     bind_host: str = "127.0.0.1",
     bind_port: int = 8765,
     data_dir: Path | None = None,
-    pricing_url: str | None = None,
+    # Default is to fetch live and fall back to the bundled table; config only
+    # overrides the URL. Pass an empty string to disable live resolution.
+    pricing_url: str | None = DEFAULT_PRICING_URL,
 ) -> FastAPI:
     app = FastAPI(title="nightdesk", version="0.1.0")
     app.state.engine = engine
     app.state.bearer_token = bearer_token
     app.state.transcript_root = transcript_root
     app.state.worktree_root = worktree_root
-    # Live-pricing resolution (analytics): where the cache lives and which
-    # endpoint to fetch. None → resolve_prices falls back straight to the
-    # bundled table (no network), e.g. in tests.
     app.state.data_dir = data_dir
     app.state.pricing_url = pricing_url
     app.state.one_shot_store = auth_routes.OneShotStore()
