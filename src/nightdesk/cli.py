@@ -1244,6 +1244,7 @@ _FILE_KEYS = {
     "worktree_root": str,
     "data_dir": str,
     "log_dir": str,
+    "pricing_url": str,
 }
 
 # Keys that are runtime-updatable via PATCH /api/v1/config.
@@ -1378,6 +1379,7 @@ def config_list() -> None:
     print(f"db_path = {cfg.db_path}")
     print(f"transcript_root = {cfg.transcript_root}")
     print(f"worktree_root = {cfg.worktree_root}")
+    print(f"pricing_url = {cfg.pricing_url}")
     if cfg.worktree_base_ref is not None:
         print(f"worktree_base_ref = {cfg.worktree_base_ref}")
     else:

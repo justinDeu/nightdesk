@@ -5,6 +5,7 @@ import pytest
 
 from nightdesk.db.models import Profile, Run, Ticket
 from nightdesk.domain import analytics
+from nightdesk.domain.pricing import PriceInfo
 
 
 NOW = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
@@ -244,3 +245,63 @@ def test_spend_status_day_and_month(session):
     status = analytics.compute_spend_status(session, now=NOW)
     assert status.day_spend_usd == pytest.approx(5.0)
     assert status.month_spend_usd == pytest.approx(11.0)
+
+
+# --- live price repricing --------------------------------------------------
+# Live prices that differ from the bundled table: sonnet input $9/MTok vs $3.
+LIVE = PriceInfo("live", "2026-06-30", {
+    "claude-sonnet-4": {
+        "input": 9.0, "output": 45.0, "cache_read": 0.9, "cache_write": 11.25},
+})
+
+
+def test_window_totals_reprices_with_live_prices(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    # 1M sonnet input tokens; stored cost_usd is NULL (cost=None default).
+    r = _run(session, t, started_at=NOW, input_tokens=1_000_000)
+    r.model_used = "claude-sonnet-4-5"
+    session.commit()
+
+    w_stored = analytics.window_totals(session, start=analytics.start_of_day(NOW))
+    assert w_stored["cost"] == pytest.approx(0.0)  # NULL cost, no prices given
+
+    w_live = analytics.window_totals(
+        session, start=analytics.start_of_day(NOW), prices=LIVE)
+    # 1M * $9 = $9.00, not the bundled $3.00.
+    assert w_live["cost"] == pytest.approx(9.0)
+
+
+def test_build_dashboard_surfaces_source_and_reprices(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    r = _run(session, t, started_at=NOW, input_tokens=1_000_000)
+    r.model_used = "claude-sonnet-4-5"
+    session.commit()
+
+    data = analytics.build_dashboard(session, now=NOW, price_info=LIVE)
+    assert data["price_source"] == "live"
+    assert "live prices" in data["price_source_label"]
+    assert data["price_as_of"] == "2026-06-30"
+    assert data["today"]["cost"] == pytest.approx(9.0)
+    # The per-model row is repriced too.
+    assert any(row["cost"] == pytest.approx(9.0) for row in data["by_model"])
+
+    # Default (no price_info) resolves to the bundled table -> $3.00/MTok.
+    data_tbl = analytics.build_dashboard(session, now=NOW)
+    assert data_tbl["price_source"] == "table"
+    assert data_tbl["today"]["cost"] == pytest.approx(3.0)
+
+
+def test_usage_by_profile_reprices_with_live_prices(session):
+    p = _profile(session, "alpha")
+    t = _ticket(session, p, "ta")
+    r = _run(session, t, started_at=NOW, input_tokens=1_000_000)
+    r.model_used = "claude-sonnet-4-5"
+    session.commit()
+
+    rows = analytics.usage_by_profile(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=29), prices=LIVE)
+    assert rows[0]["name"] == "alpha"
+    assert rows[0]["cost"] == pytest.approx(9.0)
+

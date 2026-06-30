@@ -4,9 +4,9 @@ Per-run ``cost_usd`` and token counts live on the ``Run`` row (written by the
 worker via ``domain/cost.py``). This module rolls those up cheaply in SQL for
 the ``/analytics`` dashboard and the header spend chip / worker pill.
 
-All cost figures are estimates: the price table in ``domain/cost.py`` is dated
-and unknown models contribute ``cost_usd = NULL`` (counted as $0). Callers
-should surface "estimate, prices as of <date>" next to any total.
+All cost figures are estimates: prices are resolved live → cached → bundled
+(see ``domain/pricing.py``) and unknown models contribute $0. Callers should
+surface the price source and its as-of date next to any total.
 
 Time bucketing is UTC. ``Run.started_at`` is always present (a run gets a row
 the moment it starts), so it drives every window/day boundary. In-flight runs
@@ -24,7 +24,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Profile, Run, Ticket
-from nightdesk.domain.cost import PRICES_AS_OF
+from nightdesk.domain import pricing
+from nightdesk.domain.pricing import PriceInfo
 
 
 # --------------------------------------------------------------------------
@@ -126,10 +127,33 @@ def _token_row(it, ot, cr, cw, n, cost) -> dict:
     }
 
 
+def _window_cost(
+    session: Session,
+    prices: PriceInfo,
+    *,
+    start: datetime,
+    end: Optional[datetime] = None,
+) -> float:
+    """Reprice ``[start, end)`` from per-model token sums using resolved prices."""
+    stmt = select(Run.model_used, *_TOKEN_SUMS).where(Run.started_at >= start)
+    if end is not None:
+        stmt = stmt.where(Run.started_at < end)
+    total = 0.0
+    for model, it, ot, cr, cw in session.execute(stmt.group_by(Run.model_used)).all():
+        total += prices.cost(model, int(it), int(ot), int(cr), int(cw))
+    return total
+
+
 def window_totals(
-    session: Session, *, start: datetime, end: Optional[datetime] = None
+    session: Session, *, start: datetime, end: Optional[datetime] = None,
+    prices: Optional[PriceInfo] = None,
 ) -> dict:
-    """Token totals + cache-hit rate + run count + cost for ``[start, end)``."""
+    """Token totals + cache-hit rate + run count + cost for ``[start, end)``.
+
+    With ``prices`` given the cost is repriced from live/cached prices; without
+    it the stored ``cost_usd`` sum is returned (the original behavior, used by
+    direct unit tests).
+    """
     stmt = select(
         *_TOKEN_SUMS,
         func.count(Run.id),
@@ -138,11 +162,14 @@ def window_totals(
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
     it, ot, cr, cw, n, cost = session.execute(stmt).one()
+    if prices is not None:
+        cost = _window_cost(session, prices, start=start, end=end)
     return _token_row(it, ot, cr, cw, n, cost)
 
 
 def tokens_by_model(
-    session: Session, *, start: datetime, end: Optional[datetime] = None
+    session: Session, *, start: datetime, end: Optional[datetime] = None,
+    prices: Optional[PriceInfo] = None,
 ) -> list[dict]:
     """Token totals + cache-hit rate grouped by model, most tokens first.
 
@@ -163,18 +190,26 @@ def tokens_by_model(
         stmt = stmt.where(Run.started_at < end)
     out = []
     for model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
+        if prices is not None:
+            cost = prices.cost(model, int(it), int(ot), int(cr), int(cw))
         row = {"model": model or "unknown", **_token_row(it, ot, cr, cw, n, cost)}
         out.append(row)
     return out
 
 
 def usage_by_profile(
-    session: Session, *, start: datetime, end: Optional[datetime] = None
+    session: Session, *, start: datetime, end: Optional[datetime] = None,
+    prices: Optional[PriceInfo] = None,
 ) -> list[dict]:
-    """Token totals + run count grouped by profile name, most tokens first."""
+    """Token totals + run count grouped by profile name, most tokens first.
+
+    Groups by ``(profile, model)`` so the cost can be repriced from resolved
+    prices; the rows are rolled back up to one per profile.
+    """
     stmt = (
         select(
             Profile.name,
+            Run.model_used,
             *_TOKEN_SUMS,
             func.count(Run.id),
             func.coalesce(func.sum(Run.cost_usd), 0.0),
@@ -183,15 +218,24 @@ def usage_by_profile(
         .join(Ticket, Run.ticket_id == Ticket.id)
         .join(Profile, Ticket.profile_id == Profile.id)
         .where(Run.started_at >= start)
-        .group_by(Profile.name)
-        .order_by(_TOTAL_TOKENS.desc())
+        .group_by(Profile.name, Run.model_used)
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
-    return [
-        {"name": name, **_token_row(it, ot, cr, cw, n, cost)}
-        for name, it, ot, cr, cw, n, cost in session.execute(stmt).all()
-    ]
+    agg: dict[str, dict] = {}
+    for name, model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
+        slot = agg.setdefault(name, {"it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0, "cost": 0.0})
+        it, ot, cr, cw, n = int(it), int(ot), int(cr), int(cw), int(n)
+        slot["it"] += it
+        slot["ot"] += ot
+        slot["cr"] += cr
+        slot["cw"] += cw
+        slot["n"] += n
+        slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
+    rows = [{"name": name, **_token_row(a["it"], a["ot"], a["cr"], a["cw"], a["n"], a["cost"])}
+            for name, a in agg.items()]
+    rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return rows
 
 
 def usage_by_ticket(
@@ -200,12 +244,18 @@ def usage_by_ticket(
     start: datetime,
     end: Optional[datetime] = None,
     limit: int = 10,
+    prices: Optional[PriceInfo] = None,
 ) -> list[dict]:
-    """Top tickets by total tokens over the window."""
+    """Top tickets by total tokens over the window.
+
+    Groups by ``(ticket, model)`` so the cost can be repriced from resolved
+    prices; rows are rolled back up to one per ticket and truncated to ``limit``.
+    """
     stmt = (
         select(
             Ticket.id,
             Ticket.title,
+            Run.model_used,
             *_TOKEN_SUMS,
             func.count(Run.id),
             func.coalesce(func.sum(Run.cost_usd), 0.0),
@@ -213,16 +263,27 @@ def usage_by_ticket(
         .select_from(Run)
         .join(Ticket, Run.ticket_id == Ticket.id)
         .where(Run.started_at >= start)
-        .group_by(Ticket.id, Ticket.title)
-        .order_by(_TOTAL_TOKENS.desc())
-        .limit(limit)
+        .group_by(Ticket.id, Ticket.title, Run.model_used)
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
-    return [
-        {"ticket_id": tid, "title": title, **_token_row(it, ot, cr, cw, n, cost)}
-        for tid, title, it, ot, cr, cw, n, cost in session.execute(stmt).all()
-    ]
+    agg: dict[str, dict] = {}
+    titles: dict[str, str] = {}
+    for tid, title, model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
+        titles[tid] = title
+        slot = agg.setdefault(tid, {"it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0, "cost": 0.0})
+        it, ot, cr, cw, n = int(it), int(ot), int(cr), int(cw), int(n)
+        slot["it"] += it
+        slot["ot"] += ot
+        slot["cr"] += cr
+        slot["cw"] += cw
+        slot["n"] += n
+        slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
+    rows = [{"ticket_id": tid, "title": titles[tid],
+             **_token_row(a["it"], a["ot"], a["cr"], a["cw"], a["n"], a["cost"])}
+            for tid, a in agg.items()]
+    rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return rows[:limit]
 
 
 def run_stats(
@@ -304,19 +365,21 @@ MODEL_PALETTE = [
 
 
 def daily_usage_by_model_series(
-    session: Session, *, start: datetime, now: datetime
+    session: Session, *, start: datetime, now: datetime,
+    prices: Optional[PriceInfo] = None,
 ) -> list[dict]:
     """Per-day token totals broken down by model from ``start`` to ``now``'s day.
 
     Returns one entry per calendar day (UTC), zero-filled, oldest first:
     ``{date, total_tokens, cost, by_model: {model: tokens}}``. Runs with no
-    recorded model group under ``"unknown"``.
+    recorded model group under ``"unknown"``. Cost is repriced from ``prices``
+    when given, else summed from stored ``cost_usd``.
     """
     rows = session.execute(
         select(
             func.date(Run.started_at),
             Run.model_used,
-            _TOTAL_TOKENS,
+            *_TOKEN_SUMS,
             func.coalesce(func.sum(Run.cost_usd), 0.0),
         )
         .where(Run.started_at >= start)
@@ -324,12 +387,14 @@ def daily_usage_by_model_series(
     ).all()
 
     by_day: dict[str, dict] = {}
-    for day, model, tokens, cost in rows:
+    for day, model, it, ot, cr, cw, cost in rows:
+        it, ot, cr, cw = int(it), int(ot), int(cr), int(cw)
+        tokens = it + ot + cr + cw
         key = str(day)
         slot = by_day.setdefault(key, {"total_tokens": 0, "cost": 0.0, "by_model": {}})
-        slot["by_model"][model or "unknown"] = int(tokens)
-        slot["total_tokens"] += int(tokens)
-        slot["cost"] += float(cost)
+        slot["by_model"][model or "unknown"] = tokens
+        slot["total_tokens"] += tokens
+        slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
 
     out: list[dict] = []
     day = start_of_day(start)
@@ -342,17 +407,26 @@ def daily_usage_by_model_series(
     return out
 
 
-def build_dashboard(session: Session, *, now: datetime) -> dict:
+def build_dashboard(
+    session: Session, *, now: datetime, price_info: Optional[PriceInfo] = None
+) -> dict:
     """Assemble the full context for the ``/analytics`` page.
 
     Breakdowns and stats use a rolling 30-day window; the headline chips use
     today / 7-day / 30-day windows. Token-focused: cost is a secondary figure.
+
+    ``price_info`` drives both the displayed cost (repriced from the resolved
+    live/cached/table prices) and the source label. Defaults to the bundled
+    table when unset (e.g. direct unit tests with no network).
     """
+    if price_info is None:
+        price_info = pricing.table_price_info()
+
     today_start = start_of_day(now)
     last_7d_start = today_start - timedelta(days=6)
     last_30d_start = today_start - timedelta(days=29)
 
-    by_model = tokens_by_model(session, start=last_30d_start)
+    by_model = tokens_by_model(session, start=last_30d_start, prices=price_info)
     # Assign each model a stable color by token rank; reuse it in the legend,
     # the per-model table, and the stacked daily bars.
     model_colors = {
@@ -363,18 +437,24 @@ def build_dashboard(session: Session, *, now: datetime) -> dict:
         row["color"] = model_colors[row["model"]]
     model_legend = [{"model": m, "color": c} for m, c in model_colors.items()]
 
-    series = daily_usage_by_model_series(session, start=last_30d_start, now=now)
+    series = daily_usage_by_model_series(
+        session, start=last_30d_start, now=now, prices=price_info
+    )
     max_daily_tokens = max((d["total_tokens"] for d in series), default=0)
 
     return {
-        "prices_as_of": PRICES_AS_OF,
-        "today": window_totals(session, start=today_start),
-        "last_7d": window_totals(session, start=last_7d_start),
-        "last_30d": window_totals(session, start=last_30d_start),
+        "price_source": price_info.source,
+        "price_as_of": price_info.as_of,
+        "price_source_label": price_info.label,
+        # Kept for backward compatibility with older templates/tests.
+        "prices_as_of": price_info.as_of,
+        "today": window_totals(session, start=today_start, prices=price_info),
+        "last_7d": window_totals(session, start=last_7d_start, prices=price_info),
+        "last_30d": window_totals(session, start=last_30d_start, prices=price_info),
         "by_model": by_model,
         "model_legend": model_legend,
-        "by_profile": usage_by_profile(session, start=last_30d_start),
-        "by_ticket": usage_by_ticket(session, start=last_30d_start),
+        "by_profile": usage_by_profile(session, start=last_30d_start, prices=price_info),
+        "by_ticket": usage_by_ticket(session, start=last_30d_start, prices=price_info),
         "run_stats": run_stats(session, start=last_30d_start),
         "duration": duration_percentiles(session, start=last_30d_start),
         "daily_series": series,

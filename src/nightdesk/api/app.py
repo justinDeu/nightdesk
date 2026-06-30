@@ -42,12 +42,19 @@ def create_app(
     worktree_root: Path,
     bind_host: str = "127.0.0.1",
     bind_port: int = 8765,
+    data_dir: Path | None = None,
+    pricing_url: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="nightdesk", version="0.1.0")
     app.state.engine = engine
     app.state.bearer_token = bearer_token
     app.state.transcript_root = transcript_root
     app.state.worktree_root = worktree_root
+    # Live-pricing resolution (analytics): where the cache lives and which
+    # endpoint to fetch. None → resolve_prices falls back straight to the
+    # bundled table (no network), e.g. in tests.
+    app.state.data_dir = data_dir
+    app.state.pricing_url = pricing_url
     app.state.one_shot_store = auth_routes.OneShotStore()
 
     app.include_router(health.router)

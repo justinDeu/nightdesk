@@ -21,6 +21,8 @@ from typing import Optional
 import os
 import tomli
 
+from nightdesk.domain.pricing import DEFAULT_PRICING_URL
+
 
 DEFAULT_DATA_DIR = Path(os.path.expanduser("~/.local/share/nightdesk"))
 DEFAULT_CONFIG_PATH = Path(os.path.expanduser("~/.config/nightdesk/config.toml"))
@@ -56,6 +58,9 @@ class NightdeskConfig:
     # mutable ConfigRow.worktree_base_ref at setup; new tickets without an
     # explicit base_ref branch from this ref instead of HEAD.
     worktree_base_ref: Optional[str] = None
+    # Live model-pricing endpoint (JSON). Override to point at any compatible
+    # source; see domain/pricing.py for accepted shapes. Defaults to models.dev.
+    pricing_url: str = DEFAULT_PRICING_URL
     secrets: dict[str, str] = field(default_factory=dict)
 
 
@@ -96,7 +101,8 @@ def load_config(
             cfg.data_dir = Path(os.path.expanduser(data["data_dir"]))
             explicit_keys.add("data_dir")
 
-        for key in ("bearer_token", "bind_host", "bind_port", "worktree_base_ref"):
+        for key in ("bearer_token", "bind_host", "bind_port", "worktree_base_ref",
+                    "pricing_url"):
             if key in data:
                 setattr(cfg, key, data[key])
 
@@ -143,6 +149,8 @@ def load_config(
         cfg.bearer_token = v
     if v := os.environ.get("NIGHTDESK_WORKTREE_BASE_REF"):
         cfg.worktree_base_ref = v
+    if v := os.environ.get("NIGHTDESK_PRICING_URL"):
+        cfg.pricing_url = v
 
     if secrets_path.exists():
         cfg.secrets = _parse_secrets(secrets_path.read_text())

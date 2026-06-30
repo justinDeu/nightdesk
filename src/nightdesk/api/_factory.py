@@ -16,4 +16,6 @@ def make():
         static_root=Path(__file__).parent.parent / "static",
         transcript_root=cfg.transcript_root,
         worktree_root=cfg.worktree_root,
+        data_dir=cfg.data_dir,
+        pricing_url=cfg.pricing_url,
     )

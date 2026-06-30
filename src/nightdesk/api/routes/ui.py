@@ -401,9 +401,20 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
     async def analytics_page(request: Request, session: Session = Depends(get_session)):
         from datetime import datetime, timezone
 
-        from nightdesk.domain import analytics
+        from starlette.concurrency import run_in_threadpool
 
-        data = analytics.build_dashboard(session, now=datetime.now(timezone.utc))
+        from nightdesk.domain import analytics, pricing
+
+        now = datetime.now(timezone.utc)
+        # Resolve live → cached → bundled prices off the event loop: a slow
+        # upstream is bounded by the fetch timeout and never blocks the page.
+        price_info = await run_in_threadpool(
+            pricing.resolve_prices,
+            getattr(request.app.state, "data_dir", None),
+            url=getattr(request.app.state, "pricing_url", None),
+            now=now,
+        )
+        data = analytics.build_dashboard(session, now=now, price_info=price_info)
         return templates.TemplateResponse(
             request, "analytics.html",
             {"title": "Analytics", "active_page": "analytics", **data},

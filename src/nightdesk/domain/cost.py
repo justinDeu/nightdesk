@@ -3,11 +3,14 @@
 The CC SDK emits a final ``result`` event with a ``usage`` block:
 ``{"input_tokens", "output_tokens", "cache_creation_input_tokens",
 "cache_read_input_tokens"}``. We persist those counts onto the Run row
-and compute a USD estimate using a small in-repo price table.
+and compute a USD estimate from a price set.
 
-Prices change. The table here is correct as of 2026-05-18; update it
-when the published prices move. The UI surfaces "as of YYYY-MM-DD"
-next to the cost so the user knows it's an estimate.
+Prices change. The table here is the **last-resort** fallback (correct as
+of ``PRICES_AS_OF``); live/cached prices live in ``domain/pricing.py`` and
+are preferred at analytics-render time. ``scripts/update_prices.py`` can
+refresh both the on-disk cache and this table. The UI surfaces the source
+("live" / "cached" / "bundled") and its as-of date next to any cost so the
+user knows it's an estimate.
 """
 from __future__ import annotations
 
@@ -20,6 +23,12 @@ PRICES_AS_OF = "2026-05-18"
 
 # USD per 1M tokens. Sourced from the Anthropic pricing page.
 # Model-id matching is prefix-based ("claude-opus-4" matches all opus-4 variants).
+#
+# This list is the offline last-resort fallback. ``scripts/update_prices.py
+# --regenerate`` rewrites the block between the @update-prices sentinels from a
+# fetched price set, and bumps ``PRICES_AS_OF`` to the fetch date. Keep the
+# sentinels intact if you hand-edit.
+# @update-prices begin
 _PRICE_TABLE: list[tuple[str, dict[str, float]]] = [
     ("claude-opus-4", {
         "input": 15.0, "output": 75.0,
@@ -47,6 +56,12 @@ _PRICE_TABLE: list[tuple[str, dict[str, float]]] = [
         "cache_write": 1.25, "cache_read": 0.10,
     }),
 ]
+# @update-prices end
+
+
+def price_table() -> list[tuple[str, dict[str, float]]]:
+    """The bundled fallback table (a stable copy; safe to mutate)."""
+    return [(prefix, dict(prices)) for prefix, prices in _PRICE_TABLE]
 
 
 @dataclass
@@ -68,6 +83,27 @@ def _prices_for(model: Optional[str]) -> Optional[dict[str, float]]:
     return None
 
 
+def apply_prices(
+    prices: dict[str, float],
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    cache_write_tokens: int,
+) -> float:
+    """USD cost from a per-1M-token price dict. The shared pricing primitive.
+
+    Used by :func:`compute_cost` (bundled table) and by the live/cached
+    repricing path in :mod:`nightdesk.domain.pricing` / analytics.
+    """
+    return (
+        input_tokens * prices["input"]
+        + output_tokens * prices["output"]
+        + cache_read_tokens * prices["cache_read"]
+        + cache_write_tokens * prices["cache_write"]
+    ) / 1_000_000.0
+
+
 def compute_cost(
     *,
     model: Optional[str],
@@ -76,16 +112,22 @@ def compute_cost(
     cache_read_tokens: int,
     cache_write_tokens: int,
 ) -> Optional[float]:
-    """Return USD cost or None if the model is unknown."""
+    """Return USD cost or None if the model is unknown.
+
+    Uses the bundled ``_PRICE_TABLE`` (the last-resort fallback). This stays
+    the per-run pricing primitive; analytics additionally reprices displayed
+    totals from live/cached prices via :mod:`nightdesk.domain.pricing`.
+    """
     prices = _prices_for(model)
     if prices is None:
         return None
-    return (
-        input_tokens * prices["input"]
-        + output_tokens * prices["output"]
-        + cache_read_tokens * prices["cache_read"]
-        + cache_write_tokens * prices["cache_write"]
-    ) / 1_000_000.0
+    return apply_prices(
+        prices,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+    )
 
 
 def extract_usage(result_event: dict[str, Any], *, model_hint: Optional[str] = None) -> RunUsage:
