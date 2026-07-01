@@ -1,5 +1,6 @@
 """Aggregation correctness + live-spend helpers for the cost dashboard."""
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -9,6 +10,11 @@ from nightdesk.domain.pricing import PriceInfo
 
 
 NOW = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
+
+# A non-UTC zone for the local-window tests. America/New_York is EDT (UTC-4) in
+# late May, so 2026-05-24 12:00 UTC == 2026-05-24 08:00 local, and local
+# midnight is 2026-05-24 04:00 UTC.
+NY = ZoneInfo("America/New_York")
 
 
 def _profile(session, name="p"):
@@ -304,4 +310,104 @@ def test_usage_by_profile_reprices_with_live_prices(session):
         session, start=analytics.start_of_day(NOW) - timedelta(days=29), prices=LIVE)
     assert rows[0]["name"] == "alpha"
     assert rows[0]["cost"] == pytest.approx(9.0)
+
+
+# --- local-time windows (day/week/month boundaries in a configured zone) ----
+def test_start_of_day_is_local_midnight_as_utc():
+    # 2026-05-24 12:00 UTC == 08:00 EDT (UTC-4). Local midnight is 04:00 UTC.
+    assert analytics.start_of_day(NOW, NY) == datetime(2026, 5, 24, 4, 0, tzinfo=timezone.utc)
+    # Default (no tz) is UTC midnight — unchanged from the original behavior.
+    assert analytics.start_of_day(NOW) == datetime(2026, 5, 24, 0, 0, tzinfo=timezone.utc)
+    assert analytics.start_of_day(NOW) == analytics.start_of_day(NOW, ZoneInfo("UTC"))
+
+
+def test_start_of_month_is_local_first_as_utc():
+    # 2026-05-01 00:00 EDT == 2026-05-01 04:00 UTC.
+    assert analytics.start_of_month(NOW, NY) == datetime(2026, 5, 1, 4, 0, tzinfo=timezone.utc)
+    assert analytics.start_of_month(NOW) == datetime(2026, 5, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def test_today_counts_local_morning_run_not_utc_aged_off(session):
+    # now = 2026-05-24 03:00 UTC == 2026-05-23 23:00 EDT: still local the 23rd.
+    now = datetime(2026, 5, 24, 3, 0, tzinfo=timezone.utc)
+    p = _profile(session)
+    t = _ticket(session, p)
+    # Local-morning run: 2026-05-23 09:00 EDT == 13:00 UTC -> local today.
+    _run(session, t, started_at=datetime(2026, 5, 23, 13, 0, tzinfo=timezone.utc),
+         input_tokens=100, cost=2.0)
+    # Prior local-evening run: 2026-05-22 23:00 EDT == 2026-05-23 03:00 UTC ->
+    # before local midnight of the 23rd, so excluded from today.
+    _run(session, t, started_at=datetime(2026, 5, 23, 3, 0, tzinfo=timezone.utc),
+         input_tokens=50, cost=1.0)
+
+    data = analytics.build_dashboard(session, now=now, tz=NY)
+    # With local boundaries, only the local-morning run is "today".
+    assert data["today"]["input_tokens"] == 100
+    assert data["today"]["run_count"] == 1
+    # last_7d/last_30d derive from the same local today_start, so both recent
+    # runs (the morning run and the prior-evening run) fall inside them.
+    assert data["last_7d"]["input_tokens"] == 150
+    assert data["last_30d"]["input_tokens"] == 150
+
+    # Contrast with the UTC default: "today" = [2026-05-24 00:00 UTC, now], so
+    # BOTH runs (which are on UTC the 23rd) have aged off -> today is empty.
+    # This is the reported symptom: tokens-used-today drops mid-day.
+    data_utc = analytics.build_dashboard(session, now=now)
+    assert data_utc["today"]["input_tokens"] == 0
+
+
+def test_today_uses_utc_midnight_when_tz_unset(session):
+    # When schedule_timezone is unset, behavior is identical to UTC: today_start
+    # is UTC midnight, so a run on the local-calendar day but before UTC midnight
+    # of now's UTC date is NOT counted as today.
+    now = datetime(2026, 5, 24, 3, 0, tzinfo=timezone.utc)
+    p = _profile(session)
+    t = _ticket(session, p)
+    _run(session, t, started_at=datetime(2026, 5, 23, 13, 0, tzinfo=timezone.utc),
+         input_tokens=100)
+    data = analytics.build_dashboard(session, now=now)
+    assert data["today"]["input_tokens"] == 0
+
+
+def test_spend_status_uses_local_day(session):
+    # The header spend chip: day spend must reset at local midnight, not UTC.
+    now = datetime(2026, 5, 24, 3, 0, tzinfo=timezone.utc)  # local 2026-05-23 23:00 EDT
+    p = _profile(session)
+    t = _ticket(session, p)
+    _run(session, t, started_at=datetime(2026, 5, 23, 13, 0, tzinfo=timezone.utc), cost=7.0)
+
+    status = analytics.compute_spend_status(session, now=now, tz=NY)
+    assert status.day_spend_usd == pytest.approx(7.0)
+    # UTC default: today starts at 2026-05-24 00:00 UTC, so the 13:00-UTC run
+    # has aged off -> 0 (the bug).
+    assert analytics.compute_spend_status(session, now=now).day_spend_usd == pytest.approx(0.0)
+
+
+def test_daily_series_buckets_by_local_date(session):
+    # now = 2026-05-24 03:00 UTC == local 2026-05-23 23:00 EDT (local "today" = 23rd).
+    now = datetime(2026, 5, 24, 3, 0, tzinfo=timezone.utc)
+    p = _profile(session)
+    t = _ticket(session, p)
+    # Run A: 2026-05-24 02:30 UTC == local 2026-05-23 22:30 EDT -> local 23rd.
+    # (Its UTC date is the 24th; without local bucketing it would land on the 24th.)
+    rA = _run(session, t, started_at=datetime(2026, 5, 24, 2, 30, tzinfo=timezone.utc),
+              input_tokens=70)
+    rA.model_used = "claude-opus-4-7"
+    # Run B: 2026-05-23 03:00 UTC == local 2026-05-22 23:00 EDT -> local 22nd.
+    rB = _run(session, t, started_at=datetime(2026, 5, 23, 3, 0, tzinfo=timezone.utc),
+              input_tokens=40)
+    rB.model_used = "claude-opus-4-7"
+    session.commit()
+
+    series = analytics.daily_usage_by_model_series(
+        session, start=analytics.start_of_day(now, NY) - timedelta(days=2),
+        now=now, tz=NY)
+    by_day = {d["date"]: d for d in series}
+    # Run A is attributed to its LOCAL date (23rd), not its UTC date (24th).
+    assert by_day["2026-05-23"]["total_tokens"] == 70
+    assert by_day["2026-05-23"]["by_model"]["claude-opus-4-7"] == 70
+    # No UTC-24th bucket leaks in: local "today" is the 23rd.
+    assert "2026-05-24" not in by_day
+    # Run B lands on local the 22nd.
+    assert by_day["2026-05-22"]["total_tokens"] == 40
 

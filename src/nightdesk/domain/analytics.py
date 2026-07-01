@@ -8,8 +8,12 @@ All cost figures are estimates: prices are resolved live → cached → bundled
 (see ``domain/pricing.py``) and unknown models contribute $0. Callers should
 surface the price source and its as-of date next to any total.
 
-Time bucketing is UTC. ``Run.started_at`` is always present (a run gets a row
-the moment it starts), so it drives every window/day boundary. In-flight runs
+Time bucketing is timezone-aware. Day/week/month boundaries are localized to a
+caller-supplied zone (defaulting to UTC, which reproduces the original behavior)
+and then expressed as aware UTC instants: ``Run.started_at`` is always stored in
+UTC, so the query side stays UTC and only the boundary localization shifts.
+``Run.started_at`` is always present (a run gets a row the moment it starts), so
+it drives every window/day boundary. In-flight runs
 carry ``cost_usd = NULL`` until they finish, so summing ``cost_usd`` naturally
 counts only completed-run spend without an explicit ``finished_at`` filter.
 """
@@ -19,6 +23,7 @@ import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -29,18 +34,36 @@ from nightdesk.domain.pricing import PriceInfo
 
 
 # --------------------------------------------------------------------------
-# Time helpers (UTC).
+# Time helpers (timezone-aware).
+#
+# Day/month boundaries are computed in a caller-supplied zone (``tz``) and
+# returned as aware UTC instants. ``Run.started_at`` is stored in UTC, so the
+# query side keeps comparing in UTC; only the *boundary localization* changes.
+# Defaulting ``tz`` to UTC reproduces the original behavior exactly.
 # --------------------------------------------------------------------------
-def start_of_day(now: datetime) -> datetime:
-    return now.astimezone(timezone.utc).replace(
+_UTC = ZoneInfo("UTC")
+
+
+def start_of_day(now: datetime, tz: ZoneInfo = _UTC) -> datetime:
+    """Local midnight of ``now`` in ``tz``, returned as an aware UTC instant.
+
+    Default ``tz=UTC`` gives UTC midnight (the original behavior). For a user in
+    a negative-UTC zone, local midnight lands the *previous* UTC day, which is
+    exactly what stops local-morning work from aging off early as UTC rolls
+    over.
+    """
+    local = now.astimezone(tz)
+    return local.replace(
         hour=0, minute=0, second=0, microsecond=0
-    )
+    ).astimezone(timezone.utc)
 
 
-def start_of_month(now: datetime) -> datetime:
-    return now.astimezone(timezone.utc).replace(
+def start_of_month(now: datetime, tz: ZoneInfo = _UTC) -> datetime:
+    """Midnight of local-day-1 of ``now`` in ``tz``, as an aware UTC instant."""
+    local = now.astimezone(tz)
+    return local.replace(
         day=1, hour=0, minute=0, second=0, microsecond=0
-    )
+    ).astimezone(timezone.utc)
 
 
 # --------------------------------------------------------------------------
@@ -71,14 +94,17 @@ class SpendStatus:
     month_spend_usd: float
 
 
-def compute_spend_status(session: Session, *, now: datetime) -> SpendStatus:
+def compute_spend_status(
+    session: Session, *, now: datetime, tz: ZoneInfo = _UTC
+) -> SpendStatus:
     """Current day/month completed-run spend (estimate).
 
     Two cheap SUM queries powering the header spend chip and the worker pill.
+    ``tz`` localizes the day/month boundaries (default UTC = original behavior).
     """
     return SpendStatus(
-        day_spend_usd=spend_between(session, start=start_of_day(now)),
-        month_spend_usd=spend_between(session, start=start_of_month(now)),
+        day_spend_usd=spend_between(session, start=start_of_day(now, tz)),
+        month_spend_usd=spend_between(session, start=start_of_month(now, tz)),
     )
 
 
@@ -367,23 +393,38 @@ MODEL_PALETTE = [
 def daily_usage_by_model_series(
     session: Session, *, start: datetime, now: datetime,
     prices: Optional[PriceInfo] = None,
+    tz: ZoneInfo = _UTC,
 ) -> list[dict]:
     """Per-day token totals broken down by model from ``start`` to ``now``'s day.
 
-    Returns one entry per calendar day (UTC), zero-filled, oldest first:
-    ``{date, total_tokens, cost, by_model: {model: tokens}}``. Runs with no
-    recorded model group under ``"unknown"``. Cost is repriced from ``prices``
-    when given, else summed from stored ``cost_usd``.
+    Returns one entry per local calendar day (in ``tz``; default UTC), zero-
+    filled, oldest first: ``{date, total_tokens, cost, by_model: {model: tokens}}``.
+    Runs with no recorded model group under ``"unknown"``. Cost is repriced from
+    ``prices`` when given, else summed from stored ``cost_usd``.
+
+    Both the SQL bucketing and the day labels are aligned to ``tz``: the stored
+    UTC ``started_at`` is shifted by the local UTC offset before ``func.date``
+    extracts the day, and the emitted labels are local dates. This keeps a run
+    attributed to the day the user actually experienced it (a local-evening run
+    for a negative-offset user otherwise lands on the *next* UTC date). The
+    offset is taken at ``now``; the bounded 30-day window means a DST
+    transition can mis-attribute at most the single transition day.
     """
+    # Shift the stored UTC instant by the local UTC offset so func.date() yields
+    # the local calendar date. '+0 seconds' (UTC) is a no-op.
+    offset = now.astimezone(tz).utcoffset() or timedelta(0)
+    day_mod = f"{int(offset.total_seconds()):+d} seconds"
+    day_expr = func.date(Run.started_at, day_mod)
+
     rows = session.execute(
         select(
-            func.date(Run.started_at),
+            day_expr,
             Run.model_used,
             *_TOKEN_SUMS,
             func.coalesce(func.sum(Run.cost_usd), 0.0),
         )
         .where(Run.started_at >= start)
-        .group_by(func.date(Run.started_at), Run.model_used)
+        .group_by(day_expr, Run.model_used)
     ).all()
 
     by_day: dict[str, dict] = {}
@@ -397,8 +438,10 @@ def daily_usage_by_model_series(
         slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
 
     out: list[dict] = []
-    day = start_of_day(start)
-    last = start_of_day(now)
+    # Iterate over local dates (start_of_day already localizes to tz); strftime
+    # the local date so labels match the shifted SQL buckets.
+    day = start_of_day(start, tz).astimezone(tz)
+    last = start_of_day(now, tz).astimezone(tz)
     while day <= last:
         key = day.strftime("%Y-%m-%d")
         slot = by_day.get(key, {"total_tokens": 0, "cost": 0.0, "by_model": {}})
@@ -408,21 +451,25 @@ def daily_usage_by_model_series(
 
 
 def build_dashboard(
-    session: Session, *, now: datetime, price_info: Optional[PriceInfo] = None
+    session: Session, *, now: datetime,
+    price_info: Optional[PriceInfo] = None,
+    tz: ZoneInfo = _UTC,
 ) -> dict:
     """Assemble the full context for the ``/analytics`` page.
 
     Breakdowns and stats use a rolling 30-day window; the headline chips use
     today / 7-day / 30-day windows. Token-focused: cost is a secondary figure.
 
-    ``price_info`` drives both the displayed cost (repriced from the resolved
-    live/cached/table prices) and the source label. Defaults to the bundled
-    table when unset (e.g. direct unit tests with no network).
+    ``tz`` localizes every day/week/month boundary (default UTC = original
+    behavior); ``now`` stays an aware UTC instant internally. ``price_info``
+    drives both the displayed cost (repriced from the resolved live/cached/table
+    prices) and the source label. Defaults to the bundled table when unset
+    (e.g. direct unit tests with no network).
     """
     if price_info is None:
         price_info = pricing.table_price_info()
 
-    today_start = start_of_day(now)
+    today_start = start_of_day(now, tz)
     last_7d_start = today_start - timedelta(days=6)
     last_30d_start = today_start - timedelta(days=29)
 
@@ -438,7 +485,7 @@ def build_dashboard(
     model_legend = [{"model": m, "color": c} for m, c in model_colors.items()]
 
     series = daily_usage_by_model_series(
-        session, start=last_30d_start, now=now, prices=price_info
+        session, start=last_30d_start, now=now, prices=price_info, tz=tz
     )
     max_daily_tokens = max((d["total_tokens"] for d in series), default=0)
 

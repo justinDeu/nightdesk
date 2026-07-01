@@ -172,7 +172,7 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
         active = next((w.label for w in windows if window_matches(w, now, tz)), None)
         effective_max = cap if cap is not None else 0
 
-        spend = compute_spend_status(session, now=now)
+        spend = compute_spend_status(session, now=now, tz=tz)
 
         stale = True
         last_seen_at = None

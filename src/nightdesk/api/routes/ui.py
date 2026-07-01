@@ -406,6 +406,17 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         from nightdesk.domain import analytics, pricing
 
         now = datetime.now(timezone.utc)
+        # Resolve the analytics timezone the same way the scheduler does
+        # (src/nightdesk/worker/scheduler.py): cfg.schedule_timezone, defaulting
+        # to UTC when unset/invalid so day boundaries stay local-midnight-to-now
+        # for the configured zone. ``now`` stays an aware UTC instant; only the
+        # boundary localization changes.
+        cfg = session.get(ConfigRow, 1)
+        tz_name = cfg.schedule_timezone if cfg and cfg.schedule_timezone else "UTC"
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("UTC")
         # Resolve live → cached → bundled prices off the event loop: a slow
         # upstream is bounded by the fetch timeout and never blocks the page.
         price_info = await run_in_threadpool(
@@ -414,7 +425,7 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
             url=getattr(request.app.state, "pricing_url", None),
             now=now,
         )
-        data = analytics.build_dashboard(session, now=now, price_info=price_info)
+        data = analytics.build_dashboard(session, now=now, price_info=price_info, tz=tz)
         return templates.TemplateResponse(
             request, "analytics.html",
             {"title": "Analytics", "active_page": "analytics", **data},

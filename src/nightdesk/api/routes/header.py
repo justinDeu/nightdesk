@@ -107,7 +107,7 @@ def _collect_worker_status(session: Session, *, worktree_root: str,
         (w.label for w in windows if window_matches(w, now, tz)), None
     )
 
-    spend = compute_spend_status(session, now=now)
+    spend = compute_spend_status(session, now=now, tz=tz)
 
     stale = True
     host = None
