@@ -17,17 +17,22 @@ draft  ──► queued ──► running ──► review ──► archived
       (running flips run_now=true)
 ```
 
-Valid transitions (`src/nightdesk/domain/tickets.py:13`):
+Valid transitions (`_VALID_TRANSITIONS`, `src/nightdesk/domain/tickets.py:28`):
 
 | from → to | allowed |
 |---|---|
-| `draft` | `queued`, `running` |
+| `inbox` | `draft`, `queued`, `archived` |
+| `draft` | `queued`, `running`, `inbox` |
 | `queued` | `draft`, `running` |
 | `running` | `review` |
 | `review` | `queued`, `archived` |
 | `archived` | `queued` |
 
 Anything else returns `409 invalid transition`. Dropping into `running` from `draft` or `queued` sets `run_now=true` so the scheduler picks it on the next tick.
+
+**API surface caveats — the state machine and the JSON API don't fully line up:**
+- `POST /api/v1/tickets/{tid}/transition` only accepts targets `draft|queued|running|review|archived`. **`inbox` is NOT a valid `/transition` target** even though `draft → inbox` is state-machine-legal. Tickets move *into* `inbox` only via the HTMX inbox routes (`/inbox/...`); the JSON API has no `→ inbox` path.
+- `archived` is reachable only from `review` (`/archive` or `transition status=archived`) or from `inbox` (decline). **A `draft` or `queued` ticket cannot be archived via the API or board** — only deleted, or hand-walked `draft → inbox → archived` through the domain layer. (Known bug.)
 
 ## Before creating a ticket
 
@@ -48,14 +53,14 @@ curl -s "${AUTH[@]}" "$BASE/api/v1/profiles" | jq '.[] | {id, name}'
 
 | mode | when to use |
 |---|---|
-| `git_worktree` | **Default for any ticket involving code changes.** Gives the agent an isolated git worktree branched from the primary source path. |
+| `git_worktree` | **Default for any ticket involving code changes.** Gives the agent an isolated git worktree branched from `source_path`. |
 | `directory` | Tickets that only read files, run queries, or operate on non-git directories. |
 
 If unsure, ask the user. When using `git_worktree`, suggest a `worktree_name` derived from the ticket title (e.g. a ticket titled "Fix login bug" → `fix/login-bug`). Show the derived name to the user before creating the ticket.
 
-### 3. Primary workspace source path
+### 3. Source path (`source_path`)
 
-`source_path` should be the repo root the agent operates in. Confirm it with the user or infer it from the current working directory. Never assume a path.
+`source_path` is the repo root / directory the agent operates in — it **replaced the old `cwd` field** (which no longer exists). Confirm it with the user or infer it from the current working directory. Never assume a path. The server turns top-level `source_path` + `workspace_mode` into the ticket's single **primary** workspace.
 
 ### 4. Quick checklist
 
@@ -63,19 +68,25 @@ Before sending the POST, confirm:
 
 - [ ] `profile_id` resolved (asked user if multiple profiles)
 - [ ] `workspace_mode` chosen (`git_worktree` for code changes, `directory` otherwise)
-- [ ] `source_path` confirmed with user or inferred from `$PWD`
+- [ ] `source_path` confirmed with user or inferred from `$PWD` (or `status="inbox"` to skip the workspace requirement)
 - [ ] `worktree_name` derived from title and shown to user (when using `git_worktree`)
 
 ## Create a ticket
 
-Required: `title`, `profile_id`, `source_path`. `source_path` is validated as a non-empty string and normalized to an absolute path. New tickets default to `status="draft"`.
+Required: `title`, `profile_id`. New tickets default to `status="draft"`.
 
-`workspace_mode` controls how the agent's working directory is set up (see "Before creating a ticket" for selection guidance):
+**A workspace is required (exactly one primary). There is no `cwd` field.** Provide the primary workspace one of two ways:
+- **Simple:** set top-level `source_path` (absolute; normalized server-side) plus optional `workspace_mode` / `worktree_name`. The server synthesizes the single primary workspace from these.
+- **Explicit:** pass a `workspaces` list containing exactly one `role:"primary"` entry (see "Workspaces" below).
+
+Provide neither and the create returns `422 "workspaces must include exactly one primary workspace"` — **unless** `status="inbox"`, the one exception (captured triage items may have no workspace yet).
+
+`workspace_mode` sets the primary workspace's kind (see "Before creating a ticket" for selection guidance):
 
 | mode | behavior |
 |---|---|
 | `directory` | agent runs in `source_path` as a plain directory |
-| `in_place` | agent runs directly in `source_path` (legacy alias for directory) |
+| `in_place` | runs directly in `source_path` (legacy alias for directory) |
 | `git_worktree` | agent gets an isolated git worktree branched from `source_path` |
 | `worktree` | reserved; not yet fully implemented |
 
@@ -134,7 +145,7 @@ JSON requires real `\n` escapes inside string values — literal newlines in the
 
 ## Workspaces (multi-workspace tickets)
 
-Tickets support an optional `workspaces` list for exposing additional directories or worktrees to the agent alongside the primary source path. Each entry is a `TicketWorkspaceIn` object:
+Tickets support a `workspaces` list — the primary workspace plus any additional directories or worktrees exposed to the agent. Pass it instead of (or alongside) top-level `source_path`; it must contain exactly one `role:"primary"` entry. Each entry is a `TicketWorkspaceIn` object:
 
 | field | type | description |
 |---|---|---|
@@ -150,12 +161,22 @@ Tickets support an optional `workspaces` list for exposing additional directorie
 | `retention` | `preserve`, `cleanup_on_success`, `cleanup_after_review` | default `preserve` |
 
 ```bash
-# Create ticket with an extra linked read-only directory
+# Primary worktree + an extra linked read-only directory. The list MUST contain
+# exactly one role:"primary" entry — top-level source_path is NOT consulted to
+# fill in a primary when a workspaces list is present.
 cat > /tmp/ticket.json <<'JSON'
 {
   "title": "...",
   "prompt": "...",
   "workspaces": [
+    {
+      "kind": "git_worktree",
+      "role": "primary",
+      "label": "primary",
+      "access": "read_write",
+      "source_path": "/home/thor/fun/nightdesk",
+      "worktree_name": "fix/my-feature"
+    },
     {
       "kind": "directory",
       "role": "linked",
@@ -166,8 +187,13 @@ cat > /tmp/ticket.json <<'JSON'
   ]
 }
 JSON
-jq '. + {profile_id: "<uuid>", source_path: "/home/thor/fun/nightdesk"}' \
-  /tmp/ticket.json > /tmp/ticket.full.json
+# Inject profile_id with Python (NOT jq — see the create recipe above).
+python3 -c "
+import json
+t = json.load(open('/tmp/ticket.json'))
+t['profile_id'] = '<uuid>'
+json.dump(t, open('/tmp/ticket.full.json', 'w'))
+"
 curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
   -X POST "$BASE/api/v1/tickets" --data @/tmp/ticket.full.json | jq '{id, title, status}'
 ```
@@ -243,6 +269,17 @@ curl -s "${AUTH[@]}" "$BASE/api/v1/runs/$RID"          | jq .
 
 A run's `started_as_run_now` flag is run-level history; it survives even after the ticket's transient `run_now` flag clears.
 
+## Conversations and continuing a run
+
+Runs are grouped into **conversations**. A ticket has many conversations (1:N) with exactly one active at a time; each run is one turn within its conversation. The conversation is the continuous thread of work and holds the Claude/OpenCode session id used to resume.
+
+- **Continue** extends the active conversation: same runtime, same workspace, full message history resumed via the SDK session. The typed text becomes the next user turn. Route: browser-only HTMX form `POST /tickets/{tid}/continue` with form field `next_run_context`.
+- **New conversation** starts a fresh session (no history). Use it to switch runtime (e.g. Claude Code to OpenCode) or start over. Route: browser-only HTMX `POST /tickets/{tid}/new-conversation`, choosing runtime and workspace.
+- Conversations are **runtime-bound**. You cannot continue a conversation across an incompatible runtime; switching runtime requires a new conversation.
+- Legacy re-run verbs still exist as HTMX routes: `/tickets/{tid}/resume`, `/retry`, `/restart`. `resume`/`retry` start fresh-context on the same worktree; `restart` uses a fresh worktree.
+
+**There is no JSON `/api/v1/*` continue or new-conversation endpoint.** Scripts cannot continue a conversation through the JSON API; it is browser/HTMX only. The JSON `Run` and `Ticket` schemas do not expose conversation fields. To drive a follow-up programmatically you stage it the same way the UI does (set `next_run_context` and transition to `queued`), but that starts a fresh-context run, not a session resume.
+
 ## Transcript (SSE)
 
 ```bash
@@ -268,6 +305,8 @@ curl -s "${AUTH[@]}" "$BASE/api/v1/fs/suggest?path=~/f" | jq .
 - Calling `POST /board/tickets/{tid}` from a script. That's the HTMX update endpoint; it returns `204 + HX-Redirect`. Use `PATCH /api/v1/tickets/{tid}` instead.
 - Sending a sparse PATCH and expecting omitted fields to clear. They don't — see `nightdesk-api`.
 - Trying to transition `draft → review`. Not allowed; go through `running` or use `archive`/`requeue` paths.
+- Passing `cwd` on create. That field was removed — the server ignores it and you get `422 "workspaces must include exactly one primary workspace"`. Use top-level `source_path` (or a `workspaces` list with one primary).
+- Trying to archive a `draft`/`queued` ticket. `/archive` and `transition status=archived` only work from `review` (and `inbox` declines). There is no API path to archive a never-run draft — see the lifecycle caveats above.
 - Forgetting `-N` on the SSE curl — output looks frozen.
 - Passing both `--data @file.json` AND a second `-d` (or `-d @-` from a heredoc) on the same `curl`. Multiple `-d` flags **concatenate with `&`**, which produces malformed JSON and silently posts garbage; the server returns a 4xx and `jq '{id,title,status}'` shows `{id: null, title: null, status: null}`. Use a single `--data @file.json` and inject any extra fields with Python BEFORE the POST.
 - Using an unquoted heredoc tag (`<<JSON` instead of `<<'JSON'`) when the prompt contains backticks or `$`. The shell will expand them and either run commands or empty out variables silently. Always quote the tag.

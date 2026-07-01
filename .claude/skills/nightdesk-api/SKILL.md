@@ -67,6 +67,11 @@ For Python-side schema details (field types, defaults, validators), read `src/ni
 - A `PATCH` body that omits a field does not clear it. To clear, send an explicit `null` (where the `*Update` schema allows `Optional[...]`).
 - Tickets in `status="running"` cannot be deleted — `409` from `DELETE /api/v1/tickets/{tid}`. Cancel or wait first.
 - `bind_host = "127.0.0.1"` by default — `localhost` works, but a stale `0.0.0.0` assumption from elsewhere will hang.
+- Continuing a conversation (`/tickets/{tid}/continue`, `/tickets/{tid}/new-conversation`) plus the legacy `/resume`, `/retry`, `/restart` are **HTMX-only**. There is no JSON `/api/v1/*` continue or new-conversation endpoint, and `Run`/`Ticket` JSON schemas do not expose conversation fields. Scripts cannot resume a session through the JSON API.
+
+## Conversations
+
+Runs are grouped into conversations (a ticket has many, one active; each run is a turn). The conversation is the resumable thread and holds the runtime session id. Continue extends the active conversation (same runtime, full history); new-conversation starts fresh and is the way to switch runtime. Both are browser/HTMX surfaces, documented in `nightdesk-ticket-ops`. See `src/nightdesk/domain/conversations.py` for the model.
 
 ## Sister skill
 
