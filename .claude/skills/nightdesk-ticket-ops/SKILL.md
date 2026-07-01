@@ -273,12 +273,23 @@ A run's `started_as_run_now` flag is run-level history; it survives even after t
 
 Runs are grouped into **conversations**. A ticket has many conversations (1:N) with exactly one active at a time; each run is one turn within its conversation. The conversation is the continuous thread of work and holds the Claude/OpenCode session id used to resume.
 
-- **Continue** extends the active conversation: same runtime, same workspace, full message history resumed via the SDK session. The typed text becomes the next user turn. Route: browser-only HTMX form `POST /tickets/{tid}/continue` with form field `next_run_context`.
-- **New conversation** starts a fresh session (no history). Use it to switch runtime (e.g. Claude Code to OpenCode) or start over. Route: browser-only HTMX `POST /tickets/{tid}/new-conversation`, choosing runtime and workspace.
+- **Continue** extends the active conversation: same runtime, same workspace, full message history resumed via the SDK session. The typed text becomes the next user turn. JSON route: `POST /api/v1/tickets/{tid}/continue` with body `{"message": "..."}` (browser HTMX form `POST /tickets/{tid}/continue` with field `next_run_context` still exists).
+- **New conversation** starts a fresh session (no history). Use it to switch runtime (e.g. Claude Code to OpenCode) or start over. JSON route: `POST /api/v1/tickets/{tid}/new-conversation` with body `{"message"?, "profile_id"?, "workspace"?: "keep"|"fresh"}` (browser HTMX `POST /tickets/{tid}/new-conversation` still exists).
 - Conversations are **runtime-bound**. You cannot continue a conversation across an incompatible runtime; switching runtime requires a new conversation.
 - Legacy re-run verbs still exist as HTMX routes: `/tickets/{tid}/resume`, `/retry`, `/restart`. `resume`/`retry` start fresh-context on the same worktree; `restart` uses a fresh worktree.
 
-**There is no JSON `/api/v1/*` continue or new-conversation endpoint.** Scripts cannot continue a conversation through the JSON API; it is browser/HTMX only. The JSON `Run` and `Ticket` schemas do not expose conversation fields. To drive a follow-up programmatically you stage it the same way the UI does (set `next_run_context` and transition to `queued`), but that starts a fresh-context run, not a session resume.
+```bash
+# Continue the active conversation (message = next user turn on the resumed session).
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/continue" \
+  -H 'Content-Type: application/json' -d '{"message":"now also fix the tests"}' | jq .
+
+# Start a fresh conversation — e.g. to switch runtime. All fields optional.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/new-conversation" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"retry","profile_id":"<id>","workspace":"fresh"}' | jq .
+```
+
+Both endpoints stage a queued run-now the worker picks up and return the affected ticket as `TicketOut` JSON. **`continue` requires a resumable active conversation** (one whose turn recorded a session id): if there is no active conversation, or its session id is null, `continue` returns `409 {"detail": "... start a new conversation ..."}` — call `new-conversation` instead (this is also the only way to switch runtime, since sessions are not portable across runtimes). Other errors: ticket not found → `404`; from a non-`review`/`archived` status → `409`; empty `continue` message → `422`; unknown `profile_id` → `404`.
 
 ## Transcript (SSE)
 

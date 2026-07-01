@@ -9,18 +9,21 @@ from nightdesk.api.schemas import (
     BulkPriorityUpdate, BulkProfileUpdate, BulkProjectUpdate, BulkStatusUpdate,
     BulkUpdateResult,
     DependencyCreate, DependencyOut,
-    TicketCreate, TicketOut, TicketPriorityUpdate, TicketProfileUpdate,
+    TicketContinue, TicketCreate, TicketNewConversation, TicketOut,
+    TicketPriorityUpdate, TicketProfileUpdate,
     TicketProjectUpdate, TicketReorder, TicketStatusUpdate, TicketTransition,
     TicketUpdate,
 )
 from nightdesk.domain.tickets import (
     add_dependency, archive, bulk_update_priority, bulk_update_profile,
-    bulk_update_project, bulk_update_status, create_ticket, delete_ticket,
-    get_ticket, list_tickets, remove_dependency, requeue,
+    bulk_update_project, bulk_update_status, continue_ticket, create_ticket,
+    delete_ticket, get_ticket, list_tickets, new_conversation_ticket,
+    remove_dependency, requeue,
     reorder_in_column, request_run_now, transition_status,
     transition_with_position, unarchive, update_ticket,
     update_ticket_priority, update_ticket_profile, update_ticket_project,
-    TicketNotFound, InvalidTransition, CyclicDependency, DependencyNotFound,
+    ConversationNotResumable, TicketNotFound, InvalidTransition,
+    CyclicDependency, DependencyNotFound,
 )
 from nightdesk.domain.profiles import ProfileNotFound
 
@@ -294,6 +297,60 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
+
+    @router.post("/{tid}/continue", response_model=TicketOut)
+    async def continue_route(
+        tid: str, payload: TicketContinue,
+        session: Session = Depends(get_session),
+    ):
+        """Continue the ACTIVE conversation: the ``message`` becomes the next
+        user turn on the resumed SDK session (same runtime, full history).
+
+        Mirrors the HTMX ``POST /tickets/{tid}/continue`` form end to end — it
+        calls the same ``continue_ticket`` domain function, which stages the
+        continue intent + the conversation id and queues a run-now so the worker
+        seeds ``resume=`` from the conversation's session id. No resume logic is
+        duplicated here. A conversation with no resumable session id is refused
+        (409) and the caller is pointed at ``new-conversation``.
+        """
+        try:
+            t = continue_ticket(session, tid, next_run_context=payload.message)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ConversationNotResumable as e:
+            raise HTTPException(409, str(e))
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        return _ticket_to_out(t)
+
+    @router.post("/{tid}/new-conversation", response_model=TicketOut)
+    async def new_conversation_route(
+        tid: str, payload: TicketNewConversation,
+        session: Session = Depends(get_session),
+    ):
+        """Start a FRESH conversation (new session, no resumed history).
+
+        Symmetric JSON counterpart to the HTMX ``POST /tickets/{tid}/new-
+        conversation`` form. Picks the runtime (``profile_id``; default the
+        ticket's current profile) and workspace policy (``keep`` current files
+        or ``fresh`` worktree). This is the path for switching runtime (e.g.
+        Claude Code to OpenCode), since sessions are not portable across
+        runtimes — an empty runtime switch still requires new-conversation.
+        """
+        try:
+            t = new_conversation_ticket(
+                session, tid,
+                next_run_context=payload.message,
+                profile_id=payload.profile_id,
+                workspace_policy="fresh" if payload.workspace == "fresh" else None,
+            )
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        except ProfileNotFound:
+            raise HTTPException(404, "profile not found")
+        return _ticket_to_out(t)
 
     @router.delete("/{tid}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete(tid: str, session: Session = Depends(get_session)):

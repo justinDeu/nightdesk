@@ -706,6 +706,47 @@ class TicketProfileUpdate(BaseModel):
     profile_id: str
 
 
+class TicketContinue(BaseModel):
+    """Follow-up message to continue a ticket's ACTIVE conversation.
+
+    The message becomes the next user turn on the resumed SDK session (same
+    runtime, full prior message history). Mirrors the HTMX ``/continue`` form's
+    ``next_run_context`` field, which is why it maps to ``next_run_context``
+    internally. Empty/whitespace is rejected (422) — there is nothing to append.
+    """
+
+    message: str
+
+    @field_validator("message")
+    @classmethod
+    def _nonempty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("message must not be empty")
+        return v
+
+
+class TicketNewConversation(BaseModel):
+    """Start a fresh conversation (new session, no resumed history).
+
+    Mirrors the HTMX ``/new-conversation`` form. ``workspace`` is ``"keep"``
+    (reuse the current worktree files) or ``"fresh"`` (fresh worktree path).
+    ``profile_id`` switches the runtime for the NEXT new conversation only —
+    switching runtime always starts a new conversation because sessions are not
+    portable across runtimes.
+    """
+
+    message: Optional[str] = None
+    profile_id: Optional[str] = None
+    workspace: Literal["keep", "fresh"] = "keep"
+
+    @field_validator("message")
+    @classmethod
+    def _clean_message(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            return None
+        return v
+
+
 class BulkPriorityUpdate(BaseModel):
     ticket_ids: list[str] = Field(min_length=1)
     priority: int
