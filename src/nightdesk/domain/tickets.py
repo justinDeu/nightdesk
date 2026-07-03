@@ -297,28 +297,72 @@ def get_ticket(session: Session, ticket_id: str) -> Ticket:
     return t
 
 
+def _ticket_filters(
+    status: Optional[str],
+    profile_id: Optional[str],
+    project_id: Optional[str],
+) -> list:
+    """Shared WHERE-clause builder for ``list_tickets`` / ``count_tickets``.
+
+    Centralized so the page (``list_tickets``) and the total
+    (``count_tickets``) can never drift apart — a mismatch would defeat the
+    truncation metadata callers rely on to detect incomplete results.
+    """
+    filters: list = []
+    if status is not None:
+        filters.append(Ticket.status == status)
+    if profile_id is not None:
+        filters.append(Ticket.profile_id == profile_id)
+    if project_id is not None:
+        if project_id == "null":
+            filters.append(Ticket.project_id.is_(None))
+        else:
+            filters.append(Ticket.project_id == project_id)
+    return filters
+
+
 def list_tickets(
     session: Session,
     status: Optional[str] = None,
     profile_id: Optional[str] = None,
     project_id: Optional[str] = None,
     limit: int = 200,
+    offset: int = 0,
 ) -> list[Ticket]:
+    """One page of tickets matching the filters, ordered board-stable.
+
+    ``limit``/``offset`` are paging: combine with ``count_tickets`` (same
+    filters) for a total and to detect truncation. The default ``limit`` of
+    200 is a guardrail, NOT a hard ceiling — callers may request a larger
+    page; the API route enforces its own max and returns paging headers.
+    """
     stmt = (
         select(Ticket)
+        .where(*_ticket_filters(status, profile_id, project_id))
         .order_by(Ticket.position.asc(), Ticket.priority.desc(), Ticket.created_at.asc())
         .limit(limit)
+        .offset(offset)
     )
-    if status is not None:
-        stmt = stmt.where(Ticket.status == status)
-    if profile_id is not None:
-        stmt = stmt.where(Ticket.profile_id == profile_id)
-    if project_id is not None:
-        if project_id == "null":
-            stmt = stmt.where(Ticket.project_id.is_(None))
-        else:
-            stmt = stmt.where(Ticket.project_id == project_id)
     return list(session.scalars(stmt))
+
+
+def count_tickets(
+    session: Session,
+    status: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> int:
+    """Total tickets matching the filters, ignoring ``limit``/``offset``.
+
+    The paging counterpart to ``list_tickets``: it uses the exact same
+    ``_ticket_filters`` so the count and the page agree. Callers page with
+    ``offset`` and use this for ``X-Total-Count`` / has-more so truncated
+    results are always detectable rather than silently clamped.
+    """
+    stmt = select(func.count(Ticket.id)).where(
+        *_ticket_filters(status, profile_id, project_id)
+    )
+    return int(session.scalar(stmt) or 0)
 
 
 def update_ticket(session: Session, ticket_id: str, **fields) -> Ticket:

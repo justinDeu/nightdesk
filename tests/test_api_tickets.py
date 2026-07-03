@@ -1,5 +1,23 @@
 from nightdesk.domain.labels import create_label, set_ticket_labels
 from nightdesk.domain.tickets import create_ticket
+from nightdesk.api.routes.tickets import MAX_LIST_LIMIT
+
+
+async def _seed_tickets(session, *, n, status="draft", title_prefix="t", pid=None):
+    """Bulk-create ``n`` tickets straight through the domain layer (fast — no
+    HTTP per row) so paging tests can exceed the 200-row default window."""
+    ids = []
+    for i in range(n):
+        t = create_ticket(
+            session,
+            title=f"{title_prefix}-{i}",
+            prompt="p",
+            profile_id=pid,
+            source_path="/tmp",
+            status=status,
+        )
+        ids.append(t.id)
+    return ids
 
 
 async def _create_profile(client):
@@ -144,3 +162,122 @@ async def test_ticket_api_includes_labels(client, session):
     assert r.status_code == 200
     match = next(t for t in r.json() if t["id"] == ticket.id)
     assert match["labels"] == [{"id": label.id, "name": "urgent", "color": "#ef4444"}]
+
+
+# --- limit / offset paging + truncation metadata ----------------------------
+#
+# Regression for: GET /api/v1/tickets?limit=500 silently returned 200 rows
+# because the route never declared a ``limit`` param (FastAPI dropped it), and
+# there was no signal of truncation. Now ``limit`` is honored up to a hard max,
+# over-max is a 422 (never a silent clamp), ``offset`` pages, and
+# X-Total-Count / X-Has-More make a truncated slice detectable.
+
+
+async def test_limit_param_is_honored_with_truncation_headers(client, session):
+    """A limit smaller than the total returns exactly that many rows AND flags
+    that more exist — the missing signal in the original bug."""
+    pid = await _create_profile(client)
+    ids = await _seed_tickets(session, n=3, pid=pid)
+
+    r = await client.get("/api/v1/tickets?limit=2")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 2  # limit honored, not the 200 default
+    assert r.headers["X-Total-Count"] == "3"
+    assert r.headers["X-Has-More"] == "true"
+    assert r.headers["X-Limit"] == "2"
+    assert r.headers["X-Offset"] == "0"
+    returned = {t["id"] for t in body}
+    assert returned.issubset(set(ids))
+
+
+async def test_offset_pages_through_every_row(client, session):
+    """Walking offset by the limit covers the full set with no dupes/gaps, and
+    X-Has-More flips to false exactly on the last page."""
+    pid = await _create_profile(client)
+    ids = set(await _seed_tickets(session, n=5, pid=pid))
+
+    seen: list[str] = []
+    has_more_seq: list[str] = []
+    for offset in (0, 2, 4):
+        r = await client.get(f"/api/v1/tickets?limit=2&offset={offset}")
+        assert r.status_code == 200
+        seen += [t["id"] for t in r.json()]
+        has_more_seq.append(r.headers["X-Has-More"])
+        assert r.headers["X-Total-Count"] == "5"
+        assert r.headers["X-Offset"] == str(offset)
+
+    assert set(seen) == ids  # every row exactly once
+    assert len(seen) == len(ids) == 5
+    # pages 0 and 2 have more (2/5 and 4/5), the last page (4..5) does not.
+    assert has_more_seq == ["true", "true", "false"]
+
+
+async def test_default_limit_returns_everything_below_the_window(client, session):
+    """When the total is under the 200 default, the whole set comes back and
+    X-Has-More is false — no behavior change for ordinary callers."""
+    pid = await _create_profile(client)
+    await _seed_tickets(session, n=4, pid=pid)
+
+    r = await client.get("/api/v1/tickets")
+    assert r.status_code == 200
+    assert len(r.json()) == 4
+    assert r.headers["X-Total-Count"] == "4"
+    assert r.headers["X-Has-More"] == "false"
+
+
+async def test_large_limit_is_no_longer_clamped_to_200(client, session):
+    """The exact repro: with >200 tickets, limit=500 used to return 200 (the
+    param was ignored). It must now return the full set and report no more."""
+    pid = await _create_profile(client)
+    await _seed_tickets(session, n=205, pid=pid)
+
+    r = await client.get("/api/v1/tickets?limit=500")
+    assert r.status_code == 200
+    assert len(r.json()) == 205  # was 200 before the fix
+    assert r.headers["X-Total-Count"] == "205"
+    assert r.headers["X-Has-More"] == "false"
+
+
+async def test_limit_above_hard_max_is_422_not_silently_clamped(client, session):
+    """Asking for more than the hard max must ERROR, never silently clamp — a
+    clamp is the failure mode this ticket exists to kill."""
+    pid = await _create_profile(client)
+    await _seed_tickets(session, n=3, pid=pid)
+
+    r = await client.get(f"/api/v1/tickets?limit={MAX_LIST_LIMIT + 1}")
+    assert r.status_code == 422  # validation error, not a 200 with truncated rows
+    # The body must point at the limit param so the caller knows what to fix.
+    assert any("limit" in str(loc) for loc in r.json()["detail"][0]["loc"])
+
+
+async def test_limit_at_hard_max_is_honored(client, session):
+    """The boundary itself is allowed (inclusive)."""
+    pid = await _create_profile(client)
+    await _seed_tickets(session, n=3, pid=pid)
+
+    r = await client.get(f"/api/v1/tickets?limit={MAX_LIST_LIMIT}")
+    assert r.status_code == 200
+    assert len(r.json()) == 3
+
+
+async def test_invalid_limit_and_offset_rejected(client):
+    """limit<1 and offset<0 are 422s — paging is bounded on both ends."""
+    assert (await client.get("/api/v1/tickets?limit=0")).status_code == 422
+    assert (await client.get("/api/v1/tickets?offset=-1")).status_code == 422
+
+
+async def test_total_count_respects_status_filter(client, session):
+    """X-Total-Count matches the filtered set, not the whole table, so a caller
+    paging through archived tickets gets honest per-filter counts."""
+    pid = await _create_profile(client)
+    await _seed_tickets(session, n=2, pid=pid, status="archived", title_prefix="arch")
+    await _seed_tickets(session, n=3, pid=pid, status="draft", title_prefix="drf")
+
+    r = await client.get("/api/v1/tickets?status=archived&limit=500")
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 2
+    assert all(t["status"] == "archived" for t in rows)
+    assert r.headers["X-Total-Count"] == "2"  # filtered count, not 5
+    assert r.headers["X-Has-More"] == "false"

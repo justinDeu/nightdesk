@@ -60,6 +60,39 @@ For Python-side schema details (field types, defaults, validators), read `src/ni
 - Errors: FastAPI `{"detail": "..."}` with appropriate status code (`401` missing bearer, `404` not found, `409` invalid transition, `422` validation).
 - HTMX routes return `204 No Content` with an `HX-Redirect: /` header — useless to a script.
 
+## Listing / paging tickets
+
+`GET /api/v1/tickets` returns one page of a board-stable ordered list. It does **not** silently clamp:
+
+| Param | Default | Notes |
+|---|---|---|
+| `status` | all | `inbox`/`draft`/`queued`/`running`/`review`/`archived` |
+| `profile_id` | all | |
+| `project_id` | all | `null` selects tickets with no project |
+| `limit` | `200` | honored up to a hard max of `1000`; **above the max is a `422`, not a clamp** |
+| `offset` | `0` | page past the limit / the hard max |
+
+Because the body is a bare JSON array, paging metadata is in response **headers** — always check these, never assume a full result set:
+
+- `X-Total-Count` — total tickets matching the filters (ignores `limit`/`offset`).
+- `X-Has-More` — `true` when more rows exist beyond this page; `false` when the page is the whole result set.
+- `X-Limit`, `X-Offset` — echo of the effective paging params.
+
+Fetch every ticket (e.g. to retro-tag `project_id`) by looping until `X-Has-More` is `false`:
+
+```bash
+all=(); offset=0
+while :; do
+  r=$(curl -s -D - "${AUTH[@]}" "$BASE/api/v1/tickets?limit=1000&offset=$offset")
+  body=$(printf '%s' "$r" | tail -n +$(printf '%s' "$r" | grep -n $'\r$' | tail -1 | cut -d: -f1) | tail -n +1)
+  # ...append body rows to `all`...
+  echo "$r" | tr -d '\r' | grep -i 'X-Has-More: false' >/dev/null && break
+  offset=$((offset + 1000))
+done
+```
+
+In Python, just read `resp.headers["x-total-count"]` / `resp.headers["x-has-more"]`. The historical bug was that `?limit=500` was silently ignored and 200 rows came back with no signal of truncation — the headers exist precisely so that cannot recur.
+
 ## Common gotchas
 
 - `GET /board/tickets/{id}` → `405 Method Not Allowed`. The board surface has no per-ticket GET; use `GET /api/v1/tickets/{tid}`.

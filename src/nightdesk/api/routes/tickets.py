@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_bearer
@@ -16,7 +16,8 @@ from nightdesk.api.schemas import (
 )
 from nightdesk.domain.tickets import (
     add_dependency, archive, bulk_update_priority, bulk_update_profile,
-    bulk_update_project, bulk_update_status, continue_ticket, create_ticket,
+    bulk_update_project, bulk_update_status, continue_ticket, count_tickets,
+    create_ticket,
     delete_ticket, get_ticket, list_tickets, new_conversation_ticket,
     remove_dependency, requeue,
     reorder_in_column, request_run_now, transition_status,
@@ -26,6 +27,15 @@ from nightdesk.domain.tickets import (
     CyclicDependency, DependencyNotFound,
 )
 from nightdesk.domain.profiles import ProfileNotFound
+
+
+# Hard ceiling on the page size for GET /api/v1/tickets. The default ``limit``
+# is 200, but callers may request a larger page (e.g. to retro-tag every ticket
+# in one pass). Anything above this is REJECTED with 422 — never silently
+# clamped — so a caller cannot unknowingly receive a truncated slice. Page past
+# the ceiling with ``offset``; the ``X-Total-Count`` / ``X-Has-More`` headers
+# let a caller detect incomplete results regardless of the limit it asked for.
+MAX_LIST_LIMIT = 1000
 
 
 def _coerce_dirs(payload_dirs):
@@ -120,12 +130,34 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     @router.get("", response_model=list[TicketOut])
     async def lst(
+        response: Response,
         status: str | None = Query(default=None),
         profile_id: str | None = Query(default=None),
         project_id: str | None = Query(default=None),
+        limit: int = Query(default=200, ge=1, le=MAX_LIST_LIMIT),
+        offset: int = Query(default=0, ge=0),
         session: Session = Depends(get_session),
     ):
-        tickets = list_tickets(session, status=status, profile_id=profile_id, project_id=project_id)
+        """List tickets, one page at a time.
+
+        ``limit`` is honored up to ``MAX_LIST_LIMIT``; requesting more is a 422
+        (not a silent clamp). ``offset`` pages past the limit. The
+        ``X-Total-Count`` and ``X-Has-More`` headers expose whether the page is
+        the whole result set, so callers can never mistake a truncated slice for
+        completeness — the original bug was exactly that a larger ``limit`` was
+        ignored and 200 rows were returned with no signal of truncation.
+        """
+        tickets = list_tickets(
+            session, status=status, profile_id=profile_id,
+            project_id=project_id, limit=limit, offset=offset,
+        )
+        total = count_tickets(
+            session, status=status, profile_id=profile_id, project_id=project_id,
+        )
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["X-Has-More"] = "true" if (offset + len(tickets)) < total else "false"
+        response.headers["X-Limit"] = str(limit)
+        response.headers["X-Offset"] = str(offset)
         return [_ticket_to_out(t) for t in tickets]
 
     # --- Bulk metadata update endpoints -----------------------------------------
