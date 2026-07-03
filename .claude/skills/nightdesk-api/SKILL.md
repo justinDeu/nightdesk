@@ -129,6 +129,25 @@ curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/new-conversation" \
 
 See `src/nightdesk/domain/conversations.py` for the model and `nightdesk-ticket-ops` for recipes.
 
+## Installing these skills
+
+These nightdesk skills are plain markdown, so any agent that loads
+`<dir>/skills/<name>/SKILL.md` folders can use them. `nightdesk-install-skills`
+detects installed coding agents and installs into each one's default skills
+directory (Claude Code, opencode, and pi all share the same `SKILL.md` layout):
+
+```bash
+nightdesk-install-skills --list-harnesses   # show supported + detected agents
+nightdesk-install-skills                    # Claude Code only -> straight install
+nightdesk-install-skills --all              # every detected agent (non-interactive; alias --yes)
+nightdesk-install-skills --harness opencode # one specific agent (non-interactive)
+nightdesk-install-skills --target ./myproj  # project-local ./myproj/.claude/skills
+nightdesk-install-skills --force            # reinstall even if up to date
+```
+
+Each target keeps its own drift marker (`.nightdesk-skills-version`), so updates
+are tracked per agent.
+
 ## Sister skill
 
 For concrete ticket recipes (create, transition, run-now, comments, archive, transcript stream), use `nightdesk-ticket-ops`. That skill also covers:

@@ -78,6 +78,34 @@ To re-open the UI later without copy-pasting the bearer:
 nightdesk-login
 ```
 
+## Installing skills into other coding agents
+
+nightdesk ships a few bundled skills (`nightdesk-api`, `nightdesk-ticket-ops`,
+`nightdesk-monitor-tickets`) that document its HTTP API. They are plain
+markdown, so they work inside any coding agent that loads
+`<dir>/skills/<name>/SKILL.md` folders — Claude Code, [opencode](https://opencode.ai/docs/skills/),
+and [pi](https://pi.dev/docs/latest/skills) all share that layout.
+
+`nightdesk-install-skills` is harness-aware: it detects which agents are
+installed and installs into each one's default skills directory, with a
+per-target drift marker so updates are tracked independently.
+
+```bash
+nightdesk-install-skills --list-harnesses    # show supported + detected agents
+nightdesk-install-skills                     # Claude Code only -> straight install (default)
+nightdesk-install-skills --all               # every detected agent, non-interactive (alias: --yes)
+nightdesk-install-skills --harness opencode  # one specific agent, non-interactive
+nightdesk-install-skills --harness pi
+nightdesk-install-skills --target ./myproj   # project-local ./myproj/.claude/skills
+nightdesk-install-skills --force             # reinstall even if up to date
+```
+
+Detected defaults: Claude Code → `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`;
+opencode → `$OPENCODE_CONFIG_DIR/skills` or `$XDG_CONFIG_HOME/opencode/skills`
+(default `~/.config/opencode/skills`); pi → `$PI_CODING_AGENT_DIR/skills` or
+`~/.pi/agent/skills`. When more than one agent is present and no flag is passed,
+you are prompted `y/n` for each.
+
 ## Daily use
 
 The board lives at `http://127.0.0.1:8765`. The default port and bind host are

@@ -1557,19 +1557,262 @@ def _resolve_skills_dir(target_arg: str | None) -> Path:
     return base / "skills"
 
 
+# ---------------------------------------------------------------------------
+# Harness registry: supported coding-agent targets for skill installation.
+#
+# nightdesk's bundled skills are generic HTTP-API docs shipped as
+# ``<name>/SKILL.md`` folders. That exact layout is loaded natively by every
+# harness below, so one copy routine serves all of them — only the config-root
+# resolution and the "is this agent installed?" detection differ per harness.
+#
+# Confirmed default locations (do not invent new ones — if a harness's skill
+# location can't be confirmed from its docs, leave it out of the registry):
+#   - Claude Code : ``$CLAUDE_CONFIG_DIR/skills`` or ``~/.claude/skills``
+#                   https://docs.claude.com/en/docs/claude-code/skills
+#   - opencode    : ``$OPENCODE_CONFIG_DIR/skills`` or
+#                   ``$XDG_CONFIG_HOME/opencode/skills`` (default
+#                   ``~/.config/opencode/skills``). opencode also reads
+#                   ``~/.claude/skills`` natively, but we install into its own
+#                   dir so the install is first-class and isolated.
+#                   Skills are ``skills/<name>/SKILL.md`` folders; the ``name``
+#                   frontmatter must equal the directory name.
+#                   https://opencode.ai/docs/skills/  (config: /docs/config/)
+#   - pi          : ``$PI_CODING_AGENT_DIR/skills`` or ``~/.pi/agent/skills``
+#                   (pi does NOT honor XDG_CONFIG_HOME). Skills are
+#                   ``skills/<name>/SKILL.md`` folders; ``name`` need not match
+#                   the directory. https://pi.dev/docs/latest/skills
+# ---------------------------------------------------------------------------
+
+
+class Harness:
+    """A supported coding-agent harness nightdesk can install skills into."""
+
+    def __init__(self, name, display, doc_url, config_root, detect):
+        self.name = name
+        self.display = display
+        self.doc_url = doc_url
+        self._config_root = config_root  # callable[[], Path]
+        self._detect = detect            # callable[[], bool]
+
+    def config_root(self) -> Path:
+        """Resolve this harness's config-directory root (env overrides honored)."""
+        return self._config_root()
+
+    def skills_dir(self) -> Path:
+        """Directory skills are installed into / loaded from for this harness."""
+        return self.config_root() / "skills"
+
+    def is_installed(self) -> bool:
+        """True when this harness appears to be installed on the machine."""
+        return self._detect()
+
+
+def _xdg_config_home() -> Path:
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    return Path(xdg).expanduser() if xdg else Path.home() / ".config"
+
+
+def _on_path(binary: str) -> bool:
+    return shutil.which(binary) is not None
+
+
+def _claude_config_root() -> Path:
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return Path(cfg).expanduser() if cfg else Path.home() / ".claude"
+
+
+def _opencode_config_root() -> Path:
+    cfg = os.environ.get("OPENCODE_CONFIG_DIR", "").strip()
+    if cfg:
+        return Path(cfg).expanduser()
+    return _xdg_config_home() / "opencode"
+
+
+def _pi_config_root() -> Path:
+    cfg = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
+    return Path(cfg).expanduser() if cfg else Path.home() / ".pi" / "agent"
+
+
+def _claude_detected() -> bool:
+    return (
+        bool(os.environ.get("CLAUDE_CONFIG_DIR", "").strip())
+        or _claude_config_root().is_dir()
+        or _on_path("claude")
+    )
+
+
+def _opencode_detected() -> bool:
+    return (
+        bool(os.environ.get("OPENCODE_CONFIG_DIR", "").strip())
+        or _opencode_config_root().is_dir()
+        or _on_path("opencode")
+    )
+
+
+def _pi_detected() -> bool:
+    return (
+        bool(os.environ.get("PI_CODING_AGENT_DIR", "").strip())
+        or _pi_config_root().is_dir()
+        or _on_path("pi")
+    )
+
+
+# Registry order = listing/prompt order. Claude Code first (the default).
+_HARNESSES: list[Harness] = [
+    Harness("claude", "Claude Code",
+            "https://docs.claude.com/en/docs/claude-code/skills",
+            _claude_config_root, _claude_detected),
+    Harness("opencode", "opencode",
+            "https://opencode.ai/docs/skills/",
+            _opencode_config_root, _opencode_detected),
+    Harness("pi", "pi",
+            "https://pi.dev/docs/latest/skills",
+            _pi_config_root, _pi_detected),
+]
+
+
+def _harness_by_name(name: str) -> Harness | None:
+    for h in _HARNESSES:
+        if h.name == name:
+            return h
+    return None
+
+
+def _claude_harness() -> Harness:
+    return _harness_by_name("claude")  # always present
+
+
+def _detect_harnesses() -> list[Harness]:
+    return [h for h in _HARNESSES if h.is_installed()]
+
+
+def _install_into_target(
+    target_dir: Path, bundled: Path, skills_hash: str, version: str, force: bool
+) -> dict | None:
+    """Copy every bundled skill into ``target_dir`` and write its version marker.
+
+    Shared by every harness target (and by ``--target``). Returns a result dict
+    ``{"installed", "updated", "marker_existed", "force"}`` when skills were
+    written, or ``None`` when it stopped early for a reason it already printed
+    (up to date / no bundled skills / no changes). Refuses to install into the
+    bundled source directory (exits 1) — the guard holds for every target.
+    """
+    # Refuse to install into our own bundled skills dir. If a target resolves
+    # to the bundled source, the per-skill rmtree + copytree below would delete
+    # each source skill before copying it back from the now-empty path,
+    # destroying the bundled skills. Nothing to install here.
+    if target_dir.resolve() == bundled.resolve():
+        print(
+            "Target resolves to nightdesk's own bundled skills directory "
+            f"({bundled}); nothing to install.\n"
+            "Run from another project, or pass --target <other-project>.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    bundled_skills = sorted(d for d in bundled.iterdir() if d.is_dir())
+    if not bundled_skills:
+        print("No bundled skills found. Nothing to install.")
+        return None
+
+    marker = _read_version_marker(target_dir)
+    needs_update = force
+
+    if marker and not force:
+        installed_hash = marker.get("skills_hash", "")
+        installed_version = marker.get("nightdesk_version", "?")
+        if installed_hash == skills_hash:
+            print(f"Skills are up to date (nightdesk {installed_version}). Use --force to reinstall.")
+            return None
+        print(f"Skills drift detected (installed from {installed_version}, current {version}).")
+        needs_update = True
+    elif not marker:
+        needs_update = True
+
+    if not needs_update:
+        print("No changes needed.")
+        return None
+
+    installed: list[str] = []
+    updated: list[str] = []
+
+    for skill_dir in bundled_skills:
+        name = skill_dir.name
+        dest = target_dir / name
+        if dest.exists():
+            shutil.rmtree(dest)
+            shutil.copytree(skill_dir, dest)
+            updated.append(name)
+        else:
+            shutil.copytree(skill_dir, dest)
+            installed.append(name)
+
+    # Each target keeps its own marker in its own dir, so drift detection is
+    # per-harness and isolated. Same filename everywhere; the Claude Code one
+    # stays exactly where it has always been.
+    _write_version_marker(target_dir, version, skills_hash)
+
+    return {"installed": installed, "updated": updated,
+            "marker_existed": bool(marker), "force": force}
+
+
+def _summarize_install(target_dir: Path, result: dict, version: str, skills_hash: str) -> None:
+    """Print the post-install summary for one target."""
+    action = ("updated" if result["marker_existed"] and not result["force"]
+              else ("reinstalled" if result["force"] else "installed"))
+    print(f"\nSkills {action} into {target_dir}:")
+    for name in result["installed"]:
+        print(f"  + {name} (new)")
+    for name in result["updated"]:
+        print(f"  ~ {name} (updated)")
+    if not result["installed"] and not result["updated"]:
+        print("  (none)")
+    print(f"\nVersion marker: nightdesk {version}, hash {skills_hash[:12]}...")
+
+
+def _install_one(harness: Harness, bundled: Path, skills_hash: str,
+                 version: str, force: bool) -> None:
+    """Install into one harness's default skills dir and summarize."""
+    target = harness.skills_dir()
+    print(f"\n=== {harness.display} -> {target} ===")
+    result = _install_into_target(target, bundled, skills_hash, version, force)
+    if result:
+        _summarize_install(target, result, version, skills_hash)
+
+
+def _prompt_yn(question: str) -> bool:
+    """y/n prompt; defaults to No on empty input or EOF (non-interactive)."""
+    try:
+        return input(question).strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def _print_harness_list() -> None:
+    detected = {h.name for h in _detect_harnesses()}
+    print("Supported harnesses (* = detected on this machine):")
+    for h in _HARNESSES:
+        mark = "*" if h.name in detected else " "
+        print(f"  {mark} {h.name:<10} {h.display:<14} {h.skills_dir()}")
+
+
 def install_skills() -> None:
     """CLI entry point: install nightdesk skills for the user.
 
-    By default installs into the user's Claude config dir
-    (``$CLAUDE_CONFIG_DIR/skills`` or ``~/.claude/skills``), so the skills are
-    available across every project. ``--target DIR`` instead installs them
-    project-locally into ``DIR/.claude/skills``. Writes a version marker for
-    drift detection on subsequent runs.
+    nightdesk's skills are generic markdown docs, so they are useful inside any
+    coding agent that loads ``<dir>/skills/<name>/SKILL.md`` folders. This
+    command is harness-aware: it detects installed agents and can install into
+    each one's default skills directory.
 
     Usage:
-        nightdesk-install-skills                     # -> ~/.claude/skills
-        nightdesk-install-skills --target /path/to/project
-        nightdesk-install-skills --force
+        nightdesk-install-skills                     # Claude Code only -> straight install (default)
+        nightdesk-install-skills --target /path/to/project   # project-local DIR/.claude/skills
+        nightdesk-install-skills --list-harnesses    # show supported + detected harnesses
+        nightdesk-install-skills --all               # every detected harness, non-interactive
+        nightdesk-install-skills --harness opencode  # one specific harness, non-interactive
+        nightdesk-install-skills --force             # reinstall even if up to date
     """
     import argparse
     from importlib.metadata import version as pkg_version
@@ -1582,13 +1825,32 @@ def install_skills() -> None:
              "(default: the user's $CLAUDE_CONFIG_DIR/skills or ~/.claude/skills).",
     )
     parser.add_argument(
+        "--harness",
+        metavar="NAME",
+        help="Install into one specific harness's default location, "
+             "non-interactively (e.g. opencode, pi, claude). "
+             "Use --list-harnesses to see supported names.",
+    )
+    parser.add_argument(
+        "--all",
+        "--yes",
+        dest="install_all",
+        action="store_true",
+        help="Install into every detected harness non-interactively "
+             "(alias: --yes). Needed for worker/sandbox runs.",
+    )
+    parser.add_argument(
+        "--list-harnesses",
+        action="store_true",
+        help="Print supported harnesses, mark which are detected, then exit.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Re-install all skills even if the version marker matches.",
     )
     args = parser.parse_args()
 
-    target_skills = _resolve_skills_dir(args.target)
     bundled = _find_bundled_skills_dir()
     skills_hash = _hash_skills(bundled)
 
@@ -1597,77 +1859,75 @@ def install_skills() -> None:
     except Exception:
         version = "0.0.0"
 
-    # Refuse to install into our own bundled skills dir. Running with
-    # --target pointed at the nightdesk repo makes target_skills the bundled
-    # source — the per-skill rmtree + copytree
-    # below would delete each source skill before copying it back from the
-    # now-empty path, destroying the bundled skills. Nothing to install here.
-    if target_skills.resolve() == bundled.resolve():
-        print(
-            "Target resolves to nightdesk's own bundled skills directory "
-            f"({bundled}); nothing to install.\n"
-            "Run from another project, or pass --target <other-project>.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    target_skills.mkdir(parents=True, exist_ok=True)
-
-    # Determine which bundled skill directories to install.
-    bundled_skills = sorted(
-        d for d in bundled.iterdir() if d.is_dir()
-    )
-    if not bundled_skills:
-        print("No bundled skills found. Nothing to install.")
+    if args.list_harnesses:
+        _print_harness_list()
         return
 
-    # Check for drift against the installed marker.
-    marker = _read_version_marker(target_skills)
-    needs_update = args.force
+    # --target: existing project-local Claude-Code-style install, unchanged.
+    if args.target:
+        if args.harness or args.install_all:
+            print("--target cannot be combined with --harness/--all.",
+                  file=sys.stderr)
+            sys.exit(2)
+        target = _resolve_skills_dir(args.target)
+        result = _install_into_target(target, bundled, skills_hash, version, args.force)
+        if result:
+            _summarize_install(target, result, version, skills_hash)
+        return
 
-    if marker and not args.force:
-        installed_hash = marker.get("skills_hash", "")
-        installed_version = marker.get("nightdesk_version", "?")
-        if installed_hash == skills_hash:
-            print(f"Skills are up to date (nightdesk {installed_version}). Use --force to reinstall.")
+    # --harness NAME: one specific harness, non-interactive.
+    if args.harness:
+        harness = _harness_by_name(args.harness)
+        if harness is None:
+            supported = ", ".join(h.name for h in _HARNESSES)
+            print(f"Unknown harness '{args.harness}'. Supported: {supported}.",
+                  file=sys.stderr)
+            sys.exit(2)
+        _install_one(harness, bundled, skills_hash, version, args.force)
+        return
+
+    detected = _detect_harnesses()
+
+    # --all / --yes: install into every detected harness, non-interactive.
+    if args.install_all:
+        if not detected:
+            print("No supported harnesses detected on this machine.\n"
+                  "Use --harness <name> to install into a specific one "
+                  f"(one of: {', '.join(h.name for h in _HARNESSES)}).")
             return
-        print(f"Skills drift detected (installed from {installed_version}, current {version}).")
-        needs_update = True
-    elif not marker:
-        needs_update = True
-
-    if not needs_update:
-        print("No changes needed.")
+        for harness in detected:
+            _install_one(harness, bundled, skills_hash, version, args.force)
         return
 
-    # Install / update each skill.
-    installed: list[str] = []
-    updated: list[str] = []
+    # No flag: default flow.
+    non_claude = [h for h in detected if h.name != "claude"]
 
-    for skill_dir in bundled_skills:
-        name = skill_dir.name
-        dest = target_skills / name
+    if not non_claude:
+        # Only Claude Code detected (or nothing detected) — preserve the exact
+        # historical behavior: straight install into the Claude skills dir,
+        # no per-harness prompt. Existing users see no regression.
+        target = _claude_harness().skills_dir()
+        result = _install_into_target(target, bundled, skills_hash, version, args.force)
+        if result:
+            _summarize_install(target, result, version, skills_hash)
+        return
 
-        if dest.exists():
-            shutil.rmtree(dest)
-            shutil.copytree(skill_dir, dest)
-            updated.append(name)
-        else:
-            shutil.copytree(skill_dir, dest)
-            installed.append(name)
+    # More than one harness detected — prompt y/n per harness.
+    chosen: list[Harness] = []
+    print("Multiple coding-agent harnesses detected on this machine.")
+    for harness in detected:
+        if _prompt_yn(
+            f"  Install nightdesk skills into {harness.display} "
+            f"({harness.skills_dir()})? [y/N] "
+        ):
+            chosen.append(harness)
 
-    _write_version_marker(target_skills, version, skills_hash)
+    if not chosen:
+        print("Nothing selected. No skills installed.")
+        return
 
-    # Summary.
-    action = "updated" if marker and not args.force else ("reinstalled" if args.force else "installed")
-    print(f"\nSkills {action} into {target_skills}:")
-    for name in installed:
-        print(f"  + {name} (new)")
-    for name in updated:
-        print(f"  ~ {name} (updated)")
-    if not installed and not updated:
-        print("  (none)")
-    print(f"\nVersion marker: nightdesk {version}, hash {skills_hash[:12]}...")
+    for harness in chosen:
+        _install_one(harness, bundled, skills_hash, version, args.force)
 
 
 def run_dev() -> None:
