@@ -442,4 +442,4 @@ Tune for long/serialized runs: `--interval 60 --timeout-mins 360`. The script's 
 ## Sister skills
 
 - `nightdesk-api` — bearer auth, base-URL discovery, the JSON vs HTMX surface split.
-- `nightdesk-ticket-ops` — create/transition/cancel/requeue/archive, comments, runs, transcript. Use it to set up dependency links (`POST .../dependencies`) at-or-before queue time.
+- `nightdesk-ticket-ops` — create/transition/cancel/requeue/archive, runs, transcript. Use it to set up dependency links (`POST .../dependencies`) at-or-before queue time.

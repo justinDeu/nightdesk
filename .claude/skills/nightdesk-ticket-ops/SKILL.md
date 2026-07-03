@@ -1,6 +1,6 @@
 ---
 name: nightdesk-ticket-ops
-description: Use when performing ticket lifecycle operations against the nightdesk API — create, fetch, update, transition (draft/queued/running/review/archived), run-now, cancel, requeue, archive/unarchive, comments, runs, transcript streaming, search. Assumes auth and base URL are already set up per `nightdesk-api`.
+description: Use when performing ticket lifecycle operations against the nightdesk API — create, fetch, update, transition (draft/queued/running/review/archived), run-now, cancel, requeue, archive/unarchive, runs, transcript streaming, search. Assumes auth and base URL are already set up per `nightdesk-api`.
 ---
 
 # nightdesk ticket operations
@@ -394,15 +394,6 @@ curl -s "${AUTH[@]}" -X DELETE "$BASE/api/v1/tickets/$TID"
 ```
 
 `409` if the ticket is `running`. Cancel it first.
-
-## Comments
-
-```bash
-curl -s "${AUTH[@]}" "$BASE/api/v1/tickets/$TID/comments" | jq .
-curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
-  -X POST "$BASE/api/v1/tickets/$TID/comments" \
-  -d '{"body": "note text"}' | jq .
-```
 
 ## Runs
 

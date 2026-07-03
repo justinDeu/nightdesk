@@ -63,7 +63,7 @@ async def test_run_token_resolves_to_run_principal(engine):
     assert principal is not None
     assert principal.run_id == rid
     assert principal.ticket_id == tid
-    assert "ticket.comment.self" in principal.scopes
+    assert "ticket.read.self" in principal.scopes
     assert "ticket.create" not in principal.scopes
 
 

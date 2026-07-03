@@ -10,7 +10,7 @@ Local-first work queue for LLM agents. Schedule a Claude Code run against a dire
 - A worker picks queued tickets and dispatches them to `claude` in a sandbox.
 - The agent runs headless to completion; you review the result on the board.
 - Profiles control what the agent can do (allowed tools, network, filesystem, credentials).
-- Per-run scoped tokens let the agent call back into nightdesk (post comments, spawn child tickets) without exposing your admin bearer token.
+- Per-run scoped tokens let the agent call back into nightdesk (spawn child tickets) without exposing your admin bearer token.
 
 ## A look at Nightdesk
 
