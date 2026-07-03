@@ -301,3 +301,78 @@ def test_prepare_workspace_reuses_existing_git_worktree_when_requested(tmp_path)
         assert reused.path == ws.path
     finally:
         cleanup_workspace(ws)
+
+
+# --- base_ref stacking warnings (provision-time guard) ---------------------
+
+
+def _head_branch(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def _commit(repo: Path, message: str) -> None:
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", message],
+        check=True,
+    )
+
+
+def test_base_ref_warns_when_prereq_branch_has_no_commits_beyond_head(tmp_path):
+    """Reproduces the stacking failure: the prerequisite's branch was never
+    advanced (its run left work uncommitted), so base_ref == HEAD and the
+    dependent gets an empty prerequisite. Provisioning must warn."""
+    repo = init_git_repo(tmp_path / "proj")
+    # Prerequisite branch cut from HEAD but never advanced (no committed work).
+    subprocess.run(["git", "-C", str(repo), "branch", "feat/prereq"], check=True)
+
+    ws = prepare_workspace(
+        ticket_id="abc", root=tmp_path / "work", source_path=repo,
+        mode="git_worktree", worktree_name="dep", base_ref="feat/prereq",
+    )
+    try:
+        assert len(ws.warnings) == 1
+        assert "feat/prereq" in ws.warnings[0]
+        assert "commit_on_finish" in ws.warnings[0]
+    finally:
+        cleanup_workspace(ws)
+
+
+def test_base_ref_no_warning_when_prereq_branch_advanced_past_head(tmp_path):
+    """When the prerequisite committed its work, base_ref advances past HEAD,
+    the dependent receives the work, and no warning fires."""
+    repo = init_git_repo(tmp_path / "proj")
+    default = _head_branch(repo)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "feat/prereq"], check=True)
+    (repo / "prereq_work.txt").write_text("prereq\n")
+    _commit(repo, "prereq work")
+    # Return the source checkout to the base so HEAD is behind feat/prereq.
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", default], check=True)
+
+    ws = prepare_workspace(
+        ticket_id="abc", root=tmp_path / "work", source_path=repo,
+        mode="git_worktree", worktree_name="dep", base_ref="feat/prereq",
+    )
+    try:
+        assert ws.warnings == []
+        # The dependent actually received the prerequisite's committed work.
+        assert (ws.path / "prereq_work.txt").read_text() == "prereq\n"
+    finally:
+        cleanup_workspace(ws)
+
+
+def test_base_ref_no_warning_when_base_ref_unset(tmp_path):
+    """No base_ref -> no stacking claim -> no warning."""
+    repo = init_git_repo(tmp_path / "proj")
+    ws = prepare_workspace(
+        ticket_id="abc", root=tmp_path / "work", source_path=repo,
+        mode="git_worktree", worktree_name="dep",
+    )
+    try:
+        assert ws.warnings == []
+    finally:
+        cleanup_workspace(ws)

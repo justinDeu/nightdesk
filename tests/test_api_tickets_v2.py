@@ -67,6 +67,35 @@ async def test_update_accepts_additional_dirs(client):
     assert r.json()["additional_dirs"] == [{"path": "/a", "mode": "rw"}]
 
 
+async def test_commit_on_finish_round_trips_through_api(client):
+    """commit_on_finish is the opt-in that makes base_ref stacking work, so its
+    API contract (create -> read -> patch) must hold: defaults to None, persists
+    True on create, and can be flipped via PATCH."""
+    pid = await _create_profile(client)
+
+    # Default when omitted.
+    t = await _create_ticket(client, pid)
+    assert t["commit_on_finish"] is None
+
+    # Set True at creation.
+    t = await _create_ticket(client, pid, commit_on_finish=True)
+    assert t["commit_on_finish"] is True
+
+    # Flip it on via PATCH on a ticket created without it.
+    r = await client.patch(f"/api/v1/tickets/{t['id']}", json={
+        "commit_on_finish": True,
+    })
+    assert r.status_code == 200
+    assert r.json()["commit_on_finish"] is True
+
+    # Flip it back off explicitly (False must survive the non-None filter).
+    r = await client.patch(f"/api/v1/tickets/{t['id']}", json={
+        "commit_on_finish": False,
+    })
+    assert r.status_code == 200
+    assert r.json()["commit_on_finish"] is False
+
+
 async def test_create_accepts_workspace_list(client):
     pid = await _create_profile(client)
     r = await client.post("/api/v1/tickets", json={

@@ -237,6 +237,70 @@ def _capture_head_sha(path: str) -> Optional[str]:
     return sha or None
 
 
+def _has_working_tree_changes(path: str) -> bool:
+    """True if the git tree at ``path`` has any staged or unstaged changes."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", path, "status", "--porcelain"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def _commit_workspace_changes(
+    ws: Workspace, *, ticket_id: str, run_id: str, run_intent: str,
+) -> Optional[str]:
+    """Best-effort: stage + commit a git_worktree workspace's working-tree
+    changes onto its branch. Returns the new commit SHA, or None if there was
+    nothing to commit, the workspace isn't a committable git worktree, or git
+    failed.
+
+    This is the commit_on_finish path that makes ``base_ref`` stacking work:
+    without it a run leaves its work uncommitted, the branch ref never advances
+    past the base commit, and any dependent ticket that provisions from this
+    branch (via ``base_ref``) gets an empty prerequisite. Never raises — a
+    commit hiccup must not fail an otherwise-successful run.
+    """
+    if ws.kind != "git_worktree" or not ws.branch or not ws.path:
+        return None
+    path = str(ws.path)
+    if not _has_working_tree_changes(path):
+        log.info("commit_on_finish: nothing to commit for ticket %s (run %s)",
+                 ticket_id, run_id)
+        return None
+    try:
+        add = subprocess.run(
+            ["git", "-C", path, "add", "-A"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if add.returncode != 0:
+            log.warning("commit_on_finish: git add failed for ticket %s: %s",
+                        ticket_id, (add.stderr or "").strip())
+            return None
+        message = (f"nightdesk: auto-commit for ticket {ticket_id[:8]} "
+                   f"(run {run_id[:8]}, intent={run_intent})")
+        commit = subprocess.run(
+            ["git", "-c", "user.email=nightdesk@worker", "-c", "user.name=nightdesk",
+             "-C", path, "commit", "-m", message],
+            capture_output=True, text=True, timeout=120,
+        )
+        if commit.returncode != 0:
+            out = (commit.stdout or "") + (commit.stderr or "")
+            log.warning("commit_on_finish: git commit failed for ticket %s: %s",
+                        ticket_id, out.strip())
+            return None
+        sha = _capture_head_sha(path)
+        if sha:
+            log.info("commit_on_finish: committed %s on branch %s for ticket %s (run %s)",
+                     sha[:8], ws.branch, ticket_id, run_id)
+        return sha
+    except (OSError, subprocess.SubprocessError):
+        log.exception("commit_on_finish: git error for ticket %s", ticket_id)
+        return None
+
+
 def _record_workspace_resolution(ticket: Ticket, bundle: WorkspaceBundle) -> None:
     if not getattr(ticket, "workspaces", None):
         return
@@ -659,6 +723,20 @@ async def run_one(
             for row in (ticket.workspaces or []):
                 if row.conversation_id is None:
                     row.conversation_id = conversation.id
+            # Surface provision-time workspace warnings (e.g. an empty base_ref
+            # stack where a prerequisite's work was never committed) on the
+            # transcript so the operator can see them.
+            for _pws in bundle.workspaces:
+                for _pw in (_pws.warnings or []):
+                    try:
+                        append_event(run.transcript_path, {
+                            "type": "system",
+                            "subtype": "provision_warning",
+                            "data": {"workspace": str(_pws.path), "message": _pw},
+                        })
+                    except Exception:
+                        log.exception("could not record provision warning for run %s",
+                                      run.id)
             _setup_phase = "profile_spec"
             spec = _apply_workspace_permissions(
                 _profile_to_spec(
@@ -978,6 +1056,38 @@ async def run_one(
                 except Exception:
                     log.exception("context handoff failed for ticket %s",
                                   ticket.id)
+
+            # commit_on_finish: when the ticket opts in and the run succeeded,
+            # commit the working-tree changes onto each read_write git_worktree
+            # branch so dependent (stacked) tickets that provision from this
+            # branch via base_ref actually receive this ticket's work. This MUST
+            # run before the cleanup_on_success loop below, which may delete the
+            # worktree (and its uncommitted changes) out from under us.
+            if result.exit_status == "success" and bundle is not None:
+                cof_ticket = session.get(Ticket, ticket.id)
+                if cof_ticket is not None and cof_ticket.commit_on_finish:
+                    for owned_ws in bundle.workspaces:
+                        if (owned_ws.kind != "git_worktree"
+                                or owned_ws.access != "read_write"):
+                            continue
+                        try:
+                            new_sha = _commit_workspace_changes(
+                                owned_ws, ticket_id=ticket.id, run_id=run.id,
+                                run_intent=run_intent,
+                            )
+                            if new_sha:
+                                append_event(run.transcript_path, {
+                                    "type": "system",
+                                    "subtype": "commit_on_finish",
+                                    "data": {
+                                        "branch": owned_ws.branch,
+                                        "commit": new_sha,
+                                        "workspace": str(owned_ws.path),
+                                    },
+                                })
+                        except Exception:
+                            log.exception(
+                                "commit_on_finish failed for ticket %s", ticket.id)
 
             if result.exit_status == "success" and bundle is not None:
                 for owned_ws in bundle.workspaces:

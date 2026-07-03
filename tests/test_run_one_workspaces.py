@@ -16,6 +16,7 @@ from nightdesk.domain.tickets import (
     set_next_run_context,
     transition_status,
 )
+from nightdesk.transcript import read_events
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult
 from nightdesk.worker.run_one import (
     RunOneConfig,
@@ -513,6 +514,140 @@ async def test_run_one_allocates_fresh_worktree_for_restart_new_path(session, sa
     assert second_result.exit_status == "success"
     assert second.request is not None
     assert Path(old_worktree_path) != second.request.working_dir
+
+
+class _WritingExecutor:
+    """Executor that simulates an agent doing real work: it leaves an
+    uncommitted file in the run's working dir, then reports success."""
+
+    def __init__(self, filename: str = "venues.py", body: str = "VENUES = []\n"):
+        self.filename = filename
+        self.body = body
+        self.request: ExecutionRequest | None = None
+
+    async def run(self, req: ExecutionRequest) -> ExecutionResult:
+        self.request = req
+        (req.working_dir / self.filename).write_text(self.body)
+        return ExecutionResult(exit_status="success", final_summary="done")
+
+
+def _git(path: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(path), *args],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+@pytest.mark.anyio
+async def test_run_one_commit_on_finish_commits_workspace_changes(
+    session, sample_profile, tmp_path,
+):
+    """commit_on_finish (the fix): on a successful run the ticket's
+    working-tree changes are committed onto its git_worktree branch, so a
+    dependent that base_ref-points at this branch actually receives the work.
+    Reproduces-and-fixes the 'runs leave work uncommitted' failure mode."""
+    repo = init_git_repo(tmp_path / "proj")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    ticket = create_ticket(
+        session,
+        title="prereq",
+        prompt="add venues",
+        status="running",
+        priority=0,
+        profile_id=sample_profile.id,
+        source_path=str(repo),
+        workspace_mode="git_worktree",
+        worktree_name="venues",
+        commit_on_finish=True,
+    )
+    ticket_id = ticket.id
+
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(
+            worktree_root=tmp_path / "work",
+            transcript_root=tmp_path / "transcripts",
+            secrets={},
+            host="testhost",
+            executor=_WritingExecutor(),
+        ),
+        ticket_id,
+    )
+    assert result.exit_status == "success"
+
+    session.expire_all()
+    refreshed = session.get(Ticket, ticket_id)
+    ws_row = refreshed.workspaces[0]
+    wt = Path(ws_row.worktree_path or ws_row.resolved_path)
+    branch = ws_row.branch
+
+    # The prerequisite's work is now committed on the branch (it advanced past
+    # the base commit), so a dependent provisioning from `branch` receives it.
+    tip = _git(wt, "rev-parse", "HEAD")
+    assert tip != base_sha
+    assert branch is not None
+    assert _git(repo, "rev-parse", branch) == tip
+    assert "venues.py" in _git(wt, "ls-tree", "--name-only", "HEAD")
+    # And the working tree is clean — no dangling uncommitted work left behind.
+    assert _git(wt, "status", "--porcelain") == ""
+
+    # A commit_on_finish event was recorded on the run's transcript.
+    run = session.get(Run, refreshed.current_run_id)
+    cof = [e for e in read_events(run.transcript_path)
+           if e.get("subtype") == "commit_on_finish"]
+    assert len(cof) == 1
+    assert cof[0]["data"]["branch"] == branch
+    assert cof[0]["data"]["commit"] == tip
+
+
+@pytest.mark.anyio
+async def test_run_one_without_commit_on_finish_leaves_work_uncommitted(
+    session, sample_profile, tmp_path,
+):
+    """Default (commit_on_finish off) preserves the historical behavior the bug
+    describes: a successful run leaves its work UNCOMMITTED, so the branch ref
+    never advances and any dependent base_ref-pointing here gets an empty
+    prerequisite."""
+    repo = init_git_repo(tmp_path / "proj")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    ticket = create_ticket(
+        session,
+        title="prereq",
+        prompt="add venues",
+        status="running",
+        priority=0,
+        profile_id=sample_profile.id,
+        source_path=str(repo),
+        workspace_mode="git_worktree",
+        worktree_name="venues",
+        # commit_on_finish intentionally NOT set (default off)
+    )
+    ticket_id = ticket.id
+
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(
+            worktree_root=tmp_path / "work",
+            transcript_root=tmp_path / "transcripts",
+            secrets={},
+            host="testhost",
+            executor=_WritingExecutor(),
+        ),
+        ticket_id,
+    )
+    assert result.exit_status == "success"
+
+    session.expire_all()
+    refreshed = session.get(Ticket, ticket_id)
+    ws_row = refreshed.workspaces[0]
+    wt = Path(ws_row.worktree_path or ws_row.resolved_path)
+    branch = ws_row.branch
+
+    # Branch ref never advanced — exactly the bug: dependent gets empty prereq.
+    assert _git(repo, "rev-parse", branch) == base_sha
+    # The work is sitting uncommitted in the working tree.
+    assert "venues.py" in _git(wt, "status", "--porcelain")
+
 
 @pytest.mark.anyio
 async def test_run_one_finishes_run_when_setup_fails_after_start(session, tmp_path):

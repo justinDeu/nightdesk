@@ -4,7 +4,7 @@ import logging
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +55,9 @@ class Workspace:
     base_ref: Optional[str] = None
     base_sha: Optional[str] = None
     retention: str = "preserve"
+    # Provision-time diagnostics (e.g. base_ref stacking warnings). Populated by
+    # _create_git_worktree so the runner can surface them on the transcript.
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -102,6 +105,39 @@ def _resolve_git_path(source_dir: Path, raw: str) -> Path:
     if not path.is_absolute():
         path = source_dir / path
     return path.resolve()
+
+
+def _base_ref_stack_warning(source: GitSource, base_ref: Optional[str]) -> Optional[str]:
+    """Warn when ``base_ref`` carries no commits beyond the source HEAD.
+
+    This is the provision-time guard for ``base_ref`` stacking: a dependent
+    ticket that provisions from a base_ref which hasn't advanced past HEAD
+    silently receives an EMPTY prerequisite (the exact failure mode where a
+    prerequisite's run left its work uncommitted). Returns a human-readable
+    warning when the stack is empty, or None when base_ref does advance the
+    tree or the check can't be determined.
+    """
+    if not base_ref or not source.base_sha:
+        return None
+    try:
+        out = _run_git(
+            source.command_dir, "rev-list", "--count",
+            f"{source.base_sha}..{base_ref}",
+        )
+    except Exception:
+        # Unresolvable ref / git error: don't block provisioning on the check.
+        return None
+    count = (out or "").strip()
+    if count.isdigit() and int(count) == 0:
+        return (
+            f"base_ref {base_ref!r} has no commits beyond the repository HEAD "
+            f"({source.base_sha[:8]}); this worktree was provisioned with none "
+            f"of that ref's intended work. If {base_ref!r} points at another "
+            f"ticket's branch, that ticket's run likely left its changes "
+            f"uncommitted — enable commit_on_finish on the prerequisite "
+            f"(or commit its branch manually) before the dependent provisions."
+        )
+    return None
 
 
 def _safe_worktree_name(name: Optional[str], *, ticket_id: str) -> str:
@@ -236,6 +272,17 @@ def _create_git_worktree(*, ticket_id: str, root: Path, source_dir: Path,
     git_common_dir = source.git_common_dir
     relative = source.relative_path
 
+    # Provision-time guard for base_ref stacking: if base_ref hasn't advanced
+    # past the source HEAD, the dependent gets an empty prerequisite. Surface a
+    # warning (don't block) so the operator can enable commit_on_finish on the
+    # prerequisite or commit its branch manually.
+    provision_warnings: list[str] = []
+    if base_ref:
+        _bw = _base_ref_stack_warning(source, base_ref)
+        if _bw:
+            provision_warnings.append(_bw)
+            log.warning("base_ref stacking risk for ticket %s: %s", ticket_id, _bw)
+
     log.info("creating git worktree for ticket %s: source_dir=%s repo=%s",
              ticket_id, source_dir, repo_root)
 
@@ -279,6 +326,7 @@ def _create_git_worktree(*, ticket_id: str, root: Path, source_dir: Path,
                 branch=branch_name,
                 base_ref=base_ref,
                 base_sha=source.base_sha,
+                warnings=list(provision_warnings),
             )
         if not fresh_if_exists:
             log.error("worktree_path already exists for ticket %s: %s", ticket_id, target)
@@ -325,6 +373,7 @@ def _create_git_worktree(*, ticket_id: str, root: Path, source_dir: Path,
         branch=branch_name,
         base_ref=base_ref,
         base_sha=source.base_sha,
+        warnings=list(provision_warnings),
     )
 
 

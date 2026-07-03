@@ -92,6 +92,7 @@ def _ticket_to_out(t) -> TicketOut:
         "workspaces": workspaces,
         "labels": labels,
         "run_now": t.run_now,
+        "commit_on_finish": t.commit_on_finish,
         "scheduled_after": t.scheduled_after,
         "current_run_id": t.current_run_id,
         "next_run_context": t.next_run_context,

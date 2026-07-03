@@ -120,6 +120,13 @@ class Ticket(Base):
     toolchain_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     run_now: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Opt-in: on a successful run, commit this ticket's working-tree changes
+    # onto its git_worktree branch so dependent (stacked) tickets whose base_ref
+    # points at that branch actually receive this ticket's work. Without this,
+    # runs leave work uncommitted and the branch ref never advances, so a
+    # dependent provisions from the stale base commit. See the run-completion
+    # path in worker/run_one.py and the stacking docs in nightdesk-ticket-ops.
+    commit_on_finish: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     scheduled_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     current_run_id: Mapped[Optional[str]] = mapped_column(ForeignKey("runs.id"), nullable=True)
     # The active conversation (1 ticket : N conversations, ordered). Exactly one

@@ -289,6 +289,10 @@ class TicketCreate(BaseModel):
     worktree_path: Optional[str] = None
     workspaces: Optional[list[TicketWorkspaceIn]] = None
     run_now: bool = False
+    # Opt-in: commit this ticket's working-tree changes to its git_worktree
+    # branch on run success so stacked/dependent tickets base_ref-pointing at
+    # this branch actually receive the work. See nightdesk-ticket-ops.
+    commit_on_finish: Optional[bool] = None
     scheduled_after: Optional[datetime] = None
 
     @field_validator("source_path", mode="before")
@@ -320,6 +324,7 @@ class TicketUpdate(BaseModel):
     worktree_path: Optional[str] = None
     workspaces: Optional[list[TicketWorkspaceIn]] = None
     run_now: Optional[bool] = None
+    commit_on_finish: Optional[bool] = None
     scheduled_after: Optional[datetime] = None
 
     @field_validator("source_path", mode="before")
@@ -357,6 +362,7 @@ class TicketOut(BaseModel):
     workspaces: list[TicketWorkspaceOut] = []
     labels: list[LabelOut] = []
     run_now: bool
+    commit_on_finish: Optional[bool] = None
     scheduled_after: Optional[datetime] = None
     current_run_id: Optional[str] = None
     next_run_context: Optional[str] = None

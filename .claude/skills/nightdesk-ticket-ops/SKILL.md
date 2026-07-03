@@ -90,7 +90,7 @@ Provide neither and the create returns `422 "workspaces must include exactly one
 | `git_worktree` | agent gets an isolated git worktree branched from `source_path` |
 | `worktree` | reserved; not yet fully implemented |
 
-When using `git_worktree`, pair with `worktree_name` (e.g. `fix/my-feature`) — the server generates one if omitted, but an explicit name is clearer.
+When using `git_worktree`, pair with `worktree_name` (e.g. `fix/my-feature`) — the server generates one if omitted, but an explicit name is clearer. If this ticket is a **prerequisite** that other (stacked) tickets will `base_ref` onto, also set `"commit_on_finish": true` so a successful run commits its work onto the branch — otherwise dependents provision an empty tree. See "Dependent / stacked tickets".
 
 **Single-line / inline prompt** (fine for short prompts):
 
@@ -229,19 +229,47 @@ When ticket **B** depends on ticket **A** *and* B's work must **build on** A's c
    `POST /api/v1/tickets/<B>/dependencies` with `{"depends_on_id": "<A>"}`.
 2. **Set B's primary workspace `base_ref` to A's branch name** so B's git_worktree is cut from A's committed work instead of from `main`/HEAD.
 
-### Why both are needed
+### Why all three are needed (the stacking trap)
 
 - The **dependency edge** only gates *execution order*. On its own, B's worktree still branches off HEAD and would **not** contain A's changes.
-- **`base_ref`** is what actually makes the worktree build on A. nightdesk provisions a git_worktree with `git worktree add -b <branch> <target> [base_ref]` (see `_create_git_worktree` in `src/nightdesk/worker/workspace.py`): when `base_ref` is set, the new branch is cut from that ref instead of HEAD. Pointing it at A's branch means B's agent opens **on top of A's commits**, so it can't produce work that semantically conflicts with A — eliminating painful end-of-run rebases.
-- They **compose**: the dep edge guarantees A has already run and committed its branch, so the branch named in B's `base_ref` exists in the (bare) repo by the time B provisions.
+- **`base_ref`** is what actually makes the worktree build on A. nightdesk provisions a git_worktree with `git worktree add -b <branch> <target> [base_ref]` (see `_create_git_worktree` in `src/nightdesk/worker/workspace.py`): when `base_ref` is set, the new branch is cut from that ref instead of HEAD. Pointing it at A's branch means B's agent opens **on top of A's *committed* work**, so it can't produce work that semantically conflicts with A — eliminating painful end-of-run rebases.
+- **The prerequisite must actually have committed work on its branch.** This is the part that is easy to get wrong. nightdesk runs leave the agent's changes **uncommitted in the worktree** by default, so the prerequisite's branch ref stays parked at the commit it was cut from. If B provisions from that branch name, `git worktree add ... <base_ref>` produces a tree with **none of A's actual changes** — B's agent is then told "A's work is already in your tree" and has to improvise a standalone implementation. To make stacking real you must opt in (next section).
+- They **compose**: the dep edge guarantees A has already *run* before B provisions, but **only `commit_on_finish` (or a manual commit) guarantees A's branch has actually advanced** by the time B provisions.
+
+### Make the prerequisite commit its work (`commit_on_finish`)
+
+`base_ref` points at a *commit*, not a working tree, so it only carries A's changes if those changes are **on the branch**. Three ways to guarantee that:
+
+1. **Recommended — set `commit_on_finish: true` on the prerequisite (ticket A).** On a successful run, nightdesk auto-commits A's working-tree changes onto its `git_worktree` branch (best-effort, never fails the run; recorded as a `commit_on_finish` transcript event). Then A's branch ref advances and B's `base_ref` actually receives the work. Set it on A at creation alongside the usual fields:
+
+   ```jsonc
+   // ticket A (the prerequisite) — opt in so its work lands on its branch
+   {
+     "title": "A — prerequisite",
+     "workspaces": [{
+       "kind": "git_worktree", "role": "primary", "access": "read_write",
+       "source_path": "/home/thor/fun/nightdesk",
+       "worktree_name": "feat/a-prerequisite"
+     }],
+     "commit_on_finish": true
+   }
+   ```
+
+   PATCH it onto an existing A the same way: `{"commit_on_finish": true}`.
+
+2. **Manual commit.** After A's run finishes (and before B provisions), commit A's worktree yourself: `git -C <A-worktree> add -A && git -C <A-worktree> commit -m "..."`. This is what you must do if A does not opt into `commit_on_finish`.
+
+3. **Safety net — provision-time warning.** If you forget and B provisions from a `base_ref` that hasn't advanced past HEAD, nightdesk records a `provision_warning` transcript event (and logs it) at B's provision time: *"base_ref … has no commits beyond the repository HEAD … enable `commit_on_finish` on the prerequisite (or commit its branch manually)."* It does not block provisioning — watch for it so you can fix A and re-provision B rather than letting B improvise.
 
 ### Set `base_ref` at creation
 
 Put A's branch name in B's primary workspace entry alongside the usual `kind`/`source_path`/`worktree_name`/`role`/`label`/`access`:
 
 ```bash
-# B builds on A's branch. Assumes $PREREQ_BRANCH is the branch A commits to
-# (e.g. the worktree_name you gave ticket A) and $A_TID is A's ticket id.
+# B builds on A's branch. Requires that A's work is actually COMMITTED on
+# $PREREQ_BRANCH — set `commit_on_finish: true` on ticket A (or commit A's
+# worktree manually) before B provisions, or B gets an empty prerequisite.
+# $PREREQ_BRANCH is the worktree_name/branch you gave ticket A; $A_TID is A's id.
 cat > /tmp/ticket.json <<'JSON'
 {
   "title": "B — builds on A",
@@ -307,7 +335,7 @@ curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
 
 ### Caveats
 
-- The `base_ref` branch **must exist** in the repo when B's worktree provisions. The dependency edge ensures this (A runs and commits its branch first). Never point `base_ref` at a branch nothing creates — provisioning will fail.
+- The `base_ref` branch **must exist, and must carry A's committed work**, in the repo when B's worktree provisions. The dependency edge only guarantees A has *run* — it does **not** guarantee A's branch has advanced. Use `commit_on_finish: true` on A (or commit A's worktree manually) so the branch B cuts from actually contains A's changes. Never point `base_ref` at a branch nothing creates — provisioning will fail.
 - **Don't delete a prerequisite branch** until every dependent that bases on it has provisioned/landed — it's both the worktree base *and* the rebase reference point.
 - **Chains stack transitively** (A ← B ← C): each link's `base_ref` is the immediately-preceding branch (B's `base_ref` = A's branch, C's `base_ref` = B's branch), and each link gets its own dependency edge.
 - **Merge-time reconciliation.** Stacking happens at *work* time, not necessarily *merge* time. If the host project squash-merges, B's branch carries A's individual commits while `main` has them squashed. To land only B's own delta, rebase with:
@@ -429,6 +457,7 @@ curl -s "${AUTH[@]}" "$BASE/api/v1/fs/suggest?path=~/f" | jq .
 
 ## Common mistakes
 
+- **Stacking without `commit_on_finish` on the prerequisite.** A dependency edge + `base_ref` is not enough: runs leave work *uncommitted* by default, so the prerequisite's branch never advances and the dependent provisions an empty tree (then improvises a duplicate implementation). Set `commit_on_finish: true` on the prerequisite, or commit its worktree manually, before the dependent provisions. If you forget, watch for the `provision_warning` transcript event at the dependent's provision time. See "Dependent / stacked tickets".
 - Calling `POST /board/tickets/{tid}` from a script. That's the HTMX update endpoint; it returns `204 + HX-Redirect`. Use `PATCH /api/v1/tickets/{tid}` instead.
 - Sending a sparse PATCH and expecting omitted fields to clear. They don't — see `nightdesk-api`.
 - Trying to transition `draft → review`. Not allowed; go through `running` or use `archive`/`requeue` paths.
