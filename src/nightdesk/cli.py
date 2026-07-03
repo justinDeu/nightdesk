@@ -1491,25 +1491,72 @@ def _find_bundled_skills_dir() -> Path:
     return skills_dir
 
 
-def _hash_skills(skills_dir: Path) -> str:
-    """Compute a deterministic SHA-256 hash over all skill file contents.
+def _is_internal_skill(skill_dir: Path) -> bool:
+    """True if a bundled skill is internal and must NOT ship to users.
 
-    Walks directories in sorted order and hashes each file's relative path +
-    content, so the hash is stable regardless of filesystem traversal order.
+    A skill opts out of shipping by setting ``internal: true`` in its
+    ``SKILL.md`` frontmatter. Anything else — no SKILL.md, no frontmatter, a
+    missing or false-valued key, no closing fence, or an unreadable file —
+    ships normally. That default is deliberate: new user skills install
+    automatically, and only dev/internal runbooks need to opt out.
+    """
+    import re
+
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        return False
+    try:
+        text = skill_md.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return False
+    block: list[str] = []
+    closed = False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            closed = True
+            break
+        block.append(line)
+    if not closed:
+        return False
+    m = re.search(r'^[ \t]*internal[ \t]*:[ \t]*([^\s#]+)', "\n".join(block), re.MULTILINE)
+    if not m:
+        return False
+    return m.group(1).strip().lower() in ("true", "yes", "1")
+
+
+def _shippable_skill_dirs(bundled: Path) -> list[Path]:
+    """Sorted bundled skill directories that are NOT marked internal."""
+    return sorted(
+        d for d in bundled.iterdir()
+        if d.is_dir() and not _is_internal_skill(d)
+    )
+
+
+def _hash_skills(skills_dir: Path) -> str:
+    """Compute a deterministic SHA-256 hash over all shippable skill contents.
+
+    Walks skill directories in sorted order and hashes each file's relative
+    path + content, so the hash is stable regardless of filesystem traversal
+    order. Internal skills (``internal: true`` frontmatter) are excluded, so
+    editing a dev-only runbook does not mark installed user skills as drifted.
     """
     import hashlib
 
     h = hashlib.sha256()
-    for dirpath, dirnames, filenames in sorted(os.walk(skills_dir)):
-        # Skip the version marker itself if it somehow ended up in the source.
-        dirnames.sort()
-        for fname in sorted(filenames):
-            if fname == _VERSION_MARKER:
-                continue
-            fpath = Path(dirpath) / fname
-            rel = fpath.relative_to(skills_dir)
-            h.update(str(rel).encode())
-            h.update(fpath.read_bytes())
+    for skill_dir in _shippable_skill_dirs(skills_dir):
+        for dirpath, dirnames, filenames in sorted(os.walk(skill_dir)):
+            # Skip the version marker itself if it somehow ended up in the source.
+            dirnames.sort()
+            for fname in sorted(filenames):
+                if fname == _VERSION_MARKER:
+                    continue
+                fpath = Path(dirpath) / fname
+                rel = fpath.relative_to(skills_dir)
+                h.update(str(rel).encode())
+                h.update(fpath.read_bytes())
     return h.hexdigest()
 
 
@@ -1712,7 +1759,7 @@ def _install_into_target(
 
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    bundled_skills = sorted(d for d in bundled.iterdir() if d.is_dir())
+    bundled_skills = _shippable_skill_dirs(bundled)
     if not bundled_skills:
         print("No bundled skills found. Nothing to install.")
         return None

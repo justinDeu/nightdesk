@@ -362,3 +362,83 @@ class TestMultiHarnessPrompt:
         out = capsys.readouterr().out
         assert "Nothing selected" in out
         assert not (tmp_path / ".claude" / "skills").exists()
+
+
+# -- internal skills are never shipped --------------------------------------
+
+
+def _make_skill(parent: Path, name: str, *, internal: bool | None = None) -> Path:
+    """Create a fake bundled skill dir with a SKILL.md frontmatter block."""
+    d = parent / name
+    d.mkdir(parents=True)
+    fm = ["---", f"name: {name}", "description: x"]
+    if internal is not None:
+        fm.append(f"internal: {'true' if internal else 'false'}")
+    fm.append("---")
+    (d / "SKILL.md").write_text("\n".join(fm) + "\n# skill\n")
+    return d
+
+
+class TestInternalSkills:
+    def test_detects_internal_flag(self, tmp_path):
+        from nightdesk.cli import _is_internal_skill
+        assert _is_internal_skill(_make_skill(tmp_path, "a", internal=True)) is True
+
+    def test_false_flag_is_shippable(self, tmp_path):
+        from nightdesk.cli import _is_internal_skill
+        assert _is_internal_skill(_make_skill(tmp_path, "a", internal=False)) is False
+
+    def test_missing_flag_is_shippable(self, tmp_path):
+        from nightdesk.cli import _is_internal_skill
+        assert _is_internal_skill(_make_skill(tmp_path, "a")) is False
+
+    def test_no_frontmatter_is_shippable(self, tmp_path):
+        from nightdesk.cli import _is_internal_skill
+        d = tmp_path / "a"
+        d.mkdir()
+        (d / "SKILL.md").write_text("# no frontmatter at all\n")
+        assert _is_internal_skill(d) is False
+
+    def test_unclosed_frontmatter_is_shippable(self, tmp_path):
+        from nightdesk.cli import _is_internal_skill
+        d = tmp_path / "a"
+        d.mkdir()
+        (d / "SKILL.md").write_text("---\ninternal: true\n# never closed\n")
+        assert _is_internal_skill(d) is False
+
+    def test_no_skill_md_is_shippable(self, tmp_path):
+        from nightdesk.cli import _is_internal_skill
+        d = tmp_path / "a"
+        d.mkdir()
+        (d / "README.md").write_text("not a skill\n")
+        assert _is_internal_skill(d) is False
+
+    def test_install_excludes_internal(self, tmp_path):
+        from nightdesk.cli import _install_into_target, _hash_skills
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        _make_skill(bundled, "ship-me")
+        _make_skill(bundled, "dev-only", internal=True)
+        skills_hash = _hash_skills(bundled)
+        target = tmp_path / "skills"
+        result = _install_into_target(target, bundled, skills_hash, "1.0.0", False)
+
+        assert set(result["installed"]) == {"ship-me"}
+        assert (target / "ship-me" / "SKILL.md").is_file()
+        assert not (target / "dev-only").exists()
+
+    def test_hash_ignores_internal_skill_changes(self, tmp_path):
+        from nightdesk.cli import _hash_skills
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        _make_skill(bundled, "ship-me")
+        _make_skill(bundled, "dev-only", internal=True)
+        before = _hash_skills(bundled)
+        # Edit the internal skill — shipped hash must not move.
+        (bundled / "dev-only" / "SKILL.md").write_text(
+            "---\nname: dev-only\ninternal: true\n---\n# totally different\n"
+        )
+        assert _hash_skills(bundled) == before
+        # Editing a shippable skill DOES move the hash.
+        (bundled / "ship-me" / "SKILL.md").write_text("# changed\n")
+        assert _hash_skills(bundled) != before
