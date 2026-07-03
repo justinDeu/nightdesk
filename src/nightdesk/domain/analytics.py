@@ -19,6 +19,7 @@ counts only completed-run spend without an explicit ``finished_at`` filter.
 """
 from __future__ import annotations
 
+import math
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from nightdesk.db.models import Profile, Run, Ticket
+from nightdesk.db.models import Profile, Run, RunLatency, Ticket
 from nightdesk.domain import pricing
 from nightdesk.domain.pricing import PriceInfo
 
@@ -340,6 +341,32 @@ def run_stats(
     }
 
 
+def _nearest_rank(sorted_values: list[float], pct: float) -> Optional[float]:
+    """Nearest-rank percentile over an already-sorted, non-empty list.
+
+    Index = ceil(pct * n) - 1, clamped to [0, n-1]. Matches the original
+    ``duration_percentiles`` p90 math.
+    """
+    if not sorted_values:
+        return None
+    idx = max(0, math.ceil(pct * len(sorted_values)) - 1)
+    return sorted_values[min(idx, len(sorted_values) - 1)]
+
+
+def _percentiles(values: list[float]) -> dict:
+    """Median / p90 / p99 / count over a sample list (nearest-rank p90/p99)."""
+    if not values:
+        return {"median_seconds": None, "p90_seconds": None,
+                "p99_seconds": None, "count": 0}
+    ordered = sorted(values)
+    return {
+        "median_seconds": statistics.median(ordered),
+        "p90_seconds": _nearest_rank(ordered, 0.90),
+        "p99_seconds": _nearest_rank(ordered, 0.99),
+        "count": len(ordered),
+    }
+
+
 def duration_percentiles(
     session: Session, *, start: datetime, end: Optional[datetime] = None
 ) -> dict:
@@ -362,17 +389,11 @@ def duration_percentiles(
             durations.append(secs)
     if not durations:
         return {"median_seconds": None, "p90_seconds": None, "count": 0}
-    durations.sort()
-    median = statistics.median(durations)
-    # Nearest-rank p90: index = ceil(0.9 * n) - 1.
-    import math
-
-    idx = max(0, math.ceil(0.9 * len(durations)) - 1)
-    p90 = durations[idx]
+    ordered = sorted(durations)
     return {
-        "median_seconds": median,
-        "p90_seconds": p90,
-        "count": len(durations),
+        "median_seconds": statistics.median(ordered),
+        "p90_seconds": _nearest_rank(ordered, 0.90),
+        "count": len(ordered),
     }
 
 
@@ -450,6 +471,131 @@ def daily_usage_by_model_series(
     return out
 
 
+# --------------------------------------------------------------------------
+# Latency aggregations (read the cached ``run_latency`` rows, never files).
+#
+# Per-run latency summaries are derived from transcripts once, at run
+# completion, and cached on ``run_latency`` (see ``domain.latency``). These
+# rollups aggregate those rows over the window. Models come from
+# ``RunLatency.model`` (== the run's ``model_used``); runs with no model group
+# under ``"unknown"`` to mirror ``tokens_by_model``.
+# --------------------------------------------------------------------------
+def _latency_window_stmt(columns, session: Session, *, start: datetime,
+                         end: Optional[datetime]):
+    """A RunLatency⋈Run select scoped to runs started in [start, end)."""
+    stmt = (
+        select(*columns)
+        .select_from(RunLatency)
+        .join(Run, RunLatency.run_id == Run.id)
+        .where(Run.started_at >= start)
+    )
+    if end is not None:
+        stmt = stmt.where(Run.started_at < end)
+    return stmt
+
+
+def _as_floats(value) -> list[float]:
+    """Coerce a JSON ``turn_latencies`` cell into a list of floats."""
+    if not isinstance(value, list):
+        return []
+    return [float(x) for x in value if isinstance(x, (int, float))]
+
+
+def latency_by_model(
+    session: Session, *, start: datetime, end: Optional[datetime] = None,
+) -> list[dict]:
+    """Median / p90 / p99 per-turn latency + sample count, grouped by model.
+
+    Operates over per-turn samples (``run_latency.turn_latencies`` merged across
+    runs), so ``count`` is the number of turns, not runs. Most samples first,
+    like ``tokens_by_model``.
+    """
+    stmt = _latency_window_stmt(
+        (RunLatency.model, RunLatency.turn_latencies), session,
+        start=start, end=end,
+    )
+    by_model: dict[str, list[float]] = {}
+    for model, lats in session.execute(stmt).all():
+        by_model.setdefault(model or "unknown", []).extend(_as_floats(lats))
+    rows = [{"model": m, **_percentiles(lats)} for m, lats in by_model.items()]
+    rows.sort(key=lambda r: r["count"], reverse=True)
+    return rows
+
+
+def model_vs_tool_time(
+    session: Session, *, start: datetime, end: Optional[datetime] = None,
+) -> list[dict]:
+    """Per-model totals of model-inference time vs tool-execution time.
+
+    ``model_seconds`` = sum of per-turn latencies; ``tool_seconds`` = sum of
+    tool-execution gaps. Most total time first.
+    """
+    stmt = _latency_window_stmt(
+        (
+            RunLatency.model,
+            func.coalesce(func.sum(RunLatency.total_model_seconds), 0.0),
+            func.coalesce(func.sum(RunLatency.total_tool_seconds), 0.0),
+            func.count(RunLatency.run_id),
+        ),
+        session, start=start, end=end,
+    ).group_by(RunLatency.model)
+    rows = []
+    for model, ms, ts, n in session.execute(stmt).all():
+        rows.append({
+            "model": model or "unknown",
+            "model_seconds": float(ms),
+            "tool_seconds": float(ts),
+            "run_count": int(n),
+        })
+    rows.sort(key=lambda r: r["model_seconds"] + r["tool_seconds"], reverse=True)
+    return rows
+
+
+def daily_latency_by_model_series(
+    session: Session, *, start: datetime, now: datetime,
+    tz: ZoneInfo = _UTC,
+) -> list[dict]:
+    """Per-day per-model MEDIAN per-turn latency from ``start`` to ``now``'s day.
+
+    Structured like ``daily_usage_by_model_series`` (one entry per local
+    calendar day, zero-filled, oldest first) so the existing-chart style can
+    render it: ``{date, by_model: {model: median_seconds}}``. Days/models with
+    no turn samples have empty/absent entries. Day bucketing is aligned to
+    ``tz`` exactly as in ``daily_usage_by_model_series``.
+    """
+    offset = now.astimezone(tz).utcoffset() or timedelta(0)
+    day_mod = f"{int(offset.total_seconds()):+d} seconds"
+    day_expr = func.date(Run.started_at, day_mod)
+
+    stmt = (
+        select(day_expr, RunLatency.model, RunLatency.turn_latencies)
+        .select_from(RunLatency)
+        .join(Run, RunLatency.run_id == Run.id)
+        .where(Run.started_at >= start)
+    )
+    by_day: dict[str, dict[str, list[float]]] = {}
+    for day, model, lats in session.execute(stmt).all():
+        floats = _as_floats(lats)
+        if not floats:
+            continue
+        by_day.setdefault(str(day), {}).setdefault(
+            model or "unknown", []
+        ).extend(floats)
+
+    out: list[dict] = []
+    day = start_of_day(start, tz).astimezone(tz)
+    last = start_of_day(now, tz).astimezone(tz)
+    while day <= last:
+        key = day.strftime("%Y-%m-%d")
+        per_model = {
+            m: statistics.median(lats)
+            for m, lats in by_day.get(key, {}).items() if lats
+        }
+        out.append({"date": key, "by_model": per_model})
+        day += timedelta(days=1)
+    return out
+
+
 def build_dashboard(
     session: Session, *, now: datetime,
     price_info: Optional[PriceInfo] = None,
@@ -489,6 +635,30 @@ def build_dashboard(
     )
     max_daily_tokens = max((d["total_tokens"] for d in series), default=0)
 
+    # Latency rollups (read cached run_latency rows, never transcript files).
+    latency_rows = latency_by_model(session, start=last_30d_start)
+    latency_series = daily_latency_by_model_series(
+        session, start=last_30d_start, now=now, tz=tz
+    )
+    model_tool = model_vs_tool_time(session, start=last_30d_start)
+    max_daily_latency = max(
+        (med for d in latency_series for med in d["by_model"].values()),
+        default=0.0,
+    )
+    # Reuse the token-rank colors so a given model keeps one color across every
+    # chart; latency-only models (no tokens) get the next palette slots.
+    latency_colors = dict(model_colors)
+    next_idx = len(model_colors)
+    for row in latency_rows:
+        m = row["model"]
+        if m not in latency_colors:
+            latency_colors[m] = MODEL_PALETTE[next_idx % len(MODEL_PALETTE)]
+            next_idx += 1
+    latency_model_legend = [{"model": m, "color": c}
+                            for m, c in latency_colors.items()]
+    for row in latency_rows:
+        row["color"] = latency_colors[row["model"]]
+
     return {
         "price_source": price_info.source,
         "price_as_of": price_info.as_of,
@@ -506,4 +676,9 @@ def build_dashboard(
         "duration": duration_percentiles(session, start=last_30d_start),
         "daily_series": series,
         "max_daily_tokens": max_daily_tokens,
+        "latency_by_model": latency_rows,
+        "latency_series": latency_series,
+        "latency_model_legend": latency_model_legend,
+        "max_daily_latency": max_daily_latency,
+        "model_vs_tool_time": model_tool,
     }

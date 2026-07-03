@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from nightdesk.db.models import Profile, Run, Ticket
+from nightdesk.db.models import Profile, Run, RunLatency, Ticket
 from nightdesk.domain import analytics
 from nightdesk.domain.pricing import PriceInfo
 
@@ -47,6 +47,25 @@ def _run(session, ticket, *, started_at, cost=None, exit_status="success",
     session.add(r)
     session.commit()
     return r
+
+
+def _run_latency(session, run, *, model, turn_latencies,
+                 total_model_seconds=None, total_tool_seconds=0.0,
+                 ttft_seconds=None):
+    """Insert a cached run_latency row (the dashboard's latency data source)."""
+    if total_model_seconds is None:
+        total_model_seconds = float(sum(turn_latencies))
+    rl = RunLatency(
+        run_id=run.id, model=model,
+        total_model_seconds=total_model_seconds,
+        total_tool_seconds=total_tool_seconds,
+        turn_count=len(turn_latencies),
+        ttft_seconds=ttft_seconds,
+        turn_latencies=list(turn_latencies),
+    )
+    session.add(rl)
+    session.commit()
+    return rl
 
 
 # --- spend / window totals -------------------------------------------------
@@ -410,4 +429,135 @@ def test_daily_series_buckets_by_local_date(session):
     assert "2026-05-24" not in by_day
     # Run B lands on local the 22nd.
     assert by_day["2026-05-22"]["total_tokens"] == 40
+
+
+# --- latency aggregations (read cached run_latency rows) -------------------
+def test_latency_by_model_percentiles_and_count(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    r1 = _run(session, t, started_at=NOW)
+    _run_latency(session, r1, model="claude-opus-4-7",
+                 turn_latencies=[4.0, 4.0, 10.0], total_tool_seconds=12.0)
+    r2 = _run(session, t, started_at=NOW)
+    _run_latency(session, r2, model="claude-opus-4-7", turn_latencies=[6.0])
+    r3 = _run(session, t, started_at=NOW)
+    _run_latency(session, r3, model="claude-sonnet-4-6", turn_latencies=[8.0])
+
+    rows = analytics.latency_by_model(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=29))
+    by_model = {r["model"]: r for r in rows}
+    # opus turns merged across both runs: [4,4,10,6].
+    opus = by_model["claude-opus-4-7"]
+    assert opus["count"] == 4
+    assert opus["median_seconds"] == pytest.approx(5.0)  # median of [4,4,6,10]
+    # nearest-rank p90/p99 over 4 samples -> index 3 -> 10.
+    assert opus["p90_seconds"] == pytest.approx(10.0)
+    assert opus["p99_seconds"] == pytest.approx(10.0)
+    # sonnet has the most turns? no — opus (4) sorts first by count.
+    assert rows[0]["model"] == "claude-opus-4-7"
+    assert by_model["claude-sonnet-4-6"]["count"] == 1
+
+
+def test_latency_by_model_empty_when_no_rows(session):
+    p = _profile(session)
+    _ticket(session, p)
+    rows = analytics.latency_by_model(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=29))
+    assert rows == []
+
+
+def test_model_vs_tool_time_sums_per_model(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    r1 = _run(session, t, started_at=NOW)
+    _run_latency(session, r1, model="opus", turn_latencies=[4.0, 4.0],
+                 total_model_seconds=8.0, total_tool_seconds=12.0)
+    r2 = _run(session, t, started_at=NOW)
+    _run_latency(session, r2, model="opus", turn_latencies=[6.0],
+                 total_model_seconds=6.0, total_tool_seconds=9.0)
+    r3 = _run(session, t, started_at=NOW)
+    _run_latency(session, r3, model="sonnet", turn_latencies=[8.0],
+                 total_model_seconds=8.0, total_tool_seconds=2.0)
+
+    rows = analytics.model_vs_tool_time(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=29))
+    by_model = {r["model"]: r for r in rows}
+    assert by_model["opus"]["model_seconds"] == pytest.approx(14.0)
+    assert by_model["opus"]["tool_seconds"] == pytest.approx(21.0)
+    assert by_model["opus"]["run_count"] == 2
+    assert by_model["sonnet"]["model_seconds"] == pytest.approx(8.0)
+    # Sorted by total time desc: opus (35) before sonnet (10).
+    assert rows[0]["model"] == "opus"
+
+
+def test_daily_latency_series_per_day_per_model_median(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    today = _run(session, t, started_at=NOW)
+    _run_latency(session, today, model="claude-opus-4-7",
+                 turn_latencies=[4.0, 4.0, 10.0])  # median 4
+    today2 = _run(session, t, started_at=NOW)
+    _run_latency(session, today2, model="claude-sonnet-4-6",
+                 turn_latencies=[8.0])  # median 8
+    two_days_ago = _run(session, t, started_at=NOW - timedelta(days=2))
+    _run_latency(session, two_days_ago, model="claude-opus-4-7",
+                 turn_latencies=[6.0])  # median 6
+
+    series = analytics.daily_latency_by_model_series(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=4), now=NOW)
+    assert len(series) == 5  # 5-day inclusive window
+    by_day = {d["date"]: d for d in series}
+    assert by_day["2026-05-24"]["by_model"]["claude-opus-4-7"] == pytest.approx(4.0)
+    assert by_day["2026-05-24"]["by_model"]["claude-sonnet-4-6"] == pytest.approx(8.0)
+    assert by_day["2026-05-22"]["by_model"]["claude-opus-4-7"] == pytest.approx(6.0)
+    # Zero-filled day has no model entries.
+    assert by_day["2026-05-23"]["by_model"] == {}
+    assert series[0]["date"] == "2026-05-20"
+    assert series[-1]["date"] == "2026-05-24"
+
+
+def test_build_dashboard_returns_latency_fields(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    r = _run(session, t, started_at=NOW, input_tokens=500)
+    r.model_used = "claude-opus-4-7"
+    session.commit()
+    _run_latency(session, r, model="claude-opus-4-7",
+                 turn_latencies=[3.0, 5.0], ttft_seconds=2.0)
+
+    data = analytics.build_dashboard(session, now=NOW)
+    # New keys are present.
+    for key in ("latency_by_model", "latency_series", "model_vs_tool_time",
+                "latency_model_legend", "max_daily_latency"):
+        assert key in data
+    # The opus row carries median/p90/p99/count + a color.
+    opus = next(r for r in data["latency_by_model"] if r["model"] == "claude-opus-4-7")
+    assert opus["count"] == 2
+    assert opus["median_seconds"] == pytest.approx(4.0)
+    assert opus["color"]
+    # Model-vs-tool total reflects the cached row.
+    mvt = next(r for r in data["model_vs_tool_time"] if r["model"] == "claude-opus-4-7")
+    assert mvt["model_seconds"] == pytest.approx(8.0)
+    # The latency legend shares the token-rank color for opus.
+    tok_color = next(m["color"] for m in data["model_legend"]
+                     if m["model"] == "claude-opus-4-7")
+    lat_color = next(m["color"] for m in data["latency_model_legend"]
+                     if m["model"] == "claude-opus-4-7")
+    assert tok_color == lat_color
+
+
+def test_build_dashboard_latency_empty_without_rows(session):
+    # No run_latency rows -> latency sections are empty but the build still works
+    # and existing analytics are unaffected.
+    p = _profile(session)
+    t = _ticket(session, p)
+    _run(session, t, started_at=NOW, input_tokens=100)
+
+    data = analytics.build_dashboard(session, now=NOW)
+    assert data["latency_by_model"] == []
+    assert data["model_vs_tool_time"] == []
+    assert data["max_daily_latency"] == 0.0
+    assert all(d["by_model"] == {} for d in data["latency_series"])
+    # Existing fields still populate normally.
+    assert data["last_30d"]["run_count"] == 1
 

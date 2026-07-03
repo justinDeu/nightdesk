@@ -1021,6 +1021,15 @@ async def run_one(
             if run.conversation_id is not None:
                 sync_conversation_from_turn(session, session.get(Run, run.id))
 
+            # Cache this run's model/tool latency (derived from the now-complete
+            # transcript) on run_latency so the analytics dashboard aggregates
+            # rows instead of rescanning files. Best-effort: never fails the run.
+            try:
+                from nightdesk.domain.latency import populate_run_latency
+                populate_run_latency(session, session.get(Run, run.id))
+            except Exception:
+                log.exception("could not populate run_latency for run %s", run.id)
+
             session.expire_all()
             cur = session.get(Ticket, ticket.id)
             if cur is not None and cur.status == "running":

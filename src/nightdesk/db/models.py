@@ -312,6 +312,36 @@ class Run(Base):
     )
 
 
+class RunLatency(Base):
+    """Cached per-run latency summary derived from the transcript.
+
+    Populated once when a run finishes (see
+    ``domain.latency.populate_run_latency``) and never rescanned — transcripts
+    are terminal, so a cached row is final. The analytics dashboard aggregates
+    these rows instead of reading transcript files on every load.
+
+    ``turn_latencies`` keeps the raw per-turn seconds (JSON array) so
+    percentiles/medians can be merged across runs in Python without rescanning.
+    ``total_model_seconds`` / ``total_tool_seconds`` are the per-run sums
+    (model inference time vs tool execution time); ``ttft_seconds`` is the
+    run's first-token latency. See ``domain.latency`` for the accuracy caveat:
+    these are ingest-receipt deltas, trend-useful but not ms-precise API TTFT.
+    """
+
+    __tablename__ = "run_latency"
+
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), primary_key=True,
+    )
+    model: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    total_model_seconds: Mapped[float] = mapped_column(sa_Float, nullable=False, default=0.0)
+    total_tool_seconds: Mapped[float] = mapped_column(sa_Float, nullable=False, default=0.0)
+    turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ttft_seconds: Mapped[Optional[float]] = mapped_column(sa_Float, nullable=True)
+    turn_latencies: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    run: Mapped["Run"] = relationship(foreign_keys=[run_id])
+
 
 class TicketWorkspace(Base):
     __tablename__ = "ticket_workspaces"
