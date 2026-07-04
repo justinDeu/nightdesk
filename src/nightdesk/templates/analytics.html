@@ -193,6 +193,7 @@
               <th class="text-right font-medium pb-1">Turns</th>
               <th class="text-right font-medium pb-1">Median</th>
               <th class="text-right font-medium pb-1">p90</th>
+              <th class="text-right font-medium pb-1">p95</th>
               <th class="text-right font-medium pb-1">p99</th>
             </tr>
           </thead>
@@ -205,6 +206,7 @@
                 <td class="py-1 text-right text-fg-muted">{{ row.count }}</td>
                 <td class="py-1 text-right">{{ fmt_dur(row.median_seconds) }}</td>
                 <td class="py-1 text-right text-fg-muted">{{ fmt_dur(row.p90_seconds) }}</td>
+                <td class="py-1 text-right text-fg-muted">{{ fmt_dur(row.p95_seconds) }}</td>
                 <td class="py-1 text-right text-fg-muted">{{ fmt_dur(row.p99_seconds) }}</td>
               </tr>
             {% endfor %}

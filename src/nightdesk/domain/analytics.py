@@ -354,14 +354,16 @@ def _nearest_rank(sorted_values: list[float], pct: float) -> Optional[float]:
 
 
 def _percentiles(values: list[float]) -> dict:
-    """Median / p90 / p99 / count over a sample list (nearest-rank p90/p99)."""
+    """Median / p90 / p95 / p99 / count over a sample list (nearest-rank p90/p95/p99)."""
     if not values:
         return {"median_seconds": None, "p90_seconds": None,
+                "p95_seconds": None,
                 "p99_seconds": None, "count": 0}
     ordered = sorted(values)
     return {
         "median_seconds": statistics.median(ordered),
         "p90_seconds": _nearest_rank(ordered, 0.90),
+        "p95_seconds": _nearest_rank(ordered, 0.95),
         "p99_seconds": _nearest_rank(ordered, 0.99),
         "count": len(ordered),
     }
