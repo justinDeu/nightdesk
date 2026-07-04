@@ -15,6 +15,12 @@
 {% set project = projects_by_id.get(t.project_id) if projects_by_id and t.project_id else none %}
 {% set outcome = run_outcomes.get(t.id) if run_outcomes else None %}
 {% set blocked_by = dep_titles.get(t.id) if dep_titles else None %}
+{# Unsatisfied-dep count for the run-now chip tooltip / sidebar hint. Mirrors
+   the "blocked by N" pill below (all upstream deps count), so card and sidebar
+   agree on what "waiting on N deps" means. run_now is cleared by the worker
+   once a run actually starts (run_one.py), so this chip only appears on tickets
+   that are armed-but-not-yet-running — never on a real running card. #}
+{% set _rn_dep_count = (blocked_by | length) if blocked_by else 0 %}
 {% set ticket_labels = t.labels if t.labels is defined and t.labels else [] %}
 {% set _sp = show_props if show_props is defined else none %}
 <li
@@ -62,6 +68,23 @@
           <span class="px-1.5 py-0.5 rounded bg-warn/15 border border-warn/40 text-warn" title="Waiting on: {{ blocked_by | join(', ') }}">
             blocked by {{ blocked_by | length }}
           </span>
+        {% endif %}
+        {# Run-now chip: ⚡ when the ticket is armed for the scheduler's next
+           tick. Visible in every column (draft/queued/visual-Running) since
+           run_now is meaningful in all of them. Clicking cancels run-now
+           (stopPropagation so the card click doesn't also open the sidebar);
+           the cancel response re-renders the sidebar + polls the columns so
+           the chip disappears and the button flips back to "Run now". #}
+        {% if t.run_now %}
+          <button
+            type="button"
+            onclick="event.stopPropagation();"
+            hx-post="/tickets/{{ t.id }}/cancel-run-now"
+            hx-swap="none"
+            data-tooltip="{% if _rn_dep_count %}Run-now armed but waiting on {{ _rn_dep_count }} dep(s). Click to cancel.{% else %}Run-now armed. Click to cancel.{% endif %}"
+            class="px-1.5 py-0.5 rounded bg-accent/15 border border-accent/40 text-accent hover:bg-accent/25 cursor-pointer leading-none"
+            aria-label="Cancel run-now"
+          >&#9889;</button>
         {% endif %}
         {# Labels — inline label picker anchor (same as list rows). #}
         {% if _sp is none or 'labels' in _sp %}

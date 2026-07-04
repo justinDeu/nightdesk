@@ -334,6 +334,62 @@ async def test_run_now_on_running_returns_409(cookie_client, session):
     assert r.status_code == 409
 
 
+async def test_cancel_run_now_htmx_clears_flag_keeps_status(cookie_client, session):
+    """The inverse of run-now: HTMX clients get 204 + HX-Trigger so board.js
+    can refresh the sidebar (button -> Run now) and poll the columns (chip
+    disappears, card -> Queued). Status must NOT change — cancel only clears
+    the flag."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket, get_ticket
+
+    p = create_profile(
+        session, name="cancel-rn-ui", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="armed", prompt="", priority=0, profile_id=p.id,
+        source_path="/tmp", status="queued", run_now=True,
+    )
+
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/cancel-run-now",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 204
+    assert r.headers.get("HX-Trigger") == "nd-run-now-canceled"
+    assert r.content == b""
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.run_now is False
+    assert after.status == "queued"  # unchanged
+
+
+async def test_cancel_run_now_non_htmx_falls_back_to_303(cookie_client, session):
+    """curl / no-JS clients keep working: a plain POST gets the 303 back to
+    the ticket detail page."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="cancel-rn-curl", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="armed", prompt="", priority=0, profile_id=p.id,
+        source_path="/tmp", status="queued", run_now=True,
+    )
+    r = await cookie_client.post(
+        f"/tickets/{t.id}/cancel-run-now",
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/tickets/{t.id}"
+
+
 async def test_archive_htmx_returns_204_and_transitions(cookie_client, session):
     """The cookie-auth Archive route mirrors run-now: HTMX clients get 204
     so the template can gate `window.location='/archive'` on success without

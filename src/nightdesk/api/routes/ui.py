@@ -35,7 +35,7 @@ from nightdesk.domain.toolchains import (
 )
 from nightdesk.domain.notifications import build_test_payload, fire_webhook
 from nightdesk.domain.tickets import (
-    archive, requeue, request_run_now, transition_status,
+    archive, requeue, request_run_now, set_run_now, transition_status,
     TicketNotFound, InvalidTransition,
 )
 
@@ -349,6 +349,32 @@ def build_router(get_session, bearer_token: str, templates: Jinja2Templates,
         if request.headers.get("HX-Request") == "true":
             resp = Response(status_code=204)
             resp.headers["HX-Trigger"] = "nd-run-now-queued"
+            return resp
+        return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
+
+    @router.post("/tickets/{tid}/cancel-run-now", dependencies=[auth])
+    async def ui_cancel_run_now(
+        request: Request,
+        tid: str,
+        session: Session = Depends(get_session),
+    ):
+        # Cookie-auth twin of POST /api/v1/tickets/{tid}/cancel-run-now and the
+        # inverse of the Run-now button above. Clears ``run_now`` WITHOUT
+        # touching ``status`` (a queued+run-now ticket stays queued, it just
+        # stops asking the scheduler to bypass the queue). The card chip and
+        # the sidebar "Cancel run-now" button both POST here.
+        #
+        # The HX-Trigger event lets board.js refresh the sidebar (button flips
+        # back to "Run now") and poll the columns (card moves out of the visual
+        # Running column, ⚡ chip disappears) so the toggle feels instant
+        # rather than waiting for the next poll.
+        try:
+            set_run_now(session, tid, False)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        if request.headers.get("HX-Request") == "true":
+            resp = Response(status_code=204)
+            resp.headers["HX-Trigger"] = "nd-run-now-canceled"
             return resp
         return RedirectResponse(url=f"/tickets/{tid}", status_code=303)
 

@@ -1277,3 +1277,53 @@ async def test_board_columns_oob_props_hides_profile(cookie_client, session, pro
     # Full fragment carries the profile chip; the filtered one doesn't.
     assert profile.name in r_all.text
     assert profile.name not in r_min.text
+
+
+async def test_board_card_shows_run_now_chip_when_armed(cookie_client, session, profile):
+    """Deliverable 1: a run_now-armed card carries a clickable ⚡ chip that
+    posts to cancel-run-now; a plain queued card does not."""
+    from nightdesk.domain.tickets import create_ticket
+    create_ticket(
+        session, title="armed-card", prompt="x", profile_id=profile.id,
+        status="queued", run_now=True, source_path="/tmp",
+    )
+    create_ticket(
+        session, title="plain-card", prompt="x", profile_id=profile.id,
+        status="queued", run_now=False, source_path="/tmp",
+    )
+    r = await cookie_client.get("/")
+    assert r.status_code == 200
+    body = r.text
+    # The armed card renders the lightning chip + its cancel endpoint.
+    assert "armed-card" in body
+    assert "/tickets/" in body and "/cancel-run-now" in body
+    assert "&#9889;" in body or "⚡" in body  # the chip glyph
+    # The plain (non-armed) card has no cancel-run-now affordance of its own;
+    # the only cancel-run-now href present belongs to the armed card.
+    assert body.count("/cancel-run-now") == 1
+
+
+async def test_sidebar_run_now_button_is_state_aware(cookie_client, session, profile):
+    """Deliverable 2: the sidebar button reads 'Cancel run-now' (filled) when
+    armed and 'Run now' (outlined) when not."""
+    from nightdesk.domain.tickets import create_ticket
+    armed = create_ticket(
+        session, title="armed", prompt="x", profile_id=profile.id,
+        status="queued", run_now=True, source_path="/tmp",
+    )
+    plain = create_ticket(
+        session, title="plain", prompt="x", profile_id=profile.id,
+        status="queued", run_now=False, source_path="/tmp",
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={armed.id}")
+    assert r.status_code == 200
+    armed_body = r.text
+    assert "Cancel run-now" in armed_body
+    assert "/cancel-run-now" in armed_body
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={plain.id}")
+    assert r.status_code == 200
+    plain_body = r.text
+    assert ">Run now<" in plain_body
+    assert "Cancel run-now" not in plain_body
