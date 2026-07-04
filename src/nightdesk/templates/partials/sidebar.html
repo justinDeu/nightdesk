@@ -71,14 +71,37 @@
           class="px-3 py-1.5 rounded bg-accent text-bg font-medium hover:brightness-110 text-sm"
         >Edit</button>
         {% if ticket.status in ('draft', 'queued', 'review', 'archived') %}
-          <button
-            type="button"
-            data-run-now-btn
-            hx-post="/tickets/{{ ticket.id }}/run-now"
-            hx-swap="none"
-            hx-on::after-request="window.ndRunNowFeedback && window.ndRunNowFeedback(this, event)"
-            class="px-3 py-1.5 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-sm font-medium"
-          >Run now</button>
+          {# State-aware Run-now button. Hidden for running (run_now is already
+             cleared by the worker when a run starts, so the toggle is moot).
+             The button is NOT symmetric: Run now transitions draft/review/
+             archived -> queued AND arms run_now; Cancel run-now only clears the
+             flag (status stays queued). The tooltips document that asymmetry.
+             Both flows re-render this sidebar via HTMX so the label reflects the
+             new state without waiting for a poll. #}
+          {% set _sidebar_dep_count = (deps_upstreams | length) if (deps_upstreams is defined and deps_upstreams) else 0 %}
+          {% if ticket.run_now %}
+            <button
+              type="button"
+              data-run-now-btn
+              hx-post="/tickets/{{ ticket.id }}/cancel-run-now"
+              hx-swap="none"
+              data-tooltip="Cancel run-now: clears the run-now flag without changing status. The ticket stays queued and runs in its normal position."
+              class="px-3 py-1.5 rounded bg-accent text-bg font-medium hover:brightness-110 text-sm"
+            >Cancel run-now</button>
+            {% if _sidebar_dep_count %}
+              <span class="text-[11px] text-warn" data-tooltip="Upstream dependencies must finish before the scheduler will run this ticket.">waiting on {{ _sidebar_dep_count }} dep(s)</span>
+            {% endif %}
+          {% else %}
+            <button
+              type="button"
+              data-run-now-btn
+              hx-post="/tickets/{{ ticket.id }}/run-now"
+              hx-swap="none"
+              hx-on::after-request="window.ndRunNowFeedback && window.ndRunNowFeedback(this, event)"
+              data-tooltip="Run now: transition to queued and ask the scheduler to pick this ticket on its next tick, ahead of its normal position."
+              class="px-3 py-1.5 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-sm font-medium"
+            >Run now</button>
+          {% endif %}
         {% endif %}
         {% if ticket.status == 'review' %}
           <button

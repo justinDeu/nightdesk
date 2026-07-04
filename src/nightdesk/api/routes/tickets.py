@@ -20,7 +20,7 @@ from nightdesk.domain.tickets import (
     create_ticket,
     delete_ticket, get_ticket, list_tickets, new_conversation_ticket,
     remove_dependency, requeue,
-    reorder_in_column, request_run_now, transition_status,
+    reorder_in_column, request_run_now, set_run_now, transition_status,
     transition_with_position, unarchive, update_ticket,
     update_ticket_priority, update_ticket_profile, update_ticket_project,
     ConversationNotResumable, TicketNotFound, InvalidTransition,
@@ -275,6 +275,18 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
+
+    @router.post("/{tid}/cancel-run-now", response_model=TicketOut)
+    async def cancel_run_now(tid: str, session: Session = Depends(get_session)):
+        # Symmetric inverse of run-now: clear the run_now flag without changing
+        # status (a queued+run-now ticket stays queued, it just stops asking the
+        # scheduler to bypass the queue). Reuses the same domain helper the HTMX
+        # surface and the drag-to-Queued path use, so there is one write path.
+        try:
+            t = set_run_now(session, tid, False)
+            return _ticket_to_out(t)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
 
     @router.post("/{tid}/cancel", response_model=TicketOut)
     async def cancel(tid: str, session: Session = Depends(get_session)):

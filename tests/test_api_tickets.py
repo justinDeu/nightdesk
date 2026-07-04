@@ -141,6 +141,59 @@ async def test_run_now_transitions_review_to_queued(client):
     assert body["run_now"] is True
 
 
+async def test_cancel_run_now_clears_flag_keeps_status(client):
+    """cancel-run-now is the inverse of run-now: it clears the flag WITHOUT
+    changing status (a queued+run-now ticket stays queued, it just stops asking
+    the scheduler to bypass the queue)."""
+    pid = await _create_profile(client)
+    r = await client.post("/api/v1/tickets", json={
+        "title": "armed", "prompt": "p",
+        "profile_id": pid, "source_path": "/tmp", "status": "queued",
+    })
+    tid = r.json()["id"]
+    # Arm it first.
+    r = await client.post(f"/api/v1/tickets/{tid}/run-now")
+    assert r.json()["run_now"] is True
+    assert r.json()["status"] == "queued"
+
+    # Cancel — the JSON smoke from the ticket's verification section:
+    #   curl -X POST .../cancel-run-now | jq '{id, status, run_now}'
+    r = await client.post(f"/api/v1/tickets/{tid}/cancel-run-now")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["run_now"] is False
+    assert body["status"] == "queued"  # unchanged
+    assert body["id"] == tid
+
+
+async def test_cancel_run_now_round_trips_run_now(client):
+    """Run-now then cancel-run-now returns the ticket to its pre-arm state
+    (run_now=false, status still queued) — the toggle must be reversible."""
+    pid = await _create_profile(client)
+    r = await client.post("/api/v1/tickets", json={
+        "title": "toggle", "prompt": "p",
+        "profile_id": pid, "source_path": "/tmp", "status": "queued",
+    })
+    tid = r.json()["id"]
+    await client.post(f"/api/v1/tickets/{tid}/run-now")
+    assert (await _get(client, tid))["run_now"] is True
+    await client.post(f"/api/v1/tickets/{tid}/cancel-run-now")
+    state = await _get(client, tid)
+    assert state["run_now"] is False
+    assert state["status"] == "queued"
+
+
+async def test_cancel_run_now_unknown_ticket_404(client):
+    r = await client.post("/api/v1/tickets/does-not-exist/cancel-run-now")
+    assert r.status_code == 404
+
+
+async def _get(client, tid):
+    r = await client.get(f"/api/v1/tickets/{tid}")
+    assert r.status_code == 200
+    return r.json()
+
+
 async def test_ticket_api_includes_labels(client, session):
     """Labels attached to a ticket must appear in both list and single-fetch."""
     pid = await _create_profile(client)

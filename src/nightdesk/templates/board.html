@@ -182,6 +182,27 @@
       htmx.trigger(trigger, 'poll');
     }
 
+    function modalOpen() {
+      // Any open <dialog> (edit/create ticket modal, save-view, quick-capture)
+      // means the user is mid-interaction — skip a sidebar swap that would
+      // re-render and close it. Column polls are still safe to run.
+      return !!document.querySelector('dialog[open]');
+    }
+
+    function refreshSidebarForSelected() {
+      // Re-fetch the currently-selected ticket's sidebar so the Run-now /
+      // Cancel-run-now button reflects the latest run_now state without a
+      // full reload. Skipped when a modal is open (it would close it) or when
+      // nothing is selected (create mode).
+      var sidebar = document.getElementById('sidebar');
+      var tid = sidebar && sidebar.getAttribute('data-selected-ticket-id');
+      if (!tid || typeof htmx === 'undefined' || modalOpen()) return;
+      try {
+        htmx.ajax('GET', '/board/sidebar?ticket_id=' + encodeURIComponent(tid),
+                  { target: '#sidebar', swap: 'outerHTML' });
+      } catch (e) { /* best-effort */ }
+    }
+
     function isDragging() {
       return !!document.querySelector(
         '.sortable-chosen, .sortable-drag, .sortable-ghost'
@@ -255,8 +276,9 @@
             var fromStatus = evt.from.dataset.status;
             var toStatus = evt.to.dataset.status;
             var itemId = evt.item.dataset.ticketId;
+            var crossColumn = fromStatus !== toStatus;
             var p;
-            if (fromStatus === toStatus) {
+            if (!crossColumn) {
               var ids = ticketIdsFrom(evt.to);
               p = postForm('/board/columns/' + toStatus + '/reorder', {
                 ticket_ids: csv(ids),
@@ -272,7 +294,39 @@
             // else that changed); on failure it reverts the optimistic
             // DOM placement to server truth. No full page reload, so
             // the sidebar's in-progress edit is preserved.
-            p.then(pollColumnsNow, pollColumnsNow);
+            p.then(function (resp) {
+              pollColumnsNow();
+              // A cross-column drop can change run_now (->running arms it,
+              // ->queued clears it). Keep the sidebar's Run-now button in
+              // sync when the dragged card is the one shown there.
+              if (crossColumn && itemId) {
+                var sidebar = document.getElementById('sidebar');
+                var sel = sidebar && sidebar.getAttribute('data-selected-ticket-id');
+                if (sel && sel === itemId) refreshSidebarForSelected();
+              }
+              // Surface a rejected drop as a toast instead of the silent
+              // snap-back that used to make invalid transitions (e.g.
+              // queued -> review, or run-now on a review ticket) look like
+              // a no-op. The move endpoint returns JSON {detail} on 4xx.
+              if (crossColumn && resp && !resp.ok && window.ndToast) {
+                resp.json().then(function (body) {
+                  var detail = (body && body.detail)
+                    ? body.detail
+                    : ('Move failed (' + (resp.status || '?') + ')');
+                  window.ndToast(detail, { type: 'error' });
+                }).catch(function () {
+                  window.ndToast('Move failed (' + (resp.status || '?') + ')',
+                                 { type: 'error' });
+                });
+              }
+            }, function () {
+              // Network/transport failure: still revert the DOM and tell the
+              // user something went wrong.
+              pollColumnsNow();
+              if (crossColumn && window.ndToast) {
+                window.ndToast('Move failed — please retry', { type: 'error' });
+              }
+            });
           },
         }));
       });
@@ -333,6 +387,20 @@
       if (elt && elt.id === 'board-columns-poll' && (isDragging() || pickerOpen())) {
         evt.preventDefault();
       }
+    });
+
+    // Run-now armed (sidebar Run-now click / endpoint emits nd-run-now-queued):
+    // poll the columns so the card lands in the visual Running column with its ⚡
+    // chip, and refresh the sidebar so the button flips to "Cancel run-now".
+    // Canceled (nd-run-now-canceled): poll so the card moves back to Queued and
+    // the chip disappears, and refresh the sidebar so the button flips back.
+    // refreshSidebarForSelected is a no-op when a modal is open or nothing is
+    // selected, so these are safe to fire unconditionally.
+    ['nd-run-now-queued', 'nd-run-now-canceled'].forEach(function (evtName) {
+      document.body.addEventListener(evtName, function () {
+        refreshSidebarForSelected();
+        pollColumnsNow();
+      });
     });
   })();
 </script>

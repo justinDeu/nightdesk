@@ -30,6 +30,10 @@
     <script src="{{ static_v('display_options.js') }}" defer></script>
     {# notifications.js: browser desktop notifications for run completions. #}
     <script src="{{ static_v('notifications.js') }}" defer></script>
+    {# toast.js: minimal in-page toast primitive (window.ndToast) for surfacing
+       non-fatal failures like rejected board drops. Loaded before bulk_select
+       so both this and the bulk bar's undo toast share the same look. #}
+    <script src="{{ static_v('toast.js') }}" defer></script>
     {# property_picker.js: the ONE shared anchored picker for single-value
        ticket metadata (priority, status, project, …). Replaces all
        per-property pickers. #}
