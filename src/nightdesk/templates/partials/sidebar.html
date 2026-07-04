@@ -80,7 +80,7 @@
             class="px-3 py-1.5 rounded border border-accent text-accent hover:bg-accent hover:text-bg text-sm font-medium"
           >Run now</button>
         {% endif %}
-        {% if ticket.status == 'review' %}
+        {% if ticket.status in ('draft', 'queued', 'review') %}
           <button
             type="button"
             data-archive-btn

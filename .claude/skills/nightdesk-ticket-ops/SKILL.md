@@ -15,6 +15,8 @@ draft  ──► queued ──► running ──► review ──► archived
   │         │           │          ▼           │
   └── direct drop ──────┘        queued ◄──────┘
       (running flips run_now=true)
+
+draft, queued ──► archived   (discard; ticket never ran / abandoned)
 ```
 
 Valid transitions (`_VALID_TRANSITIONS`, `src/nightdesk/domain/tickets.py:28`):
@@ -22,8 +24,8 @@ Valid transitions (`_VALID_TRANSITIONS`, `src/nightdesk/domain/tickets.py:28`):
 | from → to | allowed |
 |---|---|
 | `inbox` | `draft`, `queued`, `archived` |
-| `draft` | `queued`, `running`, `inbox` |
-| `queued` | `draft`, `running` |
+| `draft` | `queued`, `running`, `inbox`, `archived` |
+| `queued` | `draft`, `running`, `archived` |
 | `running` | `review` |
 | `review` | `queued`, `archived` |
 | `archived` | `queued` |
@@ -32,7 +34,7 @@ Anything else returns `409 invalid transition`. Dropping into `running` from `dr
 
 **API surface caveats — the state machine and the JSON API don't fully line up:**
 - `POST /api/v1/tickets/{tid}/transition` only accepts targets `draft|queued|running|review|archived`. **`inbox` is NOT a valid `/transition` target** even though `draft → inbox` is state-machine-legal. Tickets move *into* `inbox` only via the HTMX inbox routes (`/inbox/...`); the JSON API has no `→ inbox` path.
-- `archived` is reachable only from `review` (`/archive` or `transition status=archived`) or from `inbox` (decline). **A `draft` or `queued` ticket cannot be archived via the API or board** — only deleted, or hand-walked `draft → inbox → archived` through the domain layer. (Known bug.)
+- `archived` is reachable from `draft`, `queued`, or `review` (`/archive` or `transition status=archived`), or from `inbox` (decline). `running` is deliberately excluded — cancel or finish the run (→ `review`) first. Archiving a `draft`/`queued` ticket is the non-destructive way to discard one that will never run (vs. `DELETE`, which is destructive).
 
 ## Before creating a ticket
 
@@ -383,7 +385,7 @@ curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
 
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/cancel"     # running → review
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/requeue"    # review|archived → queued
-curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/archive"    # review → archived
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/archive"    # draft|queued|review → archived
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/unarchive"  # archived → queued
 ```
 
@@ -453,7 +455,7 @@ curl -s "${AUTH[@]}" "$BASE/api/v1/fs/suggest?path=~/f" | jq .
 - Sending a sparse PATCH and expecting omitted fields to clear. They don't — see `nightdesk-api`.
 - Trying to transition `draft → review`. Not allowed; go through `running` or use `archive`/`requeue` paths.
 - Passing `cwd` on create. That field was removed — the server ignores it and you get `422 "workspaces must include exactly one primary workspace"`. Use top-level `source_path` (or a `workspaces` list with one primary).
-- Trying to archive a `draft`/`queued` ticket. `/archive` and `transition status=archived` only work from `review` (and `inbox` declines). There is no API path to archive a never-run draft — see the lifecycle caveats above.
+- Trying to archive a `running` ticket. `/archive` and `transition status=archived` work from `draft`, `queued`, or `review` — not `running`. Cancel or finish the run (→ `review`) first.
 - Forgetting `-N` on the SSE curl — output looks frozen.
 - Passing both `--data @file.json` AND a second `-d` (or `-d @-` from a heredoc) on the same `curl`. Multiple `-d` flags **concatenate with `&`**, which produces malformed JSON and silently posts garbage; the server returns a 4xx and `jq '{id,title,status}'` shows `{id: null, title: null, status: null}`. Use a single `--data @file.json` and inject any extra fields with Python BEFORE the POST.
 - Using an unquoted heredoc tag (`<<JSON` instead of `<<'JSON'`) when the prompt contains backticks or `$`. The shell will expand them and either run commands or empty out variables silently. Always quote the tag.

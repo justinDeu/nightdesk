@@ -27,8 +27,8 @@ from nightdesk.domain.toolchains import (
 # incomplete-ticket validation boundary enforced in ``transition_with_position``.
 _VALID_TRANSITIONS: dict[str, set[str]] = {
     "inbox":    {"draft", "queued", "archived"},  # promote / promote+queue / decline
-    "draft":    {"queued", "running", "inbox"},   # running implies run-now
-    "queued":   {"draft", "running"},
+    "draft":    {"queued", "running", "inbox", "archived"},   # running implies run-now
+    "queued":   {"draft", "running", "archived"},
     "running":  {"review"},
     "review":   {"queued", "archived"},
     "archived": {"queued"},
@@ -511,10 +511,20 @@ def reorder_in_column(
     return out
 
 
+_ARCHIVABLE_SOURCES = {"draft", "queued", "review"}
+
+
 def archive(session: Session, ticket_id: str) -> Ticket:
-    """Convenience: review -> archived."""
+    """Convenience: draft|queued|review -> archived.
+
+    ``draft``/``queued`` archiving is the non-destructive way to discard a
+    ticket that will never run (abandoned triage, or finished out of band) —
+    the alternative is a destructive ``delete_ticket``. ``running`` is
+    deliberately excluded: a live run must go through ``review`` first
+    (cancel or finish) before it can be archived.
+    """
     t = get_ticket(session, ticket_id)
-    if t.status != "review":
+    if t.status not in _ARCHIVABLE_SOURCES:
         raise InvalidTransition(f"cannot archive from {t.status}")
     return transition_status(session, ticket_id, "archived")
 
@@ -1117,10 +1127,11 @@ def bulk_archive(
     session: Session,
     ticket_ids: list[str],
 ) -> tuple[list[Ticket], list[dict]]:
-    """Bulk archive.  Archives each ticket that is in ``review`` (the only
-    state from which archiving is valid); every other ticket is skipped with a
-    reason rather than failing the whole batch.  Returns ``(updated, skipped)``
-    where each skipped entry is ``{"ticket_id": ..., "reason": ...}``."""
+    """Bulk archive.  Archives each ticket that is in ``draft``, ``queued``, or
+    ``review`` (see ``_ARCHIVABLE_SOURCES``); every other ticket (e.g.
+    ``running``, already ``archived``) is skipped with a reason rather than
+    failing the whole batch.  Returns ``(updated, skipped)`` where each
+    skipped entry is ``{"ticket_id": ..., "reason": ...}``."""
     updated: list[Ticket] = []
     skipped: list[dict] = []
     for tid in ticket_ids:

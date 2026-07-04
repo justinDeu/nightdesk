@@ -309,9 +309,29 @@ async def test_archive_and_unarchive(client):
     assert r.json()["status"] == "queued"
 
 
-async def test_archive_rejects_non_review_409(client):
+async def test_archive_from_draft(client):
+    """draft -> archived is the non-destructive discard path for a ticket
+    that will never run."""
     pid = await _create_profile(client)
     t = await _create_ticket(client, pid)
+    r = await client.post(f"/api/v1/tickets/{t['id']}/archive")
+    assert r.status_code == 200
+    assert r.json()["status"] == "archived"
+
+
+async def test_archive_from_queued(client):
+    pid = await _create_profile(client)
+    t = await _create_ticket(client, pid, status="queued")
+    r = await client.post(f"/api/v1/tickets/{t['id']}/archive")
+    assert r.status_code == 200
+    assert r.json()["status"] == "archived"
+
+
+async def test_archive_rejects_running_409(client):
+    pid = await _create_profile(client)
+    t = await _create_ticket(client, pid, status="queued")
+    await client.post(f"/api/v1/tickets/{t['id']}/transition",
+                       json={"status": "running"})
     r = await client.post(f"/api/v1/tickets/{t['id']}/archive")
     assert r.status_code == 409
 

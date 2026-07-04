@@ -257,10 +257,10 @@ class TestCommitRoute:
 
     async def test_status_invalid_transition_409(self, client, session, _profile):
         t = _make(session, _profile, status="draft")
-        # draft -> archived is not a valid transition.
+        # draft -> review is not a valid transition.
         r = await client.post(
             f"/board/tickets/{t.id}/property/status",
-            data={"value": "archived"},
+            data={"value": "review"},
             headers={"HX-Request": "true"},
         )
         assert r.status_code == 409
