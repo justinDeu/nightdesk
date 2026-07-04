@@ -1,7 +1,7 @@
 """Tests for selection-driven bulk ticket actions.
 
 Covers the cookie-auth board routes that back the bulk action bar:
-  - POST /board/tickets/bulk/archive    (archive review tickets; skip the rest)
+  - POST /board/tickets/bulk/archive    (archive draft/queued/review tickets; skip the rest)
   - POST /board/tickets/bulk/unarchive  (the archive undo path)
   - POST /board/tickets/bulk/labels     (add labels, set-union)
   - POST /board/tickets/bulk/restore    (generic undo: per-ticket prior values)
@@ -77,7 +77,8 @@ def _make_ticket(session, profile, *, title="t", status="draft", priority=0,
 
 
 def _review_ticket(session, profile, *, title="rev"):
-    """A ticket parked in review (the only state from which archive is valid)."""
+    """A ticket parked in review (one of the states from which archive is
+    valid — draft/queued/review; see ``_ARCHIVABLE_SOURCES``)."""
     return _make_ticket(session, profile, title=title, status="review")
 
 
@@ -104,9 +105,26 @@ class TestBulkArchive:
         assert get_ticket(session, a.id).status == "archived"
         assert get_ticket(session, b.id).status == "archived"
 
-    async def test_skips_non_review(self, cookie_client, session, profile):
+    async def test_archives_draft_and_queued_tickets(self, cookie_client, session, profile):
+        """draft/queued are also valid archive sources — the non-destructive
+        discard path for a ticket that will never run."""
+        a = _make_ticket(session, profile, title="a", status="draft")
+        b = _make_ticket(session, profile, title="b", status="queued")
+        r = await cookie_client.post(
+            "/board/tickets/bulk/archive",
+            data={"ticket_ids": f"{a.id},{b.id}"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["updated"]) == 2
+        assert {u["status"] for u in body["updated"]} == {"archived"}
+        session.expire_all()
+        assert get_ticket(session, a.id).status == "archived"
+        assert get_ticket(session, b.id).status == "archived"
+
+    async def test_skips_non_archivable(self, cookie_client, session, profile):
         a = _review_ticket(session, profile, title="a")
-        b = _make_ticket(session, profile, title="b", status="draft")
+        b = _make_ticket(session, profile, title="b", status="running")
         r = await cookie_client.post(
             "/board/tickets/bulk/archive",
             data={"ticket_ids": f"{a.id},{b.id}"},
@@ -145,7 +163,7 @@ class TestBulkArchive:
 
     async def test_no_undo_when_nothing_archived(self, cookie_client, session,
                                                  profile):
-        b = _make_ticket(session, profile, title="b", status="draft")
+        b = _make_ticket(session, profile, title="b", status="running")
         r = await cookie_client.post(
             "/board/tickets/bulk/archive", data={"ticket_ids": b.id},
         )

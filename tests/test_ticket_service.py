@@ -154,8 +154,25 @@ def test_requeue_rejects_draft(session, sample_profile):
         requeue(session, t.id)
 
 
-def test_archive_only_from_review(session, sample_profile):
+def test_archive_from_draft(session, sample_profile):
+    """draft -> archived is the non-destructive discard path for a ticket
+    that will never run (e.g. a triage draft or one finished out of band)."""
     t = make_ticket(session, sample_profile)
+    out = archive(session, t.id)
+    assert out.status == "archived"
+
+
+def test_archive_from_queued(session, sample_profile):
+    t = make_ticket(session, sample_profile, status="queued")
+    out = archive(session, t.id)
+    assert out.status == "archived"
+
+
+def test_archive_rejects_running(session, sample_profile):
+    """A live run must go through review (cancel or finish) before it can be
+    archived."""
+    t = make_ticket(session, sample_profile, status="queued")
+    transition_status(session, t.id, "running")
     with pytest.raises(InvalidTransition):
         archive(session, t.id)
 

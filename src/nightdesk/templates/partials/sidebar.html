@@ -103,7 +103,7 @@
             >Run now</button>
           {% endif %}
         {% endif %}
-        {% if ticket.status == 'review' %}
+        {% if ticket.status in ('draft', 'queued', 'review') %}
           <button
             type="button"
             data-archive-btn

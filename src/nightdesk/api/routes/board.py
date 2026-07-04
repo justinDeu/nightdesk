@@ -1417,8 +1417,9 @@ def build_router(
         session: Session = Depends(get_session),
     ):
         """Cookie-auth bulk archive.  Archives every selected ticket that is in
-        ``review`` (the only valid source state); others are skipped.  The undo
-        payload unarchives exactly the tickets that were archived."""
+        ``draft``, ``queued``, or ``review``; others (e.g. ``running``) are
+        skipped.  The undo payload unarchives exactly the tickets that were
+        archived."""
         form = await request.form()
         raw_ids = (form.get("ticket_ids") or "")
         ticket_ids = [s.strip() for s in raw_ids.split(",") if s.strip()]
@@ -1556,13 +1557,13 @@ def build_router(
         request: Request,
         session: Session = Depends(get_session),
     ):
-        # Sidebar Archive button target. Performs the review->archived
-        # transition and re-renders the sidebar in edit mode for the same
-        # ticket. The hard requirement matches Run-now: no page navigation,
-        # the sidebar updates in place. Once archived, the new Archive
-        # button gate (status == 'review') no longer matches so the button
-        # disappears; Run-now stays visible because it's enabled for the
-        # archived status too.
+        # Sidebar Archive button target. Performs the draft|queued|review ->
+        # archived transition and re-renders the sidebar in edit mode for the
+        # same ticket. The hard requirement matches Run-now: no page
+        # navigation, the sidebar updates in place. Once archived, the
+        # Archive button gate (status in draft/queued/review) no longer
+        # matches so the button disappears; Run-now stays visible because
+        # it's enabled for the archived status too.
         try:
             archive(session, tid)
         except TicketNotFound:

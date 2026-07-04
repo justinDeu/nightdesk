@@ -453,13 +453,11 @@ async def test_archive_non_htmx_falls_back_to_303(cookie_client, session):
     assert after.status == "archived"
 
 
-async def test_archive_on_draft_returns_409(cookie_client, session):
-    """Archive is review-only per _VALID_TRANSITIONS; firing it on a draft
-    must error rather than silently no-op. 409 lets the template skip the
-    success-gated navigation so the user stays on the page and sees the
-    request failed."""
+async def test_archive_on_draft_succeeds(cookie_client, session):
+    """Archive is valid from draft/queued/review per _VALID_TRANSITIONS; a
+    draft ticket archives cleanly instead of erroring."""
     from nightdesk.domain.profiles import create_profile
-    from nightdesk.domain.tickets import create_ticket
+    from nightdesk.domain.tickets import create_ticket, get_ticket
 
     p = create_profile(
         session, name="arch-ui-draft", fs_read=[], fs_write=[], allowed_tools=[],
@@ -476,7 +474,11 @@ async def test_archive_on_draft_returns_409(cookie_client, session):
         headers={"HX-Request": "true"},
         follow_redirects=False,
     )
-    assert r.status_code == 409
+    assert r.status_code == 204
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.status == "archived"
 
 
 async def test_archive_missing_ticket_404(cookie_client):
@@ -515,10 +517,10 @@ async def test_sidebar_review_pane_shows_archive_button(cookie_client, session):
     assert ">Archive<" in body
 
 
-async def test_sidebar_draft_pane_omits_archive_button(cookie_client, session):
-    """Same gate as the detail page: only render Archive when status='review'.
-    A draft ticket must NOT see the button — the underlying transition would
-    409 and the user would think they archived something they didn't."""
+async def test_sidebar_draft_pane_shows_archive_button(cookie_client, session):
+    """Same gate as the detail page: Archive renders for
+    draft/queued/review. A draft ticket now sees the button — archiving
+    directly from draft is a legal transition (_ARCHIVABLE_SOURCES)."""
     from nightdesk.domain.profiles import create_profile
     from nightdesk.domain.tickets import create_ticket
 
@@ -530,6 +532,29 @@ async def test_sidebar_draft_pane_omits_archive_button(cookie_client, session):
     t = create_ticket(
         session, title="dft", prompt="", priority=0, profile_id=p.id,
         source_path="/tmp", run_now=False,  # default status='draft'
+    )
+
+    r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
+    assert r.status_code == 200
+    body = r.text
+    assert "data-archive-btn" in body
+    assert f'hx-post="/board/tickets/{t.id}/archive"' in body
+
+
+async def test_sidebar_running_pane_omits_archive_button(cookie_client, session):
+    """A live run is excluded from _ARCHIVABLE_SOURCES — archiving a running
+    ticket would orphan an in-flight process, so the button must not render."""
+    from nightdesk.domain.profiles import create_profile
+    from nightdesk.domain.tickets import create_ticket
+
+    p = create_profile(
+        session, name="arch-sb-running", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(
+        session, title="run", prompt="", priority=0, profile_id=p.id,
+        source_path="/tmp", run_now=False, status="running",
     )
 
     r = await cookie_client.get(f"/board/sidebar?ticket_id={t.id}")
@@ -579,9 +604,9 @@ async def test_board_archive_route_returns_sidebar_partial(cookie_client, sessio
     assert after.status == "archived"
 
 
-async def test_board_archive_on_draft_returns_409(cookie_client, session):
+async def test_board_archive_on_draft_succeeds(cookie_client, session):
     from nightdesk.domain.profiles import create_profile
-    from nightdesk.domain.tickets import create_ticket
+    from nightdesk.domain.tickets import create_ticket, get_ticket
 
     p = create_profile(
         session, name="arch-board-draft", fs_read=[], fs_write=[], allowed_tools=[],
@@ -597,7 +622,11 @@ async def test_board_archive_on_draft_returns_409(cookie_client, session):
         f"/board/tickets/{t.id}/archive",
         follow_redirects=False,
     )
-    assert r.status_code == 409
+    assert r.status_code == 200
+
+    session.expire_all()
+    after = get_ticket(session, t.id)
+    assert after.status == "archived"
 
 
 async def test_detail_page_archive_button_uses_cookie_auth_route(
