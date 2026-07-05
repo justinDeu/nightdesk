@@ -3,3 +3,4 @@ dist/
 .vite/
 *.local
 .playwright-mcp/
+design-screenshots/
