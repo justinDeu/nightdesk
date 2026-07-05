@@ -5,9 +5,12 @@ Covers:
     * Webhook does NOT fire when the URL is empty/NULL.
     * fire_webhook logs but does not raise on network failure.
     * build_run_completion_payload computes duration correctly.
-    * Settings page persists notify_webhook_url.
-    * Test-webhook endpoint fires a synthetic payload.
     * PATCH /api/v1/config accepts notify_webhook_url.
+
+The settings-page and test-webhook-button HTML routes were removed with the
+HTMX rip-out; their JSON equivalents (PATCH /api/v1/config,
+POST /api/v1/notifications/test) are covered here and in
+tests/test_api_v1_spa_gaps.py respectively.
 """
 import json
 import pytest
@@ -36,17 +39,6 @@ def app(engine, tmp_path):
         transcript_root=tmp_path / "transcripts",
         worktree_root=tmp_path / "work",
     )
-
-
-@pytest.fixture
-async def cookie_client(app):
-    transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://test",
-        cookies={"nightdesk_token": "t"},
-    ) as ac:
-        yield ac
 
 
 @pytest.fixture
@@ -194,94 +186,6 @@ class TestFireWebhook:
         )
         # Must not raise.
         fire_webhook("https://hooks.example.com/abc", payload)
-
-
-# -- settings page tests --------------------------------------------------
-
-class TestSettingsWebhook:
-    async def test_settings_get_renders_webhook_field(self, cookie_client, session):
-        session.add(ConfigRow(
-            id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
-            notify_webhook_url="https://ntfy.sh/my-topic",
-        ))
-        session.commit()
-
-        r = await cookie_client.get("/settings/notifications")
-        assert r.status_code == 200
-        assert 'name="notify_webhook_url"' in r.text
-        assert "ntfy.sh/my-topic" in r.text
-
-    async def test_settings_post_persists_webhook_url(self, cookie_client, session):
-        session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-        session.commit()
-
-        r = await cookie_client.post(
-            "/settings/notifications",
-            data={
-                "notify_webhook_url": "https://ntfy.sh/test",
-            },
-        )
-        assert r.status_code == 200
-        session.expire_all()
-        cfg = session.get(ConfigRow, 1)
-        assert cfg.notify_webhook_url == "https://ntfy.sh/test"
-
-    async def test_settings_post_clears_webhook_url(self, cookie_client, session):
-        session.add(ConfigRow(
-            id=1, worktree_root="/tmp/w", transcript_root="/tmp/t",
-            notify_webhook_url="https://ntfy.sh/old",
-        ))
-        session.commit()
-
-        r = await cookie_client.post(
-            "/settings/notifications",
-            data={
-                "notify_webhook_url": "",
-            },
-        )
-        assert r.status_code == 200
-        session.expire_all()
-        cfg = session.get(ConfigRow, 1)
-        assert cfg.notify_webhook_url is None
-
-
-# -- test-webhook endpoint tests ------------------------------------------
-
-class TestTestWebhookEndpoint:
-    @patch("nightdesk.api.routes.ui.fire_webhook")
-    async def test_test_webhook_fires(self, mock_fire, cookie_client, session):
-        session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-        session.commit()
-
-        r = await cookie_client.post(
-            "/settings/notifications/test-webhook",
-            data={"url": "https://ntfy.sh/test-topic"},
-        )
-        assert r.status_code == 204
-        mock_fire.assert_called_once()
-        payload = mock_fire.call_args[0][1]
-        assert payload.exit_status == "success"
-        assert "test" in payload.ticket_id
-
-    async def test_test_webhook_rejects_empty_url(self, cookie_client, session):
-        session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-        session.commit()
-
-        r = await cookie_client.post(
-            "/settings/notifications/test-webhook",
-            data={"url": ""},
-        )
-        assert r.status_code == 422
-
-    async def test_test_webhook_rejects_invalid_url(self, cookie_client, session):
-        session.add(ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t"))
-        session.commit()
-
-        r = await cookie_client.post(
-            "/settings/notifications/test-webhook",
-            data={"url": "not-a-url"},
-        )
-        assert r.status_code == 422
 
 
 # -- PATCH /api/v1/config webhook field tests -----------------------------

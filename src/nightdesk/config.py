@@ -62,6 +62,12 @@ class NightdeskConfig:
     # source; see domain/pricing.py for accepted shapes. Defaults to the
     # LiteLLM community price file (per-token USD, normalized to per-1M).
     pricing_url: str = DEFAULT_PRICING_URL
+    # Vite build output (frontend/dist) to mount at /app. None means "let
+    # api.app.create_app fall back to its own default (<repo>/frontend/dist
+    # relative to the installed package)" — unlike the other paths above,
+    # there is no sensible default under data_dir since this is a build
+    # artifact tied to the source checkout, not user data.
+    spa_dist: Optional[Path] = None
     secrets: dict[str, str] = field(default_factory=dict)
 
 
@@ -107,7 +113,7 @@ def load_config(
             if key in data:
                 setattr(cfg, key, data[key])
 
-        for key in ("db_path", "transcript_root", "log_dir", "worktree_root"):
+        for key in ("db_path", "transcript_root", "log_dir", "worktree_root", "spa_dist"):
             if key in data:
                 setattr(cfg, key, Path(os.path.expanduser(data[key])))
                 explicit_keys.add(key)
@@ -152,6 +158,8 @@ def load_config(
         cfg.worktree_base_ref = v
     if v := os.environ.get("NIGHTDESK_PRICING_URL"):
         cfg.pricing_url = v
+    if v := os.environ.get("NIGHTDESK_SPA_DIST"):
+        cfg.spa_dist = Path(os.path.expanduser(v))
 
     if secrets_path.exists():
         cfg.secrets = _parse_secrets(secrets_path.read_text())

@@ -1,23 +1,17 @@
 """Filesystem path suggestion endpoint.
 
-Used by the board sidebar to autocomplete directory paths. Read-only,
-restricted to local directory listing. Returns directory entries only
-(files are skipped) with trailing slash.
+Used by the ticket workspace editor to autocomplete directory paths.
+Read-only, restricted to local directory listing. Returns directory
+entries only (files are skipped) with trailing slash.
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-from starlette.requests import Request
+from fastapi import APIRouter, Depends, Query
 
-from nightdesk.api.auth import (
-    require_bearer,
-    require_token_cookie_or_bearer,
-)
+from nightdesk.api.auth import require_token_cookie_or_bearer
 
 
 _MAX_SUGGESTIONS = 25
@@ -94,31 +88,13 @@ def _suggest_dirs(prefix: str, limit: int = _MAX_SUGGESTIONS) -> list[str]:
     return out
 
 
-def build_router(get_session, bearer_token: str, templates: Jinja2Templates) -> APIRouter:
+def build_router(bearer_token: str) -> APIRouter:
     router = APIRouter(tags=["fs"])
-    cookie_or_bearer = Depends(require_token_cookie_or_bearer(bearer_token))
-    bearer = Depends(require_bearer(bearer_token))
+    auth = Depends(require_token_cookie_or_bearer(bearer_token))
 
-    @router.get("/api/v1/fs/suggest", dependencies=[bearer])
+    @router.get("/api/v1/fs/suggest", dependencies=[auth])
     async def suggest_api(prefix: str = Query(default=""),
                           limit: int = Query(default=_MAX_SUGGESTIONS, ge=1, le=100)):
         return {"prefix": prefix, "matches": _suggest_dirs(prefix, limit)}
-
-    @router.get("/fs/suggest", response_class=HTMLResponse, dependencies=[cookie_or_bearer])
-    async def suggest_html(request: Request,
-                           q: str = Query(default=""),
-                           target: str = Query(default="")):
-        """HTML partial for HTMX-driven autocomplete dropdowns.
-
-        ``q`` is the current input value. ``target`` identifies which
-        sidebar field the suggestions belong to so multiple inputs on
-        the page can each get their own dropdown.
-        """
-        matches = _suggest_dirs(q) if q else []
-        return templates.TemplateResponse(request, "partials/path_suggest.html", {
-            "matches": matches,
-            "target": target,
-            "q": q,
-        })
 
     return router

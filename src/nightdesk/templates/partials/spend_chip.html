@@ -1,7 +1,0 @@
-{# Header spend summary. Rendered into the #spend-chip <a> (links to
-   /analytics). Cost is an estimate (see domain/cost.py). #}
-<span class="inline-flex items-center gap-1.5">
-  <span class="text-fg-muted">$</span>
-  <span class="text-fg">{{ '%.2f'|format(status.day_spend_usd or 0) }}</span>
-  <span class="text-fg-muted">today</span>
-</span>

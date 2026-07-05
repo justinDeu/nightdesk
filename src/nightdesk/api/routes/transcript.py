@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.db.models import Run
-from nightdesk.domain.runs import list_runs
+from nightdesk.domain.runs import RunNotFound, get_run, list_runs
 from nightdesk.domain.tickets import get_ticket, TicketNotFound
 from nightdesk.transcript import is_canonical
 
@@ -124,6 +124,70 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
                         session.expire_all()
                         cur = session.get(type(t), tid)
                         if cur is None or cur.status != "running":
+                            yield "event: end\ndata: done\n\n"
+                            return
+                        await asyncio.sleep(0.5)
+                        continue
+                    chunk = _format_sse(line, since_seq) if canonical else _legacy_chunk(line)
+                    if chunk:
+                        yield chunk
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @router.get("/api/v1/runs/{rid}/transcript", dependencies=[auth])
+    async def run_transcript_sse(
+        request: Request,
+        rid: str,
+        since_seq: int = Query(-1),
+        session: Session = Depends(get_session),
+    ):
+        """Canonical transcript for ONE specific run (not just the latest).
+
+        Same SSE protocol as the per-ticket stream above (typed events with
+        ``id: <seq>``, ``Last-Event-ID`` resume, ``event: end`` terminator) so
+        the client renderer needs no run-vs-ticket branch. A finished run
+        replays its on-disk transcript once and ends immediately — no tailing,
+        since nothing will ever be appended to it again. A run still in
+        flight (``finished_at`` unset) tails exactly like the ticket endpoint,
+        polling until it finishes.
+        """
+        try:
+            run = get_run(session, rid)
+        except RunNotFound:
+            raise HTTPException(404, "run not found")
+        if not run.transcript_path:
+            raise HTTPException(404, "no transcript for this run")
+        path = Path(run.transcript_path)
+        if not path.exists():
+            raise HTTPException(404, "transcript file not found")
+
+        last_event_id = request.headers.get("last-event-id")
+        if last_event_id:
+            try:
+                since_seq = max(since_seq, int(last_event_id))
+            except (TypeError, ValueError):
+                pass
+
+        canonical = is_canonical(path)
+        is_live = run.finished_at is None
+
+        async def gen():
+            with path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    chunk = _format_sse(line, since_seq) if canonical else _legacy_chunk(line)
+                    if chunk:
+                        yield chunk
+                if not is_live:
+                    yield "event: end\ndata: done\n\n"
+                    return
+                # The run was in flight when we opened the file: tail it,
+                # exactly like the ticket endpoint, until it finishes.
+                while True:
+                    line = f.readline()
+                    if not line:
+                        session.expire_all()
+                        cur = session.get(Run, rid)
+                        if cur is None or cur.finished_at is not None:
                             yield "event: end\ndata: done\n\n"
                             return
                         await asyncio.sleep(0.5)

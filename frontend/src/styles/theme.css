@@ -1,0 +1,262 @@
+@import "tailwindcss";
+
+/* Self-hosted fonts (bundled via @fontsource, no network fetch). */
+@import "@fontsource/space-grotesk/400.css";
+@import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/600.css";
+@import "@fontsource/space-grotesk/700.css";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+/*
+ * dusk console — the nightdesk design language.
+ * Dark-first (used at night). Deliberately NOT near-black + acid-green.
+ * Every token below is bespoke; no Tailwind default palette color is used.
+ */
+@theme {
+  /* Surfaces (ink) — neutral near-black, no blue tint. Panels sit a touch
+     lighter than the page and lean on elevation (see shadows) rather than 1px
+     borders alone, so the UI reads with depth instead of flat outlines. */
+  --color-ink-950: #0a0a0b; /* page */
+  --color-ink-900: #171719; /* panels — lifted a notch off the page */
+  --color-ink-800: #232327; /* raised */
+  --color-ink-700: #42424b; /* borders / hover — one notch more visible */
+
+  /* Text (moon) — high contrast on the near-black surfaces (all >= 4.5:1 on
+     panel: moon-100 16.4, moon-400 9.3, moon-600 4.7). */
+  --color-moon-100: #f4f5f7; /* primary — near-white */
+  --color-moon-400: #b7bbc4; /* secondary — comfortable at reading size */
+  --color-moon-600: #7e828c; /* faint / draft — still passes text AA */
+
+  /* Accents */
+  --color-lamp: #e5a54b; /* desk-lamp amber — primary, focus, attention */
+  --color-lamp-soft: #f0c07f;
+  --color-dawn: #dc7264; /* pairs with lamp in the running gradient */
+
+  /* Status — nudged brighter to hold >= 4.5:1 text contrast on the darker ink. */
+  --color-review: #9c93f0; /* violet */
+  --color-queued: #8b99ae; /* steel */
+  --color-success: #63bd97; /* sage */
+  --color-failed: #e06b64; /* ember */
+
+  /* Typography */
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+
+  /* Radius — 8px controls, 12px cards */
+  --radius-control: 8px;
+  --radius-card: 12px;
+
+  /* Elevation — dark-UI depth needs layered ambient shadow (not just a y-offset)
+     plus a faint 1px inset top-highlight, the classic "lit from above" cue that
+     lifts a surface off near-black without a hard border. */
+  --shadow-raised:
+    0 1px 2px rgb(0 0 0 / 0.55),
+    0 6px 16px -4px rgb(0 0 0 / 0.5),
+    inset 0 1px 0 rgb(255 255 255 / 0.045);
+  --shadow-overlay:
+    0 2px 8px -1px rgb(0 0 0 / 0.5),
+    0 18px 44px -10px rgb(0 0 0 / 0.62),
+    inset 0 1px 0 rgb(255 255 255 / 0.05);
+
+  /* Aliases keep every existing consumer working while upgrading its depth:
+     cards use --shadow-panel, dialogs/dropdowns/popovers use --shadow-pop. */
+  --shadow-panel: var(--shadow-raised);
+  --shadow-pop: var(--shadow-overlay);
+
+  /* Motion */
+  --animate-dawn-drift: dawn-drift 6s ease-in-out infinite;
+  --animate-spin-slow: spin 0.8s linear infinite;
+}
+
+@keyframes dawn-drift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  * {
+    border-color: var(--color-ink-700);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-ink-950);
+    /* Faint top-center ambient: lifts the page off flat black so layered
+       surfaces read with a light source, not as cut-outs. Fixed so it doesn't
+       scroll; deliberately barely-there (~3%). */
+    background-image: radial-gradient(
+      1200px 620px at 50% -6%,
+      rgb(255 255 255 / 0.03),
+      transparent 60%
+    );
+    background-attachment: fixed;
+    color: var(--color-moon-100);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv05", "ss01";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Native date/time controls: keep them on the dark scheme and tame the
+     browser's picker indicator so it reads as part of the token system instead
+     of leaking default chrome. The meridiem (AM/PM) needs room — consumers size
+     these inputs wide enough that "12:00 AM" never clips. */
+  input[type="time"],
+  input[type="date"],
+  input[type="datetime-local"] {
+    color-scheme: dark;
+  }
+  input[type="time"]::-webkit-calendar-picker-indicator,
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+    filter: invert(0.65);
+    opacity: 0.55;
+    cursor: pointer;
+    padding-left: 2px;
+    transition: opacity 100ms;
+  }
+  input[type="time"]::-webkit-calendar-picker-indicator:hover,
+  input[type="date"]::-webkit-calendar-picker-indicator:hover,
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 0.95;
+  }
+
+  /* One consistent, visible focus ring everywhere. */
+  :focus-visible {
+    outline: 2px solid var(--color-lamp);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-lamp) 35%, transparent);
+    color: var(--color-moon-100);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-ink-700);
+    border-radius: 999px;
+    border: 2px solid var(--color-ink-950);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--color-ink-700) 70%, var(--color-moon-600));
+  }
+}
+
+@layer utilities {
+  /* The signature "dawn edge": a slow amber→coral gradient hairline that marks
+     any running ticket. Static under reduced-motion. */
+  .dawn-edge {
+    background-image: linear-gradient(
+      100deg,
+      var(--color-lamp),
+      var(--color-dawn),
+      var(--color-lamp)
+    );
+    background-size: 220% 100%;
+    animation: var(--animate-dawn-drift);
+  }
+
+  .dawn-text {
+    background-image: linear-gradient(100deg, var(--color-lamp), var(--color-dawn));
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: var(--animate-dawn-drift);
+  }
+
+  /* Failed-run wash: an ember gradient anchored at the LEFT edge, most present
+     there and fading to nothing by ~70% across, so a failed card/row reads warm
+     from the start of the scan without a uniform flat tint. Applied over the
+     surface's own background-color (cards keep bg-ink-900; rows keep theirs). */
+  .wash-failed {
+    background-image: linear-gradient(
+      to right,
+      color-mix(in srgb, var(--color-failed) 14%, transparent) 0%,
+      color-mix(in srgb, var(--color-failed) 6%, transparent) 34%,
+      transparent 70%
+    );
+  }
+  .wash-failed:hover {
+    background-image: linear-gradient(
+      to right,
+      color-mix(in srgb, var(--color-failed) 18%, transparent) 0%,
+      color-mix(in srgb, var(--color-failed) 8%, transparent) 34%,
+      transparent 72%
+    );
+  }
+
+  .pop-in {
+    animation: pop-in 120ms ease-out;
+  }
+  .fade-in {
+    animation: fade-in 120ms ease-out;
+  }
+  .overlay-in {
+    animation: overlay-in 140ms ease-out;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dawn-edge,
+    .dawn-text,
+    .pop-in,
+    .fade-in,
+    .overlay-in {
+      animation: none;
+      background-position: 0% 50%;
+    }
+  }
+}

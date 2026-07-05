@@ -1,36 +1,29 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.engine import Engine
 
 from nightdesk.api.deps import get_session_dep
-from nightdesk.api.routes import archive as archive_routes
+from nightdesk.api.routes import analytics as analytics_routes
 from nightdesk.api.routes import auth as auth_routes
-from nightdesk.api.routes import board as board_routes
 from nightdesk.api.routes import config as config_routes
 from nightdesk.api.routes import cron_jobs as cron_jobs_routes
-from nightdesk.api.routes import cron_page as cron_page_routes
-from nightdesk.api.routes import diagnostics as diagnostics_routes
 from nightdesk.api.routes import effective_config as effective_config_routes
 from nightdesk.api.routes import fs as fs_routes
-from nightdesk.api.routes import header as header_routes
 from nightdesk.api.routes import health
+from nightdesk.api.routes import helpers as helpers_routes
 from nightdesk.api.routes import inbox as inbox_routes
 from nightdesk.api.routes import labels as labels_routes
 from nightdesk.api.routes import profiles as profiles_routes
 from nightdesk.api.routes import projects as projects_routes
 from nightdesk.api.routes import runs as runs_routes
 from nightdesk.api.routes import search as search_routes
-from nightdesk.api.routes import ticket_page as ticket_page_routes
 from nightdesk.api.routes import tickets as tickets_routes
 from nightdesk.api.routes import transcript as transcript_routes
 from nightdesk.api.routes import saved_views as saved_views_routes
-from nightdesk.api.routes import ui as ui_routes
+from nightdesk.api import spa as spa_app
 from nightdesk.domain.pricing import DEFAULT_PRICING_URL
 
 
@@ -38,15 +31,25 @@ def create_app(
     *,
     engine: Engine,
     bearer_token: str,
-    static_root: Path,
-    transcript_root: Path,
-    worktree_root: Path,
+    # Unused now that the Jinja/HTMX surface is gone (there's nothing left to
+    # serve under /static). Kept as a parameter rather than removed outright
+    # so the many existing call sites/fixtures across the codebase that still
+    # pass it don't all need updating; the value is never read.
+    static_root: Path | None = None,
+    transcript_root: Path | None = None,
+    worktree_root: Path | None = None,
     bind_host: str = "127.0.0.1",
     bind_port: int = 8765,
     data_dir: Path | None = None,
     # Default is to fetch live and fall back to the bundled table; config only
     # overrides the URL. Pass an empty string to disable live resolution.
     pricing_url: str | None = DEFAULT_PRICING_URL,
+    # Vite build output (frontend/dist) mounted at / when present; see
+    # nightdesk.api.spa for the exact cache policy and the required Vite
+    # `base: "/"` setting. None resolves to spa.default_dist_root(); when
+    # that path has no build either, nothing is mounted and every /api/v1
+    # route is unaffected either way.
+    spa_dist_root: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="nightdesk", version="0.1.0")
     app.state.engine = engine
@@ -74,97 +77,28 @@ def create_app(
     app.include_router(transcript_routes.build_router(get_session, bearer_token))
     app.include_router(cron_jobs_routes.build_router(get_session, bearer_token))
     app.include_router(saved_views_routes.build_api_router(get_session, bearer_token))
-
-    templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
-    # Expose the transcript-renderer helpers so the Jinja macros can compute
-    # diff rows / bash elision / fenced-code segments without baking it into
-    # each template. The JS live-tail mirrors the same logic in JS.
-    from nightdesk import transcript_view as _tv  # local import: avoid cycles
-    templates.env.globals["tv"] = _tv
-
-    # Cache-busting helper for our own static assets. Appends the file's mtime
-    # as ?v= so a changed app.css / *.js is refetched instead of served stale
-    # from the browser cache. Falls back to the bare path if the file is
-    # missing (e.g. in tests with an empty static_root).
-    def _static_v(path: str) -> str:
-        try:
-            mtime = int((static_root / path).stat().st_mtime)
-        except OSError:
-            return f"/static/{path}"
-        return f"/static/{path}?v={mtime}"
-
-    templates.env.globals["static_v"] = _static_v
-
-    # Priority scale helpers for templates (label, css class, name lookup).
-    from nightdesk.domain.priority import priority_label, priority_css, priority_name, PRIORITY_SCALE
-    templates.env.globals["priority_label"] = priority_label
-    templates.env.globals["priority_css"] = priority_css
-    templates.env.globals["priority_name"] = priority_name
-    templates.env.globals["PRIORITY_SCALE"] = PRIORITY_SCALE
-
-    # Shared property-picker chip helper: property_chip(prop, ticket, project=None)
-    # returns the current-value chip dict for any registered metadata property
-    # (priority, status, project, …) so every template renders chips the same way.
-    from nightdesk.domain.properties import property_chip as _property_chip
-    templates.env.globals["property_chip"] = _property_chip
-
-    # Inbox triage helper: returns the list of reasons an under-specified inbox
-    # ticket is not yet promotable (empty list == complete). The inbox row uses
-    # it to gate the promote actions behind the completeness boundary.
-    from nightdesk.domain.saved_views import view_url as _view_url
-    templates.env.globals["view_url"] = _view_url
-
-    from nightdesk.domain.tickets import ticket_completeness as _ticket_completeness
-    from nightdesk.domain.tickets import ticket_missing_fields as _ticket_missing_fields
-    templates.env.globals["inbox_blockers"] = _ticket_completeness
-    # Field-level companion: which edit-modal inputs an inbox item must still
-    # satisfy before promotion, so the promote modal can highlight exactly them.
-    templates.env.globals["inbox_missing_fields"] = _ticket_missing_fields
-
-    # UTC ISO string for client-side localization (localize_time.js). Run/
-    # ticket datetimes are UTC but come back from SQLite naive; emitting a bare
-    # isoformat() would make the browser parse them as local time. Force a UTC
-    # offset so ``new Date()`` interprets them correctly, then renders in the
-    # viewer's own timezone.
-    def _iso_utc(dt: datetime | None) -> str:
-        if dt is None:
-            return ""
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc).isoformat()
-
-    templates.env.globals["iso_utc"] = _iso_utc
-    app.state.templates = templates
-    app.include_router(ui_routes.build_router(get_session, bearer_token, templates,
-                                                          transcript_root=transcript_root))
-    app.include_router(profiles_routes.build_html_router(get_session, bearer_token, templates))
-    app.include_router(board_routes.build_router(
-        get_session, bearer_token, templates,
-        transcript_root=transcript_root, worktree_root=worktree_root,
+    app.include_router(inbox_routes.build_api_router(get_session, bearer_token))
+    app.include_router(analytics_routes.build_router(get_session, bearer_token))
+    app.include_router(helpers_routes.build_router(
+        get_session, bearer_token, worktree_root=worktree_root,
     ))
-    app.include_router(archive_routes.build_router(get_session, bearer_token, templates))
-    app.include_router(inbox_routes.build_router(get_session, bearer_token, templates))
-    app.include_router(ticket_page_routes.build_router(get_session, bearer_token, templates))
-    app.include_router(effective_config_routes.build_router(get_session, bearer_token, templates))
-    app.include_router(cron_page_routes.build_router(get_session, bearer_token, templates))
-    app.include_router(saved_views_routes.build_router(get_session, bearer_token, templates))
-    app.include_router(header_routes.build_router(
-        get_session, bearer_token, templates,
-        worktree_root=str(worktree_root), transcript_root=str(transcript_root),
-    ))
-    app.include_router(fs_routes.build_router(get_session, bearer_token, templates))
+    app.include_router(fs_routes.build_router(bearer_token))
     app.include_router(auth_routes.build_router(
         bearer_token=bearer_token,
         one_shot_store=app.state.one_shot_store,
-        templates=templates,
         session_cookie_max_age=60 * 60 * 24 * 30,
         bind_host=bind_host,
         bind_port=bind_port,
     ))
-    app.include_router(diagnostics_routes.build_router(
-        bearer_token=bearer_token, engine=engine, templates=templates,
-    ))
 
-    static_root.mkdir(parents=True, exist_ok=True)
-    app.mount("/static", StaticFiles(directory=str(static_root)), name="static")
+    # SPA serving. The legacy-redirect router (/app/* -> 308 -> /*) must be
+    # registered before the SPA root router below, and the SPA root router
+    # must be registered LAST of all — its GET /{path:path} catch-all would
+    # otherwise shadow every route after it. See nightdesk.api.spa's module
+    # docstring for the full reasoning.
+    app.include_router(spa_app.build_app_redirect_router())
+    spa_router = spa_app.build_router(spa_dist_root or spa_app.default_dist_root())
+    if spa_router is not None:
+        app.include_router(spa_router)
+
     return app

@@ -18,4 +18,5 @@ def make():
         worktree_root=cfg.worktree_root,
         data_dir=cfg.data_dir,
         pricing_url=cfg.pricing_url,
+        spa_dist_root=cfg.spa_dist,
     )

@@ -4,7 +4,9 @@ A saved view captures the URL params for a surface so the user can navigate
 back to a recurring query with one click.  Applying a view is pure client-side
 navigation to the composed URL — no server-side rendering state.
 
-Surfaces: "board" (/?q=&group=) and "list" (/list?q=&group=&order=).
+Surfaces: "tickets" (/tickets?f=&view=) is the live SPA surface; "board"
+(/?q=&group=) and "list" (/list?q=&group=&order=) are legacy surfaces kept
+valid so older stored views keep resolving.
 """
 from __future__ import annotations
 
@@ -21,21 +23,26 @@ from nightdesk.db.models import SavedView
 # Surface constants
 # ---------------------------------------------------------------------------
 
-VALID_SURFACES: frozenset[str] = frozenset(["board", "list"])
+VALID_SURFACES: frozenset[str] = frozenset(["tickets", "board", "list"])
 
 # Allowed URL params per surface.  All values must be non-empty strings.
+# "tickets" is the live SPA surface (filter string ``f`` + board/list ``view``);
+# it also tolerates the legacy keys so a view is never rejected on a key that was
+# valid for the older surfaces.
 SURFACE_ALLOWED_PARAMS: dict[str, frozenset[str]] = {
+    "tickets": frozenset(["f", "view", "q", "group", "order", "props"]),
     "board": frozenset(["q", "group", "order", "props"]),
     "list": frozenset(["q", "group", "order", "props"]),
 }
 
 _SURFACE_PATHS: dict[str, str] = {
+    "tickets": "/tickets",
     "board": "/",
     "list": "/list",
 }
 
 # Stable emission order so URLs are deterministic.
-_PARAM_ORDER = ("q", "group", "order", "props")
+_PARAM_ORDER = ("f", "view", "q", "group", "order", "props")
 
 
 # ---------------------------------------------------------------------------

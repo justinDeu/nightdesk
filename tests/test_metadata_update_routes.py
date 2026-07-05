@@ -1,7 +1,6 @@
 """Tests for focused ticket metadata update routes.
 
-Covers both the JSON API (/api/v1/tickets/{tid}/priority|status|project|profile)
-and the HTMX board routes (/board/tickets/{tid}/priority|status|project|profile),
+Covers the JSON API (/api/v1/tickets/{tid}/priority|status|project|profile)
 plus the bulk variants.  Validates:
   - Sparse updates touch only the target field.
   - Status transitions respect the lifecycle state machine.
@@ -38,18 +37,6 @@ def app(engine, tmp_path):
         transcript_root=tmp_path / "transcripts",
         worktree_root=tmp_path / "work",
     )
-
-
-@pytest.fixture
-async def cookie_client(app):
-    """Cookie-auth client (HTMX / board routes)."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://test",
-        cookies={"nightdesk_token": "t"},
-    ) as ac:
-        yield ac
 
 
 @pytest.fixture
@@ -434,256 +421,6 @@ class TestBulkProfileUpdate:
 
 
 # ===========================================================================
-# HTMX / board routes — single-ticket focused updates
-# ===========================================================================
-
-
-class TestHTMXPriorityUpdate:
-    """POST /board/tickets/{tid}/priority"""
-
-    async def test_updates_priority(self, cookie_client, session, profile):
-        t = _make_ticket(session, profile, priority=0)
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/priority",
-            data={"priority": "4"},
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert body["priority"] == 4
-        session.expire_all()
-        assert get_ticket(session, t.id).priority == 4
-
-    async def test_rejects_negative(self, cookie_client, session, profile):
-        t = _make_ticket(session, profile)
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/priority",
-            data={"priority": "-1"},
-        )
-        assert r.status_code == 422
-
-    async def test_rejects_out_of_range(self, cookie_client, session, profile):
-        t = _make_ticket(session, profile)
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/priority",
-            data={"priority": "5"},
-        )
-        assert r.status_code == 422
-
-    async def test_missing_ticket_404(self, cookie_client, session, profile):
-        r = await cookie_client.post(
-            "/board/tickets/nonexistent/priority",
-            data={"priority": "3"},
-        )
-        assert r.status_code == 404
-
-
-class TestHTMXStatusUpdate:
-    """POST /board/tickets/{tid}/status"""
-
-    async def test_valid_transition(self, cookie_client, session, profile):
-        t = _make_ticket(session, profile, status="draft")
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/status",
-            data={"new_status": "queued"},
-        )
-        assert r.status_code == 200
-        assert r.json()["status"] == "queued"
-
-    async def test_invalid_transition_409(self, cookie_client, session, profile):
-        t = _make_ticket(session, profile, status="draft")
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/status",
-            data={"new_status": "review"},
-        )
-        assert r.status_code == 409
-
-    async def test_missing_ticket_404(self, cookie_client, session, profile):
-        r = await cookie_client.post(
-            "/board/tickets/nonexistent/status",
-            data={"new_status": "queued"},
-        )
-        assert r.status_code == 404
-
-
-class TestHTMXProjectUpdate:
-    """POST /board/tickets/{tid}/project"""
-
-    async def test_assigns_project(self, cookie_client, session, profile):
-        project = create_project(session, name="htmx-proj", source_path="/tmp/hp")
-        t = _make_ticket(session, profile)
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/project",
-            data={"project_id": project.id},
-        )
-        assert r.status_code == 200
-        assert r.json()["project_id"] == project.id
-
-    async def test_clears_project_with_empty(self, cookie_client, session, profile):
-        t = _make_ticket(session, profile)
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/project",
-            data={"project_id": ""},
-        )
-        assert r.status_code == 200
-        assert r.json()["project_id"] is None
-
-    async def test_rejects_unknown_project(self, cookie_client, session, profile):
-        t = _make_ticket(session, profile)
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/project",
-            data={"project_id": "nonexistent"},
-        )
-        assert r.status_code == 404
-
-
-class TestHTMXProfileUpdate:
-    """POST /board/tickets/{tid}/profile"""
-
-    async def test_reassigns_profile(self, cookie_client, session, profile,
-                                      profile_b):
-        t = _make_ticket(session, profile)
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/profile",
-            data={"profile_id": profile_b.id},
-        )
-        assert r.status_code == 200
-        assert r.json()["profile_id"] == profile_b.id
-
-    async def test_rejects_unknown_profile(self, cookie_client, session, profile):
-        t = _make_ticket(session, profile)
-        r = await cookie_client.post(
-            f"/board/tickets/{t.id}/profile",
-            data={"profile_id": "nonexistent"},
-        )
-        assert r.status_code == 404
-
-
-# ===========================================================================
-# HTMX / board routes — bulk focused updates
-# ===========================================================================
-
-
-class TestHTMXBulkPriority:
-    """POST /board/tickets/bulk/priority"""
-
-    async def test_updates_multiple(self, cookie_client, session, profile):
-        a = _make_ticket(session, profile, title="a", priority=0)
-        b = _make_ticket(session, profile, title="b", priority=1)
-        r = await cookie_client.post(
-            "/board/tickets/bulk/priority",
-            data={"ticket_ids": f"{a.id},{b.id}", "priority": "4"},
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert len(body["updated"]) == 2
-        assert len(body["skipped"]) == 0
-
-    async def test_rejects_out_of_range_bulk_priority(self, cookie_client, session, profile):
-        a = _make_ticket(session, profile, title="a")
-        r = await cookie_client.post(
-            "/board/tickets/bulk/priority",
-            data={"ticket_ids": a.id, "priority": "5"},
-        )
-        assert r.status_code == 422
-
-    async def test_skips_missing(self, cookie_client, session, profile):
-        a = _make_ticket(session, profile, title="a")
-        r = await cookie_client.post(
-            "/board/tickets/bulk/priority",
-            data={"ticket_ids": f"{a.id},nonexistent", "priority": "3"},
-        )
-        assert r.status_code == 200
-        assert len(r.json()["updated"]) == 1
-        assert len(r.json()["skipped"]) == 1
-
-    async def test_rejects_empty_ids(self, cookie_client, session, profile):
-        r = await cookie_client.post(
-            "/board/tickets/bulk/priority",
-            data={"ticket_ids": "", "priority": "3"},
-        )
-        assert r.status_code == 422
-
-
-class TestHTMXBulkStatus:
-    """POST /board/tickets/bulk/status"""
-
-    async def test_transitions_multiple(self, cookie_client, session, profile):
-        a = _make_ticket(session, profile, title="a", status="draft")
-        b = _make_ticket(session, profile, title="b", status="draft")
-        r = await cookie_client.post(
-            "/board/tickets/bulk/status",
-            data={"ticket_ids": f"{a.id},{b.id}", "status": "queued"},
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert len(body["updated"]) == 2
-
-    async def test_skips_invalid_transitions(self, cookie_client, session, profile):
-        a = _make_ticket(session, profile, title="a", status="draft")
-        b = _make_ticket(session, profile, title="b", status="running")
-        r = await cookie_client.post(
-            "/board/tickets/bulk/status",
-            data={"ticket_ids": f"{a.id},{b.id}", "status": "queued"},
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert len(body["updated"]) == 1
-        assert len(body["skipped"]) == 1
-
-
-class TestHTMXBulkProject:
-    """POST /board/tickets/bulk/project"""
-
-    async def test_assigns_project_to_multiple(self, cookie_client, session,
-                                                profile):
-        project = create_project(session, name="bulk-htmx-proj",
-                                  source_path="/tmp/bhp")
-        a = _make_ticket(session, profile, title="a")
-        b = _make_ticket(session, profile, title="b")
-        r = await cookie_client.post(
-            "/board/tickets/bulk/project",
-            data={"ticket_ids": f"{a.id},{b.id}", "project_id": project.id},
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert len(body["updated"]) == 2
-
-    async def test_rejects_unknown_project(self, cookie_client, session,
-                                            profile):
-        a = _make_ticket(session, profile, title="a")
-        r = await cookie_client.post(
-            "/board/tickets/bulk/project",
-            data={"ticket_ids": a.id, "project_id": "nonexistent"},
-        )
-        assert r.status_code == 404
-
-
-class TestHTMXBulkProfile:
-    """POST /board/tickets/bulk/profile"""
-
-    async def test_reassigns_multiple(self, cookie_client, session, profile,
-                                       profile_b):
-        a = _make_ticket(session, profile, title="a")
-        b = _make_ticket(session, profile, title="b")
-        r = await cookie_client.post(
-            "/board/tickets/bulk/profile",
-            data={"ticket_ids": f"{a.id},{b.id}", "profile_id": profile_b.id},
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert len(body["updated"]) == 2
-
-    async def test_rejects_unknown_profile(self, cookie_client, session,
-                                            profile):
-        a = _make_ticket(session, profile, title="a")
-        r = await cookie_client.post(
-            "/board/tickets/bulk/profile",
-            data={"ticket_ids": a.id, "profile_id": "nonexistent"},
-        )
-        assert r.status_code == 404
-
-
-# ===========================================================================
 # Regression: existing PATCH semantics preserved
 # ===========================================================================
 
@@ -743,7 +480,7 @@ class TestExistingPatchPreserved:
 
 
 class TestFocusedRoutesRequireAuth:
-    """Both JSON API and HTMX focused routes reject unauthenticated requests."""
+    """The focused JSON routes reject unauthenticated requests."""
 
     async def test_json_priority_requires_auth(self, app):
         transport = ASGITransport(app=app)
@@ -769,28 +506,9 @@ class TestFocusedRoutesRequireAuth:
             r = await ac.patch("/api/v1/tickets/x/profile", json={"profile_id": "x"})
             assert r.status_code == 401
 
-    async def test_htmx_priority_requires_auth(self, app):
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            r = await ac.post("/board/tickets/x/priority", data={"priority": "1"})
-            assert r.status_code == 401
-
-    async def test_htmx_status_requires_auth(self, app):
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            r = await ac.post("/board/tickets/x/status", data={"new_status": "queued"})
-            assert r.status_code == 401
-
     async def test_json_bulk_requires_auth(self, app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             r = await ac.patch("/api/v1/tickets/bulk/priority",
                                json={"ticket_ids": ["x"], "priority": 1})
-            assert r.status_code == 401
-
-    async def test_htmx_bulk_requires_auth(self, app):
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            r = await ac.post("/board/tickets/bulk/priority",
-                              data={"ticket_ids": "x", "priority": "1"})
             assert r.status_code == 401

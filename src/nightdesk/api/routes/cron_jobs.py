@@ -15,7 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_bearer
+from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.api.schemas import CronJobCreate, CronJobOut, CronJobUpdate, TicketOut
 from nightdesk.domain.cron_jobs import (
     CronJobNotFound, InvalidCronJob,
@@ -36,7 +36,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/cron-jobs",
         tags=["cron-jobs"],
-        dependencies=[Depends(require_bearer(bearer_token))],
+        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
     )
 
     @router.post("", response_model=CronJobOut, status_code=status.HTTP_201_CREATED)

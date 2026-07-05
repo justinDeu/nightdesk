@@ -3,30 +3,39 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_bearer
+from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.domain.projects import ProjectNotFound
 from nightdesk.api.schemas import (
+    AdditionalDirAdd,
+    BulkArchiveRequest, BulkLabelsUpdate,
     BulkPriorityUpdate, BulkProfileUpdate, BulkProjectUpdate, BulkStatusUpdate,
     BulkUpdateResult,
     DependencyCreate, DependencyOut,
-    TicketContinue, TicketCreate, TicketNewConversation, TicketOut,
+    TicketClone, TicketContinue, TicketCreate, TicketNewConversation,
+    TicketNextRunContext, TicketOut,
     TicketPriorityUpdate, TicketProfileUpdate,
-    TicketProjectUpdate, TicketReorder, TicketStatusUpdate, TicketTransition,
+    TicketProjectUpdate, TicketReorder, TicketRestart, TicketResumeOrRetry,
+    TicketStatusUpdate, TicketTransition,
     TicketUpdate,
 )
 from nightdesk.domain.tickets import (
-    add_dependency, archive, bulk_update_priority, bulk_update_profile,
-    bulk_update_project, bulk_update_status, continue_ticket, count_tickets,
+    add_dependency, archive, bulk_archive, bulk_unarchive,
+    bulk_update_priority, bulk_update_profile,
+    bulk_update_project, bulk_update_status, clone_ticket, continue_ticket,
+    count_tickets,
     create_ticket,
-    delete_ticket, get_ticket, list_tickets, new_conversation_ticket,
+    delete_ticket, get_ticket, list_tickets,
+    merge_next_run_context_into_prompt, new_conversation_ticket,
     remove_dependency, requeue,
-    reorder_in_column, request_run_now, set_run_now, transition_status,
+    reorder_in_column, request_run_now, restart_ticket, resume_ticket,
+    retry_ticket, send_to_inbox, set_next_run_context, set_run_now, transition_status,
     transition_with_position, unarchive, update_ticket,
     update_ticket_priority, update_ticket_profile, update_ticket_project,
     ConversationNotResumable, TicketNotFound, InvalidTransition,
     CyclicDependency, DependencyNotFound,
 )
 from nightdesk.domain.profiles import ProfileNotFound
+from nightdesk.domain.labels import LabelNotFound, set_ticket_labels
 
 
 # Hard ceiling on the page size for GET /api/v1/tickets. The default ``limit``
@@ -108,7 +117,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/tickets",
         tags=["tickets"],
-        dependencies=[Depends(require_bearer(bearer_token))],
+        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
     )
 
     @router.post("", response_model=TicketOut, status_code=status.HTTP_201_CREATED)
@@ -137,6 +146,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         project_id: str | None = Query(default=None),
         limit: int = Query(default=200, ge=1, le=MAX_LIST_LIMIT),
         offset: int = Query(default=0, ge=0),
+        sort: str = Query(default="board", pattern="^(board|recent)$"),
         session: Session = Depends(get_session),
     ):
         """List tickets, one page at a time.
@@ -147,10 +157,15 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         the whole result set, so callers can never mistake a truncated slice for
         completeness — the original bug was exactly that a larger ``limit`` was
         ignored and 200 rows were returned with no signal of truncation.
+
+        ``sort`` defaults to ``board`` (position-stable, unchanged for existing
+        callers). ``sort=recent`` orders by ``updated_at`` desc — the newest-
+        first order the Archive page uses so page 1 is the most recently
+        archived. Any other value is a 422.
         """
         tickets = list_tickets(
             session, status=status, profile_id=profile_id,
-            project_id=project_id, limit=limit, offset=offset,
+            project_id=project_id, limit=limit, offset=offset, sort=sort,
         )
         total = count_tickets(
             session, status=status, profile_id=profile_id, project_id=project_id,
@@ -235,6 +250,50 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             return [_ticket_to_out(t) for t in tickets]
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
+
+    @router.patch("/bulk/labels", response_model=BulkUpdateResult)
+    async def bulk_labels(
+        payload: BulkLabelsUpdate,
+        session: Session = Depends(get_session),
+    ):
+        """Replace the label set on every listed ticket (not additive — mirrors
+        the per-ticket PUT ``/api/v1/labels/tickets/{id}`` semantics)."""
+        updated = []
+        skipped = []
+        for tid in payload.ticket_ids:
+            try:
+                t = set_ticket_labels(session, tid, payload.label_ids)
+                updated.append(t)
+            except TicketNotFound:
+                skipped.append({"ticket_id": tid, "reason": "not found"})
+            except LabelNotFound as e:
+                skipped.append({"ticket_id": tid, "reason": str(e)})
+        return BulkUpdateResult(
+            updated=[_ticket_to_out(t) for t in updated],
+            skipped=skipped,
+        )
+
+    @router.post("/bulk/archive", response_model=BulkUpdateResult)
+    async def bulk_archive_route(
+        payload: BulkArchiveRequest,
+        session: Session = Depends(get_session),
+    ):
+        updated, skipped = bulk_archive(session, payload.ticket_ids)
+        return BulkUpdateResult(
+            updated=[_ticket_to_out(t) for t in updated],
+            skipped=skipped,
+        )
+
+    @router.post("/bulk/unarchive", response_model=BulkUpdateResult)
+    async def bulk_unarchive_route(
+        payload: BulkArchiveRequest,
+        session: Session = Depends(get_session),
+    ):
+        updated, skipped = bulk_unarchive(session, payload.ticket_ids)
+        return BulkUpdateResult(
+            updated=[_ticket_to_out(t) for t in updated],
+            skipped=skipped,
+        )
 
     # --- Per-ticket routes (path parameter {tid}) --------------------------------
 
@@ -343,6 +402,24 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
+    @router.post("/{tid}/send-to-inbox", response_model=TicketOut)
+    async def send_to_inbox_route(tid: str, session: Session = Depends(get_session)):
+        """Send a draft ticket back to the inbox. Valid ONLY from ``draft``;
+        every other status is a 409 (see ``domain.tickets.send_to_inbox``).
+
+        The generic ``POST /{tid}/transition`` endpoint deliberately refuses
+        ``status: "inbox"`` as a target (``TicketTransition`` excludes it —
+        promotion is a one-way crossing everywhere else in the API), so this
+        is the only JSON path back into the inbox for an existing ticket.
+        """
+        try:
+            t = send_to_inbox(session, tid)
+            return _ticket_to_out(t)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+
     @router.post("/{tid}/continue", response_model=TicketOut)
     async def continue_route(
         tid: str, payload: TicketContinue,
@@ -395,6 +472,125 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, str(e))
         except ProfileNotFound:
             raise HTTPException(404, "profile not found")
+        return _ticket_to_out(t)
+
+    @router.post("/{tid}/resume", response_model=TicketOut)
+    async def resume_route(
+        tid: str, payload: TicketResumeOrRetry,
+        session: Session = Depends(get_session),
+    ):
+        """Fresh-context agent on the same worktree (a new conversation
+        internally). JSON parity with the HTMX ``/tickets/{tid}/resume`` form."""
+        try:
+            t = resume_ticket(session, tid, next_run_context=payload.message)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        return _ticket_to_out(t)
+
+    @router.post("/{tid}/retry", response_model=TicketOut)
+    async def retry_route(
+        tid: str, payload: TicketResumeOrRetry,
+        session: Session = Depends(get_session),
+    ):
+        """Re-attempt on the same worktree, fresh context. JSON parity with the
+        HTMX ``/tickets/{tid}/retry`` form."""
+        try:
+            t = retry_ticket(session, tid, next_run_context=payload.message)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        return _ticket_to_out(t)
+
+    @router.post("/{tid}/restart", response_model=TicketOut)
+    async def restart_route(
+        tid: str, payload: TicketRestart,
+        session: Session = Depends(get_session),
+    ):
+        """Fresh worktree, fresh context. JSON parity with the HTMX
+        ``/tickets/{tid}/restart`` form."""
+        try:
+            t = restart_ticket(
+                session, tid,
+                next_run_context=payload.message,
+                workspace_policy=payload.workspace_policy,
+            )
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        except InvalidTransition as e:
+            raise HTTPException(409, str(e))
+        return _ticket_to_out(t)
+
+    @router.post("/{tid}/clone", response_model=TicketOut, status_code=status.HTTP_201_CREATED)
+    async def clone_route(
+        tid: str, payload: TicketClone,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            cloned = clone_ticket(
+                session, tid,
+                title=(payload.title or "").strip() or None,
+                carry_context=payload.carry_context,
+            )
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        return _ticket_to_out(cloned)
+
+    @router.post("/{tid}/next-run-context", response_model=TicketOut)
+    async def next_run_context_route(
+        tid: str, payload: TicketNextRunContext,
+        session: Session = Depends(get_session),
+    ):
+        """Stage (or clear, with an empty body) a steering note for the next run."""
+        try:
+            t = set_next_run_context(session, tid, payload.body)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        return _ticket_to_out(t)
+
+    @router.post("/{tid}/merge-next-run-context", response_model=TicketOut)
+    async def merge_next_run_context_route(
+        tid: str, session: Session = Depends(get_session),
+    ):
+        """Fold the staged next-run-context into the prompt and clear it."""
+        try:
+            t = merge_next_run_context_into_prompt(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return _ticket_to_out(t)
+
+    @router.post("/{tid}/additional-dirs", response_model=TicketOut)
+    async def add_additional_dir_route(
+        tid: str, payload: AdditionalDirAdd,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            t = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        dirs = list(t.additional_dirs or [])
+        if not any(d.get("path") == payload.path for d in dirs):
+            dirs.append({"path": payload.path, "mode": payload.mode})
+            t = update_ticket(session, tid, additional_dirs=dirs)
+        return _ticket_to_out(t)
+
+    @router.delete("/{tid}/additional-dirs", response_model=TicketOut)
+    async def remove_additional_dir_route(
+        tid: str, path: str = Query(...),
+        session: Session = Depends(get_session),
+    ):
+        try:
+            t = get_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        dirs = [d for d in (t.additional_dirs or []) if d.get("path") != path]
+        t = update_ticket(session, tid, additional_dirs=dirs)
         return _ticket_to_out(t)
 
     @router.delete("/{tid}", status_code=status.HTTP_204_NO_CONTENT)

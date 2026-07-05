@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from pathlib import Path
 
-from nightdesk.api.auth import require_bearer
+from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.api.schemas import RunOut
 from nightdesk.db.models import TicketWorkspace
 from nightdesk.domain.diff import (
@@ -21,7 +21,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/runs",
         tags=["runs"],
-        dependencies=[Depends(require_bearer(bearer_token))],
+        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
     )
 
     @router.get("", response_model=list[RunOut])

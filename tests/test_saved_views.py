@@ -4,17 +4,9 @@ Covers:
   - Domain CRUD: create, list, get, rename, delete, reorder
   - Domain validation: name required, surface whitelist, params whitelist
   - URL composition: q/group/order round-trip for board and list
-  - HTMX routes: save, delete, rename, menu fragment (auth + behavior)
-  - JSON API: GET /api/v1/views
-  - Nav menu HTML: saved views appear; empty state when none
-  - Command palette JS: ndSavedViews hook, g-v shortcut
-  - board/list template: Save view button present
-  - Cheatsheet: g-v documented
+  - JSON API: full CRUD + reorder on /api/v1/views (auth + behavior)
 """
 from __future__ import annotations
-
-import shutil
-from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -34,8 +26,6 @@ from nightdesk.domain.saved_views import (
     view_url,
 )
 
-_SRC_STATIC = Path(__file__).resolve().parent.parent / "src" / "nightdesk" / "static"
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -44,13 +34,9 @@ _SRC_STATIC = Path(__file__).resolve().parent.parent / "src" / "nightdesk" / "st
 
 @pytest.fixture
 def app(engine, tmp_path):
-    static_dst = tmp_path / "static"
-    if _SRC_STATIC.is_dir():
-        shutil.copytree(str(_SRC_STATIC), str(static_dst), dirs_exist_ok=True)
     return create_app(
         engine=engine,
         bearer_token="t",
-        static_root=static_dst,
         transcript_root=tmp_path / "transcripts",
         worktree_root=tmp_path / "work",
     )
@@ -308,13 +294,90 @@ def test_view_url_special_chars_encoded(session):
 
 
 # ---------------------------------------------------------------------------
+# Domain + URL: "tickets" surface (the live SPA surface)
+# ---------------------------------------------------------------------------
+
+
+def test_tickets_surface_valid():
+    assert "tickets" in VALID_SURFACES
+    assert "f" in SURFACE_ALLOWED_PARAMS["tickets"]
+    assert "view" in SURFACE_ALLOWED_PARAMS["tickets"]
+
+
+def test_tickets_surface_create_with_f_and_view(session):
+    v = create_saved_view(
+        session, name="Running board", surface="tickets",
+        params={"f": "status:running", "view": "board"},
+    )
+    assert v.surface == "tickets"
+    assert v.params == {"f": "status:running", "view": "board"}
+
+
+def test_tickets_surface_accepts_legacy_keys(session):
+    # Additive: legacy keys stay valid so nothing that used them breaks.
+    v = create_saved_view(
+        session, name="Legacy-ish", surface="tickets",
+        params={"q": "project=nd", "group": "status"},
+    )
+    assert v.params == {"q": "project=nd", "group": "status"}
+
+
+def test_tickets_surface_unknown_param_rejected(session):
+    with pytest.raises(ValueError, match="unknown params"):
+        create_saved_view(
+            session, name="Bad", surface="tickets", params={"bogus": "x"},
+        )
+
+
+def test_view_url_tickets_with_f_and_view(session):
+    v = create_saved_view(
+        session, name="Running", surface="tickets",
+        params={"f": "status:running", "view": "list"},
+    )
+    url = view_url(v)
+    assert url.startswith("/tickets?")
+    assert "view=list" in url
+    # f is percent-encoded (the ":" becomes %3A).
+    assert "f=" in url
+    f_idx = url.index("f=")
+    view_idx = url.index("view=")
+    assert f_idx < view_idx
+
+
+def test_view_url_tickets_empty_params(session):
+    v = create_saved_view(session, name="Bare tickets", surface="tickets", params={})
+    assert view_url(v) == "/tickets"
+
+
+async def test_api_save_tickets_view_round_trips(bearer_client, session):
+    r = await bearer_client.post(
+        "/api/v1/views",
+        json={
+            "name": "SPA view",
+            "surface": "tickets",
+            "params": {"f": "label:bug", "view": "board"},
+        },
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["surface"] == "tickets"
+    assert body["params"] == {"f": "label:bug", "view": "board"}
+    assert body["url"].startswith("/tickets?")
+    # Round-trips through the list endpoint too.
+    lst = await bearer_client.get("/api/v1/views")
+    assert lst.status_code == 200
+    stored = next(x for x in lst.json() if x["id"] == body["id"])
+    assert stored["params"] == {"f": "label:bug", "view": "board"}
+
+
+# ---------------------------------------------------------------------------
 # Routes: save (POST /views)
 # ---------------------------------------------------------------------------
 
 
-async def test_save_view_creates(client, session):
-    r = await client.post(
-        "/views",
+async def test_api_save_view_creates(bearer_client, session):
+    r = await bearer_client.post(
+        "/api/v1/views",
         json={"name": "Backend work", "surface": "board", "params": {"q": "project=backend"}},
     )
     assert r.status_code == 201
@@ -326,146 +389,110 @@ async def test_save_view_creates(client, session):
     assert len(views) == 1
 
 
-async def test_save_view_requires_auth(app, tmp_path):
+async def test_api_save_view_requires_auth(app, tmp_path):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        r = await ac.post("/views", json={"name": "X", "surface": "board", "params": {}})
+        r = await ac.post("/api/v1/views", json={"name": "X", "surface": "board", "params": {}})
     assert r.status_code == 401
 
 
-async def test_save_view_duplicate_name_409(client, session):
+async def test_api_save_view_duplicate_name_409(bearer_client, session):
     create_saved_view(session, name="Existing", surface="board", params={})
-    r = await client.post(
-        "/views",
+    r = await bearer_client.post(
+        "/api/v1/views",
         json={"name": "Existing", "surface": "list", "params": {}},
     )
     assert r.status_code == 409
 
 
-async def test_save_view_invalid_surface_422(client):
-    r = await client.post(
-        "/views",
+async def test_api_save_view_invalid_surface_422(bearer_client):
+    r = await bearer_client.post(
+        "/api/v1/views",
         json={"name": "Bad", "surface": "inbox", "params": {}},
     )
     assert r.status_code == 422
 
 
-async def test_save_view_unknown_param_422(client):
-    r = await client.post(
-        "/views",
+async def test_api_save_view_unknown_param_422(bearer_client):
+    r = await bearer_client.post(
+        "/api/v1/views",
         json={"name": "Bad", "surface": "board", "params": {"bogus": "priority"}},
     )
     assert r.status_code == 422
 
 
-async def test_save_view_empty_name_422(client):
-    r = await client.post(
-        "/views",
+async def test_api_save_view_empty_name_422(bearer_client):
+    r = await bearer_client.post(
+        "/api/v1/views",
         json={"name": "", "surface": "board", "params": {}},
     )
     assert r.status_code == 422
 
 
 # ---------------------------------------------------------------------------
-# Routes: delete (POST /views/{id}/delete)
+# JSON API: DELETE /api/v1/views/{id}
 # ---------------------------------------------------------------------------
 
 
-async def test_delete_view_returns_menu_html(client, session):
+async def test_api_delete_view(bearer_client, session):
     v = create_saved_view(session, name="To remove", surface="board", params={})
-    r = await client.post(f"/views/{v.id}/delete")
-    assert r.status_code == 200
-    assert "text/html" in r.headers["content-type"]
-    # View should be gone from DB.
+    r = await bearer_client.delete(f"/api/v1/views/{v.id}")
+    assert r.status_code == 204
     assert list_saved_views(session) == []
 
 
-async def test_delete_view_not_found_404(client):
-    r = await client.post("/views/nonexistent/delete")
+async def test_api_delete_view_not_found_404(bearer_client):
+    r = await bearer_client.delete("/api/v1/views/nonexistent")
     assert r.status_code == 404
 
 
-async def test_delete_view_requires_auth(app, tmp_path, session):
+async def test_api_delete_view_requires_auth(app, tmp_path, session):
     v = create_saved_view(session, name="Protected", surface="board", params={})
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        r = await ac.post(f"/views/{v.id}/delete")
+        r = await ac.delete(f"/api/v1/views/{v.id}")
     assert r.status_code == 401
 
 
 # ---------------------------------------------------------------------------
-# Routes: rename (POST /views/{id}/rename)
+# JSON API: PATCH /api/v1/views/{id} (rename)
 # ---------------------------------------------------------------------------
 
 
-async def test_rename_view_returns_menu_html(client, session):
+async def test_api_rename_view(bearer_client, session):
     v = create_saved_view(session, name="Old", surface="board", params={})
-    r = await client.post(f"/views/{v.id}/rename", data={"name": "New"})
+    r = await bearer_client.patch(f"/api/v1/views/{v.id}", json={"name": "New"})
     assert r.status_code == 200
-    assert "text/html" in r.headers["content-type"]
+    assert r.json()["name"] == "New"
     session.expire_all()
     assert get_saved_view(session, v.id).name == "New"
 
 
-async def test_rename_view_conflict_409(client, session):
+async def test_api_rename_view_conflict_409(bearer_client, session):
     create_saved_view(session, name="Alpha", surface="board", params={})
     v2 = create_saved_view(session, name="Beta", surface="list", params={})
-    r = await client.post(f"/views/{v2.id}/rename", data={"name": "Alpha"})
+    r = await bearer_client.patch(f"/api/v1/views/{v2.id}", json={"name": "Alpha"})
     assert r.status_code == 409
 
 
-async def test_rename_view_not_found_404(client):
-    r = await client.post("/views/bad-id/rename", data={"name": "New"})
+async def test_api_rename_view_not_found_404(bearer_client):
+    r = await bearer_client.patch("/api/v1/views/bad-id", json={"name": "New"})
     assert r.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# Routes: nav menu (GET /views/menu)
+# JSON API: POST /api/v1/views/reorder
 # ---------------------------------------------------------------------------
 
 
-async def test_views_menu_empty_state(client):
-    r = await client.get("/views/menu")
-    assert r.status_code == 200
-    body = r.text
-    assert "No saved views" in body or "no saved views" in body.lower()
-
-
-async def test_views_menu_lists_views(client, session):
-    create_saved_view(session, name="My board view", surface="board", params={"q": "status=review"})
-    create_saved_view(session, name="My list view", surface="list", params={"order": "priority"})
-    r = await client.get("/views/menu")
-    assert r.status_code == 200
-    body = r.text
-    assert "My board view" in body
-    assert "My list view" in body
-
-
-async def test_views_menu_has_delete_buttons(client, session):
-    v = create_saved_view(session, name="Deletable", surface="board", params={})
-    r = await client.get("/views/menu")
-    assert r.status_code == 200
-    body = r.text
-    assert f"/views/{v.id}/delete" in body
-
-
-async def test_views_menu_links_use_composed_urls(client, session):
-    create_saved_view(
-        session, name="Review board", surface="board",
-        params={"q": "status=review", "group": "priority"},
+async def test_api_reorder_views(bearer_client, session):
+    a = create_saved_view(session, name="A", surface="board", params={})
+    b = create_saved_view(session, name="B", surface="board", params={})
+    r = await bearer_client.post(
+        "/api/v1/views/reorder", json={"view_ids": [b.id, a.id]},
     )
-    r = await client.get("/views/menu")
     assert r.status_code == 200
-    body = r.text
-    # The composed URL should appear as an href.
-    assert "status" in body or "group" in body
-
-
-async def test_views_menu_requires_auth(app, tmp_path):
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        r = await ac.get("/views/menu")
-    assert r.status_code == 401
+    assert [v["id"] for v in r.json()] == [b.id, a.id]
 
 
 # ---------------------------------------------------------------------------
@@ -516,180 +543,14 @@ async def test_api_views_accepts_cookie_auth(client):
 
 
 # ---------------------------------------------------------------------------
-# UI: base.html nav and dialog
+# End-to-end: save -> API list -> rename -> delete, all via /api/v1/views
 # ---------------------------------------------------------------------------
-
-
-async def test_base_has_views_nav_entry(client):
-    r = await client.get("/")
-    assert r.status_code == 200
-    body = r.text
-    assert "nd-views-nav-popover" in body
-    assert "/views/menu" in body
-
-
-async def test_base_loads_saved_views_js(client):
-    r = await client.get("/")
-    assert r.status_code == 200
-    assert "saved_views.js" in r.text
-
-
-async def test_base_has_save_view_dialog(client):
-    r = await client.get("/")
-    assert r.status_code == 200
-    body = r.text
-    assert "nd-save-view-dialog" in body
-    assert "nd-save-view-form" in body
-    assert "nd-save-view-name" in body
-
-
-async def test_board_has_save_view_button(client):
-    r = await client.get("/")
-    assert r.status_code == 200
-    body = r.text
-    assert "ndOpenSaveViewDialog" in body
-    assert "Save view" in body
-
-
-async def test_list_has_save_view_button(client):
-    r = await client.get("/list")
-    assert r.status_code == 200
-    body = r.text
-    assert "ndOpenSaveViewDialog" in body
-    assert "Save view" in body
-
-
-async def test_board_save_view_passes_board_surface(client):
-    r = await client.get("/")
-    assert r.status_code == 200
-    body = r.text
-    assert "ndOpenSaveViewDialog('board')" in body
-
-
-async def test_list_save_view_passes_list_surface(client):
-    r = await client.get("/list")
-    assert r.status_code == 200
-    body = r.text
-    assert "ndOpenSaveViewDialog('list')" in body
-
-
-# ---------------------------------------------------------------------------
-# JS: command_palette.js saved views integration
-# ---------------------------------------------------------------------------
-
-
-async def test_palette_js_has_ndSavedViews_hook(client):
-    r = await client.get("/static/command_palette.js")
-    assert r.status_code == 200
-    js = r.text
-    assert "ndSavedViews" in js
-
-
-async def test_palette_js_view_section(client):
-    r = await client.get("/static/command_palette.js")
-    assert r.status_code == 200
-    js = r.text
-    assert '"Saved views"' in js or "'Saved views'" in js
-
-
-async def test_palette_js_view_label_prefix(client):
-    r = await client.get("/static/command_palette.js")
-    assert r.status_code == 200
-    js = r.text
-    assert '"View: "' in js or "'View: '" in js
-
-
-async def test_palette_js_openPaletteFiltered(client):
-    r = await client.get("/static/command_palette.js")
-    assert r.status_code == 200
-    js = r.text
-    assert "openPaletteFiltered" in js
-
-
-async def test_palette_js_g_v_chord(client):
-    r = await client.get("/static/command_palette.js")
-    assert r.status_code == 200
-    js = r.text
-    assert 'key === "v" || key === "V"' in js
-    assert 'openPaletteFiltered("View:")' in js
-
-
-async def test_palette_js_gv_shortcut_label(client):
-    r = await client.get("/static/command_palette.js")
-    assert r.status_code == 200
-    js = r.text
-    assert 'shortcut: "g v"' in js
-
-
-async def test_saved_views_js_exists(client):
-    r = await client.get("/static/saved_views.js")
-    assert r.status_code == 200
-    js = r.text
-    assert "ndSavedViews" in js
-    assert "ndOpenSaveViewDialog" in js
-
-
-async def test_saved_views_js_fetches_api(client):
-    r = await client.get("/static/saved_views.js")
-    assert r.status_code == 200
-    js = r.text
-    assert "/api/v1/views" in js
-
-
-async def test_saved_views_js_refreshes_nav(client):
-    r = await client.get("/static/saved_views.js")
-    assert r.status_code == 200
-    js = r.text
-    assert "nd-views-nav-popover" in js
-    assert "/views/menu" in js
-
-
-# ---------------------------------------------------------------------------
-# Cheatsheet: g-v documented
-# ---------------------------------------------------------------------------
-
-
-async def test_cheatsheet_documents_g_v(client):
-    r = await client.get("/")
-    assert r.status_code == 200
-    body = r.text
-    assert "g then v" in body
-
-
-async def test_cheatsheet_g_v_label(client):
-    r = await client.get("/")
-    assert r.status_code == 200
-    assert "Jump to saved view" in r.text or "saved view" in r.text.lower()
-
-
-# ---------------------------------------------------------------------------
-# End-to-end: save → menu shows → delete → gone
-# ---------------------------------------------------------------------------
-
-
-async def test_e2e_save_then_menu_shows_view(client, session):
-    r = await client.post(
-        "/views",
-        json={"name": "E2E view", "surface": "board", "params": {"q": "status=review"}},
-    )
-    assert r.status_code == 201
-
-    r2 = await client.get("/views/menu")
-    assert r2.status_code == 200
-    assert "E2E view" in r2.text
-
-
-async def test_e2e_delete_removes_from_menu(client, session):
-    v = create_saved_view(session, name="Temp", surface="list", params={})
-    r = await client.post(f"/views/{v.id}/delete")
-    assert r.status_code == 200
-    assert "Temp" not in r.text
 
 
 async def test_e2e_api_round_trip(bearer_client, session):
-    """Board view with q+group survives a full save → API list → URL round trip."""
+    """Board view with q+group survives a full save -> API list -> URL round trip."""
     r = await bearer_client.post(
-        "/views",
+        "/api/v1/views",
         json={
             "name": "Round trip",
             "surface": "board",
@@ -697,6 +558,7 @@ async def test_e2e_api_round_trip(bearer_client, session):
         },
     )
     assert r.status_code == 201
+    view_id = r.json()["id"]
 
     r2 = await bearer_client.get("/api/v1/views")
     data = r2.json()
@@ -707,6 +569,13 @@ async def test_e2e_api_round_trip(bearer_client, session):
     assert url.startswith("/?") or url.startswith("/")
     assert "group=priority" in url
     assert "project" in url
+
+    r3 = await bearer_client.patch(f"/api/v1/views/{view_id}", json={"name": "Renamed"})
+    assert r3.status_code == 200
+
+    r4 = await bearer_client.delete(f"/api/v1/views/{view_id}")
+    assert r4.status_code == 204
+    assert list_saved_views(session) == []
 
 
 # ---------------------------------------------------------------------------

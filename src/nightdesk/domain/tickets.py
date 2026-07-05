@@ -250,6 +250,11 @@ def create_ticket(session: Session, **fields) -> Ticket:
     status = fields.get("status")
     if status not in _ALL_STATUSES:
         raise InvalidTransition(f"unknown status {status!r}")
+    # Inbox tickets may be captured before a profile is chosen — same exception
+    # as the workspace requirement below, and the same field `ticket_completeness`
+    # gates at promotion time. Everything else must have a profile up front.
+    if status != "inbox" and not fields.get("profile_id"):
+        raise ValueError("profile_id is required")
     if "priority" in fields:
         fields["priority"] = validate_priority(fields["priority"])
 
@@ -328,18 +333,34 @@ def list_tickets(
     project_id: Optional[str] = None,
     limit: int = 200,
     offset: int = 0,
+    sort: str = "board",
 ) -> list[Ticket]:
-    """One page of tickets matching the filters, ordered board-stable.
+    """One page of tickets matching the filters.
 
     ``limit``/``offset`` are paging: combine with ``count_tickets`` (same
     filters) for a total and to detect truncation. The default ``limit`` of
     200 is a guardrail, NOT a hard ceiling — callers may request a larger
     page; the API route enforces its own max and returns paging headers.
+
+    ``sort`` selects the ordering:
+
+    - ``"board"`` (default): board-stable order (``position``, then priority,
+      then oldest-first). This is what the board/list columns page through and
+      is unchanged from before ``sort`` existed, so existing callers — the SPA
+      board and any agent hitting ``GET /tickets`` — see identical results.
+    - ``"recent"``: most-recently-touched first (``updated_at`` desc). Archived
+      tickets have no dedicated ``archived_at`` column — archiving bumps
+      ``updated_at`` — so this is the newest-first order the Archive page pages
+      through. ``id`` breaks ties for a stable page boundary.
     """
+    if sort == "recent":
+        order = (Ticket.updated_at.desc(), Ticket.id.desc())
+    else:
+        order = (Ticket.position.asc(), Ticket.priority.desc(), Ticket.created_at.asc())
     stmt = (
         select(Ticket)
         .where(*_ticket_filters(status, profile_id, project_id))
-        .order_by(Ticket.position.asc(), Ticket.priority.desc(), Ticket.created_at.asc())
+        .order_by(*order)
         .limit(limit)
         .offset(offset)
     )
@@ -535,6 +556,22 @@ def unarchive(session: Session, ticket_id: str) -> Ticket:
     if t.status != "archived":
         raise InvalidTransition(f"cannot unarchive from {t.status}")
     return transition_status(session, ticket_id, "queued")
+
+
+def send_to_inbox(session: Session, ticket_id: str) -> Ticket:
+    """Send a draft ticket back to the inbox for further triage.
+
+    Mirrors the old UI's "send to inbox" action. Valid ONLY from ``draft``:
+    even though ``_VALID_TRANSITIONS`` also allows ``queued``/``review``/
+    ``archived`` tickets to walk back to ``draft`` via other routes, this
+    helper does not chain that hop itself. It is a single-step "I drafted
+    this too soon" shortcut, not a bypass around each status's own path
+    back to draft.
+    """
+    t = get_ticket(session, ticket_id)
+    if t.status != "draft":
+        raise InvalidTransition(f"cannot send to inbox from {t.status}")
+    return transition_status(session, ticket_id, "inbox")
 
 
 # ---------------------------------------------------------------------------

@@ -71,6 +71,7 @@ For Python-side schema details (field types, defaults, validators), read `src/ni
 | `project_id` | all | `null` selects tickets with no project |
 | `limit` | `200` | honored up to a hard max of `1000`; **above the max is a `422`, not a clamp** |
 | `offset` | `0` | page past the limit / the hard max |
+| `sort` | `board` | `board` = position-stable board order (unchanged default); `recent` = `updated_at` desc (newest first). Any other value is a `422`. The Archive page uses `sort=recent` so page 1 is the most recently archived. |
 
 Because the body is a bare JSON array, paging metadata is in response **headers** — always check these, never assume a full result set:
 

@@ -323,24 +323,3 @@ async def test_diff_endpoint_directory_workspace(client, session, tmp_path):
     assert paths == ["new.txt", "notes.md"]
     # Never the git-only dead-end.
     assert "not a git repository" not in data["error"]
-
-
-async def test_diff_endpoint_and_panel_agree_for_directory(
-    client, session, tmp_path,
-):
-    transcript_dir = tmp_path / "transcripts"
-    transcript_dir.mkdir()
-    run, ws, root = _make_dir_ticket_run_ws(session, tmp_path, transcript_dir)
-
-    api = await client.get(f"/api/v1/runs/{run.id}/diff")
-    panel = await client.get(
-        f"/tickets/{run.ticket_id}/runs/{run.id}/diff-panel",
-    )
-    assert api.status_code == 200
-    assert panel.status_code == 200
-    api_paths = sorted(f["path"] for f in api.json()["files"])
-    body = panel.text
-    # The panel renders the same files the JSON endpoint reports.
-    for p in api_paths:
-        assert p in body
-    assert "not a git repository" not in body

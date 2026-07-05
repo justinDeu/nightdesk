@@ -122,20 +122,24 @@ async def test_handshake_consumes_one_shot(app):
                         follow_redirects=False)
         assert r.status_code in (302, 303)
         assert "nightdesk_session" in r.cookies
-        # Second attempt with the same token should fail.
-        r2 = await c.get(f"/auth/handshake?token={one_shot}")
-        assert r2.status_code == 400
+        # Second attempt with the same (now-consumed) token redirects to the
+        # SPA's login route instead of setting a cookie — no server-rendered
+        # error page anymore (see api/routes/auth.py).
+        r2 = await c.get(f"/auth/handshake?token={one_shot}", follow_redirects=False)
+        assert r2.status_code == 303
+        assert r2.headers["location"] == "/login"
+        assert "nightdesk_session" not in r2.cookies
 
 
 async def test_diagnostics_requires_admin(client):
-    # Unauth: 401.
-    r = await client.get("/diagnostics")
+    # JSON diagnostics: unauth 401, admin 200 (the HTML /diagnostics page was
+    # removed with the HTMX rip-out; this is its only surface now).
+    r = await client.get("/api/v1/diagnostics")
     assert r.status_code == 401
-    # Admin: 200.
-    r = await client.get("/diagnostics",
+    r = await client.get("/api/v1/diagnostics",
                           headers={"Authorization": "Bearer bearer-admin"})
     assert r.status_code == 200
-    assert "Diagnostics" in r.text
+    assert "python_version" in r.json()
 
 
 def test_profile_secret_box_roundtrip():

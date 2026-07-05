@@ -1,0 +1,161 @@
+import { useEffect, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import {
+  Archive,
+  BarChart3,
+  CalendarClock,
+  Inbox,
+  LayoutDashboard,
+  ListTodo,
+  LogOut,
+  PanelLeftClose,
+  PanelLeft,
+  Settings,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { Tooltip } from "@/ui/Tooltip";
+import { logout } from "@/api/auth";
+
+interface NavEntry {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  /** exact match only (the Desk root) */
+  exact?: boolean;
+}
+
+const ENTRIES: NavEntry[] = [
+  { to: "/", label: "Desk", icon: LayoutDashboard, exact: true },
+  { to: "/tickets", label: "Tickets", icon: ListTodo },
+  { to: "/inbox", label: "Inbox", icon: Inbox },
+  { to: "/scheduled", label: "Scheduled", icon: CalendarClock },
+  { to: "/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/archive", label: "Archive", icon: Archive },
+  { to: "/settings", label: "Settings", icon: Settings },
+];
+
+const COLLAPSE_KEY = "nightdesk:nav-collapsed";
+
+export function SideNav() {
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(COLLAPSE_KEY) === "1",
+  );
+
+  const toggle = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
+      return next;
+    });
+  };
+
+  // The global "[" shortcut toggles the sidebar (dispatched from the keymap).
+  useEffect(() => {
+    window.addEventListener("nightdesk:toggle-sidebar", toggle);
+    return () => window.removeEventListener("nightdesk:toggle-sidebar", toggle);
+  }, []);
+
+  const signOut = async () => {
+    await logout();
+    // Hard redirect so all in-memory query state is dropped and the session
+    // cookie's absence is re-evaluated by the login route. BASE_URL is "/" in
+    // dev and "/app/" in prod.
+    window.location.assign(`${import.meta.env.BASE_URL}login`);
+  };
+
+  return (
+    <nav
+      aria-label="Primary"
+      className={cn(
+        "flex h-full flex-col border-r border-ink-700 bg-ink-900 transition-[width] duration-150",
+        collapsed ? "w-[60px]" : "w-[212px]",
+      )}
+    >
+      <div
+        className={cn(
+          "flex h-14 items-center gap-2.5 px-3.5",
+          collapsed && "justify-center px-0",
+        )}
+      >
+        <span className="dawn-edge grid h-7 w-7 shrink-0 place-items-center rounded-[9px] text-ink-950">
+          <span className="font-display text-sm font-bold">n</span>
+        </span>
+        {!collapsed && (
+          <span className="font-display text-[15px] font-semibold tracking-tight text-moon-100">
+            nightdesk
+          </span>
+        )}
+      </div>
+
+      <div className="flex-1 space-y-0.5 px-2.5 py-2">
+        {ENTRIES.map((entry) => {
+          const Icon = entry.icon;
+          const link = (
+            <Link
+              key={entry.to}
+              to={entry.to}
+              activeOptions={{ exact: entry.exact }}
+              className={cn(
+                "group flex items-center gap-3 rounded-control px-2.5 py-2 text-sm font-medium",
+                "text-moon-400 transition-colors duration-100",
+                "hover:bg-ink-800 hover:text-moon-100",
+                collapsed && "justify-center px-0",
+              )}
+              activeProps={{
+                className:
+                  "!text-moon-100 bg-ink-800 shadow-[inset_2px_0_0_var(--color-lamp)]",
+              }}
+            >
+              <Icon size={17} className="shrink-0" />
+              {!collapsed && <span>{entry.label}</span>}
+            </Link>
+          );
+          return collapsed ? (
+            <Tooltip key={entry.to} content={entry.label} side="right">
+              {link}
+            </Tooltip>
+          ) : (
+            link
+          );
+        })}
+      </div>
+
+      <div
+        className={cn(
+          "space-y-0.5 border-t border-ink-700 p-2.5",
+          collapsed && "px-0 text-center",
+        )}
+      >
+        <Tooltip content="Sign out" side="right">
+          <button
+            onClick={signOut}
+            aria-label="Sign out"
+            className={cn(
+              "inline-flex h-8 items-center gap-2.5 rounded-control px-2.5 text-sm text-moon-400",
+              "hover:bg-ink-800 hover:text-moon-100",
+              collapsed ? "w-8 justify-center px-0" : "w-full",
+            )}
+          >
+            <LogOut size={17} className="shrink-0" />
+            {!collapsed && <span>Sign out</span>}
+          </button>
+        </Tooltip>
+        <Tooltip content={collapsed ? "Expand" : "Collapse"} side="right">
+          <button
+            onClick={toggle}
+            aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+            className={cn(
+              "inline-flex h-8 items-center gap-2.5 rounded-control px-2.5 text-sm text-moon-400",
+              "hover:bg-ink-800 hover:text-moon-100",
+              collapsed ? "w-8 justify-center px-0" : "w-full",
+            )}
+          >
+            {collapsed ? <PanelLeft size={17} /> : <PanelLeftClose size={17} />}
+            {!collapsed && <span>Collapse</span>}
+          </button>
+        </Tooltip>
+      </div>
+    </nav>
+  );
+}

@@ -26,10 +26,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from nightdesk.db.models import Profile, Run, RunLatency, Ticket
+from nightdesk.db.models import Profile, Project, Run, RunLatency, Ticket
 from nightdesk.domain import pricing
 from nightdesk.domain.pricing import PriceInfo
 
@@ -154,17 +154,32 @@ def _token_row(it, ot, cr, cw, n, cost) -> dict:
     }
 
 
+def _scope_to_project(stmt, *, project_id: Optional[str] = None):
+    """Join ``Ticket`` and filter to one project, when ``project_id`` is given.
+
+    Shared by every ``Run``-rooted aggregate below so ``project_id`` is an
+    optional, additive filter everywhere: omit it and behavior is unchanged.
+    """
+    if project_id is None:
+        return stmt
+    return stmt.join(Ticket, Run.ticket_id == Ticket.id).where(
+        Ticket.project_id == project_id
+    )
+
+
 def _window_cost(
     session: Session,
     prices: PriceInfo,
     *,
     start: datetime,
     end: Optional[datetime] = None,
+    project_id: Optional[str] = None,
 ) -> float:
     """Reprice ``[start, end)`` from per-model token sums using resolved prices."""
     stmt = select(Run.model_used, *_TOKEN_SUMS).where(Run.started_at >= start)
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
+    stmt = _scope_to_project(stmt, project_id=project_id)
     total = 0.0
     for model, it, ot, cr, cw in session.execute(stmt.group_by(Run.model_used)).all():
         total += prices.cost(model, int(it), int(ot), int(cr), int(cw))
@@ -173,13 +188,14 @@ def _window_cost(
 
 def window_totals(
     session: Session, *, start: datetime, end: Optional[datetime] = None,
-    prices: Optional[PriceInfo] = None,
+    prices: Optional[PriceInfo] = None, project_id: Optional[str] = None,
 ) -> dict:
     """Token totals + cache-hit rate + run count + cost for ``[start, end)``.
 
     With ``prices`` given the cost is repriced from live/cached prices; without
     it the stored ``cost_usd`` sum is returned (the original behavior, used by
-    direct unit tests).
+    direct unit tests). ``project_id`` scopes to runs on that project's tickets
+    (omit for the global totals).
     """
     stmt = select(
         *_TOKEN_SUMS,
@@ -188,15 +204,16 @@ def window_totals(
     ).where(Run.started_at >= start)
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
+    stmt = _scope_to_project(stmt, project_id=project_id)
     it, ot, cr, cw, n, cost = session.execute(stmt).one()
     if prices is not None:
-        cost = _window_cost(session, prices, start=start, end=end)
+        cost = _window_cost(session, prices, start=start, end=end, project_id=project_id)
     return _token_row(it, ot, cr, cw, n, cost)
 
 
 def tokens_by_model(
     session: Session, *, start: datetime, end: Optional[datetime] = None,
-    prices: Optional[PriceInfo] = None,
+    prices: Optional[PriceInfo] = None, project_id: Optional[str] = None,
 ) -> list[dict]:
     """Token totals + cache-hit rate grouped by model, most tokens first.
 
@@ -215,6 +232,7 @@ def tokens_by_model(
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
+    stmt = _scope_to_project(stmt, project_id=project_id)
     out = []
     for model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
         if prices is not None:
@@ -226,7 +244,7 @@ def tokens_by_model(
 
 def usage_by_profile(
     session: Session, *, start: datetime, end: Optional[datetime] = None,
-    prices: Optional[PriceInfo] = None,
+    prices: Optional[PriceInfo] = None, project_id: Optional[str] = None,
 ) -> list[dict]:
     """Token totals + run count grouped by profile name, most tokens first.
 
@@ -249,6 +267,8 @@ def usage_by_profile(
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
+    if project_id is not None:
+        stmt = stmt.where(Ticket.project_id == project_id)
     agg: dict[str, dict] = {}
     for name, model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
         slot = agg.setdefault(name, {"it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0, "cost": 0.0})
@@ -272,6 +292,7 @@ def usage_by_ticket(
     end: Optional[datetime] = None,
     limit: int = 10,
     prices: Optional[PriceInfo] = None,
+    project_id: Optional[str] = None,
 ) -> list[dict]:
     """Top tickets by total tokens over the window.
 
@@ -294,6 +315,8 @@ def usage_by_ticket(
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
+    if project_id is not None:
+        stmt = stmt.where(Ticket.project_id == project_id)
     agg: dict[str, dict] = {}
     titles: dict[str, str] = {}
     for tid, title, model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
@@ -314,7 +337,8 @@ def usage_by_ticket(
 
 
 def run_stats(
-    session: Session, *, start: datetime, end: Optional[datetime] = None
+    session: Session, *, start: datetime, end: Optional[datetime] = None,
+    project_id: Optional[str] = None,
 ) -> dict:
     """Completed-run counts and success rate over the window.
 
@@ -327,6 +351,7 @@ def run_stats(
     )
     if end is not None:
         base = base.where(Run.started_at < end)
+    base = _scope_to_project(base, project_id=project_id)
     completed = int(session.scalar(base) or 0)
     success = int(
         session.scalar(base.where(Run.exit_status == "success")) or 0
@@ -370,7 +395,8 @@ def _percentiles(values: list[float]) -> dict:
 
 
 def duration_percentiles(
-    session: Session, *, start: datetime, end: Optional[datetime] = None
+    session: Session, *, start: datetime, end: Optional[datetime] = None,
+    project_id: Optional[str] = None,
 ) -> dict:
     """Median and p90 run duration (seconds) over completed runs.
 
@@ -382,6 +408,7 @@ def duration_percentiles(
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
+    stmt = _scope_to_project(stmt, project_id=project_id)
     durations: list[float] = []
     for started, finished in session.execute(stmt).all():
         if started is None or finished is None:
@@ -417,13 +444,19 @@ def daily_usage_by_model_series(
     session: Session, *, start: datetime, now: datetime,
     prices: Optional[PriceInfo] = None,
     tz: ZoneInfo = _UTC,
+    project_id: Optional[str] = None,
 ) -> list[dict]:
-    """Per-day token totals broken down by model from ``start`` to ``now``'s day.
+    """Per-day token/spend/run-count totals from ``start`` to ``now``'s day.
 
     Returns one entry per local calendar day (in ``tz``; default UTC), zero-
-    filled, oldest first: ``{date, total_tokens, cost, by_model: {model: tokens}}``.
+    filled, oldest first::
+
+        {date, total_tokens, input_tokens, output_tokens, cache_read_tokens,
+         cache_write_tokens, cost, run_count, by_model: {model: tokens}}
+
     Runs with no recorded model group under ``"unknown"``. Cost is repriced from
-    ``prices`` when given, else summed from stored ``cost_usd``.
+    ``prices`` when given, else summed from stored ``cost_usd``. ``project_id``
+    scopes to one project's tickets (omit for the global series).
 
     Both the SQL bucketing and the day labels are aligned to ``tz``: the stored
     UTC ``started_at`` is shifted by the local UTC offset before ``func.date``
@@ -439,25 +472,37 @@ def daily_usage_by_model_series(
     day_mod = f"{int(offset.total_seconds()):+d} seconds"
     day_expr = func.date(Run.started_at, day_mod)
 
-    rows = session.execute(
+    stmt = (
         select(
             day_expr,
             Run.model_used,
             *_TOKEN_SUMS,
+            func.count(Run.id),
             func.coalesce(func.sum(Run.cost_usd), 0.0),
         )
         .where(Run.started_at >= start)
         .group_by(day_expr, Run.model_used)
-    ).all()
+    )
+    stmt = _scope_to_project(stmt, project_id=project_id)
+    rows = session.execute(stmt).all()
 
     by_day: dict[str, dict] = {}
-    for day, model, it, ot, cr, cw, cost in rows:
-        it, ot, cr, cw = int(it), int(ot), int(cr), int(cw)
+    for day, model, it, ot, cr, cw, n, cost in rows:
+        it, ot, cr, cw, n = int(it), int(ot), int(cr), int(cw), int(n)
         tokens = it + ot + cr + cw
         key = str(day)
-        slot = by_day.setdefault(key, {"total_tokens": 0, "cost": 0.0, "by_model": {}})
+        slot = by_day.setdefault(key, {
+            "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
+            "cost": 0.0, "run_count": 0, "by_model": {},
+        })
         slot["by_model"][model or "unknown"] = tokens
         slot["total_tokens"] += tokens
+        slot["input_tokens"] += it
+        slot["output_tokens"] += ot
+        slot["cache_read_tokens"] += cr
+        slot["cache_write_tokens"] += cw
+        slot["run_count"] += n
         slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
 
     out: list[dict] = []
@@ -467,7 +512,11 @@ def daily_usage_by_model_series(
     last = start_of_day(now, tz).astimezone(tz)
     while day <= last:
         key = day.strftime("%Y-%m-%d")
-        slot = by_day.get(key, {"total_tokens": 0, "cost": 0.0, "by_model": {}})
+        slot = by_day.get(key, {
+            "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
+            "cost": 0.0, "run_count": 0, "by_model": {},
+        })
         out.append({"date": key, **slot})
         day += timedelta(days=1)
     return out
@@ -483,7 +532,7 @@ def daily_usage_by_model_series(
 # under ``"unknown"`` to mirror ``tokens_by_model``.
 # --------------------------------------------------------------------------
 def _latency_window_stmt(columns, session: Session, *, start: datetime,
-                         end: Optional[datetime]):
+                         end: Optional[datetime], project_id: Optional[str] = None):
     """A RunLatency⋈Run select scoped to runs started in [start, end)."""
     stmt = (
         select(*columns)
@@ -493,6 +542,10 @@ def _latency_window_stmt(columns, session: Session, *, start: datetime,
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
+    if project_id is not None:
+        stmt = stmt.join(Ticket, Run.ticket_id == Ticket.id).where(
+            Ticket.project_id == project_id
+        )
     return stmt
 
 
@@ -505,6 +558,7 @@ def _as_floats(value) -> list[float]:
 
 def latency_by_model(
     session: Session, *, start: datetime, end: Optional[datetime] = None,
+    project_id: Optional[str] = None,
 ) -> list[dict]:
     """Median / p90 / p99 per-turn latency + sample count, grouped by model.
 
@@ -514,7 +568,7 @@ def latency_by_model(
     """
     stmt = _latency_window_stmt(
         (RunLatency.model, RunLatency.turn_latencies), session,
-        start=start, end=end,
+        start=start, end=end, project_id=project_id,
     )
     by_model: dict[str, list[float]] = {}
     for model, lats in session.execute(stmt).all():
@@ -526,6 +580,7 @@ def latency_by_model(
 
 def model_vs_tool_time(
     session: Session, *, start: datetime, end: Optional[datetime] = None,
+    project_id: Optional[str] = None,
 ) -> list[dict]:
     """Per-model totals of model-inference time vs tool-execution time.
 
@@ -539,7 +594,7 @@ def model_vs_tool_time(
             func.coalesce(func.sum(RunLatency.total_tool_seconds), 0.0),
             func.count(RunLatency.run_id),
         ),
-        session, start=start, end=end,
+        session, start=start, end=end, project_id=project_id,
     ).group_by(RunLatency.model)
     rows = []
     for model, ms, ts, n in session.execute(stmt).all():
@@ -556,6 +611,7 @@ def model_vs_tool_time(
 def daily_latency_by_model_series(
     session: Session, *, start: datetime, now: datetime,
     tz: ZoneInfo = _UTC,
+    project_id: Optional[str] = None,
 ) -> list[dict]:
     """Per-day per-model MEDIAN per-turn latency from ``start`` to ``now``'s day.
 
@@ -563,7 +619,8 @@ def daily_latency_by_model_series(
     calendar day, zero-filled, oldest first) so the existing-chart style can
     render it: ``{date, by_model: {model: median_seconds}}``. Days/models with
     no turn samples have empty/absent entries. Day bucketing is aligned to
-    ``tz`` exactly as in ``daily_usage_by_model_series``.
+    ``tz`` exactly as in ``daily_usage_by_model_series``. ``project_id`` scopes
+    to one project's tickets (omit for the global series).
     """
     offset = now.astimezone(tz).utcoffset() or timedelta(0)
     day_mod = f"{int(offset.total_seconds()):+d} seconds"
@@ -575,6 +632,10 @@ def daily_latency_by_model_series(
         .join(Run, RunLatency.run_id == Run.id)
         .where(Run.started_at >= start)
     )
+    if project_id is not None:
+        stmt = stmt.join(Ticket, Run.ticket_id == Ticket.id).where(
+            Ticket.project_id == project_id
+        )
     by_day: dict[str, dict[str, list[float]]] = {}
     for day, model, lats in session.execute(stmt).all():
         floats = _as_floats(lats)
@@ -598,10 +659,77 @@ def daily_latency_by_model_series(
     return out
 
 
+def project_rollups(
+    session: Session, *, start: datetime, end: Optional[datetime] = None,
+    prices: Optional[PriceInfo] = None, project_id: Optional[str] = None,
+) -> list[dict]:
+    """Per-project spend/tokens/runs/success-rate rollup over ``[start, end)``.
+
+    Groups by ``(project, model)`` so cost can be repriced, then rolls back up
+    to one row per project, most tokens first. Tickets with no project group
+    under a ``None`` id / ``"(no project)"`` name so every run is accounted
+    for. ``project_id`` restricts the rollup to a single project (the result
+    then has at most one row) — the same filter the other aggregates accept.
+    """
+    stmt = (
+        select(
+            Ticket.project_id,
+            Project.name,
+            Project.slug,
+            Run.model_used,
+            *_TOKEN_SUMS,
+            func.count(Run.id),
+            func.coalesce(func.sum(Run.cost_usd), 0.0),
+            func.sum(case((Run.exit_status == "success", 1), else_=0)),
+            func.sum(case((Run.finished_at.is_not(None), 1), else_=0)),
+        )
+        .select_from(Run)
+        .join(Ticket, Run.ticket_id == Ticket.id)
+        .outerjoin(Project, Ticket.project_id == Project.id)
+        .where(Run.started_at >= start)
+        .group_by(Ticket.project_id, Project.name, Project.slug, Run.model_used)
+    )
+    if end is not None:
+        stmt = stmt.where(Run.started_at < end)
+    if project_id is not None:
+        stmt = stmt.where(Ticket.project_id == project_id)
+    agg: dict[Optional[str], dict] = {}
+    names: dict[Optional[str], tuple[Optional[str], Optional[str]]] = {}
+    for pid, name, slug, model, it, ot, cr, cw, n, cost, success, completed in session.execute(stmt).all():
+        names[pid] = (name, slug)
+        slot = agg.setdefault(pid, {
+            "it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0, "cost": 0.0,
+            "success": 0, "completed": 0,
+        })
+        it, ot, cr, cw, n = int(it), int(ot), int(cr), int(cw), int(n)
+        slot["it"] += it
+        slot["ot"] += ot
+        slot["cr"] += cr
+        slot["cw"] += cw
+        slot["n"] += n
+        slot["success"] += int(success or 0)
+        slot["completed"] += int(completed or 0)
+        slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
+    rows = []
+    for pid, a in agg.items():
+        name, slug = names[pid]
+        completed = a["completed"]
+        rows.append({
+            "project_id": pid,
+            "project_name": name or "(no project)",
+            "project_slug": slug,
+            **_token_row(a["it"], a["ot"], a["cr"], a["cw"], a["n"], a["cost"]),
+            "success_rate": (a["success"] / completed) if completed else 0.0,
+        })
+    rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return rows
+
+
 def build_dashboard(
     session: Session, *, now: datetime,
     price_info: Optional[PriceInfo] = None,
     tz: ZoneInfo = _UTC,
+    project_id: Optional[str] = None,
 ) -> dict:
     """Assemble the full context for the ``/analytics`` page.
 
@@ -612,7 +740,10 @@ def build_dashboard(
     behavior); ``now`` stays an aware UTC instant internally. ``price_info``
     drives both the displayed cost (repriced from the resolved live/cached/table
     prices) and the source label. Defaults to the bundled table when unset
-    (e.g. direct unit tests with no network).
+    (e.g. direct unit tests with no network). ``project_id`` scopes every
+    aggregate below to one project's tickets; ``by_project`` (the cross-project
+    rollup) respects it too, so passing it degenerates to that project's own
+    single-row breakdown.
     """
     if price_info is None:
         price_info = pricing.table_price_info()
@@ -621,7 +752,9 @@ def build_dashboard(
     last_7d_start = today_start - timedelta(days=6)
     last_30d_start = today_start - timedelta(days=29)
 
-    by_model = tokens_by_model(session, start=last_30d_start, prices=price_info)
+    by_model = tokens_by_model(
+        session, start=last_30d_start, prices=price_info, project_id=project_id,
+    )
     # Assign each model a stable color by token rank; reuse it in the legend,
     # the per-model table, and the stacked daily bars.
     model_colors = {
@@ -633,16 +766,17 @@ def build_dashboard(
     model_legend = [{"model": m, "color": c} for m, c in model_colors.items()]
 
     series = daily_usage_by_model_series(
-        session, start=last_30d_start, now=now, prices=price_info, tz=tz
+        session, start=last_30d_start, now=now, prices=price_info, tz=tz,
+        project_id=project_id,
     )
     max_daily_tokens = max((d["total_tokens"] for d in series), default=0)
 
     # Latency rollups (read cached run_latency rows, never transcript files).
-    latency_rows = latency_by_model(session, start=last_30d_start)
+    latency_rows = latency_by_model(session, start=last_30d_start, project_id=project_id)
     latency_series = daily_latency_by_model_series(
-        session, start=last_30d_start, now=now, tz=tz
+        session, start=last_30d_start, now=now, tz=tz, project_id=project_id,
     )
-    model_tool = model_vs_tool_time(session, start=last_30d_start)
+    model_tool = model_vs_tool_time(session, start=last_30d_start, project_id=project_id)
     max_daily_latency = max(
         (med for d in latency_series for med in d["by_model"].values()),
         default=0.0,
@@ -667,15 +801,22 @@ def build_dashboard(
         "price_source_label": price_info.label,
         # Kept for backward compatibility with older templates/tests.
         "prices_as_of": price_info.as_of,
-        "today": window_totals(session, start=today_start, prices=price_info),
-        "last_7d": window_totals(session, start=last_7d_start, prices=price_info),
-        "last_30d": window_totals(session, start=last_30d_start, prices=price_info),
+        "today": window_totals(session, start=today_start, prices=price_info, project_id=project_id),
+        "last_7d": window_totals(session, start=last_7d_start, prices=price_info, project_id=project_id),
+        "last_30d": window_totals(session, start=last_30d_start, prices=price_info, project_id=project_id),
         "by_model": by_model,
         "model_legend": model_legend,
-        "by_profile": usage_by_profile(session, start=last_30d_start, prices=price_info),
-        "by_ticket": usage_by_ticket(session, start=last_30d_start, prices=price_info),
-        "run_stats": run_stats(session, start=last_30d_start),
-        "duration": duration_percentiles(session, start=last_30d_start),
+        "by_profile": usage_by_profile(
+            session, start=last_30d_start, prices=price_info, project_id=project_id,
+        ),
+        "by_ticket": usage_by_ticket(
+            session, start=last_30d_start, prices=price_info, project_id=project_id,
+        ),
+        "by_project": project_rollups(
+            session, start=last_30d_start, prices=price_info, project_id=project_id,
+        ),
+        "run_stats": run_stats(session, start=last_30d_start, project_id=project_id),
+        "duration": duration_percentiles(session, start=last_30d_start, project_id=project_id),
         "daily_series": series,
         "max_daily_tokens": max_daily_tokens,
         "latency_by_model": latency_rows,

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import nightdesk.api.routes.ticket_page as ticket_page_routes
+import nightdesk.api.routes.runs as runs_routes
 from nightdesk.db.models import Run
 from nightdesk.domain.profiles import create_profile
 from nightdesk.domain.tickets import create_ticket
@@ -47,18 +47,19 @@ def _mk_run(session) -> str:
 
 
 async def test_cookie_client_downloads_run_log(cookie_client, session, tmp_path, monkeypatch):
-    """Browser cookie session can pull the worker log via the new route.
+    """Browser cookie session can pull the worker log via the JSON route.
 
-    Regression for the run-log download button, which pointed at the
-    bearer-only /api/v1 route and 401'd for cookie sessions.
+    /api/v1/runs/{rid}/log accepts the signed session cookie (not just
+    bearer) so the SPA can hit it directly with no separate HTML-only
+    download route needed.
     """
     rid = _mk_run(session)
     log_file = tmp_path / f"{rid}.log"
     log_file.write_text("hello from the worker log\n")
     monkeypatch.setattr(
-        ticket_page_routes, "run_log_path", lambda run_id: log_file,
+        runs_routes, "run_log_path", lambda run_id: log_file,
     )
 
-    r = await cookie_client.get(f"/runs/{rid}/log")
+    r = await cookie_client.get(f"/api/v1/runs/{rid}/log")
     assert r.status_code == 200
     assert "hello from the worker log" in r.text

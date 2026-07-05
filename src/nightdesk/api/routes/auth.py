@@ -3,7 +3,14 @@
 The ``nightdesk setup`` command mints a short-lived one-shot token and
 opens ``/auth/handshake?token=...`` in the user's browser. The handshake
 endpoint validates and consumes the token, sets the signed session cookie,
-and redirects to ``/``. No copy-pasting bearer tokens.
+and redirects to ``/`` (the SPA root). No copy-pasting bearer tokens.
+
+The SPA owns the login UI at its own client-side ``/login`` route (see
+``frontend/src/routes/login.tsx``); this module renders no HTML itself —
+every failure path here is either a JSON error (``POST /auth/login``, which
+the SPA's fetch call inspects via `res.ok`) or a redirect to ``/login``
+(``GET /auth/login``, ``GET /auth/handshake`` on an expired/invalid token),
+never a server-rendered page.
 
 The one-shot store is in-memory (a process-local dict). Restarting the
 API invalidates outstanding handshakes; ``nightdesk login`` regenerates
@@ -14,11 +21,9 @@ from __future__ import annotations
 
 import secrets
 import time
-from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends, Form, Response, status
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from nightdesk.api.auth import SESSION_COOKIE, issue_session_cookie, require_bearer
 
@@ -56,7 +61,6 @@ def build_router(
     *,
     bearer_token: str,
     one_shot_store: OneShotStore,
-    templates: Jinja2Templates,
     session_cookie_max_age: int,
     bind_host: str = "127.0.0.1",
     bind_port: int = 8765,
@@ -86,32 +90,30 @@ def build_router(
         url = f"http://{bind_host}:{bind_port}/auth/handshake?token={token}"
         return {"token": token, "url": url}
 
-    @router.get("/handshake", response_class=HTMLResponse)
-    async def handshake(token: str, request: Request):
+    @router.get("/handshake")
+    async def handshake(token: str):
         if not one_shot_store.consume(token):
-            return templates.TemplateResponse(
-                request,
-                "auth_login.html",
-                {"error": "Handshake token expired or invalid. "
-                 "Run `nightdesk login` to mint a new one, or sign in with your "
-                 "bearer token below."},
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
+            # Expired or already-used token: send them to the SPA's login
+            # form to re-authenticate with the bearer token instead.
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
         response = RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
         _set_cookie(response)
         return response
 
-    @router.get("/login", response_class=HTMLResponse)
-    async def login_form(request: Request, error: Optional[str] = None):
-        return templates.TemplateResponse(
-            request, "auth_login.html", {"error": error},
-        )
+    @router.get("/login")
+    async def login_redirect():
+        """No server-rendered login page — the SPA owns ``/login``.
 
-    @router.post("/login", response_class=HTMLResponse)
-    async def login_submit(request: Request, bearer: str = Form(...)):
+        Kept as a redirect (rather than removed) because ``nightdesk setup``
+        prints this URL as a manual fallback when the browser can't be
+        auto-opened; the printed URL must keep working.
+        """
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+
+    @router.post("/login")
+    async def login_submit(bearer: str = Form(...)):
         if not bearer_token or bearer.strip() != bearer_token:
-            return templates.TemplateResponse(
-                request, "auth_login.html",
+            return JSONResponse(
                 {"error": "Bearer token does not match."},
                 status_code=status.HTTP_401_UNAUTHORIZED,
             )
@@ -121,7 +123,7 @@ def build_router(
 
     @router.post("/logout")
     async def logout():
-        response = RedirectResponse(url="/auth/login", status_code=status.HTTP_303_SEE_OTHER)
+        response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
         response.delete_cookie(SESSION_COOKIE, path="/")
         return response
 

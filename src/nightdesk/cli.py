@@ -1053,6 +1053,7 @@ def run_api() -> None:
         bind_port=cfg.bind_port,
         data_dir=cfg.data_dir,
         pricing_url=cfg.pricing_url,
+        spa_dist_root=cfg.spa_dist,
     )
     uvicorn.run(app, host=cfg.bind_host, port=cfg.bind_port, log_level="info")
 

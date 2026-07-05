@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_bearer
+from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.api.schemas import ProjectCreate, ProjectOut, ProjectUpdate
 from nightdesk.domain.projects import (
     ProjectNameTaken,
@@ -26,7 +26,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/projects",
         tags=["projects"],
-        dependencies=[Depends(require_bearer(bearer_token))],
+        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
     )
 
     @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)

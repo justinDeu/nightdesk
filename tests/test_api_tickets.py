@@ -334,3 +334,70 @@ async def test_total_count_respects_status_filter(client, session):
     assert all(t["status"] == "archived" for t in rows)
     assert r.headers["X-Total-Count"] == "2"  # filtered count, not 5
     assert r.headers["X-Has-More"] == "false"
+
+
+# --- sort=recent (newest-first, for the Archive page) ------------------------
+
+
+def _stamp_updated_at(session, ids, times):
+    """Force distinct ``updated_at`` values so recency ordering is deterministic
+    (creation is too fast to guarantee tie-free timestamps)."""
+    from nightdesk.domain.tickets import get_ticket
+    for tid, ts in zip(ids, times):
+        get_ticket(session, tid).updated_at = ts
+    session.commit()
+
+
+async def test_sort_recent_orders_newest_first(client, session):
+    """``sort=recent`` returns most-recently-updated first — the order the
+    Archive page pages through so page 1 is the freshest, not the oldest."""
+    from datetime import datetime, timezone
+    pid = await _create_profile(client)
+    ids = await _seed_tickets(session, n=3, pid=pid, status="archived")
+    # ids[0] oldest, ids[2] newest
+    _stamp_updated_at(session, ids, [
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        datetime(2026, 6, 1, tzinfo=timezone.utc),
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+    ])
+
+    r = await client.get("/api/v1/tickets?status=archived&sort=recent")
+    assert r.status_code == 200
+    got = [t["id"] for t in r.json()]
+    assert got == [ids[2], ids[1], ids[0]]
+
+
+async def test_sort_recent_pages_stay_newest_first(client, session):
+    """Recency order is stable across pages: page 1 is strictly newer than
+    page 2, so the Archive page's limit/offset paging never repeats or skips."""
+    from datetime import datetime, timezone
+    pid = await _create_profile(client)
+    ids = await _seed_tickets(session, n=4, pid=pid, status="archived")
+    _stamp_updated_at(session, ids, [
+        datetime(2026, 1, d, tzinfo=timezone.utc) for d in (1, 2, 3, 4)
+    ])  # ids[3] newest
+
+    page1 = await client.get("/api/v1/tickets?status=archived&sort=recent&limit=2&offset=0")
+    page2 = await client.get("/api/v1/tickets?status=archived&sort=recent&limit=2&offset=2")
+    assert [t["id"] for t in page1.json()] == [ids[3], ids[2]]
+    assert [t["id"] for t in page2.json()] == [ids[1], ids[0]]
+    assert page1.headers["X-Has-More"] == "true"
+    assert page2.headers["X-Has-More"] == "false"
+
+
+async def test_sort_default_is_board_order_unchanged(client, session):
+    """Omitting ``sort`` (and ``sort=board``) keeps the original position-stable
+    order, so the board and existing agents see no change."""
+    pid = await _create_profile(client)
+    ids = await _seed_tickets(session, n=3, pid=pid)  # positions 0,1,2 in order
+
+    default = await client.get("/api/v1/tickets")
+    board = await client.get("/api/v1/tickets?sort=board")
+    assert [t["id"] for t in default.json()] == ids
+    assert [t["id"] for t in board.json()] == ids
+
+
+async def test_sort_invalid_value_rejected(client):
+    """An unknown ``sort`` is a 422, not a silent fallback to some ordering."""
+    r = await client.get("/api/v1/tickets?sort=sideways")
+    assert r.status_code == 422

@@ -278,7 +278,12 @@ class TicketCreate(BaseModel):
     prompt: str = ""
     status: Optional[str] = None  # defaults to 'draft' server-side
     priority: int = 0
-    profile_id: str
+    # Required for every status except "inbox" (enforced server-side in
+    # domain.tickets.create_ticket, mirroring the primary-workspace
+    # exception below): a captured-but-under-specified inbox item may have
+    # no profile yet; ``ticket_completeness`` blocks it from being promoted
+    # until one is set.
+    profile_id: Optional[str] = None
     project_id: Optional[str] = None
     permission_overrides: Optional[dict] = None
     toolchain_overrides: Optional[ToolchainOverrides] = None
@@ -887,3 +892,234 @@ class CronJobOut(BaseModel):
     last_ticket_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+
+# --- Inbox ----------------------------------------------------------------
+
+
+class InboxItemOut(BaseModel):
+    """An inbox ticket plus the human-readable reasons it isn't yet
+    promotable (empty ``blockers`` means the ticket can be promoted)."""
+
+    ticket: TicketOut
+    blockers: list[str] = []
+
+
+class TicketPromote(BaseModel):
+    """Promote an inbox item onto the runnable board."""
+
+    target: Literal["draft", "queued"] = "draft"
+
+
+class InboxCountOut(BaseModel):
+    count: int
+
+
+# --- Saved views ------------------------------------------------------------
+
+
+class SavedViewCreate(BaseModel):
+    name: str
+    surface: str
+    params: dict[str, str] = {}
+
+
+class SavedViewUpdate(BaseModel):
+    """Rename a saved view. ``params``/``surface`` are immutable after
+    creation (mirrors the HTMX rename-only affordance)."""
+
+    name: str
+
+
+class SavedViewReorder(BaseModel):
+    view_ids: list[str] = Field(min_length=1)
+
+
+class SavedViewOut(BaseModel):
+    id: str
+    name: str
+    surface: str
+    params: dict
+    url: str
+
+
+# --- Conversation / run actions ----------------------------------------------
+
+
+class TicketNextRunContext(BaseModel):
+    """Free-form steering note staged for the ticket's next run."""
+
+    body: str = ""
+
+
+class TicketRestart(BaseModel):
+    message: Optional[str] = None
+    workspace_policy: Literal["recreate_in_place", "fresh_path"]
+
+
+class TicketResumeOrRetry(BaseModel):
+    message: Optional[str] = None
+
+
+class TicketClone(BaseModel):
+    title: Optional[str] = None
+    carry_context: bool = False
+
+
+class AdditionalDirAdd(BaseModel):
+    path: str
+    mode: Literal["rw", "ro"] = "rw"
+
+    @field_validator("path")
+    @classmethod
+    def _absolute(cls, v: str) -> str:
+        if not v.strip().startswith("/"):
+            raise ValueError("path must be absolute")
+        return v.strip()
+
+
+# --- Bulk labels --------------------------------------------------------------
+
+
+class BulkLabelsUpdate(BaseModel):
+    ticket_ids: list[str] = Field(min_length=1)
+    label_ids: list[str] = []
+
+
+class BulkArchiveRequest(BaseModel):
+    ticket_ids: list[str] = Field(min_length=1)
+
+
+# --- Profiles: copy/export/import --------------------------------------------
+
+
+class ProfileImport(BaseModel):
+    """Native nightdesk profile export re-imported as JSON (no file upload).
+
+    Mirrors the multipart ``POST /profiles/import`` HTML action; secrets are
+    never accepted here beyond what ``claude_credentials``/``env`` explicitly
+    carry, and forbidden fields are silently stripped exactly as the HTML
+    importer does.
+    """
+
+    name: Optional[str] = None
+    payload: dict = Field(default_factory=dict)
+
+
+class ProfileImportFromCC(BaseModel):
+    """A Claude Code ``settings.json`` payload to translate into a profile."""
+
+    settings: dict = Field(default_factory=dict)
+    name: Optional[str] = None
+
+
+class ProfileImportResult(BaseModel):
+    id: str
+    dropped_fields: list[str] = []
+
+
+# --- Helpers -------------------------------------------------------------------
+
+
+class WorktreeNamePreviewRequest(BaseModel):
+    source_path: str
+    name: Optional[str] = None
+    path: Optional[str] = None
+    base_ref: Optional[str] = None
+
+
+class WorktreeNamePreviewOut(BaseModel):
+    path: str
+    source: str
+    base_ref: Optional[str] = None
+    base_ref_status: Optional[str] = None
+
+
+class CronPreviewRequest(BaseModel):
+    schedule: str
+    timezone: str = "UTC"
+    count: int = Field(default=5, ge=1, le=20)
+
+
+class CronPreviewOut(BaseModel):
+    next_fire_times: list[datetime]
+
+
+class WebhookTestRequest(BaseModel):
+    url: str
+
+
+class ProjectActivityRow(BaseModel):
+    run_id: str
+    ticket_id: str
+    ticket_title: str
+    outcome: str
+    duration_seconds: Optional[float] = None
+    tokens: Optional[int] = None
+    started_at: Optional[datetime] = None
+
+
+class AnalyticsSummaryOut(BaseModel):
+    """JSON twin of the headline chips on ``/analytics``."""
+
+    price_source: str
+    price_as_of: str
+    price_source_label: str
+    today: dict
+    last_7d: dict
+    last_30d: dict
+    run_stats: dict
+    duration: dict
+    # Per-project rollup (spend, tokens, run count, success rate) over the
+    # same rolling 30-day window as the other breakdowns. When ``project_id``
+    # is passed this degenerates to that one project's own row.
+    by_project: list[dict] = []
+
+
+class AnalyticsSpendOut(BaseModel):
+    range: Literal["today", "7d", "30d"]
+    project_id: Optional[str] = None
+    totals: dict
+    by_model: list[dict]
+    by_profile: list[dict]
+    by_ticket: list[dict]
+    by_project: list[dict] = []
+    # Per-day {date, cost, run_count, ...token breakdown} for the requested
+    # range — the same series ``tokens`` returns, so a spend-over-time chart
+    # doesn't need a second round trip.
+    daily_series: list[dict]
+    price_source: str
+    price_as_of: str
+
+
+class AnalyticsTokensOut(BaseModel):
+    range: Literal["today", "7d", "30d"]
+    project_id: Optional[str] = None
+    by_model: list[dict]
+    model_legend: list[dict]
+    # Per-day {date, total_tokens, input_tokens, output_tokens,
+    # cache_read_tokens, cache_write_tokens, cost, run_count, by_model}.
+    daily_series: list[dict]
+    max_daily_tokens: int
+
+
+class AnalyticsLatencyOut(BaseModel):
+    range: Literal["today", "7d", "30d"]
+    project_id: Optional[str] = None
+    latency_by_model: list[dict]
+    latency_series: list[dict]
+    latency_model_legend: list[dict]
+    max_daily_latency: float
+    model_vs_tool_time: list[dict]
+
+
+class DiagnosticsOut(BaseModel):
+    nightdesk_version: str
+    python_version: str
+    platform: str
+    kernel: str
+    bwrap_version: Optional[str] = None
+    cc_check_status: Optional[str] = None
+    cc_version: Optional[str] = None
+    cc_binary_path: Optional[str] = None
+    cc_check_message: Optional[str] = None

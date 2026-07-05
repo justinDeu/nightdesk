@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_bearer
+from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.api.schemas import (
     ConfigOut,
     ConfigUpdate,
@@ -64,7 +64,7 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
     router = APIRouter(
         prefix="/api/v1",
         tags=["config"],
-        dependencies=[Depends(require_bearer(bearer_token))],
+        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
     )
 
     @router.get("/config", response_model=ConfigOut)
