@@ -191,7 +191,7 @@ def test_resolve_no_cache_live_fails_falls_back_to_table(tmp_path):
     fetch, calls = _fetcher_failing()
     info = pricing.resolve_prices(tmp_path, url="http://x", now=NOW, fetcher=fetch)
     assert info.source == "table"
-    assert info.as_of == "2026-05-18"  # PRICES_AS_OF
+    assert info.as_of == pricing.PRICES_AS_OF
 
 
 def test_resolve_url_none_never_fetches_uses_table(tmp_path):
@@ -220,6 +220,66 @@ def test_resolve_ttl_expiry_triggers_live_refetch(tmp_path):
     assert info.prices == new_prices
     rec = pricing.read_cache(pricing.cache_path(tmp_path))
     assert rec is not None and rec[0] == new_prices
+
+
+# --- resolve_live_all: the vendor-preserving chain (run pricing snapshots) --
+GLM_LIVE_ALL = {"glm-5.2": ("zai", {
+    "input": 1.4, "output": 4.4, "cache_read": 0.26, "cache_write": 0.0})}
+
+
+def _fetcher_all_returning(entries):
+    calls = []
+    def _fetch(url):
+        calls.append(url)
+        return entries
+    return _fetch, calls
+
+
+def _fetcher_all_failing():
+    calls = []
+    def _fetch(url):
+        calls.append(url)
+        return None
+    return _fetch, calls
+
+
+def test_resolve_live_all_live_wins_and_persists_cache(tmp_path):
+    fetch, calls = _fetcher_all_returning(GLM_LIVE_ALL)
+    entries, source = pricing.resolve_live_all(tmp_path, url="http://x", now=NOW, fetcher=fetch)
+    assert source == "live"
+    assert entries == GLM_LIVE_ALL
+    assert calls == ["http://x"]
+    cached = pricing._read_cache_all(pricing.cache_path_all(tmp_path))
+    assert cached is not None and cached[0] == GLM_LIVE_ALL
+
+
+def test_resolve_live_all_fresh_cache_skips_network(tmp_path):
+    pricing._write_cache_all(pricing.cache_path_all(tmp_path), GLM_LIVE_ALL,
+                              source="http://x", fetched_at=NOW.isoformat())
+    fetch, calls = _fetcher_all_returning({"glm-5.2": ("zai", {
+        "input": 999.0, "output": 1.0, "cache_read": 1.0, "cache_write": 1.0})})
+    entries, source = pricing.resolve_live_all(tmp_path, url="http://x", now=NOW, fetcher=fetch)
+    assert source == "cache"
+    assert calls == []
+    assert entries == GLM_LIVE_ALL
+
+
+def test_resolve_live_all_no_cache_live_fails_falls_back_to_bundled(tmp_path):
+    fetch, calls = _fetcher_all_failing()
+    entries, source = pricing.resolve_live_all(tmp_path, url="http://x", now=NOW, fetcher=fetch)
+    assert source == "bundled"
+    assert entries == {}
+
+
+def test_resolve_live_all_no_data_dir_no_url_uses_bundled():
+    entries, source = pricing.resolve_live_all(None, url=None, now=NOW)
+    assert source == "bundled"
+    assert entries == {}
+
+
+def test_fetch_live_prices_all_fails_soft_on_unreachable():
+    out = pricing.fetch_live_prices_all("http://127.0.0.1:1/nope", timeout_seconds=0.5)
+    assert out is None
 
 
 # --- live fetch fail-soft -------------------------------------------------
@@ -303,6 +363,164 @@ def test_normalize_openrouter_list_under_data_scales_per_token_to_per_1m():
     assert p["output"] == pytest.approx(25.0)
     assert p["cache_read"] == pytest.approx(0.5)
     assert p["cache_write"] == pytest.approx(6.25)
+
+
+# --- vendor-aware resolution -----------------------------------------------
+def test_normalize_all_keeps_every_vendor_including_glm():
+    data = _load_fixture("litellm_prices_sample.json")
+    out = pricing.normalize_endpoint_json_all(data)
+    # Unlike normalize_endpoint_json, nothing is dropped for being non-Anthropic.
+    bedrock_key = "anthropic.claude-opus-4-5-20251101-v1:0"
+    assert bedrock_key in out
+    vendor, _prices = out[bedrock_key]
+    assert vendor == "bedrock_converse"
+    anth_vendor, _ = out["claude-opus-4-5"]
+    assert anth_vendor == "anthropic"
+    # Only the first "provider/" segment is stripped; the rest of the id
+    # (here still carrying "anthropic/") is left for the caller to interpret.
+    openrouter_vendor, _ = out["anthropic/claude-opus-4.5"]
+    assert openrouter_vendor == "openrouter"
+
+
+def test_normalize_all_openrouter_shape_tags_openrouter_regardless_of_id_prefix():
+    data = _load_fixture("openrouter_models_sample.json")
+    out = pricing.normalize_endpoint_json_all(data)
+    vendor, _prices = out["claude-opus-4.5"]
+    assert vendor == "openrouter"
+
+
+def test_resolve_vendor_price_ollama_is_free():
+    prices, source = pricing.resolve_vendor_price("ollama", "llama3", live_all=None)
+    assert prices == {"input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0}
+    assert source == "bundled"
+
+
+def test_resolve_vendor_price_anthropic_bundled():
+    prices, source = pricing.resolve_vendor_price(
+        "anthropic", "claude-sonnet-4-5", live_all=None)
+    assert source == "bundled"
+    assert prices["input"] == 3.0
+
+
+def test_resolve_vendor_price_zai_bundled_curated_wins():
+    prices, source = pricing.resolve_vendor_price("zai", "glm-5.2", live_all=None)
+    assert source == "bundled"
+    assert prices == {"input": 1.40, "output": 4.40, "cache_read": 0.26, "cache_write": 0.0}
+
+
+def test_resolve_vendor_price_zai_reseller_fallback_for_uncurated_model():
+    live_all = {
+        "@cf/zai-org/glm-6": ("cloudflare", {
+            "input": 2.0, "output": 6.0, "cache_read": 0.4, "cache_write": 0.0}),
+    }
+    prices, source = pricing.resolve_vendor_price(
+        "zai", "glm-6", live_all=live_all, live_source="live")
+    assert source == "live"
+    assert prices["input"] == 2.0
+
+
+def test_resolve_vendor_price_zai_reseller_median_never_cheapest():
+    live_all = {
+        "@cf/zai-org/glm-6": ("cloudflare", {
+            "input": 1.0, "output": 3.0, "cache_read": 0.1, "cache_write": 0.0}),
+        "glm-6": ("fireworks_ai", {
+            "input": 3.0, "output": 9.0, "cache_read": 0.3, "cache_write": 0.0}),
+        "novita/glm-6": ("novita", {
+            "input": 5.0, "output": 15.0, "cache_read": 0.5, "cache_write": 0.0}),
+    }
+    prices, source = pricing.resolve_vendor_price(
+        "zai", "glm-6", live_all=live_all, live_source="live")
+    assert source == "live"
+    # Median of {1, 3, 5} is 3 -- never the cheapest (1).
+    assert prices["input"] == 3.0
+    assert prices["output"] == 9.0
+
+
+def test_resolve_vendor_price_openai_from_live_data():
+    live_all = {"gpt-5.4": ("openai", {
+        "input": 2.0, "output": 8.0, "cache_read": 0.2, "cache_write": 0.0})}
+    prices, source = pricing.resolve_vendor_price(
+        "openai", "gpt-5.4", live_all=live_all, live_source="live")
+    assert source == "live"
+    assert prices["input"] == 2.0
+
+
+def test_resolve_vendor_price_openrouter_only_from_openrouter_tagged_rows():
+    live_all = {"claude-opus-4.5": ("openrouter", {
+        "input": 6.0, "output": 30.0, "cache_read": 0.6, "cache_write": 7.5})}
+    prices, source = pricing.resolve_vendor_price(
+        "openrouter", "claude-opus-4.5", live_all=live_all, live_source="live")
+    assert source == "live"
+    assert prices["input"] == 6.0
+    # No bundled fallback for openrouter -- an unmatched model is unpriced.
+    prices, source = pricing.resolve_vendor_price(
+        "openrouter", "nonexistent-model", live_all=live_all)
+    assert prices is None
+    assert source == "none"
+
+
+def test_resolve_vendor_price_unknown_vendor_falls_back_to_agnostic_prefix_match():
+    # No explicit rule for "custom" -- still resolves via the vendor-agnostic
+    # bundled table, same as pre-vendor-model behavior.
+    prices, source = pricing.resolve_vendor_price(
+        "custom", "claude-sonnet-4-1", live_all=None)
+    assert source == "bundled"
+    assert prices["input"] == 3.0
+
+
+def test_resolve_vendor_price_lookup_normalization_exact_beats_stripped():
+    live_all = {
+        "glm-5.2[1m]": ("zai", {
+            "input": 9.0, "output": 9.0, "cache_read": 0.0, "cache_write": 0.0}),
+        "glm-5.2": ("zai", {
+            "input": 1.40, "output": 4.40, "cache_read": 0.26, "cache_write": 0.0}),
+    }
+    # "openai" vendor path exercises the live-table lookup directly.
+    live_all_openai_shaped = {k: ("openai", v) for k, (_v, v) in live_all.items()}
+    prices, source = pricing.resolve_vendor_price(
+        "openai", "glm-5.2[1m]", live_all=live_all_openai_shaped, live_source="live")
+    assert prices["input"] == 9.0  # exact variant row wins over the stripped one
+    prices, _source = pricing.resolve_vendor_price(
+        "openai", "glm-5.2[2m]", live_all=live_all_openai_shaped, live_source="live")
+    assert prices["input"] == 1.40  # no exact row -> falls back to the stripped id
+
+
+def test_resolve_vendor_price_lookup_strips_vendor_prefix():
+    live_all = {"glm-5.2": ("openai", {
+        "input": 1.40, "output": 4.40, "cache_read": 0.26, "cache_write": 0.0})}
+    prices, _source = pricing.resolve_vendor_price(
+        "openai", "anthropic/glm-5.2", live_all=live_all, live_source="live")
+    assert prices is not None
+    assert prices["input"] == 1.40
+
+
+# --- build_pricing_snapshot -------------------------------------------------
+def test_build_pricing_snapshot_from_bundled_table():
+    snapshot = pricing.build_pricing_snapshot({
+        "claude-sonnet-4-5": "anthropic",
+        "glm-5.2": "zai",
+    })
+    assert snapshot["claude-sonnet-4-5"]["source"] == "bundled"
+    assert snapshot["claude-sonnet-4-5"]["input"] == 3.0
+    assert snapshot["glm-5.2"]["source"] == "bundled"
+    assert snapshot["glm-5.2"]["vendor"] == "zai"
+    assert snapshot["glm-5.2"]["input"] == 1.40
+    assert snapshot["claude-sonnet-4-5"]["as_of"] == pricing.PRICES_AS_OF
+
+
+def test_build_pricing_snapshot_unresolved_model_gets_null_entry():
+    snapshot = pricing.build_pricing_snapshot({"totally-unknown": "openrouter"})
+    entry = snapshot["totally-unknown"]
+    assert entry["source"] == "none"
+    assert entry["vendor"] == "openrouter"
+    assert entry["input"] is None
+    assert entry["output"] is None
+
+
+def test_build_pricing_snapshot_custom_as_of():
+    snapshot = pricing.build_pricing_snapshot(
+        {"claude-sonnet-4-5": "anthropic"}, as_of="2026-01-01")
+    assert snapshot["claude-sonnet-4-5"]["as_of"] == "2026-01-01"
 
 
 def test_normalize_per_token_alias_mapping_is_complete():

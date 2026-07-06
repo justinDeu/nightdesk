@@ -318,6 +318,90 @@ def test_build_dashboard_surfaces_source_and_reprices(session):
     assert data_tbl["today"]["cost"] == pytest.approx(3.0)
 
 
+# --- pricing snapshots: stored cost wins, legacy runs are flagged estimated ---
+def test_window_totals_prefers_stored_cost_for_snapshot_runs(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    # Snapshotted run: stored cost_usd is the historical truth, even though
+    # live/current prices would reprice it very differently.
+    snap = _run(session, t, started_at=NOW, input_tokens=1_000_000, cost=1.4)
+    snap.model_used = "claude-sonnet-4-5"
+    snap.pricing_snapshot = {"claude-sonnet-4-5": {"vendor": "zai", "input": 1.4,
+                                                    "output": 4.4, "cache_read": 0.26,
+                                                    "cache_write": 0.0, "source": "bundled",
+                                                    "as_of": "2026-07-05"}}
+    # Legacy run with no snapshot: reprices from LIVE.
+    legacy = _run(session, t, started_at=NOW, input_tokens=1_000_000)
+    legacy.model_used = "claude-sonnet-4-5"
+    session.commit()
+
+    w = analytics.window_totals(session, start=analytics.start_of_day(NOW), prices=LIVE)
+    # Snapshot run keeps its stored $1.40; legacy run reprices to $9.00 (LIVE).
+    assert w["cost"] == pytest.approx(1.4 + 9.0)
+    assert w["estimated_runs"] == 1
+
+
+def test_tokens_by_model_flags_estimated_when_snapshot_missing(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    snap = _run(session, t, started_at=NOW, input_tokens=500_000, cost=0.7)
+    snap.model_used = "claude-sonnet-4-5"
+    snap.pricing_snapshot = {"claude-sonnet-4-5": {"input": 1.4, "output": 4.4,
+                                                    "cache_read": 0.26, "cache_write": 0.0}}
+    legacy = _run(session, t, started_at=NOW, input_tokens=500_000)
+    legacy.model_used = "claude-sonnet-4-5"
+    session.commit()
+
+    rows = analytics.tokens_by_model(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=29), prices=LIVE)
+    row = next(r for r in rows if r["model"] == "claude-sonnet-4-5")
+    # 0.5M snapshot-priced ($0.70 stored) + 0.5M repriced at LIVE ($4.50).
+    assert row["cost"] == pytest.approx(0.7 + 4.5)
+    assert row["estimated_runs"] == 1
+    assert row["estimated"] is True
+
+
+def test_tokens_by_model_not_estimated_when_all_runs_snapshotted(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    r = _run(session, t, started_at=NOW, input_tokens=100, cost=0.5)
+    r.model_used = "claude-opus-4-7"
+    r.pricing_snapshot = {"claude-opus-4-7": {"input": 15.0, "output": 75.0,
+                                               "cache_read": 1.5, "cache_write": 18.75}}
+    session.commit()
+
+    rows = analytics.tokens_by_model(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=29), prices=LIVE)
+    row = next(r for r in rows if r["model"] == "claude-opus-4-7")
+    assert row["estimated_runs"] == 0
+    assert row["estimated"] is False
+    # Stored cost is kept, not repriced from LIVE (LIVE has no opus entry
+    # anyway, which would otherwise silently zero it out).
+    assert row["cost"] == pytest.approx(0.5)
+
+
+def test_usage_by_profile_and_project_rollups_flag_estimated(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    snap = _run(session, t, started_at=NOW, input_tokens=100, cost=1.0)
+    snap.model_used = "claude-sonnet-4-5"
+    snap.pricing_snapshot = {"claude-sonnet-4-5": {"input": 1.4, "output": 4.4,
+                                                    "cache_read": 0.26, "cache_write": 0.0}}
+    legacy = _run(session, t, started_at=NOW, input_tokens=100)
+    legacy.model_used = "claude-sonnet-4-5"
+    session.commit()
+
+    profile_rows = analytics.usage_by_profile(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=29), prices=LIVE)
+    assert profile_rows[0]["estimated_runs"] == 1
+    assert profile_rows[0]["estimated"] is True
+
+    project_rows = analytics.project_rollups(
+        session, start=analytics.start_of_day(NOW) - timedelta(days=29), prices=LIVE)
+    assert project_rows[0]["estimated_runs"] == 1
+    assert project_rows[0]["estimated"] is True
+
+
 def test_usage_by_profile_reprices_with_live_prices(session):
     p = _profile(session, "alpha")
     t = _ticket(session, p, "ta")

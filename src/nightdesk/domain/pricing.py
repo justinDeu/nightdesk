@@ -60,6 +60,8 @@ from typing import Callable, Mapping, Optional
 from nightdesk.domain.cost import (
     PRICES_AS_OF,
     apply_prices,
+    bundled_prices_all,
+    bundled_prices_by_vendor,
     price_table,
 )
 
@@ -313,6 +315,427 @@ def normalize_endpoint_json(data: object) -> dict[str, dict[str, float]]:
 
     # Dict-keyed (registry aggregate or flat).
     return _normalize_keyed(data)
+
+
+# --------------------------------------------------------------------------
+# Vendor-aware resolution and run pricing snapshots.
+# --------------------------------------------------------------------------
+#
+# The chain above (``normalize_endpoint_json`` / ``resolve_prices`` /
+# ``PriceInfo``) predates the provider model and stays exactly as it is:
+# Anthropic-only, prefix-matched, feeding the existing analytics repricing
+# path. Vendor-aware resolution is an additive layer on top, built from a
+# *vendor-preserving* parse of the same upstream payloads
+# (``normalize_endpoint_json_all``) so GLM and other non-Anthropic rows are
+# no longer discarded before anyone gets a chance to price them.
+#
+# Design choice: rather than mutate ``_is_anthropic`` in place (which would
+# change ``normalize_endpoint_json``'s output shape for every existing
+# caller -- the cache round-trip, the default-URL smoke test, the
+# reseller-filtering regression tests), vendor resolution reads from this
+# parallel, vendor-tagged parse. The Anthropic-only chain and the
+# vendor-aware chain currently overlap in what they can price (both can
+# resolve Anthropic models); they are expected to converge once run-time
+# pricing snapshots replace analytics' live repricing in a later change.
+
+# Vendors this module knows how to resolve explicitly. Anything else falls
+# through to the legacy vendor-agnostic best-effort path.
+KNOWN_VENDORS = frozenset({"anthropic", "zai", "openrouter", "openai", "ollama"})
+
+_PRICE_COMPONENTS = ("input", "output", "cache_read", "cache_write")
+
+
+def _entry_vendor_hint(key: str, entry: Mapping[str, object]) -> Optional[str]:
+    """Best-effort vendor tag for one raw price entry, or None with no signal.
+
+    Honors an explicit ``litellm_provider`` / ``provider`` field when
+    present, else the ``provider/`` prefix on the key. Flat/canonical
+    entries carrying no discriminator get no vendor hint at all -- callers
+    treat that as "unattributed", never as a guess.
+    """
+    prov = entry.get("litellm_provider") or entry.get("provider")
+    if prov:
+        return str(prov).lower()
+    if "/" in key:
+        return key.split("/", 1)[0].lower()
+    return None
+
+
+def _normalize_keyed_all(
+    src: Mapping[str, object],
+) -> dict[str, tuple[Optional[str], dict[str, float]]]:
+    """Vendor-preserving counterpart of ``_normalize_keyed``: every parseable
+    entry survives (no Anthropic-only filtering), tagged with its inferred
+    vendor hint."""
+    out: dict[str, tuple[Optional[str], dict[str, float]]] = {}
+    for key, val in src.items():
+        if not isinstance(key, str) or not isinstance(val, Mapping):
+            continue
+        block = _price_block_from_entry(val)
+        prices = _coerce_block(block)
+        if prices is None:
+            continue
+        prefix = key.split("/", 1)[-1]  # strip one leading "provider/" segment
+        if prefix:
+            out[prefix] = (_entry_vendor_hint(key, val), prices)
+    return out
+
+
+def normalize_endpoint_json_all(
+    data: object,
+) -> dict[str, tuple[Optional[str], dict[str, float]]]:
+    """Like :func:`normalize_endpoint_json`, but keeps every vendor's rows.
+
+    Returns ``{prefix: (vendor_hint, prices)}``. ``vendor_hint`` is the raw
+    inferred tag (e.g. ``"anthropic"``, ``"cloudflare"``, ``"fireworks_ai"``)
+    or ``None`` when the source shape carries no discriminator at all.
+
+    The one special case: the list-under-``data`` shape (OpenRouter's own
+    ``/api/v1/models``) tags every entry ``"openrouter"`` regardless of the
+    ``provider/model`` id prefix -- that prefix names the underlying model,
+    not the seller, and OpenRouter's price is its own markup over that model.
+    """
+    if not isinstance(data, Mapping):
+        return {}
+
+    if isinstance(data.get("prices"), Mapping):
+        return _normalize_keyed_all(data["prices"])  # type: ignore[arg-type]
+
+    data_list = data.get("data")
+    if isinstance(data_list, list):
+        remapped: dict[str, Mapping[str, object]] = {}
+        for entry in data_list:
+            if isinstance(entry, Mapping):
+                eid = entry.get("id")
+                if isinstance(eid, str) and eid:
+                    remapped[eid] = entry
+        parsed = _normalize_keyed_all(remapped)
+        return {prefix: ("openrouter", prices) for prefix, (_v, prices) in parsed.items()}
+
+    return _normalize_keyed_all(data)
+
+
+def _strip_variant_suffix(model: str) -> str:
+    """Drop a trailing context-variant suffix: ``"glm-5.2[1m]"`` -> ``"glm-5.2"``."""
+    idx = model.find("[")
+    return model[:idx] if idx != -1 else model
+
+
+def _strip_vendor_prefix(model: str) -> str:
+    """Drop a leading ``"vendor/"`` segment: ``"anthropic/glm-5.2"`` -> ``"glm-5.2"``."""
+    return model.split("/", 1)[-1] if "/" in model else model
+
+
+def _model_candidates(model: str) -> list[str]:
+    """Lookup candidates in order: exact id, suffix-stripped, then also
+    vendor-prefix-stripped. Never mutates the id that gets recorded -- this
+    is a read-time lookup aid only."""
+    candidates = [model]
+    stripped = _strip_variant_suffix(model)
+    if stripped != model:
+        candidates.append(stripped)
+    no_prefix = _strip_vendor_prefix(stripped)
+    if no_prefix != stripped:
+        candidates.append(no_prefix)
+    return candidates
+
+
+def _prefix_lookup(
+    model: str, table: Mapping[str, Mapping[str, float]]
+) -> Optional[dict[str, float]]:
+    """Longest-prefix match against ``table``, trying normalized candidates
+    in order (exact id first, then suffix-stripped, then vendor-prefix-
+    stripped) so a variant with its own row (``"glm-5.2[1m]"``) is preferred
+    over its stripped form when both exist."""
+    for candidate in _model_candidates(model):
+        best: Optional[str] = None
+        for prefix in table:
+            if candidate.startswith(prefix) and (best is None or len(prefix) > len(best)):
+                best = prefix
+        if best is not None:
+            return dict(table[best])
+    return None
+
+
+def _vendor_table(
+    live_all: Mapping[str, tuple[Optional[str], dict[str, float]]], vendor: str
+) -> dict[str, dict[str, float]]:
+    return {prefix: prices for prefix, (v, prices) in live_all.items() if v == vendor}
+
+
+def _zai_reseller_matches(
+    model: str, live_all: Mapping[str, tuple[Optional[str], dict[str, float]]]
+) -> list[dict[str, float]]:
+    """Reseller rows (any vendor hint) whose deepest path segment names this
+    GLM model, e.g. ``cloudflare/@cf/zai-org/glm-5.2`` or
+    ``fireworks_ai/glm-5.2`` both match ``model="glm-5.2"``."""
+    candidates = set(_model_candidates(model))
+    matches = []
+    for key, (_vendor, prices) in live_all.items():
+        deep = key.rsplit("/", 1)[-1]
+        if deep in candidates:
+            matches.append(prices)
+    return matches
+
+
+def _median_prices(entries: list[dict[str, float]]) -> dict[str, float]:
+    """Component-wise median across reseller price rows. Never the cheapest:
+    the min systematically underestimates what a user actually pays when
+    resellers vary."""
+    def median(component: str) -> float:
+        values = sorted(e[component] for e in entries)
+        n = len(values)
+        mid = n // 2
+        if n % 2:
+            return values[mid]
+        return (values[mid - 1] + values[mid]) / 2.0
+
+    return {component: median(component) for component in _PRICE_COMPONENTS}
+
+
+_ZERO_COST_PRICES: dict[str, float] = {c: 0.0 for c in _PRICE_COMPONENTS}
+
+
+def resolve_vendor_price(
+    vendor: str,
+    model: str,
+    *,
+    live_all: Optional[Mapping[str, tuple[Optional[str], dict[str, float]]]] = None,
+    live_source: str = "live",
+) -> tuple[Optional[dict[str, float]], str]:
+    """Resolve per-1M-token prices for ``(vendor, model)``.
+
+    ``live_all`` is a vendor-preserving parse of a live/cached pricing
+    payload (:func:`normalize_endpoint_json_all`); omit it to resolve
+    purely from the bundled table. ``live_source`` labels the tier
+    ``live_all`` came from (``"live"`` or ``"cache"``) and is only used when
+    a hit actually comes from it.
+
+    Returns ``(prices, source)`` where ``source`` is ``"live"``/``"cache"``
+    (per ``live_source``, when resolved from ``live_all``), ``"bundled"``, or
+    ``"none"`` when nothing resolves (``prices`` is ``None`` in that case).
+
+    Vendor rules (see docs/design/providers-and-endpoints.md, "Pricing
+    integration"):
+
+    * ``ollama`` -- always free.
+    * ``zai`` -- curated bundled rows first; live reseller rows as fallback,
+      taking the median across resellers when more than one prices a model.
+    * ``anthropic`` / ``openai`` -- live rows tagged for that vendor, then
+      the bundled table.
+    * ``openrouter`` -- live rows tagged ``"openrouter"`` only (no bundled
+      fallback: OpenRouter's markup isn't something to guess offline).
+    * anything else -- legacy vendor-agnostic best-effort prefix match
+      across whatever live data and bundled rows exist, so unknown vendors
+      degrade gracefully instead of pricing as zero.
+    """
+    live_all = live_all or {}
+
+    if vendor == "ollama":
+        return dict(_ZERO_COST_PRICES), "bundled"
+
+    if vendor == "zai":
+        hit = _prefix_lookup(model, bundled_prices_by_vendor("zai"))
+        if hit is not None:
+            return hit, "bundled"
+        matches = _zai_reseller_matches(model, live_all)
+        if matches:
+            return _median_prices(matches), live_source
+        return None, "none"
+
+    if vendor in ("anthropic", "openai"):
+        hit = _prefix_lookup(model, _vendor_table(live_all, vendor))
+        if hit is not None:
+            return hit, live_source
+        hit = _prefix_lookup(model, bundled_prices_by_vendor(vendor))
+        if hit is not None:
+            return hit, "bundled"
+        return None, "none"
+
+    if vendor == "openrouter":
+        hit = _prefix_lookup(model, _vendor_table(live_all, "openrouter"))
+        if hit is not None:
+            return hit, live_source
+        return None, "none"
+
+    # Unknown vendor: degrade to the old vendor-agnostic best-effort prefix
+    # match, first against any live/cache data, then the full bundled table.
+    agnostic_live = {prefix: prices for prefix, (_v, prices) in live_all.items()}
+    hit = _prefix_lookup(model, agnostic_live)
+    if hit is not None:
+        return hit, live_source
+    hit = _prefix_lookup(model, bundled_prices_all())
+    if hit is not None:
+        return hit, "bundled"
+    return None, "none"
+
+
+def build_pricing_snapshot(
+    models: Mapping[str, str],
+    *,
+    live_all: Optional[Mapping[str, tuple[Optional[str], dict[str, float]]]] = None,
+    live_source: str = "live",
+    as_of: Optional[str] = None,
+) -> dict[str, dict[str, object]]:
+    """Build a run pricing snapshot: model id -> resolved rates + provenance.
+
+    ``models`` maps model id -> vendor tag (the caller knows which endpoint
+    served each model; this function is pure and touches no DB). ``live_all``
+    is a vendor-preserving parse of a live/cached payload
+    (:func:`normalize_endpoint_json_all`); omit it to resolve purely from the
+    bundled table. ``as_of`` stamps every entry (default:
+    :data:`nightdesk.domain.cost.PRICES_AS_OF`).
+
+    Output shape, per the design doc::
+
+        {model_id: {"vendor", "input", "output", "cache_read", "cache_write",
+                    "source", "as_of"}}
+
+    A model that resolves to nothing still gets an entry, with every rate
+    field ``None`` and ``source="none"`` -- so a consumer can tell "priced at
+    zero" (ollama) apart from "pricing was attempted and failed" (nulls).
+    """
+    as_of = as_of or PRICES_AS_OF
+    snapshot: dict[str, dict[str, object]] = {}
+    for model, vendor in models.items():
+        prices, source = resolve_vendor_price(
+            vendor, model, live_all=live_all, live_source=live_source
+        )
+        entry: dict[str, object] = {"vendor": vendor, "source": source, "as_of": as_of}
+        if prices is None:
+            entry.update({c: None for c in _PRICE_COMPONENTS})
+        else:
+            entry.update(prices)
+        snapshot[model] = entry
+    return snapshot
+
+
+# --------------------------------------------------------------------------
+# Vendor-preserving live fetch + cache chain, for run-time pricing snapshots.
+#
+# The chain above (``fetch_live_prices`` / ``resolve_prices``) feeds the
+# Anthropic-only analytics repricing path and its on-disk cache shape has
+# already discarded vendor tags by the time it hits disk. Run pricing
+# snapshots need vendor-tagged rows (GLM included), so this is a parallel,
+# smaller chain over the same upstream payload: live fetch -> its own cache
+# file -> nothing (falls through to the bundled table via
+# ``resolve_vendor_price``, which every caller already handles).
+# --------------------------------------------------------------------------
+PRICE_CACHE_ALL_FILENAME = "model_prices_all.json"
+
+
+def cache_path_all(data_dir: Optional[Path]) -> Optional[Path]:
+    """Where the vendor-tagged price cache lives, or None if disabled."""
+    return Path(data_dir) / PRICE_CACHE_ALL_FILENAME if data_dir else None
+
+
+def fetch_live_prices_all(
+    url: str, *, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+) -> Optional[dict[str, tuple[Optional[str], dict[str, float]]]]:
+    """Like :func:`fetch_live_prices`, but vendor-preserving.
+
+    Never raises: failures log at debug and yield None so callers fall
+    through to the bundled table.
+    """
+    if not url:
+        return None
+    try:
+        import httpx
+
+        with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+            resp = client.get(url, headers={"Accept": "application/json"})
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception as exc:  # noqa: BLE001 — fail-soft by design
+        log.debug("vendor-tagged price fetch from %s failed: %s", url, exc)
+        return None
+    parsed = normalize_endpoint_json_all(payload)
+    return parsed or None
+
+
+def _write_cache_all(
+    path: Path,
+    entries: Mapping[str, tuple[Optional[str], dict[str, float]]],
+    *,
+    source: str,
+    fetched_at: str,
+) -> None:
+    prices = {
+        key: {"vendor": vendor, **rates} for key, (vendor, rates) in entries.items()
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"source": source, "fetched_at": fetched_at, "prices": prices}
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    tmp.replace(path)
+
+
+def _read_cache_all(
+    path: Optional[Path],
+) -> Optional[tuple[dict[str, tuple[Optional[str], dict[str, float]]], str]]:
+    rec = _read_raw(path)
+    if not rec:
+        return None
+    raw = rec.get("prices")
+    if not isinstance(raw, Mapping):
+        return None
+    entries: dict[str, tuple[Optional[str], dict[str, float]]] = {}
+    for key, block in raw.items():
+        if not isinstance(key, str) or not isinstance(block, Mapping):
+            continue
+        rates = {c: block.get(c) for c in _PRICE_COMPONENTS}
+        if any(not isinstance(v, (int, float)) for v in rates.values()):
+            continue
+        entries[key] = (block.get("vendor"), {c: float(v) for c, v in rates.items()})
+    if not entries:
+        return None
+    fetched_at = str(rec.get("fetched_at") or "")
+    return entries, fetched_at
+
+
+def resolve_live_all(
+    data_dir: Optional[Path] = None,
+    *,
+    url: Optional[str] = None,
+    now: Optional[datetime] = None,
+    ttl: timedelta = DEFAULT_TTL,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    fetcher: Optional[Callable[[str], Optional[dict]]] = None,
+) -> tuple[dict[str, tuple[Optional[str], dict[str, float]]], str]:
+    """Resolve vendor-tagged live prices via live -> cache -> nothing.
+
+    Returns ``(live_all, source)`` where ``source`` is ``"live"``, ``"cache"``,
+    or ``"bundled"`` (meaning neither live nor cache produced anything —
+    callers pass ``live_all={}`` on to :func:`resolve_vendor_price`, which
+    falls through to the bundled table on its own). Never raises.
+    """
+    now = now or datetime.now(timezone.utc)
+    path = cache_path_all(data_dir)
+    fetch = fetcher or (lambda u: fetch_live_prices_all(u, timeout_seconds=timeout_seconds))
+
+    if cache_fresh(path, now=now, ttl=ttl):
+        cached = _read_cache_all(path)
+        if cached is not None:
+            entries, _fetched_at = cached
+            return entries, "cache"
+
+    if url:
+        live = fetch(url)
+        if live:
+            fetched_at = now.astimezone(timezone.utc).isoformat()
+            if path is not None:
+                try:
+                    _write_cache_all(path, live, source=url, fetched_at=fetched_at)
+                except OSError as exc:
+                    log.debug("vendor-tagged price cache write to %s failed: %s", path, exc)
+            return live, "live"
+
+    cached = _read_cache_all(path)
+    if cached is not None:
+        entries, _fetched_at = cached
+        return entries, "cache"
+
+    return {}, "bundled"
 
 
 # --------------------------------------------------------------------------

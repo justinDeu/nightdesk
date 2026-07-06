@@ -125,6 +125,33 @@ def cache_hit_rate(
     return (cache_read_tokens / prompt) if prompt else 0.0
 
 
+# A run with a stamped ``pricing_snapshot`` prices from that snapshot's
+# stored ``cost_usd`` alone, never re-derived from current prices (the point
+# of the snapshot). Runs with no snapshot (everything pre-merge, or a launch
+# where snapshot-building failed) keep the legacy repricing path and are
+# flagged "estimated" so the UI can label them "estimated at current prices".
+_HAS_SNAPSHOT = case((Run.pricing_snapshot.is_not(None), 1), else_=0)
+
+
+def _split_cost(
+    model: Optional[str], it: int, ot: int, cr: int, cw: int,
+    has_snapshot: bool, stored_cost: float, prices: Optional[PriceInfo],
+) -> tuple[float, bool]:
+    """Cost contribution for one ``(model, has_snapshot)`` grouped row.
+
+    Snapshotted rows always use the stored (historical) cost. Non-snapshot
+    rows reprice from ``prices`` when repricing is requested, else also fall
+    back to the stored cost (the ``prices=None`` direct-unit-test path, whose
+    behavior predates snapshots and stays unchanged). Returns
+    ``(cost, estimated)``.
+    """
+    if has_snapshot:
+        return float(stored_cost), False
+    if prices is not None:
+        return prices.cost(model, it, ot, cr, cw), True
+    return float(stored_cost), False
+
+
 # Token-sum columns reused by several aggregates, in a stable order.
 _TOKEN_SUMS = (
     func.coalesce(func.sum(Run.input_tokens), 0),
@@ -167,23 +194,34 @@ def _scope_to_project(stmt, *, project_id: Optional[str] = None):
     )
 
 
-def _window_cost(
+def _window_cost_and_estimated(
     session: Session,
     prices: PriceInfo,
     *,
     start: datetime,
     end: Optional[datetime] = None,
     project_id: Optional[str] = None,
-) -> float:
-    """Reprice ``[start, end)`` from per-model token sums using resolved prices."""
-    stmt = select(Run.model_used, *_TOKEN_SUMS).where(Run.started_at >= start)
+) -> tuple[float, int]:
+    """Reprice ``[start, end)``: stored cost for snapshotted runs, repriced
+    from ``prices`` for the rest. Returns ``(cost, estimated_run_count)``."""
+    stmt = (
+        select(Run.model_used, _HAS_SNAPSHOT, *_TOKEN_SUMS,
+               func.count(Run.id), func.coalesce(func.sum(Run.cost_usd), 0.0))
+        .where(Run.started_at >= start)
+    )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
     stmt = _scope_to_project(stmt, project_id=project_id)
+    stmt = stmt.group_by(Run.model_used, _HAS_SNAPSHOT)
     total = 0.0
-    for model, it, ot, cr, cw in session.execute(stmt.group_by(Run.model_used)).all():
-        total += prices.cost(model, int(it), int(ot), int(cr), int(cw))
-    return total
+    estimated = 0
+    for model, has_snap, it, ot, cr, cw, n, cost in session.execute(stmt).all():
+        c, is_est = _split_cost(model, int(it), int(ot), int(cr), int(cw),
+                                 bool(has_snap), float(cost), prices)
+        total += c
+        if is_est:
+            estimated += int(n)
+    return total, estimated
 
 
 def window_totals(
@@ -192,23 +230,32 @@ def window_totals(
 ) -> dict:
     """Token totals + cache-hit rate + run count + cost for ``[start, end)``.
 
-    With ``prices`` given the cost is repriced from live/cached prices; without
-    it the stored ``cost_usd`` sum is returned (the original behavior, used by
-    direct unit tests). ``project_id`` scopes to runs on that project's tickets
-    (omit for the global totals).
+    With ``prices`` given the cost is snapshot-stored where a run has one,
+    repriced from live/cached prices otherwise (see ``_split_cost``); without
+    ``prices`` the stored ``cost_usd`` sum is returned (the original behavior,
+    used by direct unit tests). ``project_id`` scopes to runs on that
+    project's tickets (omit for the global totals). The returned dict adds
+    ``estimated_runs``: the count of runs in the window priced by repricing
+    rather than a stamped snapshot, so the UI can label the total accordingly.
     """
     stmt = select(
         *_TOKEN_SUMS,
         func.count(Run.id),
         func.coalesce(func.sum(Run.cost_usd), 0.0),
+        func.coalesce(func.sum(case((Run.pricing_snapshot.is_(None), 1), else_=0)), 0),
     ).where(Run.started_at >= start)
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
     stmt = _scope_to_project(stmt, project_id=project_id)
-    it, ot, cr, cw, n, cost = session.execute(stmt).one()
+    it, ot, cr, cw, n, cost, no_snapshot_n = session.execute(stmt).one()
+    estimated_runs = int(no_snapshot_n)
     if prices is not None:
-        cost = _window_cost(session, prices, start=start, end=end, project_id=project_id)
-    return _token_row(it, ot, cr, cw, n, cost)
+        cost, estimated_runs = _window_cost_and_estimated(
+            session, prices, start=start, end=end, project_id=project_id,
+        )
+    row = _token_row(it, ot, cr, cw, n, cost)
+    row["estimated_runs"] = estimated_runs
+    return row
 
 
 def tokens_by_model(
@@ -217,28 +264,47 @@ def tokens_by_model(
 ) -> list[dict]:
     """Token totals + cache-hit rate grouped by model, most tokens first.
 
-    Runs with no recorded ``model_used`` group under ``"unknown"``.
+    Runs with no recorded ``model_used`` group under ``"unknown"``. Each row
+    carries ``estimated_runs`` (count of that model's runs priced by
+    repricing rather than a stamped snapshot) and ``estimated`` (whether any
+    are), additive fields for the "estimated at current prices" UI label.
     """
     stmt = (
         select(
             Run.model_used,
+            _HAS_SNAPSHOT,
             *_TOKEN_SUMS,
             func.count(Run.id),
             func.coalesce(func.sum(Run.cost_usd), 0.0),
         )
         .where(Run.started_at >= start)
-        .group_by(Run.model_used)
-        .order_by(_TOTAL_TOKENS.desc())
+        .group_by(Run.model_used, _HAS_SNAPSHOT)
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
     stmt = _scope_to_project(stmt, project_id=project_id)
+    agg: dict[str, dict] = {}
+    for model, has_snap, it, ot, cr, cw, n, cost in session.execute(stmt).all():
+        key = model or "unknown"
+        it, ot, cr, cw, n = int(it), int(ot), int(cr), int(cw), int(n)
+        slot = agg.setdefault(key, {"it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0,
+                                     "cost": 0.0, "estimated_runs": 0})
+        c, is_est = _split_cost(model, it, ot, cr, cw, bool(has_snap), float(cost), prices)
+        slot["it"] += it
+        slot["ot"] += ot
+        slot["cr"] += cr
+        slot["cw"] += cw
+        slot["n"] += n
+        slot["cost"] += c
+        if is_est:
+            slot["estimated_runs"] += n
     out = []
-    for model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
-        if prices is not None:
-            cost = prices.cost(model, int(it), int(ot), int(cr), int(cw))
-        row = {"model": model or "unknown", **_token_row(it, ot, cr, cw, n, cost)}
+    for model, a in agg.items():
+        row = {"model": model, **_token_row(a["it"], a["ot"], a["cr"], a["cw"], a["n"], a["cost"])}
+        row["estimated_runs"] = a["estimated_runs"]
+        row["estimated"] = a["estimated_runs"] > 0
         out.append(row)
+    out.sort(key=lambda r: r["total_tokens"], reverse=True)
     return out
 
 
@@ -248,13 +314,16 @@ def usage_by_profile(
 ) -> list[dict]:
     """Token totals + run count grouped by profile name, most tokens first.
 
-    Groups by ``(profile, model)`` so the cost can be repriced from resolved
-    prices; the rows are rolled back up to one per profile.
+    Groups by ``(profile, model, has_snapshot)`` so the cost can be repriced
+    from resolved prices for non-snapshot runs while snapshotted runs keep
+    their stored cost; the rows are rolled back up to one per profile. Each
+    row carries ``estimated_runs``/``estimated`` (see ``tokens_by_model``).
     """
     stmt = (
         select(
             Profile.name,
             Run.model_used,
+            _HAS_SNAPSHOT,
             *_TOKEN_SUMS,
             func.count(Run.id),
             func.coalesce(func.sum(Run.cost_usd), 0.0),
@@ -263,23 +332,28 @@ def usage_by_profile(
         .join(Ticket, Run.ticket_id == Ticket.id)
         .join(Profile, Ticket.profile_id == Profile.id)
         .where(Run.started_at >= start)
-        .group_by(Profile.name, Run.model_used)
+        .group_by(Profile.name, Run.model_used, _HAS_SNAPSHOT)
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
     if project_id is not None:
         stmt = stmt.where(Ticket.project_id == project_id)
     agg: dict[str, dict] = {}
-    for name, model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
-        slot = agg.setdefault(name, {"it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0, "cost": 0.0})
+    for name, model, has_snap, it, ot, cr, cw, n, cost in session.execute(stmt).all():
+        slot = agg.setdefault(name, {"it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0,
+                                      "cost": 0.0, "estimated_runs": 0})
         it, ot, cr, cw, n = int(it), int(ot), int(cr), int(cw), int(n)
+        c, is_est = _split_cost(model, it, ot, cr, cw, bool(has_snap), float(cost), prices)
         slot["it"] += it
         slot["ot"] += ot
         slot["cr"] += cr
         slot["cw"] += cw
         slot["n"] += n
-        slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
-    rows = [{"name": name, **_token_row(a["it"], a["ot"], a["cr"], a["cw"], a["n"], a["cost"])}
+        slot["cost"] += c
+        if is_est:
+            slot["estimated_runs"] += n
+    rows = [{"name": name, **_token_row(a["it"], a["ot"], a["cr"], a["cw"], a["n"], a["cost"]),
+             "estimated_runs": a["estimated_runs"], "estimated": a["estimated_runs"] > 0}
             for name, a in agg.items()]
     rows.sort(key=lambda r: r["total_tokens"], reverse=True)
     return rows
@@ -296,14 +370,18 @@ def usage_by_ticket(
 ) -> list[dict]:
     """Top tickets by total tokens over the window.
 
-    Groups by ``(ticket, model)`` so the cost can be repriced from resolved
-    prices; rows are rolled back up to one per ticket and truncated to ``limit``.
+    Groups by ``(ticket, model, has_snapshot)`` so the cost can be repriced
+    from resolved prices for non-snapshot runs while snapshotted runs keep
+    their stored cost; rows are rolled back up to one per ticket and
+    truncated to ``limit``. Each row carries ``estimated_runs``/``estimated``
+    (see ``tokens_by_model``).
     """
     stmt = (
         select(
             Ticket.id,
             Ticket.title,
             Run.model_used,
+            _HAS_SNAPSHOT,
             *_TOKEN_SUMS,
             func.count(Run.id),
             func.coalesce(func.sum(Run.cost_usd), 0.0),
@@ -311,7 +389,7 @@ def usage_by_ticket(
         .select_from(Run)
         .join(Ticket, Run.ticket_id == Ticket.id)
         .where(Run.started_at >= start)
-        .group_by(Ticket.id, Ticket.title, Run.model_used)
+        .group_by(Ticket.id, Ticket.title, Run.model_used, _HAS_SNAPSHOT)
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
@@ -319,18 +397,23 @@ def usage_by_ticket(
         stmt = stmt.where(Ticket.project_id == project_id)
     agg: dict[str, dict] = {}
     titles: dict[str, str] = {}
-    for tid, title, model, it, ot, cr, cw, n, cost in session.execute(stmt).all():
+    for tid, title, model, has_snap, it, ot, cr, cw, n, cost in session.execute(stmt).all():
         titles[tid] = title
-        slot = agg.setdefault(tid, {"it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0, "cost": 0.0})
+        slot = agg.setdefault(tid, {"it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0,
+                                     "cost": 0.0, "estimated_runs": 0})
         it, ot, cr, cw, n = int(it), int(ot), int(cr), int(cw), int(n)
+        c, is_est = _split_cost(model, it, ot, cr, cw, bool(has_snap), float(cost), prices)
         slot["it"] += it
         slot["ot"] += ot
         slot["cr"] += cr
         slot["cw"] += cw
         slot["n"] += n
-        slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
+        slot["cost"] += c
+        if is_est:
+            slot["estimated_runs"] += n
     rows = [{"ticket_id": tid, "title": titles[tid],
-             **_token_row(a["it"], a["ot"], a["cr"], a["cw"], a["n"], a["cost"])}
+             **_token_row(a["it"], a["ot"], a["cr"], a["cw"], a["n"], a["cost"]),
+             "estimated_runs": a["estimated_runs"], "estimated": a["estimated_runs"] > 0}
             for tid, a in agg.items()]
     rows.sort(key=lambda r: r["total_tokens"], reverse=True)
     return rows[:limit]
@@ -476,34 +559,38 @@ def daily_usage_by_model_series(
         select(
             day_expr,
             Run.model_used,
+            _HAS_SNAPSHOT,
             *_TOKEN_SUMS,
             func.count(Run.id),
             func.coalesce(func.sum(Run.cost_usd), 0.0),
         )
         .where(Run.started_at >= start)
-        .group_by(day_expr, Run.model_used)
+        .group_by(day_expr, Run.model_used, _HAS_SNAPSHOT)
     )
     stmt = _scope_to_project(stmt, project_id=project_id)
     rows = session.execute(stmt).all()
 
     by_day: dict[str, dict] = {}
-    for day, model, it, ot, cr, cw, n, cost in rows:
+    for day, model, has_snap, it, ot, cr, cw, n, cost in rows:
         it, ot, cr, cw, n = int(it), int(ot), int(cr), int(cw), int(n)
         tokens = it + ot + cr + cw
         key = str(day)
         slot = by_day.setdefault(key, {
             "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
             "cache_read_tokens": 0, "cache_write_tokens": 0,
-            "cost": 0.0, "run_count": 0, "by_model": {},
+            "cost": 0.0, "run_count": 0, "by_model": {}, "estimated_runs": 0,
         })
-        slot["by_model"][model or "unknown"] = tokens
+        slot["by_model"][model or "unknown"] = slot["by_model"].get(model or "unknown", 0) + tokens
         slot["total_tokens"] += tokens
         slot["input_tokens"] += it
         slot["output_tokens"] += ot
         slot["cache_read_tokens"] += cr
         slot["cache_write_tokens"] += cw
         slot["run_count"] += n
-        slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
+        c, is_est = _split_cost(model, it, ot, cr, cw, bool(has_snap), float(cost), prices)
+        slot["cost"] += c
+        if is_est:
+            slot["estimated_runs"] += n
 
     out: list[dict] = []
     # Iterate over local dates (start_of_day already localizes to tz); strftime
@@ -515,7 +602,7 @@ def daily_usage_by_model_series(
         slot = by_day.get(key, {
             "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
             "cache_read_tokens": 0, "cache_write_tokens": 0,
-            "cost": 0.0, "run_count": 0, "by_model": {},
+            "cost": 0.0, "run_count": 0, "by_model": {}, "estimated_runs": 0,
         })
         out.append({"date": key, **slot})
         day += timedelta(days=1)
@@ -665,11 +752,14 @@ def project_rollups(
 ) -> list[dict]:
     """Per-project spend/tokens/runs/success-rate rollup over ``[start, end)``.
 
-    Groups by ``(project, model)`` so cost can be repriced, then rolls back up
-    to one row per project, most tokens first. Tickets with no project group
-    under a ``None`` id / ``"(no project)"`` name so every run is accounted
-    for. ``project_id`` restricts the rollup to a single project (the result
-    then has at most one row) — the same filter the other aggregates accept.
+    Groups by ``(project, model, has_snapshot)`` so cost can be repriced for
+    non-snapshot runs while snapshotted runs keep their stored cost, then
+    rolls back up to one row per project, most tokens first. Tickets with no
+    project group under a ``None`` id / ``"(no project)"`` name so every run
+    is accounted for. ``project_id`` restricts the rollup to a single project
+    (the result then has at most one row) — the same filter the other
+    aggregates accept. Each row carries ``estimated_runs``/``estimated``
+    (see ``tokens_by_model``).
     """
     stmt = (
         select(
@@ -677,6 +767,7 @@ def project_rollups(
             Project.name,
             Project.slug,
             Run.model_used,
+            _HAS_SNAPSHOT,
             *_TOKEN_SUMS,
             func.count(Run.id),
             func.coalesce(func.sum(Run.cost_usd), 0.0),
@@ -687,7 +778,7 @@ def project_rollups(
         .join(Ticket, Run.ticket_id == Ticket.id)
         .outerjoin(Project, Ticket.project_id == Project.id)
         .where(Run.started_at >= start)
-        .group_by(Ticket.project_id, Project.name, Project.slug, Run.model_used)
+        .group_by(Ticket.project_id, Project.name, Project.slug, Run.model_used, _HAS_SNAPSHOT)
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
@@ -695,13 +786,14 @@ def project_rollups(
         stmt = stmt.where(Ticket.project_id == project_id)
     agg: dict[Optional[str], dict] = {}
     names: dict[Optional[str], tuple[Optional[str], Optional[str]]] = {}
-    for pid, name, slug, model, it, ot, cr, cw, n, cost, success, completed in session.execute(stmt).all():
+    for pid, name, slug, model, has_snap, it, ot, cr, cw, n, cost, success, completed in session.execute(stmt).all():
         names[pid] = (name, slug)
         slot = agg.setdefault(pid, {
             "it": 0, "ot": 0, "cr": 0, "cw": 0, "n": 0, "cost": 0.0,
-            "success": 0, "completed": 0,
+            "success": 0, "completed": 0, "estimated_runs": 0,
         })
         it, ot, cr, cw, n = int(it), int(ot), int(cr), int(cw), int(n)
+        c, is_est = _split_cost(model, it, ot, cr, cw, bool(has_snap), float(cost), prices)
         slot["it"] += it
         slot["ot"] += ot
         slot["cr"] += cr
@@ -709,7 +801,9 @@ def project_rollups(
         slot["n"] += n
         slot["success"] += int(success or 0)
         slot["completed"] += int(completed or 0)
-        slot["cost"] += prices.cost(model, it, ot, cr, cw) if prices else float(cost)
+        slot["cost"] += c
+        if is_est:
+            slot["estimated_runs"] += n
     rows = []
     for pid, a in agg.items():
         name, slug = names[pid]
@@ -720,6 +814,8 @@ def project_rollups(
             "project_slug": slug,
             **_token_row(a["it"], a["ot"], a["cr"], a["cw"], a["n"], a["cost"]),
             "success_rate": (a["success"] / completed) if completed else 0.0,
+            "estimated_runs": a["estimated_runs"],
+            "estimated": a["estimated_runs"] > 0,
         })
     rows.sort(key=lambda r: r["total_tokens"], reverse=True)
     return rows
