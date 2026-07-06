@@ -67,7 +67,7 @@ def create_app(
     get_session = get_session_dep(engine)
     app.include_router(profiles_routes.build_router(get_session, bearer_token))
     app.include_router(providers_routes.build_router(get_session, bearer_token))
-    app.include_router(backends_routes.build_router(bearer_token))
+    app.include_router(backends_routes.build_router(get_session, bearer_token))
     app.include_router(projects_routes.build_router(get_session, bearer_token))
     app.include_router(tickets_routes.build_router(get_session, bearer_token))
     app.include_router(runs_routes.build_router(get_session, bearer_token))

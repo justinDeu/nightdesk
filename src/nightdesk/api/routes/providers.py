@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.api.schemas import (
-    CatalogVendorOut,
+    CatalogOfferingOut,
     EndpointCreate,
     EndpointOut,
     EndpointUpdate,
@@ -28,7 +28,7 @@ from nightdesk.api.schemas import (
     ProviderUpdate,
 )
 from nightdesk.domain.profile_secrets import ProfileSecretBox
-from nightdesk.domain.provider_catalog import catalog as vendor_catalog
+from nightdesk.domain.provider_catalog import catalog as offering_catalog
 from nightdesk.domain.providers import (
     CREDENTIAL_SOURCES,
     PROTOCOL_KINDS,
@@ -93,22 +93,49 @@ def _provider_out(p) -> dict:
 def _catalog_out() -> list[dict]:
     return [
         {
-            "vendor": v.vendor,
-            "label": v.label,
+            "key": o.key,
+            "label": o.label,
+            "vendor": o.vendor,
+            "credential_source": o.credential_source,
+            "credential_hint": o.credential_hint,
+            "description": o.description,
+            "suggested_name": o.suggested_name,
             "endpoints": [
                 {
                     "label": e.label,
                     "protocol_kind": e.protocol_kind,
                     "base_url": e.base_url,
-                    "credential_source": e.credential_source,
                     "harness_lock": e.harness_lock,
                     "default_model": e.default_model,
                 }
-                for e in v.endpoints
+                for e in o.endpoints
             ],
         }
-        for v in vendor_catalog()
+        for o in offering_catalog()
     ]
+
+
+# Credential-source families that must never appear together in a single
+# provider create call: pasting a secret and pointing at a credential file
+# are two different setup flows, and mixing them means at least one
+# endpoint's declared mode has nothing to back it. See
+# docs/design/providers-and-endpoints.md and the catalog module docstring —
+# every catalog offering already locks its endpoints to one mode; this is
+# the server-side backstop for hand-built (custom) create payloads.
+_SECRET_CREDENTIAL_SOURCES = frozenset({"api_key", "env_var"})
+_FILE_CREDENTIAL_SOURCES = frozenset({"oauth_file", "subscription_file"})
+
+
+def _check_single_credential_mode(endpoints: list[EndpointCreate]) -> None:
+    sources = {ep.credential_source for ep in endpoints}
+    if sources & _SECRET_CREDENTIAL_SOURCES and sources & _FILE_CREDENTIAL_SOURCES:
+        raise HTTPException(
+            400,
+            "endpoints must share a single credential mode: choose either a "
+            f"pasted credential ({sorted(sources & _SECRET_CREDENTIAL_SOURCES)}) or a "
+            f"credential file path ({sorted(sources & _FILE_CREDENTIAL_SOURCES)}), not both. "
+            "Register them as separate providers instead.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +220,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         credential_value = ep_in.credential_value
         if (
             credential_value is None
-            and ep_in.credential_source == "api_key"
+            and ep_in.credential_source != "none"
             and seeded_credential is not None
         ):
             credential_value = seeded_credential
@@ -222,6 +249,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
                 raise HTTPException(400, f"unknown protocol_kind {ep_in.protocol_kind!r}")
             if ep_in.credential_source not in CREDENTIAL_SOURCES:
                 raise HTTPException(400, f"unknown credential_source {ep_in.credential_source!r}")
+        _check_single_credential_mode(payload.endpoints)
         try:
             provider = create_provider(session, name=payload.name, vendor=payload.vendor)
         except ProviderNameTaken:
@@ -233,7 +261,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         return _provider_out(provider)
 
     # Registered before "/{pid}" so "catalog" is never captured by the param route.
-    @router.get("/api/v1/providers/catalog", response_model=list[CatalogVendorOut])
+    @router.get("/api/v1/providers/catalog", response_model=list[CatalogOfferingOut])
     async def catalog_api():
         return _catalog_out()
 

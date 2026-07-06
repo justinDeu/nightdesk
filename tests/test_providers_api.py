@@ -128,11 +128,31 @@ async def test_catalog_route_shape(client):
     r = await client.get("/api/v1/providers/catalog")
     assert r.status_code == 200
     body = r.json()
-    vendors = {v["vendor"] for v in body}
-    assert {"zai", "anthropic", "openai", "openrouter", "ollama"} <= vendors
-    zai = next(v for v in body if v["vendor"] == "zai")
+    keys = {o["key"] for o in body}
+    assert {
+        "openai_api", "openai_codex", "anthropic_api", "claude_subscription",
+        "zai", "zai_coding", "openrouter", "ollama",
+    } <= keys
+    for offering in body:
+        assert offering["credential_source"], offering["key"]
+        assert "credential_source" not in offering["endpoints"][0]
+    zai = next(o for o in body if o["key"] == "zai")
+    assert zai["credential_source"] == "api_key"
     assert len(zai["endpoints"]) == 2
     assert zai["endpoints"][0]["protocol_kind"] == "anthropic_compat"
+
+
+async def test_create_provider_rejects_mixed_secret_and_file_credentials(client):
+    r = await client.post("/api/v1/providers", json={
+        "name": "Mixed",
+        "vendor": "openai",
+        "endpoints": [
+            {"protocol_kind": "openai", "credential_source": "api_key", "credential_value": "sk-abc"},
+            {"protocol_kind": "openai_codex", "credential_source": "oauth_file", "credential_value": "~/.codex/auth.json"},
+        ],
+    })
+    assert r.status_code == 400
+    assert "credential mode" in r.json()["detail"]
 
 
 async def test_delete_provider_blocked_by_direct_profile_reference(client, session):

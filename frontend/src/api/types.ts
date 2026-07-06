@@ -530,14 +530,26 @@ export interface CatalogEndpointOut {
   label: string;
   protocol_kind: ProtocolKind;
   base_url: string | null;
-  credential_source: CredentialSource;
   harness_lock: string | null;
   default_model: string | null;
 }
 
-export interface CatalogVendorOut {
-  vendor: string;
+/**
+ * A single vendor *offering* — one fixed credential mode plus the
+ * endpoint(s) it seeds. Vendors with more than one way to authenticate
+ * (OpenAI API vs Codex OAuth, Anthropic API vs a Claude subscription, ZAI
+ * vs its Coding Plan) show up as separate offerings so a user is never
+ * asked to choose between a pasted secret and a credential file path for
+ * the same registration — the offering already picked one.
+ */
+export interface CatalogOfferingOut {
+  key: string;
   label: string;
+  vendor: string;
+  credential_source: CredentialSource;
+  credential_hint: string | null;
+  description: string;
+  suggested_name: string;
   endpoints: CatalogEndpointOut[];
 }
 
@@ -549,6 +561,14 @@ export interface ModelSlotOut {
   name: string;
   label: string;
   required: boolean;
+}
+
+export interface BackendRuntimeOut {
+  binary_path_override: string | null;
+  resolved_path: string | null;
+  source: "override" | "path" | "default" | null;
+  found: boolean;
+  version: string | null;
 }
 
 export interface BackendOut {
@@ -563,6 +583,9 @@ export interface BackendOut {
   group_keys: string[];
   model_slots: ModelSlotOut[];
   capabilities: string[];
+  /** Hard yes/no on whether the harness binary is present. Null for backends
+   *  without a runtime binary to probe. */
+  runtime: BackendRuntimeOut | null;
 }
 
 export interface WorkerStatusOut {

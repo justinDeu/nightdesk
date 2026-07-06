@@ -4,17 +4,36 @@ Exposes the declarative :mod:`nightdesk.domain.backend_capabilities` catalog
 so the profile editor can render backend choice, field-group visibility, and
 model slots from data instead of a hard-coded list. See
 ``docs/design/providers-and-endpoints.md`` ("Layer 2: Harnesses").
+
+Each entry also carries a ``runtime`` status (binary found/not-found, source,
+version) computed by :mod:`nightdesk.domain.backend_runtime` so the Settings
+UI can render a hard yes/no instead of an ambiguous "auto" placeholder.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.api.schemas import BackendOut
+from nightdesk.db.models import ConfigRow
 from nightdesk.domain.backend_capabilities import all_capabilities
+from nightdesk.domain.backend_runtime import BackendRuntimeStatus, runtime_status_for
 
 
-def _backend_out(cap) -> dict:
+def _runtime_out(status: BackendRuntimeStatus | None) -> dict | None:
+    if status is None:
+        return None
+    return {
+        "binary_path_override": status.binary_path_override,
+        "resolved_path": status.resolved_path,
+        "source": status.source,
+        "found": status.found,
+        "version": status.version,
+    }
+
+
+def _backend_out(cap, runtime: BackendRuntimeStatus | None) -> dict:
     return {
         "code": cap.code,
         "label": cap.label,
@@ -30,10 +49,11 @@ def _backend_out(cap) -> dict:
             for s in cap.model_slots
         ],
         "capabilities": sorted(c.value for c in cap.capabilities),
+        "runtime": _runtime_out(runtime),
     }
 
 
-def build_router(bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/backends",
         tags=["backends"],
@@ -41,7 +61,11 @@ def build_router(bearer_token: str) -> APIRouter:
     )
 
     @router.get("", response_model=list[BackendOut])
-    async def list_backends():
-        return [_backend_out(cap) for cap in all_capabilities()]
+    async def list_backends(session: Session = Depends(get_session)):
+        config_row = session.get(ConfigRow, 1)
+        return [
+            _backend_out(cap, runtime_status_for(cap.code, config_row))
+            for cap in all_capabilities()
+        ]
 
     return router

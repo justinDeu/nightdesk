@@ -198,14 +198,18 @@ class CatalogEndpointOut(BaseModel):
     label: str
     protocol_kind: str
     base_url: Optional[str] = None
-    credential_source: str
     harness_lock: Optional[str] = None
     default_model: Optional[str] = None
 
 
-class CatalogVendorOut(BaseModel):
-    vendor: str
+class CatalogOfferingOut(BaseModel):
+    key: str
     label: str
+    vendor: str
+    credential_source: str
+    credential_hint: Optional[str] = None
+    description: str = ""
+    suggested_name: str = ""
     endpoints: list[CatalogEndpointOut] = []
 
 
@@ -235,6 +239,10 @@ class BackendOut(BaseModel):
     group_keys: list[str] = []
     model_slots: list[ModelSlotOut] = []
     capabilities: list[str] = []
+    # Hard yes/no on whether the harness binary is actually present, so the
+    # UI never has to guess from an "auto" placeholder. None for backends
+    # without a runtime binary to probe (e.g. dummy). See BackendRuntimeOut.
+    runtime: Optional["BackendRuntimeOut"] = None
 
 
 class TicketWorkspaceIn(BaseModel):
@@ -1265,3 +1273,13 @@ class DiagnosticsOut(BaseModel):
     cc_version: Optional[str] = None
     cc_binary_path: Optional[str] = None
     cc_check_message: Optional[str] = None
+
+
+class BackendRuntimeOut(BaseModel):
+    """Hard yes/no on whether a harness binary is present. See BackendOut.runtime."""
+
+    binary_path_override: Optional[str] = None
+    resolved_path: Optional[str] = None
+    source: Optional[Literal["override", "path", "default"]] = None
+    found: bool = False
+    version: Optional[str] = None

@@ -441,28 +441,66 @@ def test_resolve_endpoint_harness_lock_defaults_to_none(session, box):
 
 def test_catalog_shape():
     cat = provider_catalog.catalog()
-    vendors = {v.vendor for v in cat}
+    keys = {o.key for o in cat}
+    assert keys == {
+        "openai_api", "openai_codex", "anthropic_api", "claude_subscription",
+        "zai", "zai_coding", "openrouter", "ollama",
+    }
+    vendors = {o.vendor for o in cat}
     assert vendors == {"zai", "anthropic", "openai", "openrouter", "ollama"}
-    for vendor in cat:
-        assert vendor.endpoints, vendor.vendor
-        for ep in vendor.endpoints:
+    for offering in cat:
+        assert offering.credential_source in providers_domain.CREDENTIAL_SOURCES
+        assert offering.endpoints, offering.key
+        for ep in offering.endpoints:
             assert ep.protocol_kind in providers_domain.PROTOCOL_KINDS
-            assert ep.credential_source in providers_domain.CREDENTIAL_SOURCES
+
+
+def test_catalog_offerings_have_single_credential_mode_each():
+    # The whole point of offerings-not-vendors: exactly one credential mode
+    # per offering, never a mix of secret and file-path modes.
+    for offering in provider_catalog.catalog():
+        assert offering.credential_source in providers_domain.CREDENTIAL_SOURCES
+
+
+def test_catalog_two_openai_offerings_have_distinct_suggested_names():
+    openai_offerings = [o for o in provider_catalog.catalog() if o.vendor == "openai"]
+    assert len(openai_offerings) == 2
+    names = {o.suggested_name for o in openai_offerings}
+    assert len(names) == 2
+    assert all(names)
+
+
+def test_catalog_suggested_names_are_globally_distinct():
+    names = [o.suggested_name for o in provider_catalog.catalog()]
+    assert len(names) == len(set(names))
 
 
 def test_catalog_anthropic_subscription_locked_to_claude_sdk():
-    anthropic = provider_catalog.get_vendor_template("anthropic")
-    sub = [e for e in anthropic.endpoints if e.credential_source == "subscription_file"]
-    assert len(sub) == 1
-    assert sub[0].harness_lock == "claude_sdk"
+    sub = provider_catalog.get_offering("claude_subscription")
+    assert sub.credential_source == "subscription_file"
+    assert len(sub.endpoints) == 1
+    assert sub.endpoints[0].harness_lock == "claude_sdk"
 
 
 def test_catalog_openai_codex_uses_oauth_file():
-    openai = provider_catalog.get_vendor_template("openai")
-    codex = [e for e in openai.endpoints if e.protocol_kind == "openai_codex"]
-    assert len(codex) == 1
-    assert codex[0].credential_source == "oauth_file"
+    codex = provider_catalog.get_offering("openai_codex")
+    assert codex.credential_source == "oauth_file"
+    assert len(codex.endpoints) == 1
+    assert codex.endpoints[0].protocol_kind == "openai_codex"
 
 
-def test_get_vendor_template_unknown_returns_none():
-    assert provider_catalog.get_vendor_template("bogus") is None
+def test_catalog_zai_seeds_two_endpoints_with_one_key():
+    zai = provider_catalog.get_offering("zai")
+    assert zai.credential_source == "api_key"
+    assert {e.protocol_kind for e in zai.endpoints} == {"anthropic_compat", "openai_compat"}
+
+
+def test_catalog_zai_coding_is_a_distinct_offering_from_zai():
+    zai = provider_catalog.get_offering("zai")
+    zai_coding = provider_catalog.get_offering("zai_coding")
+    assert zai.key != zai_coding.key
+    assert zai.suggested_name != zai_coding.suggested_name
+
+
+def test_get_offering_unknown_returns_none():
+    assert provider_catalog.get_offering("bogus") is None

@@ -31,7 +31,7 @@ import {
   usePullModels,
 } from "@/api/providers";
 import type {
-  CatalogVendorOut,
+  CatalogOfferingOut,
   CredentialSource,
   EndpointCreate,
   EndpointOut,
@@ -602,7 +602,7 @@ function EndpointFormDialog({
 // Create-provider wizard
 // ---------------------------------------------------------------------------
 
-type WizardStep = "vendor" | "credential" | "endpoints";
+type WizardStep = "offering" | "credential" | "endpoints";
 
 interface DraftEndpoint {
   key: string;
@@ -624,17 +624,20 @@ function CreateProviderDialog({
 }) {
   const catalog = useProviderCatalog();
   const createProvider = useCreateProvider();
-  const [step, setStep] = useState<WizardStep>("vendor");
-  const [vendor, setVendor] = useState<CatalogVendorOut | "custom" | null>(null);
+  const [step, setStep] = useState<WizardStep>("offering");
+  const [offering, setOffering] = useState<CatalogOfferingOut | "custom" | null>(null);
   const [name, setName] = useState("");
   const [customVendorTag, setCustomVendorTag] = useState("");
+  // The shared credential for a catalog offering: every endpoint under an
+  // offering has the same credential_source, so there is exactly one input
+  // here — never a choice between a pasted secret and a file path.
   const [sharedCredential, setSharedCredential] = useState("");
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [endpoints, setEndpoints] = useState<DraftEndpoint[]>([]);
 
-  function pickVendor(v: CatalogVendorOut | "custom") {
-    setVendor(v);
-    if (v === "custom") {
+  function pickOffering(o: CatalogOfferingOut | "custom") {
+    setOffering(o);
+    setSharedCredential("");
+    if (o === "custom") {
       setName("");
       setCustomVendorTag("");
       setEndpoints([
@@ -645,15 +648,15 @@ function CreateProviderDialog({
         },
       ]);
     } else {
-      setName(v.label);
+      setName(o.suggested_name || o.label);
       setEndpoints(
-        v.endpoints.map((e, i) => ({
-          key: `${v.vendor}-${i}`,
+        o.endpoints.map((e, i) => ({
+          key: `${o.key}-${i}`,
           checked: true,
           label: e.label,
           protocol_kind: e.protocol_kind,
           base_url: e.base_url ?? "",
-          credential_source: e.credential_source,
+          credential_source: o.credential_source,
           harness_lock: e.harness_lock,
           credential_override: "",
         })),
@@ -662,12 +665,13 @@ function CreateProviderDialog({
     setStep("credential");
   }
 
-  const selectedApiKeyEndpoints = endpoints.filter((e) => e.checked && e.credential_source === "api_key");
-  const selectedPathEndpoints = endpoints.filter((e) => e.checked && isPathCredential(e.credential_source));
-
   function updateEndpoint(key: string, patch: Partial<DraftEndpoint>) {
     setEndpoints((prev) => prev.map((e) => (e.key === key ? { ...e, ...patch } : e)));
   }
+
+  // Custom offerings register exactly one endpoint from the wizard, so its
+  // credential mode (radio + single input) lives on that one draft entry.
+  const customEndpoint = offering === "custom" ? endpoints[0] : undefined;
 
   async function create() {
     const chosen = endpoints.filter((e) => e.checked);
@@ -678,8 +682,7 @@ function CreateProviderDialog({
     try {
       const created = await createProvider.mutateAsync({
         name: name.trim(),
-        vendor: vendor === "custom" ? (customVendorTag.trim() || "custom") : vendor!.vendor,
-        credential_value: sharedCredential.trim() || undefined,
+        vendor: offering === "custom" ? (customVendorTag.trim() || "custom") : offering!.vendor,
         endpoints: chosen.map((e) => ({
           label: e.label,
           protocol_kind: e.protocol_kind,
@@ -687,9 +690,7 @@ function CreateProviderDialog({
           credential_source: e.credential_source,
           harness_lock: e.harness_lock,
           credential_value:
-            e.credential_override.trim() ||
-            (isPathCredential(e.credential_source) ? DEFAULT_CREDENTIAL_PATH[e.credential_source] : undefined) ||
-            undefined,
+            (offering === "custom" ? e.credential_override.trim() : sharedCredential.trim()) || undefined,
         })),
       });
       toast.success("Provider created", {
@@ -707,17 +708,17 @@ function CreateProviderDialog({
       onOpenChange={(o) => !o && onClose()}
       title="Add provider"
       description={
-        step === "vendor" ? "Pick a known vendor, or configure a custom one." :
-        step === "credential" ? "Enter a credential once — it seeds every selected endpoint." :
+        step === "offering" ? "Pick a known offering, or configure a custom one." :
+        step === "credential" ? "Every offering has exactly one credential mode — enter it once." :
         "Confirm the endpoints to register."
       }
       size="md"
       footer={
-        step === "vendor" ? (
+        step === "offering" ? (
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
         ) : (
           <>
-            <Button variant="ghost" onClick={() => setStep(step === "endpoints" ? "credential" : "vendor")}>
+            <Button variant="ghost" onClick={() => setStep(step === "endpoints" ? "credential" : "offering")}>
               Back
             </Button>
             {step === "credential" ? (
@@ -733,28 +734,27 @@ function CreateProviderDialog({
         )
       }
     >
-      {step === "vendor" && (
+      {step === "offering" && (
         <div className="grid grid-cols-2 gap-2.5">
           {catalog.isLoading ? (
             <div className="col-span-2 flex items-center gap-2 text-sm text-moon-400"><Spinner size={14} /> Loading catalog…</div>
           ) : (
             <>
-              {(catalog.data ?? []).map((v) => (
+              {(catalog.data ?? []).map((o) => (
                 <button
-                  key={v.vendor}
+                  key={o.key}
                   type="button"
-                  onClick={() => pickVendor(v)}
+                  onClick={() => pickOffering(o)}
                   className="rounded-card border border-ink-700 bg-ink-900 px-3.5 py-3 text-left hover:border-lamp/50 hover:bg-ink-800"
                 >
-                  <div className="text-sm font-medium text-moon-100">{v.label}</div>
-                  <div className="mt-0.5 text-xs text-moon-600">
-                    {v.endpoints.length} endpoint{v.endpoints.length === 1 ? "" : "s"}
-                  </div>
+                  <div className="text-sm font-medium text-moon-100">{o.label}</div>
+                  {o.description && <div className="mt-0.5 text-xs text-moon-600">{o.description}</div>}
+                  <Badge tone="neutral" mono className="mt-1.5">{CREDENTIAL_SOURCE_LABEL[o.credential_source]}</Badge>
                 </button>
               ))}
               <button
                 type="button"
-                onClick={() => pickVendor("custom")}
+                onClick={() => pickOffering("custom")}
                 className="rounded-card border border-dashed border-ink-700 bg-ink-900/50 px-3.5 py-3 text-left hover:border-lamp/50 hover:bg-ink-800"
               >
                 <div className="text-sm font-medium text-moon-100">Custom</div>
@@ -765,62 +765,86 @@ function CreateProviderDialog({
         </div>
       )}
 
-      {step === "credential" && vendor && (
+      {step === "credential" && offering && offering !== "custom" && (
+        <div className="space-y-4">
+          <Field label="Name">
+            <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={offering.suggested_name} />
+          </Field>
+
+          {offering.credential_source === "none" ? (
+            <p className="text-xs text-moon-600">No credential needed for this offering.</p>
+          ) : isPathCredential(offering.credential_source) ? (
+            <Field
+              label="Credential file path"
+              hint={`Seeded into ${endpoints.length} endpoint${endpoints.length === 1 ? "" : "s"}.`}
+            >
+              <Input
+                mono
+                value={sharedCredential}
+                onChange={(e) => setSharedCredential(e.target.value)}
+                placeholder={offering.credential_hint ?? DEFAULT_CREDENTIAL_PATH[offering.credential_source]}
+              />
+            </Field>
+          ) : (
+            <Field
+              label={CREDENTIAL_SOURCE_LABEL[offering.credential_source]}
+              hint={`Seeded into ${endpoints.length} endpoint${endpoints.length === 1 ? "" : "s"}.`}
+            >
+              <Input
+                mono
+                type="password"
+                value={sharedCredential}
+                onChange={(e) => setSharedCredential(e.target.value)}
+                placeholder="sk-…"
+              />
+            </Field>
+          )}
+        </div>
+      )}
+
+      {step === "credential" && offering === "custom" && customEndpoint && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Name">
-              <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="ZAI" />
+              <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="My provider" />
             </Field>
-            {vendor === "custom" && (
-              <Field label="Vendor tag" hint="Pricing key, e.g. openrouter">
-                <Input mono value={customVendorTag} onChange={(e) => setCustomVendorTag(e.target.value)} placeholder="custom" />
-              </Field>
-            )}
+            <Field label="Vendor tag" hint="Pricing key, e.g. openrouter">
+              <Input mono value={customVendorTag} onChange={(e) => setCustomVendorTag(e.target.value)} placeholder="custom" />
+            </Field>
           </div>
 
-          {selectedApiKeyEndpoints.length > 0 && (
-            <Field label="API key" hint={`Seeded into ${selectedApiKeyEndpoints.length} selected endpoint${selectedApiKeyEndpoints.length === 1 ? "" : "s"}.`}>
-              <Input mono type="password" value={sharedCredential} onChange={(e) => setSharedCredential(e.target.value)} placeholder="sk-…" />
-            </Field>
-          )}
+          <Field label="Credential mode" hint="Pick exactly one — the input below matches your choice.">
+            <Select
+              value={customEndpoint.credential_source}
+              onChange={(e) =>
+                updateEndpoint(customEndpoint.key, {
+                  credential_source: e.target.value as CredentialSource,
+                  credential_override: "",
+                })
+              }
+            >
+              {Object.entries(CREDENTIAL_SOURCE_LABEL).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </Select>
+          </Field>
 
-          {selectedPathEndpoints.map((e) => (
-            <Field key={e.key} label={`${e.label} — credential file path`}>
+          {customEndpoint.credential_source === "none" ? (
+            <p className="text-xs text-moon-600">No credential needed for this endpoint.</p>
+          ) : (
+            <Field label={isPathCredential(customEndpoint.credential_source) ? "Credential file path" : "Credential value"}>
               <Input
                 mono
-                value={e.credential_override}
-                onChange={(ev) => updateEndpoint(e.key, { credential_override: ev.target.value })}
-                placeholder={DEFAULT_CREDENTIAL_PATH[e.credential_source]}
+                type={isPathCredential(customEndpoint.credential_source) ? "text" : "password"}
+                value={customEndpoint.credential_override}
+                onChange={(e) => updateEndpoint(customEndpoint.key, { credential_override: e.target.value })}
+                placeholder={
+                  isPathCredential(customEndpoint.credential_source)
+                    ? DEFAULT_CREDENTIAL_PATH[customEndpoint.credential_source]
+                    : "sk-…"
+                }
               />
             </Field>
-          ))}
-
-          {selectedApiKeyEndpoints.length > 1 && (
-            <div>
-              <button
-                type="button"
-                onClick={() => setAdvancedOpen((o) => !o)}
-                className="flex items-center gap-1 text-xs text-moon-400 hover:text-moon-100"
-              >
-                {advancedOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                Per-endpoint overrides
-              </button>
-              {advancedOpen && (
-                <div className="mt-2 space-y-2.5">
-                  {selectedApiKeyEndpoints.map((e) => (
-                    <Field key={e.key} label={e.label}>
-                      <Input
-                        mono
-                        type="password"
-                        value={e.credential_override}
-                        onChange={(ev) => updateEndpoint(e.key, { credential_override: ev.target.value })}
-                        placeholder="Use the shared key above"
-                      />
-                    </Field>
-                  ))}
-                </div>
-              )}
-            </div>
           )}
         </div>
       )}

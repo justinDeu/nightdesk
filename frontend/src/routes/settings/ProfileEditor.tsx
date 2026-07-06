@@ -12,6 +12,7 @@ import { profileTransferApi } from "@/api/profileTransfer";
 import { useProviders } from "@/api/providers";
 import { useBackends } from "@/api/backends";
 import { qk } from "@/api/keys";
+import { cn } from "@/lib/cn";
 import type {
   BackendConfigAgent,
   BackendOut,
@@ -22,10 +23,61 @@ import type {
   ProviderOut,
 } from "@/api/types";
 import { SettingsCard } from "./parts/SettingsSection";
+import { CollapsibleCard } from "./parts/CollapsibleCard";
 import { SaveBar, useEditableForm } from "./parts/SaveBar";
 import { ListEditor } from "./parts/ListEditor";
 import { KeyValueEditor, type KvPair } from "./parts/KeyValueEditor";
 import { ConfirmDialog } from "./parts/ConfirmDialog";
+
+/** The three top-level segments a profile is organized into. Anchors for the
+ *  sticky mini-nav below — order here is the scroll order on the page. */
+const SEGMENTS = [
+  { id: "profile-segment-identity", label: "Profile" },
+  { id: "profile-segment-harness", label: "Harness" },
+  { id: "profile-segment-sandbox", label: "Sandbox & run shape" },
+] as const;
+
+/** Highlights whichever segment is currently topmost in the viewport, so the
+ *  sticky nav tracks scroll position instead of only reacting to clicks. */
+function useScrollSpy(ids: readonly string[]): string {
+  const [active, setActive] = useState<string>(ids[0]);
+  useEffect(() => {
+    const targets = ids.map((id) => document.getElementById(id)).filter((el): el is HTMLElement => !!el);
+    if (targets.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting);
+        if (visible.length > 0) setActive(visible[0].target.id);
+      },
+      { rootMargin: "-72px 0px -70% 0px", threshold: 0 },
+    );
+    for (const el of targets) observer.observe(el);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids.join(",")]);
+  return active;
+}
+
+function SegmentNav() {
+  const active = useScrollSpy(SEGMENTS.map((s) => s.id));
+  return (
+    <div className="sticky top-0 z-10 -mx-1 mb-5 flex gap-1 border-b border-ink-700/70 bg-ink-950/90 px-1 py-2 backdrop-blur">
+      {SEGMENTS.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          onClick={() => document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          className={cn(
+            "rounded-control px-3 py-1.5 text-xs font-medium transition-colors",
+            active === s.id ? "bg-ink-800 text-moon-100" : "text-moon-400 hover:bg-ink-800/60 hover:text-moon-100",
+          )}
+        >
+          {s.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 const PERMISSION_MODES = [
   { value: "", label: "Inherit (prompt)" },
@@ -460,6 +512,14 @@ export function ProfileEditor({
   const showModels = staticSlots.length > 0;
   const secretOnFile = profile.claude_credentials?.value_set;
 
+  // Baseline for the two collapsed-by-default cards below, so a closed card
+  // can still surface a dirty dot instead of silently hiding edits.
+  const envDirty =
+    form.env_replace !== false || JSON.stringify(form.env_pairs) !== JSON.stringify([]);
+  const scopesDirty =
+    JSON.stringify([...form.run_token_scopes].sort()) !==
+    JSON.stringify([...profile.run_token_scopes].sort());
+
   return (
     <div>
       <div className="mb-5 flex items-start justify-between gap-4">
@@ -492,351 +552,401 @@ export function ProfileEditor({
         </div>
       </div>
 
-      <div className="space-y-5">
-        <SettingsCard title="Identity">
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Name">
-                <Input value={form.name} onChange={(e) => set("name", e.target.value)} invalid={!form.name.trim()} />
-              </Field>
-              <Field label="Backend">
-                <Select value={form.backend} onChange={(e) => set("backend", e.target.value)}>
-                  {backends.map((b) => (
-                    <option key={b.code} value={b.code} disabled={!b.enabled}>
-                      {b.label}
-                      {!b.enabled ? " (not selectable)" : ""}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-            <Field label="Description">
-              <Input value={form.description} placeholder="What this profile is for" onChange={(e) => set("description", e.target.value)} />
-            </Field>
-            {showPermissionMode && (
-              <Field label="Permission mode">
-                <Select value={form.permission_mode} onChange={(e) => set("permission_mode", e.target.value)} className="max-w-xs">
-                  {PERMISSION_MODES.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            )}
-          </div>
-        </SettingsCard>
+      <SegmentNav />
 
-        {showProvider && (
-          <SettingsCard
-            title="Provider & endpoint"
-            description={
-              backend?.requires_provider
-                ? "Required — this harness cannot run without a configured provider."
-                : "Optional — leave blank to use ambient/inherited credentials."
-            }
-          >
-            <div className="space-y-3">
-              <Field label="Provider">
-                <Select
-                  value={selectedProviderId ?? ""}
-                  onChange={(e) => setSelectedProviderId(e.target.value || null)}
-                >
-                  <option value="">— none —</option>
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.vendor})
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              {provider && backend && (
-                compatible.length === 0 ? (
-                  <p className="text-xs text-failed">
-                    No endpoint on “{provider.name}” speaks a protocol {backend.label} supports
-                    (supports {backend.protocol_kinds.join(", ")}).
-                  </p>
-                ) : compatible.length === 1 ? (
-                  <p className="text-xs text-moon-400">
-                    {provider.name} · <span className="font-mono">{compatible[0].protocol_kind}</span>
-                    {compatible[0].label ? ` (${compatible[0].label})` : ""}
-                  </p>
-                ) : (
-                  <div className="space-y-1.5">
-                    {compatible.map((ep) => (
-                      <label key={ep.id} className="flex items-center gap-2 text-sm text-moon-100">
-                        <input
-                          type="radio"
-                          name="primary-endpoint"
-                          checked={form.endpoint_id === ep.id}
-                          onChange={() => set("endpoint_id", ep.id)}
-                          className="accent-lamp"
-                        />
-                        <span>
-                          {ep.label || ep.protocol_kind}{" "}
-                          <span className="font-mono text-xs text-moon-600">({ep.protocol_kind})</span>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                )
-              )}
-              {backend?.requires_provider && !form.endpoint_id && (
-                <p className="text-xs text-failed">This harness requires a provider endpoint before it can run.</p>
-              )}
-            </div>
-          </SettingsCard>
-        )}
-
-        {showModels && backend && (
-          <SettingsCard title="Models" description="Model assignments this profile's harness resolves at launch.">
-            <div className="space-y-4">
-              {isCompat ? (
-                <>
-                  <Field
-                    label="Model"
-                    hint={`Applied to every position — ${staticSlots.length} position${staticSlots.length === 1 ? "" : "s"}.`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Input
-                        mono
-                        list={datalistId}
-                        value={form.default_model}
-                        placeholder="glm-5.2"
-                        onChange={(e) => set("default_model", e.target.value)}
-                      />
-                      {offMenuBadge(form.default_model, selectedEndpoint)}
-                    </div>
-                  </Field>
-                  <button
-                    type="button"
-                    className="text-xs text-lamp hover:underline"
-                    onClick={() => setCustomize(!customize)}
-                  >
-                    {customize ? "Use one model for every position" : "Customize per position"}
-                  </button>
-                  {customize && (
-                    <div className="grid grid-cols-2 gap-3">
-                      {staticSlots.map((slot) => {
-                        const value = (form.backend_config[slot.name] as string) ?? "";
-                        return (
-                          <Field key={slot.name} label={slot.label}>
-                            <div className="flex items-center gap-2">
-                              <Input
-                                mono
-                                list={datalistId}
-                                value={value}
-                                placeholder={form.default_model || "(unset)"}
-                                onChange={(e) => setSlotOverride(slot.name, e.target.value)}
-                              />
-                              {offMenuBadge(value, selectedEndpoint)}
-                            </div>
-                          </Field>
-                        );
-                      })}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <Field label="Model" hint="Leave empty to use the harness's own defaults.">
-                  <div className="flex items-center gap-2">
-                    <Input
-                      mono
-                      list={datalistId}
-                      value={form.default_model}
-                      placeholder="(unpinned)"
-                      onChange={(e) => set("default_model", e.target.value)}
-                    />
-                    {offMenuBadge(form.default_model, selectedEndpoint)}
-                  </div>
-                </Field>
-              )}
-              <datalist id={datalistId}>
-                {(selectedEndpoint?.models ?? []).map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-
-              {backend.multi_endpoint && (
-                <div className="border-t border-ink-700/70 pt-4">
-                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-moon-400">Agents</h4>
-                  <AgentsEditor agents={agents} onChange={setAgents} backend={backend} providers={providers} />
-                </div>
-              )}
-            </div>
-          </SettingsCard>
-        )}
-
-        <SettingsCard title="Filesystem" description="Paths the sandbox may read or write. Absolute paths only.">
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Readable paths">
-              <ListEditor value={form.fs_read} onChange={(v) => set("fs_read", v)} placeholder="/usr" emptyHint="No read paths." />
-            </Field>
-            <Field label="Writable paths">
-              <ListEditor value={form.fs_write} onChange={(v) => set("fs_write", v)} placeholder="/home/you/repo" emptyHint="No write paths." />
-            </Field>
-          </div>
-        </SettingsCard>
-
-        <SettingsCard title="Tools" description="Allow- and deny-lists for agent tools. Deny wins over allow.">
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Allowed tools">
-              <ListEditor mono={false} value={form.allowed_tools} onChange={(v) => set("allowed_tools", v)} placeholder="Bash(git*)" emptyHint="All tools allowed." />
-            </Field>
-            <Field label="Denied tools">
-              <ListEditor mono={false} value={form.denied_tools} onChange={(v) => set("denied_tools", v)} placeholder="WebFetch" emptyHint="Nothing denied." />
-            </Field>
-          </div>
-        </SettingsCard>
-
-        <SettingsCard title="Network">
-          <div className="space-y-4">
-            <Field label="Network mode">
-              <Select value={form.network_mode} onChange={(e) => set("network_mode", e.target.value)} className="max-w-xs">
-                <option value="off">Off — no network</option>
-                <option value="on">On — network allowed</option>
-              </Select>
-            </Field>
-            {form.network_mode === "on" && (
-              <Field label="Allowlist" hint="Optional hostnames the sandbox may reach. Blank allows all when network is on.">
-                <ListEditor value={form.network_allowlist} onChange={(v) => set("network_allowlist", v)} placeholder="api.anthropic.com" emptyHint="No restrictions." />
-              </Field>
-            )}
-          </div>
-        </SettingsCard>
-
-        {showAuth && (
-          <SettingsCard
-            title="Credentials"
-            description="How the run authenticates to Anthropic. Secrets are write-only."
-          >
+      <div className="space-y-8">
+        {/* Segment 1 — Profile identity. Backend-independent, always present. */}
+        <section id="profile-segment-identity" className="scroll-mt-16">
+          <SettingsCard title="Identity" description="Name and description — the same for every harness.">
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Source">
-                  <Select value={form.cred_source} onChange={(e) => set("cred_source", e.target.value as ProfileForm["cred_source"])}>
-                    {CRED_SOURCES.map((s) => (
-                      <option key={s.value} value={s.value}>
-                        {s.label}
+                <Field label="Name">
+                  <Input value={form.name} onChange={(e) => set("name", e.target.value)} invalid={!form.name.trim()} />
+                </Field>
+                <Field label="Description">
+                  <Input value={form.description} placeholder="What this profile is for" onChange={(e) => set("description", e.target.value)} />
+                </Field>
+              </div>
+            </div>
+          </SettingsCard>
+        </section>
+
+        {/* Segment 2 — everything owned by the selected harness. The whole
+            frame is keyed on backend.code so switching backends visibly
+            swaps it (fade transition) instead of quietly re-rendering cards
+            in place — the swap itself is the signal that these settings
+            belong to the harness, not the profile. */}
+        <section id="profile-segment-harness" className="scroll-mt-16">
+          <div className="rounded-card border border-lamp/25 bg-lamp/[0.04] p-4">
+            <div key={backend?.code ?? form.backend} className="fade-in space-y-5">
+              <div className="flex flex-wrap items-start justify-between gap-4 border-b border-lamp/20 pb-4">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-lamp">Harness</p>
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <h3 className="font-display text-base font-semibold text-moon-100">
+                      {backend?.label ?? form.backend}
+                    </h3>
+                    {backend && !backend.executable && (
+                      <Badge tone="failed" mono>
+                        not yet wired
+                      </Badge>
+                    )}
+                  </div>
+                  {backend?.summary && (
+                    <p className="mt-1 max-w-md text-xs text-moon-400">{backend.summary}</p>
+                  )}
+                </div>
+                <Field label="Backend" className="w-60 shrink-0">
+                  <Select value={form.backend} onChange={(e) => set("backend", e.target.value)}>
+                    {backends.map((b) => (
+                      <option key={b.code} value={b.code} disabled={!b.enabled}>
+                        {b.label}
+                        {!b.enabled ? " (not selectable)" : ""}
                       </option>
                     ))}
                   </Select>
                 </Field>
-                <Field label="Base URL" hint="Optional non-Anthropic endpoint.">
-                  <Input mono placeholder="https://api.anthropic.com" value={form.cred_base_url} onChange={(e) => set("cred_base_url", e.target.value)} />
-                </Field>
               </div>
-              {form.cred_source !== "inherit" && (
-                <Field
-                  label={form.cred_source === "api_key" ? "API key" : "Auth token"}
-                  hint={
-                    secretOnFile
-                      ? "A secret is on file — leave blank to keep it, or enter a new value to rotate."
-                      : "Enter the secret value. Stored encrypted."
+
+              {showPermissionMode && (
+                <Field label="Permission mode" className="max-w-xs">
+                  <Select value={form.permission_mode} onChange={(e) => set("permission_mode", e.target.value)}>
+                    {PERMISSION_MODES.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
+
+              {showProvider && (
+                <SettingsCard
+                  title="Provider & endpoint"
+                  description={
+                    backend?.requires_provider
+                      ? "Required — this harness cannot run without a configured provider."
+                      : "Optional — leave blank to use ambient/inherited credentials."
                   }
                 >
-                  <div className="flex items-center gap-2">
-                    <KeyRound size={15} className="shrink-0 text-moon-600" />
-                    <Input
-                      type="password"
-                      mono
-                      autoComplete="off"
-                      placeholder={secretOnFile ? "•••••••• (kept)" : "sk-ant-…"}
-                      value={form.cred_value}
-                      onChange={(e) => set("cred_value", e.target.value)}
-                    />
-                    {secretOnFile && (
-                      <Badge tone="success" dot>
-                        on file
-                      </Badge>
+                  <div className="space-y-3">
+                    <Field label="Provider">
+                      <Select
+                        value={selectedProviderId ?? ""}
+                        onChange={(e) => setSelectedProviderId(e.target.value || null)}
+                      >
+                        <option value="">— none —</option>
+                        {providers.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} ({p.vendor})
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    {provider && backend && (
+                      compatible.length === 0 ? (
+                        <p className="text-xs text-failed">
+                          No endpoint on “{provider.name}” speaks a protocol {backend.label} supports
+                          (supports {backend.protocol_kinds.join(", ")}).
+                        </p>
+                      ) : compatible.length === 1 ? (
+                        <p className="text-xs text-moon-400">
+                          {provider.name} · <span className="font-mono">{compatible[0].protocol_kind}</span>
+                          {compatible[0].label ? ` (${compatible[0].label})` : ""}
+                        </p>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {compatible.map((ep) => (
+                            <label key={ep.id} className="flex items-center gap-2 text-sm text-moon-100">
+                              <input
+                                type="radio"
+                                name="primary-endpoint"
+                                checked={form.endpoint_id === ep.id}
+                                onChange={() => set("endpoint_id", ep.id)}
+                                className="accent-lamp"
+                              />
+                              <span>
+                                {ep.label || ep.protocol_kind}{" "}
+                                <span className="font-mono text-xs text-moon-600">({ep.protocol_kind})</span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )
+                    )}
+                    {backend?.requires_provider && !form.endpoint_id && (
+                      <p className="text-xs text-failed">This harness requires a provider endpoint before it can run.</p>
                     )}
                   </div>
+                </SettingsCard>
+              )}
+
+              {showModels && backend && (
+                <SettingsCard title="Models" description="Model assignments this profile's harness resolves at launch.">
+                  <div className="space-y-4">
+                    {isCompat ? (
+                      <>
+                        <Field
+                          label="Model"
+                          hint={`Applied to every position — ${staticSlots.length} position${staticSlots.length === 1 ? "" : "s"}.`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Input
+                              mono
+                              list={datalistId}
+                              value={form.default_model}
+                              placeholder="glm-5.2"
+                              onChange={(e) => set("default_model", e.target.value)}
+                            />
+                            {offMenuBadge(form.default_model, selectedEndpoint)}
+                          </div>
+                        </Field>
+                        <button
+                          type="button"
+                          className="text-xs text-lamp hover:underline"
+                          onClick={() => setCustomize(!customize)}
+                        >
+                          {customize ? "Use one model for every position" : "Customize per position"}
+                        </button>
+                        {customize && (
+                          <div className="grid grid-cols-2 gap-3">
+                            {staticSlots.map((slot) => {
+                              const value = (form.backend_config[slot.name] as string) ?? "";
+                              return (
+                                <Field key={slot.name} label={slot.label}>
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      mono
+                                      list={datalistId}
+                                      value={value}
+                                      placeholder={form.default_model || "(unset)"}
+                                      onChange={(e) => setSlotOverride(slot.name, e.target.value)}
+                                    />
+                                    {offMenuBadge(value, selectedEndpoint)}
+                                  </div>
+                                </Field>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <Field label="Model" hint="Leave empty to use the harness's own defaults.">
+                        <div className="flex items-center gap-2">
+                          <Input
+                            mono
+                            list={datalistId}
+                            value={form.default_model}
+                            placeholder="(unpinned)"
+                            onChange={(e) => set("default_model", e.target.value)}
+                          />
+                          {offMenuBadge(form.default_model, selectedEndpoint)}
+                        </div>
+                      </Field>
+                    )}
+                    <datalist id={datalistId}>
+                      {(selectedEndpoint?.models ?? []).map((m) => (
+                        <option key={m} value={m} />
+                      ))}
+                    </datalist>
+
+                    {backend.multi_endpoint && (
+                      <div className="border-t border-ink-700/70 pt-4">
+                        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-moon-400">Agents</h4>
+                        <AgentsEditor agents={agents} onChange={setAgents} backend={backend} providers={providers} />
+                      </div>
+                    )}
+                  </div>
+                </SettingsCard>
+              )}
+
+              {showAuth && (
+                <SettingsCard
+                  title="Credentials"
+                  description="How the run authenticates to Anthropic. Secrets are write-only."
+                >
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Source">
+                        <Select value={form.cred_source} onChange={(e) => set("cred_source", e.target.value as ProfileForm["cred_source"])}>
+                          {CRED_SOURCES.map((s) => (
+                            <option key={s.value} value={s.value}>
+                              {s.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="Base URL" hint="Optional non-Anthropic endpoint.">
+                        <Input mono placeholder="https://api.anthropic.com" value={form.cred_base_url} onChange={(e) => set("cred_base_url", e.target.value)} />
+                      </Field>
+                    </div>
+                    {form.cred_source !== "inherit" && (
+                      <Field
+                        label={form.cred_source === "api_key" ? "API key" : "Auth token"}
+                        hint={
+                          secretOnFile
+                            ? "A secret is on file — leave blank to keep it, or enter a new value to rotate."
+                            : "Enter the secret value. Stored encrypted."
+                        }
+                      >
+                        <div className="flex items-center gap-2">
+                          <KeyRound size={15} className="shrink-0 text-moon-600" />
+                          <Input
+                            type="password"
+                            mono
+                            autoComplete="off"
+                            placeholder={secretOnFile ? "•••••••• (kept)" : "sk-ant-…"}
+                            value={form.cred_value}
+                            onChange={(e) => set("cred_value", e.target.value)}
+                          />
+                          {secretOnFile && (
+                            <Badge tone="success" dot>
+                              on file
+                            </Badge>
+                          )}
+                        </div>
+                      </Field>
+                    )}
+                  </div>
+                </SettingsCard>
+              )}
+
+              {!showPermissionMode && !showProvider && !showModels && !showAuth && (
+                <p className="text-xs text-moon-600">This harness has no additional configuration.</p>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Segment 3 — shared sandbox/run shape. Backend-independent. */}
+        <section id="profile-segment-sandbox" className="scroll-mt-16 space-y-5">
+          <p className="text-xs text-moon-400">
+            These settings apply regardless of harness — they describe the sandbox and run shape,
+            not how the agent itself is invoked.
+          </p>
+
+          <SettingsCard title="Filesystem" description="Paths the sandbox may read or write. Absolute paths only.">
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Readable paths">
+                <ListEditor value={form.fs_read} onChange={(v) => set("fs_read", v)} placeholder="/usr" emptyHint="No read paths." />
+              </Field>
+              <Field label="Writable paths">
+                <ListEditor value={form.fs_write} onChange={(v) => set("fs_write", v)} placeholder="/home/you/repo" emptyHint="No write paths." />
+              </Field>
+            </div>
+          </SettingsCard>
+
+          <SettingsCard title="Tools" description="Allow- and deny-lists for agent tools. Deny wins over allow.">
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Allowed tools">
+                <ListEditor mono={false} value={form.allowed_tools} onChange={(v) => set("allowed_tools", v)} placeholder="Bash(git*)" emptyHint="All tools allowed." />
+              </Field>
+              <Field label="Denied tools">
+                <ListEditor mono={false} value={form.denied_tools} onChange={(v) => set("denied_tools", v)} placeholder="WebFetch" emptyHint="Nothing denied." />
+              </Field>
+            </div>
+          </SettingsCard>
+
+          <SettingsCard title="Network">
+            <div className="space-y-4">
+              <Field label="Network mode">
+                <Select value={form.network_mode} onChange={(e) => set("network_mode", e.target.value)} className="max-w-xs">
+                  <option value="off">Off — no network</option>
+                  <option value="on">On — network allowed</option>
+                </Select>
+              </Field>
+              {form.network_mode === "on" && (
+                <Field label="Allowlist" hint="Optional hostnames the sandbox may reach. Blank allows all when network is on.">
+                  <ListEditor value={form.network_allowlist} onChange={(v) => set("network_allowlist", v)} placeholder="api.anthropic.com" emptyHint="No restrictions." />
                 </Field>
               )}
             </div>
           </SettingsCard>
-        )}
 
-        <SettingsCard
-          title="Environment"
-          description="Environment variables injected into the run. Values are write-only."
-        >
-          <div className="space-y-3">
-            {profile.env_keys.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs text-moon-400">On file:</span>
-                {profile.env_keys.map((k) => (
-                  <Badge key={k} tone="neutral" mono>
-                    {k}
-                  </Badge>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-moon-600">No environment variables set.</p>
-            )}
-            <label className="flex items-center gap-2 text-sm text-moon-100">
+          <CollapsibleCard
+            title="Environment"
+            description="Environment variables injected into the run. Values are write-only."
+            dirty={envDirty}
+          >
+            <div className="space-y-3">
+              {profile.env_keys.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-moon-400">On file:</span>
+                  {profile.env_keys.map((k) => (
+                    <Badge key={k} tone="neutral" mono>
+                      {k}
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-moon-600">No environment variables set.</p>
+              )}
+              <label className="flex items-center gap-2 text-sm text-moon-100">
+                <input
+                  type="checkbox"
+                  checked={form.env_replace}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      env_replace: e.target.checked,
+                      env_pairs:
+                        e.target.checked && f.env_pairs.length === 0
+                          ? profile.env_keys.map((k) => ({ key: k, value: "" }))
+                          : f.env_pairs,
+                    }))
+                  }
+                  className="accent-lamp"
+                />
+                Replace environment
+              </label>
+              {form.env_replace && (
+                <div className="rounded-control border border-warn/30 bg-warn/5 p-3">
+                  <p className="mb-2 text-xs text-warn">
+                    Saving replaces the entire environment with the pairs below. Existing values are
+                    not shown — re-enter every variable you want to keep.
+                  </p>
+                  <KeyValueEditor pairs={form.env_pairs} onChange={(p) => set("env_pairs", p)} />
+                </div>
+              )}
+            </div>
+          </CollapsibleCard>
+
+          <SettingsCard title="System prompt" description="Prepended to the agent's system prompt for every run.">
+            <Textarea
+              className="min-h-[120px]"
+              placeholder="Optional. e.g. house style, guardrails, repo conventions…"
+              value={form.system_prompt}
+              onChange={(e) => set("system_prompt", e.target.value)}
+            />
+          </SettingsCard>
+
+          <CollapsibleCard
+            title="Run-token scopes"
+            description="Capabilities the run's scoped token may exercise via the API."
+            dirty={scopesDirty}
+          >
+            <label className="flex items-center gap-2.5 text-sm text-moon-100">
               <input
                 type="checkbox"
-                checked={form.env_replace}
+                checked={form.run_token_scopes.includes("ticket.create")}
                 onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    env_replace: e.target.checked,
-                    env_pairs:
-                      e.target.checked && f.env_pairs.length === 0
-                        ? profile.env_keys.map((k) => ({ key: k, value: "" }))
-                        : f.env_pairs,
-                  }))
+                  set(
+                    "run_token_scopes",
+                    e.target.checked
+                      ? [...new Set([...form.run_token_scopes, "ticket.create"])]
+                      : form.run_token_scopes.filter((s) => s !== "ticket.create"),
+                  )
                 }
                 className="accent-lamp"
               />
-              Replace environment
+              <ShieldCheck size={15} className="text-moon-600" />
+              <span>
+                <span className="font-mono text-[13px]">ticket.create</span>
+                <span className="ml-2 text-xs text-moon-600">Let the agent create new tickets</span>
+              </span>
             </label>
-            {form.env_replace && (
-              <div className="rounded-control border border-warn/30 bg-warn/5 p-3">
-                <p className="mb-2 text-xs text-warn">
-                  Saving replaces the entire environment with the pairs below. Existing values are
-                  not shown — re-enter every variable you want to keep.
-                </p>
-                <KeyValueEditor pairs={form.env_pairs} onChange={(p) => set("env_pairs", p)} />
-              </div>
-            )}
-          </div>
-        </SettingsCard>
-
-        <SettingsCard title="System prompt" description="Prepended to the agent's system prompt for every run.">
-          <Textarea
-            className="min-h-[120px]"
-            placeholder="Optional. e.g. house style, guardrails, repo conventions…"
-            value={form.system_prompt}
-            onChange={(e) => set("system_prompt", e.target.value)}
-          />
-        </SettingsCard>
-
-        <SettingsCard
-          title="Run-token scopes"
-          description="Capabilities the run's scoped token may exercise via the API."
-        >
-          <label className="flex items-center gap-2.5 text-sm text-moon-100">
-            <input
-              type="checkbox"
-              checked={form.run_token_scopes.includes("ticket.create")}
-              onChange={(e) =>
-                set(
-                  "run_token_scopes",
-                  e.target.checked
-                    ? [...new Set([...form.run_token_scopes, "ticket.create"])]
-                    : form.run_token_scopes.filter((s) => s !== "ticket.create"),
-                )
-              }
-              className="accent-lamp"
-            />
-            <ShieldCheck size={15} className="text-moon-600" />
-            <span>
-              <span className="font-mono text-[13px]">ticket.create</span>
-              <span className="ml-2 text-xs text-moon-600">Let the agent create new tickets</span>
-            </span>
-          </label>
-        </SettingsCard>
+          </CollapsibleCard>
+        </section>
       </div>
 
       <SaveBar dirty={dirty} saving={saving} onSave={save} onDiscard={discard} error={error} />

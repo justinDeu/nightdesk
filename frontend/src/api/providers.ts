@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import { qk } from "./keys";
 import type {
-  CatalogVendorOut,
+  CatalogOfferingOut,
   EndpointCreate,
   EndpointOut,
   EndpointUpdate,
@@ -24,7 +24,7 @@ export const providersApi = {
   remove: (id: string) => api.delete<void>(`${PROVIDERS_BASE}/${id}`),
   rotateCredential: (id: string, body: ProviderRotateCredential) =>
     api.post<ProviderRotateResult>(`${PROVIDERS_BASE}/${id}/rotate-credential`, { body }),
-  catalog: () => api.get<CatalogVendorOut[]>(`${PROVIDERS_BASE}/catalog`),
+  catalog: () => api.get<CatalogOfferingOut[]>(`${PROVIDERS_BASE}/catalog`),
 
   createEndpoint: (providerId: string, body: EndpointCreate) =>
     api.post<EndpointOut>(`${PROVIDERS_BASE}/${providerId}/endpoints`, { body }),
