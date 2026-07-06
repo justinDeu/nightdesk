@@ -354,6 +354,8 @@ def build_bwrap_argv(
     env: dict[str, str],
     cc_sessions_dir: Optional[str] = None,
     git_dirs: Optional[Iterable[str]] = None,
+    mounts: Optional[Iterable] = None,
+    require_claude: bool = True,
 ) -> list[str]:
     """Compose the bwrap invocation for a single sandboxed run.
 
@@ -369,20 +371,33 @@ def build_bwrap_argv(
     so without binding the common dir every git operation (status, checkout,
     rebase, merge) fails inside the sandbox. They are bound read-write at the
     same absolute path so the ``.git`` pointer resolves and refs can be updated.
+
+    ``mounts`` are backend-supplied extra binds (each item exposes ``.host``,
+    ``.sandbox`` and ``.mode`` in ``{"ro", "rw"}``) — e.g. a non-Claude agent
+    binary bound to a stable in-sandbox path, plus per-run scratch dirs. They
+    are validated against the protected-path exclusion just like user mounts.
+
+    ``require_claude`` binds the host ``claude`` binary and the inherit-mode
+    credentials file. Backends that ship their own agent binary via ``mounts``
+    set this False so no Claude binary is required to exist on the host.
     """
     git_dirs = [str(g) for g in (git_dirs or []) if g]
+    mount_list = list(mounts or [])
     # Validate before assembling so the error message points at the cause.
     tool_mounts = _tool_mount_paths(getattr(spec, "tool_paths", None) or [])
     candidates = (
         list(spec.fs_read) + list(spec.fs_write) + tool_mounts
-        + [working_dir] + git_dirs
+        + [working_dir] + git_dirs + [m.host for m in mount_list]
     )
     assert_no_excluded_paths(candidates)
 
-    cc_bin = spec.claude_binary_path or shutil.which("claude") or "/usr/local/bin/claude"
+    cc_bin = None
+    if require_claude:
+        cc_bin = spec.claude_binary_path or shutil.which("claude") or "/usr/local/bin/claude"
     log.info(
-        "build_bwrap_argv: working_dir=%s claude_binary=%s fs_write=%d fs_read=%d tool_paths=%d",
-        working_dir, cc_bin, len(spec.fs_write), len(spec.fs_read), len(tool_mounts),
+        "build_bwrap_argv: working_dir=%s claude_binary=%s fs_write=%d fs_read=%d tool_paths=%d mounts=%d",
+        working_dir, cc_bin or "<none>", len(spec.fs_write), len(spec.fs_read),
+        len(tool_mounts), len(mount_list),
     )
 
     argv: list[str] = ["bwrap"]
@@ -449,23 +464,34 @@ def build_bwrap_argv(
     for p in py_paths:
         argv += ["--ro-bind-try", p, p]
 
-    # Claude binary at a stable in-sandbox path.
-    cc_bin = spec.claude_binary_path or shutil.which("claude") or "/usr/local/bin/claude"
-    # If cc_bin is a symlink, resolve it first so the bind-mount points at
-    # the real file (bwrap can't follow a dangling symlink at mount time).
-    try:
-        cc_bin_resolved = str(Path(cc_bin).resolve(strict=True))
-    except FileNotFoundError as exc:
-        raise ValueError(
-            f"claude binary not found at {cc_bin!r}; configure profile.claude_binary_path "
-            "or install claude into the daemon's PATH"
-        ) from exc
-    argv += ["--ro-bind", cc_bin_resolved, SANDBOX_CLAUDE_BIN]
+    # Claude binary at a stable in-sandbox path. Skipped for backends that
+    # bring their own agent binary via ``mounts`` (require_claude=False).
+    if require_claude:
+        cc_bin = spec.claude_binary_path or shutil.which("claude") or "/usr/local/bin/claude"
+        # If cc_bin is a symlink, resolve it first so the bind-mount points at
+        # the real file (bwrap can't follow a dangling symlink at mount time).
+        try:
+            cc_bin_resolved = str(Path(cc_bin).resolve(strict=True))
+        except FileNotFoundError as exc:
+            raise ValueError(
+                f"claude binary not found at {cc_bin!r}; configure profile.claude_binary_path "
+                "or install claude into the daemon's PATH"
+            ) from exc
+        argv += ["--ro-bind", cc_bin_resolved, SANDBOX_CLAUDE_BIN]
 
-    # Credentials (if inherit mode). Other modes pass via env.
-    creds_mount = _credential_mount(spec)
-    if creds_mount is not None:
-        argv += [f"--{creds_mount.kind}", creds_mount.src, creds_mount.dst]
+        # Credentials (if inherit mode). Other modes pass via env.
+        creds_mount = _credential_mount(spec)
+        if creds_mount is not None:
+            argv += [f"--{creds_mount.kind}", creds_mount.src, creds_mount.dst]
+
+    # Backend-supplied mounts: agent binaries (ro) and per-run scratch (rw).
+    for m in mount_list:
+        host = str(Path(m.host).resolve(strict=False))
+        if m.mode == "rw":
+            os.makedirs(host, exist_ok=True)
+            argv += ["--bind", host, m.sandbox]
+        else:
+            argv += ["--ro-bind", host, m.sandbox]
 
     # Per-run Claude session store: bind this run's own (empty) host dir over
     # the session store inside the otherwise-tmpfs home, so the conversation

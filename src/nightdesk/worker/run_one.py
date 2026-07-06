@@ -17,10 +17,10 @@ import logging
 import os
 import signal
 import subprocess
-import sys
 import traceback
 import uuid
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -31,8 +31,16 @@ from nightdesk.db.models import ConfigRow, Run, Ticket
 from nightdesk.domain.conversations import (
     create_conversation, get_conversation, latest_turn, sync_conversation_from_turn,
 )
+from nightdesk.domain import backend_capabilities as bc
+from nightdesk.domain import pricing
+from nightdesk.domain.cost import compute_cost_from_snapshot, compute_cost_with_softened_fallback
 from nightdesk.domain.permissions import PermissionSpec, merge_permissions
 from nightdesk.domain.profile_secrets import ProfileSecretBox
+from nightdesk.domain.providers import (
+    ResolvedEndpoint,
+    endpoint_compatible,
+    resolve_endpoints_for_profile,
+)
 from nightdesk.domain.run_tokens import issue_run_token, revoke_for_run
 from nightdesk.domain.notifications import (
     build_run_completion_payload,
@@ -42,6 +50,7 @@ from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import transition_status
 from nightdesk.domain.toolchains import resolve_tool_paths
 from nightdesk.transcript import append_event, append_worker_error, next_transcript_seq
+from nightdesk.backends import Assignment, LaunchContext, get_backend
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult, Executor
 from nightdesk.worker.headless_prompt import (
     HEADLESS_POLICY_VERSION,
@@ -51,7 +60,6 @@ from nightdesk.worker.headless_prompt import (
 from nightdesk.worker.sandbox import (
     SANDBOX_HOME,
     build_bwrap_argv,
-    publish_cc_session,
     run_cc_sessions_dir,
     seed_cc_session,
 )
@@ -97,6 +105,168 @@ def _maybe_fire_webhook(
     fire_webhook(url, payload)
 
 
+def compute_model_assignments(
+    descriptor: bc.BackendCapability,
+    backend_config: dict,
+    *,
+    primary: Optional[ResolvedEndpoint],
+    default_model: Optional[str],
+) -> dict[str, Assignment]:
+    """Resolve the (partial) slot -> Assignment map for a launch.
+
+    See ``docs/design/providers-and-endpoints.md``, "The rendering contract":
+    full-pin only applies on ``*_compat`` endpoints with a default model set;
+    a first-party primary with no explicit overrides stays unpinned so the
+    harness's own alias resolution (e.g. CC's opus/haiku aliases) still
+    works. Static per-slot overrides in ``backend_config`` win over full-pin.
+    Per-agent slots (``agent:<name>``, opencode only) read their own
+    ``model``/``endpoint_id`` out of the matching ``backend_config["agents"]``
+    entry, defaulting to the primary's assignment/id when unset.
+    """
+    backend_config = backend_config or {}
+    slots = bc.slots_for(descriptor, backend_config)
+    assignments: dict[str, Assignment] = {}
+
+    full_pin = (
+        primary is not None
+        and primary.protocol_kind.endswith("_compat")
+        and bool(default_model)
+    )
+    if full_pin:
+        for slot in slots:
+            if not slot.name.startswith("agent:"):
+                assignments[slot.name] = Assignment(primary.id, default_model)
+
+    for slot in slots:
+        if slot.name.startswith("agent:"):
+            continue
+        override = backend_config.get(slot.name)
+        if isinstance(override, str) and override and primary is not None:
+            assignments[slot.name] = Assignment(primary.id, override)
+
+    for slot in slots:
+        if not slot.name.startswith("agent:"):
+            continue
+        agent_name = slot.name.split(":", 1)[1]
+        agent_cfg = next(
+            (a for a in (backend_config.get("agents") or [])
+             if isinstance(a, dict) and a.get("name") == agent_name),
+            {},
+        )
+        endpoint_id = agent_cfg.get("endpoint_id") or (
+            primary.id if primary is not None else None
+        )
+        model = agent_cfg.get("model")
+        if not model:
+            inherited = assignments.get("primary")
+            model = inherited.model if inherited is not None else default_model
+        if endpoint_id and model:
+            assignments[slot.name] = Assignment(endpoint_id, model)
+
+    return assignments
+
+
+def _resolve_extension_vendor(
+    model: str,
+    *,
+    model_assignments: dict[str, Assignment],
+    endpoints: dict[str, ResolvedEndpoint],
+    primary: Optional[ResolvedEndpoint],
+) -> str:
+    """Vendor to stamp a snapshot extension for ``model`` under: the endpoint
+    it was assigned to, else the primary endpoint's, else ``"anthropic"``
+    (ambient Claude runs with no endpoint at all)."""
+    vendor = next(
+        (endpoints[a.endpoint_id].vendor for a in model_assignments.values()
+         if a.model == model and a.endpoint_id in endpoints),
+        None,
+    )
+    if vendor is None and primary is not None:
+        vendor = primary.vendor
+    return vendor or "anthropic"
+
+
+def _extend_and_price_from_snapshot(
+    run: Run,
+    *,
+    model: Optional[str],
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    cache_write_tokens: int,
+    model_assignments: dict[str, Assignment],
+    endpoints: dict[str, ResolvedEndpoint],
+    primary: Optional[ResolvedEndpoint],
+    live_all: dict,
+    live_source: str,
+    usage_by_model: Optional[dict[str, dict[str, int]]] = None,
+) -> None:
+    """At run finish: extend ``run.pricing_snapshot`` for every actually-used
+    model the launch-time stamp didn't cover, then reprice ``run.cost_usd``
+    from the (possibly extended) snapshot.
+
+    ``usage_by_model`` (opencode profiles that touched more than one model)
+    takes priority over the single ``model``/token-count arguments when
+    present and non-empty. Only in that genuine multi-model case is pricing
+    softened via
+    :func:`nightdesk.domain.cost.compute_cost_with_softened_fallback`: a
+    model missing usable rates is priced at the run's primary model's rates
+    when available, and logged. The single-model fallback (Claude Code, and
+    opencode runs that reported no per-model breakdown) keeps the original
+    strict contract -- an unpriceable model never silently borrows another
+    model's rates, it just leaves the harness-reported cost in place.
+    ``run.cost_usd`` is otherwise only left untouched when nothing at all is
+    priceable. Mutates ``run`` in place; never raises (the caller wraps this
+    so a pricing failure can't fail the run).
+    """
+    multi = bool(usage_by_model)
+    usage_map = usage_by_model if multi else (
+        {
+            model: {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_tokens": cache_read_tokens,
+                "cache_write_tokens": cache_write_tokens,
+            }
+        } if model else None
+    )
+    if not usage_map:
+        return
+
+    snapshot = dict(run.pricing_snapshot or {})
+    for used_model in usage_map:
+        if used_model in snapshot:
+            continue
+        vendor = _resolve_extension_vendor(
+            used_model, model_assignments=model_assignments,
+            endpoints=endpoints, primary=primary,
+        )
+        extension = pricing.build_pricing_snapshot(
+            {used_model: vendor}, live_all=live_all or None, live_source=live_source,
+        )
+        snapshot.update(extension)
+    run.pricing_snapshot = snapshot
+
+    if not multi:
+        snapshot_cost = compute_cost_from_snapshot(usage_map, snapshot)
+        if snapshot_cost is not None:
+            run.cost_usd = snapshot_cost
+        return
+
+    primary_assignment = model_assignments.get("primary")
+    primary_model = primary_assignment.model if primary_assignment is not None else model
+    snapshot_cost, softened = compute_cost_with_softened_fallback(
+        usage_map, snapshot, primary_model=primary_model,
+    )
+    if snapshot_cost is not None:
+        run.cost_usd = snapshot_cost
+        if softened:
+            log.info(
+                "run %s: priced models %s at primary model %r rates "
+                "(no usable rate of their own)", run.id, softened, primary_model,
+            )
+
+
 @dataclass
 class RunOneConfig:
     worktree_root: Path
@@ -105,8 +275,16 @@ class RunOneConfig:
     host: str
     bearer_token: str = ""
     api_url: str = "http://127.0.0.1:8765"
-    # Optional override; defaults to dispatching via worker.backends.get_executor.
+    # Optional override (test seam); defaults to dispatching via the resolved
+    # backend's ``execute()`` (see ``nightdesk.backends.get_backend``).
     executor: Optional[Executor] = None
+    # Vendor-tagged pricing chain inputs for run pricing snapshots (see
+    # ``domain/pricing.py``, ``resolve_live_all``). Left unset (None) in tests
+    # and any deployment that hasn't opted in: the snapshot then resolves
+    # purely from the bundled table, no network hit. Production wires these
+    # from ``NightdeskConfig.data_dir`` / ``.pricing_url``.
+    data_dir: Optional[Path] = None
+    pricing_url: Optional[str] = None
 
 
 def _profile_to_spec(
@@ -143,6 +321,7 @@ def _profile_to_spec(
         network_mode=p.network_mode, network_allowlist=list(p.network_allowlist),
         secret_keys=list(p.secret_keys), default_model=p.default_model,
         backend=getattr(p, "backend", None) or "claude_sdk",
+        backend_config=dict(getattr(p, "backend_config", None) or {}),
         claude_credentials=claude_credentials,
         custom_env=custom_env,
         claude_binary_path=getattr(p, "claude_binary_path", None) or default_claude_binary,
@@ -470,12 +649,18 @@ def _build_env(
     return env
 
 
-def _resolve_executor(backend: str, override: Optional[Executor]) -> Executor:
-    if override is not None:
-        return override
-    from nightdesk.worker.backends import get_executor
+def _alloc_free_port() -> int:
+    """Reserve a free localhost TCP port for an HTTP-transport backend.
 
-    return get_executor(backend)
+    Bind to port 0, read the assigned port, close. The window between close
+    and the backend's server binding is a benign race on a single-host
+    worker; the agent shares the host net namespace so the port is reachable.
+    """
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def _make_session_id_persister(
@@ -796,7 +981,98 @@ async def run_one(
             logging.getLogger().addHandler(run_log_handler)
             log.info("run %s starting for ticket %s (intent=%s)", run.id, ticket.id, run_intent)
 
-            env = _build_env(
+            # Resolve the backend and let it compose the sandboxed launch. The
+            # worker stays backend-agnostic: no `if backend == ...` here.
+            _setup_phase = "endpoint_resolution"
+            backend = get_backend(spec.backend)
+            profile = ticket.profile
+            endpoints = resolve_endpoints_for_profile(session, profile, secret_box)
+            primary_endpoint_id = getattr(profile, "endpoint_id", None)
+            primary = endpoints.get(primary_endpoint_id) if primary_endpoint_id else None
+
+            # Compatibility gate: every resolved endpoint (primary and any
+            # per-agent endpoint) must speak a protocol this backend declares
+            # and respect its harness_lock. A Claude subscription endpoint,
+            # for instance, can never ride along as a subagent endpoint in an
+            # opencode profile. Fail the run cleanly rather than launch.
+            for ep_id, ep in endpoints.items():
+                if not endpoint_compatible(backend.descriptor, ep):
+                    raise RuntimeError(
+                        f"profile {profile.id} is incompatible with backend "
+                        f"{backend.code!r}: endpoint {ep_id} speaks protocol "
+                        f"{ep.protocol_kind!r} (harness_lock={ep.harness_lock!r})"
+                    )
+
+            _setup_phase = "model_assignment"
+            default_model = profile.default_model or (
+                primary.default_model if primary is not None else None
+            )
+            model_assignments = compute_model_assignments(
+                backend.descriptor,
+                spec.backend_config,
+                primary=primary,
+                default_model=default_model,
+            )
+
+            # Pricing snapshot: stamp the prices in effect right now so later
+            # price changes never rewrite this run's historical cost (see
+            # docs/design/providers-and-endpoints.md, "Pricing integration").
+            # ``pricing_live_all``/``pricing_live_source`` are resolved once
+            # here and reused at finish time to extend the snapshot for any
+            # model that turns out to have actually run outside it. Snapshot
+            # building must NEVER fail a launch.
+            _setup_phase = "pricing_snapshot"
+            pricing_live_all: dict = {}
+            pricing_live_source = "bundled"
+            try:
+                pricing_live_all, pricing_live_source = pricing.resolve_live_all(
+                    cfg.data_dir, url=cfg.pricing_url, now=datetime.now(timezone.utc),
+                )
+            except Exception:
+                log.exception(
+                    "pricing live-data resolution failed for run %s; "
+                    "snapshot will resolve from the bundled table only", run.id,
+                )
+                pricing_live_all, pricing_live_source = {}, "bundled"
+            try:
+                models_to_vendor = {
+                    a.model: endpoints[a.endpoint_id].vendor
+                    for a in model_assignments.values()
+                    if a.endpoint_id in endpoints
+                }
+                if models_to_vendor:
+                    run.pricing_snapshot = pricing.build_pricing_snapshot(
+                        models_to_vendor,
+                        live_all=pricing_live_all or None,
+                        live_source=pricing_live_source,
+                    )
+                    session.commit()
+            except Exception:
+                log.exception("failed to stamp pricing snapshot for run %s", run.id)
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+
+            _setup_phase = "prepare_launch"
+            # Per-run scratch, anchored as a sibling of worktree_root — outside
+            # the protected ~/.local/share/nightdesk data dir so it can be
+            # bind-mounted into the sandbox (same reason worktrees live there).
+            scratch_root = cfg.worktree_root.parent / "nightdesk-backend-scratch" / run.id
+            launch_ctx = LaunchContext(
+                spec=spec,
+                endpoint=primary,
+                run_id=run.id,
+                ticket_id=ticket.id,
+                workspace_dir=ws.path,
+                scratch_root=scratch_root,
+                http_port=_alloc_free_port() if backend.wants_http else None,
+                endpoints=endpoints,
+                model_assignments=model_assignments,
+            )
+            plan = backend.prepare_launch(launch_ctx)
+
+            base_env = _build_env(
                 spec,
                 cfg.secrets,
                 run_token=issued_token.cleartext,
@@ -804,15 +1080,16 @@ async def run_one(
                 ticket_id=ticket.id,
                 api_url=cfg.api_url,
             )
-            # Use the running interpreter so the sandbox finds the installed
-            # nightdesk package (--clearenv wipes PYTHONPATH; relying on
-            # bare ``python`` would pick up the system Python without the
-            # editable install).
-            # Anchor the session store as a sibling of worktree_root — outside
-            # the protected ~/.local/share/nightdesk data dir, so it can be
-            # bind-mounted into the sandbox (same reason worktrees live there).
+            # Backend launch env (provider creds, agent-specific knobs) layers
+            # over the base run env.
+            env = {**base_env, **plan.env}
+            # Per-run Claude session store, only set for backends that model
+            # one (claude_sdk); the continue/resume block below is a no-op for
+            # backends that leave this None. Legacy root kept as a seed-source
+            # fallback for continuations whose parent turn predates the
+            # unified per-run scratch layout.
+            cc_sessions_dir = plan.cc_sessions_dir
             cc_sessions_root = cfg.worktree_root.parent / "nightdesk-cc-sessions"
-            cc_sessions_dir = run_cc_sessions_dir(str(cc_sessions_root), run.id)
 
             # ``continue`` intent: resume the CONVERSATION's Claude Code
             # conversation by replaying its authoritative session id into the
@@ -824,7 +1101,17 @@ async def run_one(
             # resume (same worktree, no conversation history) and record it.
             resume_session_id: Optional[str] = None
             fell_back_to_fresh_context = False
-            if run_intent == "continue":
+            if run_intent == "continue" and cc_sessions_dir is None:
+                # This backend doesn't model a resumable Claude-style session
+                # store (e.g. opencode's resume path is backend-native, not
+                # this seeded-jsonl mechanism); always run as a fresh-context
+                # resume on the same worktree.
+                fell_back_to_fresh_context = True
+                log.warning(
+                    "continue turn %s: backend %s has no session store; "
+                    "falling back to fresh-context resume", run.id, spec.backend,
+                )
+            elif run_intent == "continue":
                 conv_sid = conversation.session_id
                 seed_source = prior_turn.id if prior_turn is not None else None
                 if conv_sid and seed_source is not None:
@@ -833,6 +1120,11 @@ async def run_one(
                         conv_sid,
                         [
                             run_cc_sessions_dir(str(cc_sessions_root), seed_source),
+                            # A parent turn that ran after the backend refactor
+                            # stores its session under the unified per-run
+                            # scratch layout instead of the legacy root above.
+                            str(cfg.worktree_root.parent / "nightdesk-backend-scratch"
+                                / seed_source / "cc-sessions"),
                             os.path.expanduser("~/.claude/projects"),
                         ],
                     )
@@ -864,15 +1156,18 @@ async def run_one(
             # transcript so the file keeps ONE monotonic seq space across turns.
             seq_start = next_transcript_seq(transcript_path)
 
-            log.debug("building bwrap argv for ticket %s run %s", ticket.id, run.id)
+            log.debug("building bwrap argv for ticket %s run %s (backend=%s)",
+                      ticket.id, run.id, spec.backend)
             _setup_phase = "bwrap_build"
             argv = build_bwrap_argv(
                 spec,
                 working_dir=str(ws.path),
-                cmd=[sys.executable, "-m", "nightdesk.worker._sdk_runner"],
+                cmd=plan.cmd,
                 env=env,
-                cc_sessions_dir=cc_sessions_dir,
+                cc_sessions_dir=plan.cc_sessions_dir,
                 git_dirs=_git_metadata_dirs(bundle),
+                mounts=plan.mounts,
+                require_claude=plan.needs_claude_binary,
             )
             log.debug("building headless prompt for ticket %s run %s", ticket.id, run.id)
             _setup_phase = "prompt_build"
@@ -929,6 +1224,8 @@ async def run_one(
                 on_session_id=_make_session_id_persister(
                     session_factory, run.id, conversation.id,
                 ),
+                http_port=launch_ctx.http_port,
+                launch_meta=launch_ctx.backend_state,
             )
 
             watcher = asyncio.create_task(
@@ -937,8 +1234,11 @@ async def run_one(
             executor_error_kind: Optional[str] = None
             executor_error_tb: Optional[str] = None
             try:
-                executor = _resolve_executor(spec.backend, cfg.executor)
-                result: ExecutionResult = await executor.run(request)
+                if cfg.executor is not None:
+                    # Test/override seam: run the supplied executor directly.
+                    result: ExecutionResult = await cfg.executor.run(request)
+                else:
+                    result = await backend.execute(request)
             except Exception as exc:
                 log.exception("executor crashed for ticket %s", ticket.id)
                 executor_error_kind = "executor_error"
@@ -993,12 +1293,20 @@ async def run_one(
                        error_summary=result.error_summary,
                        session_id=getattr(result, "session_id", None))
 
-            # Publish the run's Claude session from its isolated per-run store
-            # into the host ~/.claude/projects so `claude --resume <id>` works.
-            # Best-effort; never fails the run.
-            _sid = getattr(result, "session_id", None)
-            if _sid:
-                publish_cc_session(cc_sessions_dir, _sid)
+            # Record what actually ran and the backend-shaped resume handle.
+            fresh_backend_run = session.get(Run, run.id)
+            if fresh_backend_run is not None:
+                fresh_backend_run.backend = spec.backend
+                fresh_backend_run.endpoint_id = getattr(ticket.profile, "endpoint_id", None)
+                fresh_backend_run.session_ref = getattr(result, "session_ref", None)
+                session.commit()
+
+            # Backend post-run hook (e.g. claude publishes its session so
+            # `claude --resume <id>` works). Best-effort; never fails the run.
+            try:
+                backend.after_run(launch_ctx, result)
+            except Exception:
+                log.exception("after_run hook failed for ticket %s", ticket.id)
 
             # Persist token usage + cost. The CC SDK may not emit a result
             # event on cancellations or hard crashes, in which case usage
@@ -1012,7 +1320,33 @@ async def run_one(
                     fresh_run.output_tokens = usage.output_tokens
                     fresh_run.cache_read_tokens = usage.cache_read_tokens
                     fresh_run.cache_write_tokens = usage.cache_write_tokens
+                    # Harness-reported cost is the default (and the only
+                    # figure available for backends/models the pricing chain
+                    # can't resolve). Overridden below when the stamped
+                    # snapshot can price the actually-used model — the
+                    # harness's own estimate assumes Claude prices and is
+                    # wrong behind a compat endpoint.
                     fresh_run.cost_usd = usage.cost_usd
+                    try:
+                        _extend_and_price_from_snapshot(
+                            fresh_run,
+                            model=usage.model,
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                            cache_read_tokens=usage.cache_read_tokens,
+                            cache_write_tokens=usage.cache_write_tokens,
+                            model_assignments=model_assignments,
+                            endpoints=endpoints,
+                            primary=primary,
+                            live_all=pricing_live_all,
+                            live_source=pricing_live_source,
+                            usage_by_model=getattr(result, "usage_by_model", None),
+                        )
+                    except Exception:
+                        log.exception(
+                            "pricing snapshot extension/cost computation "
+                            "failed for run %s", run.id,
+                        )
                     session.commit()
             # Sync the conversation's CUMULATIVE totals to this (latest) turn's
             # reported totals. Per the cost rule the conversation equals the

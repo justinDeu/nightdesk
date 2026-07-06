@@ -705,6 +705,71 @@ async def test_run_one_finishes_run_when_setup_fails_after_start(session, tmp_pa
     assert "setup error" in (run.error_summary or "")
 
 
+@pytest.mark.anyio
+async def test_run_one_fails_cleanly_on_incompatible_endpoint(session, tmp_path):
+    """A profile whose endpoint's harness_lock excludes the backend must fail
+    the run before launch, never dispatch to prepare_launch."""
+    from nightdesk.db.models import Profile, Provider, ProviderEndpoint, Run
+
+    primary = tmp_path / "primary"
+    primary.mkdir()
+
+    provider = Provider(name="Anthropic", vendor="anthropic")
+    session.add(provider)
+    session.commit()
+    endpoint = ProviderEndpoint(
+        provider_id=provider.id,
+        label="Claude subscription",
+        protocol_kind="anthropic",
+        credential_source="subscription_file",
+        harness_lock="claude_sdk",
+    )
+    session.add(endpoint)
+    session.commit()
+
+    profile = Profile(
+        name="opencode-locked-out",
+        backend="opencode",
+        endpoint_id=endpoint.id,
+        fs_read=["/home"], fs_write=[], allowed_tools=[], denied_tools=[],
+        network_mode="off", network_allowlist=[], secret_keys=[],
+    )
+    session.add(profile)
+    session.commit()
+
+    ticket = create_ticket(
+        session,
+        title="locked endpoint",
+        prompt="p",
+        status="running",
+        priority=0,
+        profile_id=profile.id,
+        source_path=str(primary),
+    )
+    ticket_id = ticket.id
+
+    executor = CapturingExecutor()
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(
+            worktree_root=tmp_path / "work",
+            transcript_root=tmp_path / "transcripts",
+            secrets={},
+            host="testhost",
+            executor=executor,
+        ),
+        ticket_id,
+    )
+
+    assert result.exit_status == "failed"
+    assert "incompatible" in (result.error_summary or "")
+    # prepare_launch (and therefore execute) never ran.
+    assert executor.request is None
+    session.expire_all()
+    refreshed_ticket = session.get(Ticket, ticket_id)
+    assert refreshed_ticket.status == "review"
+
+
 # --- continue intent: resume the prior SDK conversation ---------------------
 
 def _stage_parent_run(session, ticket, tmp_path, *, session_id):
@@ -776,7 +841,11 @@ async def test_run_one_continue_threads_resume_session_id_and_seeds_sandbox(
         assert new_run_id is not None and new_run_id != prior_id
     # Sandbox availability: the session file was seeded into the NEW run's
     # isolated store (bound over the sandbox's CLAUDE_CONFIG_DIR/projects).
-    seeded = list((tmp_path / "nightdesk-cc-sessions" / new_run_id).rglob(
+    # The claude_sdk backend anchors its per-run session store under the
+    # unified backend scratch root, not the legacy nightdesk-cc-sessions tree
+    # (that legacy root is kept only as a seed-source fallback for parents
+    # that predate the backend refactor — see _write_parent_session_file).
+    seeded = list((tmp_path / "nightdesk-backend-scratch" / new_run_id / "cc-sessions").rglob(
         f"{parent_sid}.jsonl"))
     assert seeded, "parent session was not seeded into the new run's store"
     # The continue prompt is honest about resuming the conversation.
@@ -1015,3 +1084,354 @@ async def test_run_one_resume_does_not_thread_resume_session_id(
     assert result.exit_status == "success"
     assert executor.request.resume_session_id is None
     assert "RUN INTENT: resume" in executor.request.prompt
+
+
+# --- pricing snapshot: stamped at launch, extended/priced at finish ---------
+from nightdesk.db.models import Profile, Provider, ProviderEndpoint  # noqa: E402
+from nightdesk.domain.cost import RunUsage  # noqa: E402
+
+
+@dataclass
+class UsageExecutor:
+    """Test executor: succeeds and reports a fixed ``RunUsage``."""
+    usage: RunUsage
+    request: ExecutionRequest | None = None
+
+    async def run(self, req: ExecutionRequest) -> ExecutionResult:
+        self.request = req
+        return ExecutionResult(exit_status="success", final_summary="done",
+                                usage=self.usage)
+
+
+@dataclass
+class MultiModelUsageExecutor:
+    """Test executor: succeeds and reports usage for more than one model,
+    like an opencode run whose primary and per-agent slots hit different
+    models/endpoints."""
+    usage: RunUsage
+    usage_by_model: dict[str, dict[str, int]]
+    request: ExecutionRequest | None = None
+
+    async def run(self, req: ExecutionRequest) -> ExecutionResult:
+        self.request = req
+        return ExecutionResult(exit_status="success", final_summary="done",
+                                usage=self.usage, usage_by_model=self.usage_by_model)
+
+
+def _make_two_endpoint_opencode_profile(session):
+    """An opencode profile with a primary endpoint (vendor A, full-pinned)
+    and a per-agent endpoint (vendor B), so ``compute_model_assignments``
+    resolves two distinct (endpoint, model, vendor) triples for one run."""
+    from nightdesk.db.models import Profile, Provider, ProviderEndpoint
+
+    primary_provider = Provider(name="Openai", vendor="openai")
+    secondary_provider = Provider(name="Zai", vendor="zai")
+    session.add_all([primary_provider, secondary_provider])
+    session.commit()
+    primary_endpoint = ProviderEndpoint(
+        provider_id=primary_provider.id, label="primary", protocol_kind="openai_compat",
+        credential_source="api_key",
+    )
+    secondary_endpoint = ProviderEndpoint(
+        provider_id=secondary_provider.id, label="secondary", protocol_kind="openai_compat",
+        credential_source="api_key",
+    )
+    session.add_all([primary_endpoint, secondary_endpoint])
+    session.commit()
+    profile = Profile(
+        name="multi-model-opencode", backend="opencode", endpoint_id=primary_endpoint.id,
+        default_model="gpt-5.4",
+        backend_config={"agents": [
+            {"name": "researcher", "endpoint_id": secondary_endpoint.id, "model": "glm-5.2"},
+        ]},
+        fs_read=["/tmp"], fs_write=["/tmp"], allowed_tools=[], denied_tools=[],
+        network_mode="off", network_allowlist=[], secret_keys=[],
+    )
+    session.add(profile)
+    session.commit()
+    return profile, primary_endpoint, secondary_endpoint
+
+
+@pytest.mark.anyio
+async def test_run_one_two_model_opencode_run_prices_both_from_snapshot(
+    session, tmp_path,
+):
+    """Finish-time pricing for a two-model opencode run (distinct vendors)
+    prices each model's usage at its own vendor's rates and sums them."""
+    profile, primary_endpoint, secondary_endpoint = _make_two_endpoint_opencode_profile(session)
+    usage = RunUsage(
+        model="glm-5.2", input_tokens=500_000, output_tokens=100_000,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=None,
+    )
+    usage_by_model = {
+        "gpt-5.4": {"input_tokens": 1_000_000, "output_tokens": 500_000,
+                    "cache_read_tokens": 0, "cache_write_tokens": 0},
+        "glm-5.2": {"input_tokens": 500_000, "output_tokens": 100_000,
+                    "cache_read_tokens": 0, "cache_write_tokens": 0},
+    }
+    executor = MultiModelUsageExecutor(usage=usage, usage_by_model=usage_by_model)
+    result, run = await _run_ticket_with_profile(session, profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    # gpt-5.4 (openai, bundled table has no openai rows -> resolves to "none")
+    # is not in the bundled table, so this run relies on glm-5.2 (zai) being
+    # priceable; gpt-5.4 usage is silently excluded from the sum rather than
+    # collapsing the whole run to None.
+    assert run.pricing_snapshot["glm-5.2"]["vendor"] == "zai"
+    expected_glm = (500_000 * 1.40 + 100_000 * 4.40) / 1_000_000.0
+    assert run.cost_usd == pytest.approx(expected_glm)
+
+
+@pytest.mark.anyio
+async def test_run_one_two_model_opencode_run_softens_unrated_secondary(
+    session, tmp_path,
+):
+    """A secondary model with no rate of its own is priced at the primary
+    model's rates instead of leaving the whole run unpriced."""
+    profile, primary_endpoint, secondary_endpoint = _make_two_endpoint_opencode_profile(session)
+    # Swap in a zai primary so the primary model has real bundled rates, and
+    # give the secondary agent an unpriceable model id.
+    profile.endpoint_id = secondary_endpoint.id
+    profile.default_model = "glm-5.2"
+    profile.backend_config = {"agents": [
+        {"name": "researcher", "endpoint_id": primary_endpoint.id,
+         "model": "totally-unpriceable-agent-model"},
+    ]}
+    session.commit()
+
+    usage = RunUsage(
+        model="glm-5.2", input_tokens=100, output_tokens=100,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=None,
+    )
+    usage_by_model = {
+        "glm-5.2": {"input_tokens": 1_000_000, "output_tokens": 0,
+                    "cache_read_tokens": 0, "cache_write_tokens": 0},
+        "totally-unpriceable-agent-model": {"input_tokens": 1_000_000, "output_tokens": 0,
+                                             "cache_read_tokens": 0, "cache_write_tokens": 0},
+    }
+    executor = MultiModelUsageExecutor(usage=usage, usage_by_model=usage_by_model)
+    result, run = await _run_ticket_with_profile(session, profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    # Both models' usage priced at glm-5.2's (the primary model's) rate.
+    expected = 2 * (1_000_000 * 1.40) / 1_000_000.0
+    assert run.cost_usd == pytest.approx(expected)
+
+
+@pytest.mark.anyio
+async def test_run_one_two_model_opencode_run_keeps_harness_cost_when_all_unpriceable(
+    session, tmp_path,
+):
+    """When neither model in a multi-model run can be priced (even via the
+    primary-rate softening), the harness-reported cost is kept."""
+    profile, primary_endpoint, secondary_endpoint = _make_two_endpoint_opencode_profile(session)
+    profile.default_model = "totally-unpriceable-primary-model"
+    profile.backend_config = {"agents": [
+        {"name": "researcher", "endpoint_id": secondary_endpoint.id,
+         "model": "totally-unpriceable-agent-model"},
+    ]}
+    session.commit()
+
+    usage = RunUsage(
+        model="totally-unpriceable-primary-model", input_tokens=100, output_tokens=100,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=4.2,
+    )
+    usage_by_model = {
+        "totally-unpriceable-primary-model": {"input_tokens": 100, "output_tokens": 100,
+                                               "cache_read_tokens": 0, "cache_write_tokens": 0},
+        "totally-unpriceable-agent-model": {"input_tokens": 100, "output_tokens": 100,
+                                             "cache_read_tokens": 0, "cache_write_tokens": 0},
+    }
+    executor = MultiModelUsageExecutor(usage=usage, usage_by_model=usage_by_model)
+    result, run = await _run_ticket_with_profile(session, profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    assert run.cost_usd == pytest.approx(4.2)  # harness-reported, kept as-is
+
+
+def _make_compat_profile(session, *, vendor="zai", default_model="glm-5.2",
+                          protocol_kind="anthropic_compat"):
+    provider = Provider(name=vendor.title(), vendor=vendor)
+    session.add(provider)
+    session.commit()
+    endpoint = ProviderEndpoint(
+        provider_id=provider.id, label="compat", protocol_kind=protocol_kind,
+        credential_source="api_key",
+    )
+    session.add(endpoint)
+    session.commit()
+    profile = Profile(
+        name=f"{vendor}-compat", backend="claude_sdk", endpoint_id=endpoint.id,
+        default_model=default_model,
+        fs_read=["/tmp"], fs_write=["/tmp"], allowed_tools=[], denied_tools=[],
+        network_mode="off", network_allowlist=[], secret_keys=[],
+    )
+    session.add(profile)
+    session.commit()
+    return profile, endpoint
+
+
+async def _run_ticket_with_profile(session, profile, tmp_path, executor):
+    # run_one() closes whatever session its factory hands it (the production
+    # per-run-subprocess lifecycle), so fetch results afterward through a
+    # fresh Session on the same bind rather than the (now-closed) fixture
+    # session — same pattern as the other full-run_one tests in this file.
+    primary = tmp_path / "primary"
+    primary.mkdir(exist_ok=True)
+    ticket = create_ticket(
+        session, title="pricing", prompt="p", status="running", priority=0,
+        profile_id=profile.id, source_path=str(primary),
+    )
+    ticket_id = ticket.id
+    bind = session.get_bind()
+    result = await run_one(
+        lambda: session,
+        RunOneConfig(worktree_root=tmp_path / "work",
+                     transcript_root=tmp_path / "transcripts",
+                     secrets={}, host="testhost", executor=executor),
+        ticket_id,
+    )
+    with Session(bind) as verify:
+        refreshed = verify.get(Ticket, ticket_id)
+        run = verify.get(Run, refreshed.current_run_id)
+        verify.expunge(run)
+    return result, run
+
+
+@pytest.mark.anyio
+async def test_run_one_stamps_pricing_snapshot_at_launch_for_compat_profile(
+    session, tmp_path,
+):
+    """A compat-pinned profile (full-pin on a ``*_compat`` endpoint) gets its
+    pricing snapshot stamped at launch, before the agent ever runs."""
+    profile, endpoint = _make_compat_profile(session)
+    executor = CapturingExecutor()  # no usage -> only the launch stamp matters
+    result, run = await _run_ticket_with_profile(session, profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    assert run.pricing_snapshot is not None
+    entry = run.pricing_snapshot["glm-5.2"]
+    assert entry["vendor"] == "zai"
+    assert entry["input"] == pytest.approx(1.40)
+    assert entry["source"] == "bundled"  # no pricing_url configured in the test
+
+
+@pytest.mark.anyio
+async def test_run_one_snapshot_cost_overrides_harness_reported_cost(
+    session, tmp_path,
+):
+    """The stamped snapshot's cost wins over the harness's own (Claude-priced)
+    estimate once the actually-used model is covered by the snapshot."""
+    profile, endpoint = _make_compat_profile(session, vendor="zai", default_model="glm-5.2")
+    usage = RunUsage(
+        model="glm-5.2", input_tokens=1_000_000, output_tokens=500_000,
+        cache_read_tokens=0, cache_write_tokens=0,
+        cost_usd=999.0,  # deliberately wrong harness estimate (assumes Claude prices)
+    )
+    executor = UsageExecutor(usage=usage)
+    result, run = await _run_ticket_with_profile(session, profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    # zai glm-5.2: input 1.40, output 4.40 per 1M tokens (bundled table).
+    expected = (1_000_000 * 1.40 + 500_000 * 4.40) / 1_000_000.0
+    assert run.cost_usd == pytest.approx(expected)
+    assert run.cost_usd != pytest.approx(999.0)
+
+
+@pytest.mark.anyio
+async def test_run_one_extends_snapshot_for_off_snapshot_model_at_finish(
+    session, tmp_path,
+):
+    """When the harness reports usage for a model the launch-time snapshot
+    didn't cover, finish extends the snapshot (vendor falls back to the
+    primary endpoint's) and reprices from it when possible."""
+    profile, endpoint = _make_compat_profile(session, vendor="zai", default_model="glm-5.2")
+    usage = RunUsage(
+        model="glm-5-code",  # a different zai model, not in the launch-time pin
+        input_tokens=1_000_000, output_tokens=200_000,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=42.0,
+    )
+    executor = UsageExecutor(usage=usage)
+    result, run = await _run_ticket_with_profile(session, profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    assert "glm-5.2" in run.pricing_snapshot  # the original launch-time stamp
+    ext = run.pricing_snapshot["glm-5-code"]
+    assert ext["vendor"] == "zai"  # fell back to the primary endpoint's vendor
+    expected = (1_000_000 * 1.20 + 200_000 * 5.00) / 1_000_000.0
+    assert run.cost_usd == pytest.approx(expected)
+
+
+@pytest.mark.anyio
+async def test_run_one_keeps_harness_cost_when_snapshot_extension_cannot_price(
+    session, tmp_path,
+):
+    """A model the pricing chain can't resolve at all (no bundled/live/cache
+    row) keeps the harness-reported cost instead of silently zeroing it."""
+    profile, endpoint = _make_compat_profile(session, vendor="zai", default_model="glm-5.2")
+    usage = RunUsage(
+        model="totally-unpriceable-model-xyz",
+        input_tokens=100, output_tokens=100,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=7.5,
+    )
+    executor = UsageExecutor(usage=usage)
+    result, run = await _run_ticket_with_profile(session, profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    ext = run.pricing_snapshot["totally-unpriceable-model-xyz"]
+    assert ext["source"] == "none"
+    assert ext["input"] is None
+    assert run.cost_usd == pytest.approx(7.5)  # harness-reported, kept as-is
+
+
+@pytest.mark.anyio
+async def test_run_one_legacy_run_gets_finish_time_snapshot_vendor_anthropic(
+    session, sample_profile, tmp_path,
+):
+    """A legacy profile with no endpoint at all (ambient Claude credentials)
+    gets a finish-time snapshot stamped with vendor="anthropic"."""
+    usage = RunUsage(
+        model="claude-haiku-4-5", input_tokens=1_000_000, output_tokens=200_000,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=1.0,
+    )
+    executor = UsageExecutor(usage=usage)
+    result, run = await _run_ticket_with_profile(session, sample_profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    ext = run.pricing_snapshot["claude-haiku-4-5"]
+    assert ext["vendor"] == "anthropic"
+    expected = (1_000_000 * 1.0 + 200_000 * 5.0) / 1_000_000.0
+    assert run.cost_usd == pytest.approx(expected)
+
+
+@pytest.mark.anyio
+async def test_run_one_pricing_failure_never_fails_launch_or_finish(
+    session, tmp_path, monkeypatch,
+):
+    """A pricing-chain failure at launch or finish must never fail the run —
+    it degrades to no snapshot / the harness-reported cost."""
+    import nightdesk.worker.run_one as run_one_mod
+
+    monkeypatch.setattr(
+        run_one_mod.pricing, "resolve_live_all",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network exploded")),
+    )
+    monkeypatch.setattr(
+        run_one_mod.pricing, "build_pricing_snapshot",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("snapshot build exploded")),
+    )
+    monkeypatch.setattr(
+        run_one_mod, "_extend_and_price_from_snapshot",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("pricing exploded")),
+    )
+    profile, endpoint = _make_compat_profile(session, vendor="zai", default_model="glm-5.2")
+    usage = RunUsage(
+        model="glm-5.2", input_tokens=100, output_tokens=100,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=3.0,
+    )
+    executor = UsageExecutor(usage=usage)
+    result, run = await _run_ticket_with_profile(session, profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    assert run.pricing_snapshot is None  # resolve_live_all blew up before stamping
+    assert run.cost_usd == pytest.approx(3.0)  # harness-reported, extension never ran

@@ -28,7 +28,34 @@ wired for production runs.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+# --- runtime capabilities --------------------------------------------------
+
+
+class Capability(str, Enum):
+    """A run-time feature a backend may or may not provide.
+
+    Distinct from :class:`FieldGroup` (which is editor configuration): these
+    describe what a backend can *do at run time*, so the product surface
+    degrades per-feature instead of assuming Claude parity. The required
+    floor — stream canonical transcript events, end with a terminal result,
+    run headless, die on SIGTERM — is not listed here; it is mandatory for
+    every backend. Everything below is optional and degrades when absent.
+    """
+
+    COST_USAGE = "cost_usage"             # token counts + dollar cost
+    SESSION_RESUME = "session_resume"     # resumable conversation handle
+    TOOL_POLICY = "tool_policy"           # enforces allow/deny tool lists
+    PERMISSION_MODES = "permission_modes"  # claude-style permission modes
+    MODEL_SELECT = "model_select"         # honours a chosen model
+    SYSTEM_PROMPT = "system_prompt"       # injects a custom system prompt
+    FOLLOW_UP_CONTEXT = "follow_up_context"  # continues a prior run's session
+    SUBAGENTS = "subagents"               # emits subagent lifecycle events
+    THINKING = "thinking"                 # emits extended-thinking blocks
+    RATE_LIMIT_SIGNAL = "rate_limit_signal"  # emits rate-limit events
 
 
 # --- field groups ----------------------------------------------------------
@@ -102,10 +129,14 @@ CLAUDE_BEHAVIOR = FieldGroup(
     "Claude Code env toggles (telemetry, autoupdater, thinking budget…).",
 )
 
-# OMP / RPC (omp_rpc) specific groups.
-OMP_CONNECTION = FieldGroup(
-    "omp_connection", "OMP / RPC connection",
-    "Remote model endpoint, auth token, and model name the RPC backend dials.",
+# Provider selection. Shared in spirit — any backend can dial a configured
+# inference Provider — but rendered as its own fieldset (a row picker plus an
+# optional per-profile model override), so it is not a ``shared`` runtime
+# group like filesystem/tools.
+PROVIDER = FieldGroup(
+    "provider", "Inference provider",
+    "Which configured provider (endpoint + credential) this profile dials, "
+    "plus an optional model override.",
 )
 
 
@@ -117,12 +148,12 @@ _FIELD_GROUPS: tuple[FieldGroup, ...] = (
     ENV,
     SYSTEM_PROMPT,
     RUN_TOKEN_SCOPES,
+    PROVIDER,
     CLAUDE_AUTH,
     CLAUDE_BINARY,
     PERMISSION_MODE,
     CLAUDE_MODELS,
     CLAUDE_BEHAVIOR,
-    OMP_CONNECTION,
 )
 
 FIELD_GROUPS: dict[str, FieldGroup] = {g.key: g for g in _FIELD_GROUPS}
@@ -138,6 +169,21 @@ SHARED_GROUP_KEYS: tuple[str, ...] = tuple(
 
 
 @dataclass(frozen=True)
+class ModelSlot:
+    """One model position a harness exposes.
+
+    The slot-to-native mapping (which env var, which config key) is
+    renderer-internal — the generic layer never interprets ``name``, so no
+    mapping lives here. See ``docs/design/providers-and-endpoints.md``,
+    "Model slots".
+    """
+
+    name: str
+    label: str
+    required: bool = False
+
+
+@dataclass(frozen=True)
 class BackendCapability:
     """What a single backend consumes and how the editor presents it."""
 
@@ -147,6 +193,23 @@ class BackendCapability:
     # Field-group keys this backend consumes, in render order. Always a
     # superset of the shared groups.
     group_keys: tuple[str, ...]
+    # Run-time features this backend provides. Absent capabilities degrade
+    # the product surface gracefully (see :class:`Capability`).
+    capabilities: frozenset[Capability] = field(default_factory=frozenset)
+    # Protocol kinds (endpoint ``protocol_kind`` values) this backend speaks.
+    # Empty means the backend does not dial a configured endpoint (uses
+    # ambient credentials only).
+    protocol_kinds: frozenset[str] = field(default_factory=frozenset)
+    # Whether a single run can span more than one endpoint (primary + one per
+    # named agent). False backends (claude_sdk) are pinned to one endpoint per
+    # run — their model positions are env vars against a single
+    # ANTHROPIC_BASE_URL and cannot span providers.
+    multi_endpoint: bool = False
+    # Static per-harness model positions. Dynamic (per-agent) slots are
+    # enumerated via ``slots_for``, never appended here.
+    model_slots: tuple[ModelSlot, ...] = ()
+    # When True a run cannot start without an endpoint attached to the profile.
+    requires_provider: bool = False
     # Selectable in the editor dropdown. A described-but-disabled backend
     # shows up greyed out rather than vanishing, so the roadmap is visible.
     enabled: bool = True
@@ -158,6 +221,9 @@ class BackendCapability:
 
     def consumes(self, group_key: str) -> bool:
         return group_key in self.group_keys
+
+    def provides(self, capability: Capability) -> bool:
+        return capability in self.capabilities
 
     @property
     def groups(self) -> tuple[FieldGroup, ...]:
@@ -195,6 +261,7 @@ CLAUDE_SDK = BackendCapability(
     ),
     group_keys=(
         # Claude-specific groups first (they dominate the form), then shared.
+        PROVIDER.key,
         CLAUDE_AUTH.key,
         CLAUDE_BINARY.key,
         PERMISSION_MODE.key,
@@ -202,28 +269,58 @@ CLAUDE_SDK = BackendCapability(
         CLAUDE_BEHAVIOR.key,
         *_SHARED_TAIL,
     ),
+    capabilities=frozenset(Capability),  # every capability
+    protocol_kinds=frozenset(("anthropic", "anthropic_compat")),
+    multi_endpoint=False,
+    model_slots=(
+        ModelSlot("primary", "Primary model", required=False),
+        ModelSlot("opus_alias", "Opus alias (hard tasks)"),
+        ModelSlot("sonnet_alias", "Sonnet alias"),
+        ModelSlot("haiku_alias", "Haiku alias (background work)"),
+        ModelSlot("small_fast", "Small/fast model (legacy)"),
+        ModelSlot("subagent", "Subagent model"),
+    ),
+    requires_provider=False,  # falls back to claude_credentials
     enabled=True,
 )
 
-OMP_RPC = BackendCapability(
-    code="omp_rpc",
-    label="OMP / RPC",
+OPENCODE = BackendCapability(
+    code="opencode",
+    label="opencode",
     summary=(
-        "Dispatches the run to a remote Open-Model-Protocol endpoint over "
-        "RPC. Consumes the endpoint URL, an auth token, and a model name; "
-        "Claude-specific credentials, binary, and permission mode do not "
-        "apply."
+        "Runs the opencode agent against any configured provider. A per-run "
+        "opencode server is launched inside the sandbox and driven over "
+        "localhost HTTP. Tool policy, model selection, cost tracking, and "
+        "session resume are honoured; Claude-specific auth / binary / "
+        "permission-mode knobs do not apply."
     ),
     group_keys=(
-        OMP_CONNECTION.key,
+        PROVIDER.key,
         *_SHARED_TAIL,
     ),
+    capabilities=frozenset({
+        Capability.COST_USAGE,
+        Capability.SESSION_RESUME,
+        Capability.TOOL_POLICY,
+        Capability.MODEL_SELECT,
+        Capability.SYSTEM_PROMPT,
+        Capability.FOLLOW_UP_CONTEXT,
+    }),
+    protocol_kinds=frozenset(
+        ("anthropic", "anthropic_compat", "openai", "openai_compat",
+         "openai_codex", "openrouter", "ollama")
+    ),
+    multi_endpoint=True,
+    model_slots=(
+        ModelSlot("primary", "Primary model (model)"),
+        ModelSlot("small_model", "Small model"),
+    ),
+    requires_provider=True,
     enabled=True,
-    executable=False,
 )
 
 
-_BACKENDS: tuple[BackendCapability, ...] = (CLAUDE_SDK, OMP_RPC)
+_BACKENDS: tuple[BackendCapability, ...] = (CLAUDE_SDK, OPENCODE)
 
 CAPABILITIES: dict[str, BackendCapability] = {b.code: b for b in _BACKENDS}
 
@@ -262,6 +359,24 @@ def backend_choices() -> tuple[tuple[str, str, bool], ...]:
 def enabled_backends() -> frozenset[str]:
     """Codes selectable in the editor (and accepted by the form POST)."""
     return frozenset(b.code for b in _BACKENDS if b.enabled)
+
+
+def slots_for(capability: BackendCapability, backend_config: dict) -> tuple[ModelSlot, ...]:
+    """The full model-slot set for a profile: static slots plus dynamic ones.
+
+    opencode names agents in ``backend_config["agents"]``; each named agent
+    gets a synthetic ``agent:<name>`` slot. The editor, the worker's
+    assignment resolution, and validation all enumerate through this hook
+    rather than indexing ``capability.model_slots`` directly, so dynamic
+    slots are never missed.
+    """
+    slots = list(capability.model_slots)
+    if capability.code == "opencode":
+        for agent in (backend_config or {}).get("agents", []) or []:
+            name = agent.get("name") if isinstance(agent, dict) else None
+            if name:
+                slots.append(ModelSlot(f"agent:{name}", f"Agent: {name}"))
+    return tuple(slots)
 
 
 def consumes(code: str | None, group_key: str) -> bool:

@@ -34,6 +34,9 @@ class PermissionSpec:
     tool_paths: list[str] = field(default_factory=list)
     default_model: Optional[str] = None
     backend: str = "claude_sdk"
+    # Backend-specific configuration forwarded from Profile.backend_config.
+    # Opaque to the worker; each backend reads the keys it understands.
+    backend_config: dict = field(default_factory=dict)
     # Resolved at preflight from Profile.claude_credentials (decrypted).
     # Shape: {"source": "inherit"|"api_key"|"auth_token", "value": "..."}
     # `inherit` value is the absolute host path to .credentials.json.
@@ -52,7 +55,7 @@ class PermissionSpec:
 
 _ADDITIVE = ("fs_read", "fs_write", "allowed_tools", "network_allowlist", "secret_keys", "tool_paths")
 _RESTRICTIVE = ("denied_tools",)
-_REPLACE = ("network_mode", "default_model", "backend", "permission_mode", "allow_git_push")
+_REPLACE = ("network_mode", "default_model", "backend", "backend_config", "permission_mode", "allow_git_push")
 
 
 def _dedup(seq):

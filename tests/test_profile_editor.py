@@ -304,15 +304,16 @@ def test_translate_cc_settings_rejects_non_object():
         translate_cc_settings(["not", "a", "dict"])
 
 
-async def test_json_create_omp_rpc_without_credentials_succeeds(fresh_client):
-    """omp_rpc profiles do not use Claude credentials, so creating one without
-    claude_credentials must return 201 rather than a 400 validation error."""
+async def test_json_create_opencode_without_credentials_succeeds(fresh_client):
+    """opencode profiles do not use Claude credentials, so creating one
+    without claude_credentials must return 201 rather than a 400 validation
+    error."""
     r = await fresh_client.post("/api/v1/profiles", json={
-        "name": "omp-no-creds",
-        "backend": "omp_rpc",
+        "name": "opencode-no-creds",
+        "backend": "opencode",
     })
     assert r.status_code == 201, r.text
-    assert r.json()["backend"] == "omp_rpc"
+    assert r.json()["backend"] == "opencode"
 
 
 async def test_json_create_claude_sdk_without_credentials_400s(fresh_client):
@@ -327,7 +328,7 @@ async def test_json_create_claude_sdk_without_credentials_400s(fresh_client):
 
 
 # ---------------------------------------------------------------------------
-# omp_rpc not-executable warning (Finding 3).
+# non-executable backend warning (Finding 3).
 # ---------------------------------------------------------------------------
 
 

@@ -538,21 +538,17 @@ def _seq(counter: list[int]) -> int:
 
 
 def _seed_demo_omp_profile(engine) -> None:
-    """Add a demo ``omp_rpc`` profile so the backend-aware editor/preview has
+    """Add a demo ``opencode`` profile so the backend-aware editor/preview has
     a non-Claude profile to show off.
 
-    Idempotent: skips if a profile with the demo name already exists. The
-    OMP/RPC connection settings (endpoint / token / model) live in the
-    encrypted ``env`` blob, so this seeds them only when a bearer token is
-    configured (an encryption key is available); otherwise it creates the
-    profile with the backend selected but the connection left blank, which
-    still demonstrates the backend-specific form sections.
+    Idempotent: skips if a profile with the demo name already exists. opencode
+    dials a configured Provider (not yet wired up by this seed script), so
+    this creates the profile with the backend selected but no provider
+    attached — enough to demonstrate the backend-specific form sections.
     """
-    from nightdesk.config import load_config
-    from nightdesk.domain.profile_secrets import ProfileSecretBox
     from nightdesk.domain.profiles import create_profile, ProfileNameTaken
 
-    name = "OMP / RPC (demo)"
+    name = "opencode (demo)"
     with Session(engine) as session:
         exists = session.execute(
             text("SELECT 1 FROM profiles WHERE name = :n"), {"n": name}
@@ -560,29 +556,15 @@ def _seed_demo_omp_profile(engine) -> None:
         if exists:
             return
 
-        env_blob = None
-        try:
-            bearer = load_config().bearer_token
-        except Exception:
-            bearer = ""
-        if bearer:
-            box = ProfileSecretBox(bearer)
-            env_blob = box.encrypt({
-                "OMP_RPC_ENDPOINT": "https://omp.demo.internal/rpc",
-                "OMP_RPC_MODEL": "gpt-oss-120b",
-                "OMP_RPC_AUTH_TOKEN": "demo-rpc-token",
-            })
-
         try:
             create_profile(
                 session,
                 name=name,
-                description="Dispatches runs to a remote OMP/RPC endpoint.",
-                backend="omp_rpc",
+                description="Runs the opencode agent against a configured provider.",
+                backend="opencode",
                 network_mode="on",
                 allowed_tools=[],
                 denied_tools=[],
-                env=env_blob,
             )
         except ProfileNameTaken:
             pass

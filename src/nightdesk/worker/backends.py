@@ -1,55 +1,59 @@
-"""Executor backend registry.
+"""Compatibility shim over :mod:`nightdesk.backends`.
 
-Each profile declares a ``backend`` string (e.g. ``"claude_sdk"``). The
-worker uses ``get_executor(backend)`` to dispatch to the right
-``Executor`` implementation at run time. Backend-specific options like
-``default_model`` and ``permission_mode`` live as first-class columns on
-the Profile; the executor reads them off the resolved ``PermissionSpec``.
-
-Adding a new backend is two steps:
-1. Implement an ``Executor`` (see ``nightdesk.worker.executor.Executor``).
-2. Register it here in ``_REGISTRY``.
+The backend abstraction now lives in the top-level ``nightdesk.backends``
+package (one module per harness, see ``backends/base.py``). This module
+keeps the old import surface working for callers and tests that still ask
+for an *executor* (an object with ``.run(req)``): it adapts the registered
+:class:`~nightdesk.backends.base.Backend` into that shape.
 """
 from __future__ import annotations
 
-from typing import Callable
-
-from nightdesk.worker.claude_executor import ClaudeExecutor
-from nightdesk.worker.executor import DummyExecutor, Executor, OmpRpcExecutor
-
-
-_Factory = Callable[[], Executor]
+from nightdesk.backends import available_backends, get_backend
+from nightdesk.backends.registry import UnknownBackend, register_factory
+from nightdesk.worker.executor import ExecutionRequest, ExecutionResult
 
 
-_REGISTRY: dict[str, _Factory] = {
-    "claude_sdk": lambda: ClaudeExecutor(),
-    # ``omp_rpc`` dials a remote Open-Model-Protocol endpoint. Its config
-    # surface (profile editor, capability descriptors) is modelled ahead of
-    # the runtime wiring; the executor fails loudly until that lands.
-    "omp_rpc": lambda: OmpRpcExecutor(),
-    # ``dummy`` is the test-mode backend used in conftest / CI smoke tests.
-    "dummy": lambda: DummyExecutor(),
-}
+__all__ = [
+    "UnknownBackend",
+    "available_backends",
+    "get_executor",
+    "register",
+]
 
 
-class UnknownBackend(Exception):
-    pass
+class _BackendExecutor:
+    """Adapts a Backend to the legacy ``Executor`` (``.run``) interface."""
+
+    def __init__(self, backend) -> None:
+        self._backend = backend
+
+    async def run(self, req: ExecutionRequest) -> ExecutionResult:
+        return await self._backend.execute(req)
 
 
-def register(name: str, factory: _Factory) -> None:
-    """Register a backend factory. Intended for tests; production backends
-    should be added directly to ``_REGISTRY``."""
-    _REGISTRY[name] = factory
+def get_executor(backend: str):
+    return _BackendExecutor(get_backend(backend))
 
 
-def get_executor(backend: str) -> Executor:
-    factory = _REGISTRY.get(backend)
-    if factory is None:
-        raise UnknownBackend(
-            f"unknown backend {backend!r}; known: {sorted(_REGISTRY)}"
-        )
-    return factory()
+def register(name: str, factory) -> None:
+    """Register a backend (test seam). ``factory`` is a zero-arg callable
+    returning either a Backend or a legacy executor."""
+    obj = factory()
+    if hasattr(obj, "execute"):
+        from nightdesk.backends.registry import register as _register
+        _register(name, obj)
+        return
+    # Legacy executor: wrap it in a minimal Backend.
+    from nightdesk.backends.base import Backend, LaunchContext, LaunchPlan
 
+    class _Adapter(Backend):
+        descriptor = None  # not editor-surfaced
 
-def available_backends() -> list[str]:
-    return sorted(_REGISTRY)
+        def prepare_launch(self, ctx: LaunchContext) -> LaunchPlan:
+            return LaunchPlan(cmd=[])
+
+        async def execute(self, req: ExecutionRequest) -> ExecutionResult:
+            return await obj.run(req)
+
+    from nightdesk.backends.registry import register as _register
+    _register(name, _Adapter())

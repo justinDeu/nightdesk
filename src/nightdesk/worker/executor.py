@@ -45,6 +45,12 @@ class ExecutionRequest:
     # never leaves the conversation null-session. Best-effort; errors swallowed
     # by the caller. None when no callback is wired (e.g. tests).
     on_session_id: Optional[Callable[[str], None]] = None
+    # Pre-allocated localhost port for HTTP-transport backends (opencode);
+    # None for stdio backends (claude_sdk).
+    http_port: Optional[int] = None
+    # Opaque per-run data a backend's prepare_launch stashes for its execute
+    # step (e.g. opencode's session dir + server password). Worker-opaque.
+    launch_meta: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -54,12 +60,25 @@ class ExecutionResult:
     pid: Optional[int] = None
     final_summary: Optional[str] = None
     assistant_tail: list[str] = field(default_factory=list)
-    # Set by claude executor from the final ``result`` event. None when the
-    # run failed before the SDK emitted a result.
+    # Set by the executor from the final ``result`` event. None when the
+    # run failed before the agent emitted a result.
     usage: Optional[object] = None
     # Claude session id from the final ``result`` event, used to resume the
     # conversation later (claude --resume <id>). None when none was reported.
     session_id: Optional[str] = None
+    # Backend-shaped resume handle persisted to Run.session_ref. Opaque to the
+    # worker; the backend's resume_descriptor() reads it back.
+    session_ref: Optional[dict] = None
+    # Per-model token attribution for runs that touched more than one model
+    # (opencode profiles with per-agent endpoints/models). Maps model id ->
+    # a plain dict of the four token counts (``input_tokens``,
+    # ``output_tokens``, ``cache_read_tokens``, ``cache_write_tokens``).
+    # None (the default) means the backend only ever reports one aggregate
+    # model — ``usage`` above is the sole source of truth and finish-time
+    # pricing falls back to its single-model behaviour. Claude Code never
+    # sets this (one model per run environment); opencode sets it whenever
+    # its transcript carried at least one per-message usage event.
+    usage_by_model: Optional[dict[str, dict[str, int]]] = None
 
 
 class Executor(Protocol):
@@ -73,30 +92,6 @@ class DummyExecutor:
         req.transcript_path.parent.mkdir(parents=True, exist_ok=True)
         req.transcript_path.write_text(f"[dummy executor]\nprompt: {req.prompt}\n")
         return ExecutionResult(exit_status="success", final_summary="dummy run complete")
-
-
-class OmpRpcExecutor:
-    """Placeholder executor for the ``omp_rpc`` backend.
-
-    The OMP/RPC backend's *configuration surface* is fully modelled (profile
-    editor, capability descriptors, effective-config preview) ahead of its
-    runtime wiring. Dispatching a run against it before that wiring lands
-    fails loudly with the resolved endpoint, rather than silently reporting a
-    fake success. The connection settings live in the encrypted env blob
-    (``OMP_RPC_ENDPOINT`` / ``OMP_RPC_AUTH_TOKEN`` / ``OMP_RPC_MODEL``), so the
-    message can name the endpoint the user configured.
-    """
-
-    async def run(self, req: ExecutionRequest) -> ExecutionResult:
-        if req.cancel_event.is_set():
-            return ExecutionResult(exit_status="cancelled")
-        env = req.permission_spec.custom_env or {}
-        endpoint = env.get("OMP_RPC_ENDPOINT") or req.env.get("OMP_RPC_ENDPOINT")
-        req.transcript_path.parent.mkdir(parents=True, exist_ok=True)
-        detail = f" (endpoint: {endpoint})" if endpoint else " (no endpoint configured)"
-        msg = "omp_rpc backend is not yet wired for execution" + detail
-        req.transcript_path.write_text(f"[omp_rpc executor]\n{msg}\n")
-        return ExecutionResult(exit_status="failed", error_summary=msg)
 
 
 class ShellExecutor:

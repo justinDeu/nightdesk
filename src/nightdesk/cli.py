@@ -1204,6 +1204,8 @@ def run_ticket() -> None:
         host=default_host(),
         bearer_token=cfg.bearer_token,
         api_url=f"http://{cfg.bind_host}:{cfg.bind_port}",
+        data_dir=cfg.data_dir,
+        pricing_url=cfg.pricing_url,
     )
 
     # Lifecycle hardening for the per-run subprocess:
