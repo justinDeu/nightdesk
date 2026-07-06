@@ -6,7 +6,7 @@ Guidelines and house standards, with UX weighted first. Four scoped review passe
 plus a live browser pass at 1440x900 and 390x844.
 
 Legend: P0 broken/blocking, P1 real UX friction, P2 polish.
-Items marked **[fixed]** were addressed in the mobile pass on this branch.
+Items marked **[fixed]** were addressed on this branch (mobile pass + audit-fix waves, 2026-07-06).
 
 ## P0
 
@@ -27,16 +27,16 @@ Items marked **[fixed]** were addressed in the mobile pass on this branch.
 
 ## P1 — interaction correctness
 
-- **No unsaved-changes guard anywhere.** `settings/parts/SaveBar.tsx:12-76`
+- **[fixed]** **No unsaved-changes guard anywhere.** `settings/parts/SaveBar.tsx:12-76`
   (`useEditableForm` tracks `dirty`, nothing blocks navigation),
   `tickets/TicketDetailPage.tsx:264-372` and `tickets/TicketPeek.tsx:339-399`
   (prompt editors). Suggested: `beforeunload` + TanStack `useBlocker` keyed on
   `dirty`, once in `useEditableForm` and once in the prompt editors.
-- **Cancel run is one click, no confirm.** `desk/RunningCard.tsx:88-95`,
+- **[fixed]** **Cancel run is one click, no confirm.** `desk/RunningCard.tsx:88-95`,
   `TicketPeek` StatusActions, `detail/DetailHeader.tsx:244-249`. Sits next to
   "Watch" on the running card; a stray tap kills an expensive run. Suggested:
   reuse the existing delete ConfirmDialog pattern, or undo-window.
-- **Hover-only affordances invisible on touch.** `tickets/BoardCard.tsx:84-101`
+- **[fixed]** **Hover-only affordances invisible on touch.** `tickets/BoardCard.tsx:84-101`
   (16px select circle, `opacity-0` until hover), `tickets/List.tsx:113-133`
   (row checkbox), `archive/ArchivePage.tsx:307` (Restore/Delete cluster).
   Suggested: persistent low-opacity rest state + `group-focus-within`, larger hit box.
@@ -55,39 +55,39 @@ Items marked **[fixed]** were addressed in the mobile pass on this branch.
 
 ## P1 — state & navigation
 
-- **Archive filter/sort not in URL.** `archive/ArchivePage.tsx:78-90` keeps them in
+- **[fixed]** **Archive filter/sort not in URL.** `archive/ArchivePage.tsx:78-90` keeps them in
   useState/localStorage; reload/share/back loses them. AnalyticsPage already does
   this right — mirror its search-schema pattern.
-- **No virtualization at limit=200.** `tickets/TicketsPage.tsx:86` +
+- **[fixed — content-visibility containment]** **No virtualization at limit=200.** `tickets/TicketsPage.tsx:86` +
   per-column/group `.map()` in Board/List. Cheap first step:
   `content-visibility: auto` + `contain-intrinsic-size` on cards/rows;
   `@tanstack/react-virtual` if boards grow past a few hundred.
 
 ## P1 — a11y & semantics
 
-- Native `title=` on day-toggle chips — house-rule violation:
+- **[fixed]** Native `title=` on day-toggle chips — house-rule violation:
   `settings/SchedulingSection.tsx:333`. Use the shared Tooltip.
-- Hand-rolled toggle without `role="switch"`/`aria-checked`:
+- **[fixed — shared ui/Switch]** Hand-rolled toggle without `role="switch"`/`aria-checked`:
   `scheduled/CronEditorDialog.tsx:320-356`; `ScheduledPage.tsx:196-211` is a second
   independent reimplementation. Extract one `ui/Switch` with a11y baked in.
-- Analytics "Project" select lacks a programmatic label:
+- **[fixed]** Analytics "Project" select lacks a programmatic label:
   `analytics/AnalyticsPage.tsx:213-232`.
-- Range segmented control lacks `aria-pressed`: `analytics/AnalyticsPage.tsx:196-207`.
+- **[fixed]** Range segmented control lacks `aria-pressed`: `analytics/AnalyticsPage.tsx:196-207`.
 
 ## P2 — polish
 
-- `tabular-nums` missing on BreakdownTable + archive cost columns:
+- **[fixed]** `tabular-nums` missing on BreakdownTable + archive cost columns:
   `analytics/charts.tsx:411-438`, `archive/ArchivePage.tsx:298-300`.
-- `formatUsd` hardcodes `$…toFixed(2)` (no thousands separators):
+- **[fixed]** `formatUsd` hardcodes `$…toFixed(2)` (no thousands separators):
   `lib/status.ts:27-31`. Use `Intl.NumberFormat` currency.
-- Latency card shows false "no data" while loading:
+- **[fixed]** Latency card shows false "no data" while loading:
   `analytics/AnalyticsPage.tsx:186,416-420` (isLoading ignores latencyQ).
-- Toast card is a div-with-onClick (dismiss button already exists — drop the
+- **[fixed]** Toast card is a div-with-onClick (dismiss button already exists — drop the
   card-level handler): `ui/Toast.tsx:159-176`. Toaster offset ignores
   `env(safe-area-inset-*)`: `ui/Toast.tsx:251-259`. **[fixed]** safe-area offset.
-- Label names can overflow their card (no truncate/min-w-0):
+- **[fixed]** Label names can overflow their card (no truncate/min-w-0):
   `settings/LabelsSection.tsx:69`.
-- Raw internals leak into desk card copy ("query crashed: [Errno 11] write could
+- **[fixed]** Raw internals leak into desk card copy ("query crashed: [Errno 11] write could
   not complete without blocking"). Suggested: humanize the failure line
   ("Run failed — worker couldn't write the transcript") and keep the raw error
   in the peek/detail error section.
