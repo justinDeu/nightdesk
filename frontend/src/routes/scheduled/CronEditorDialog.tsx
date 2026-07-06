@@ -125,7 +125,7 @@ export function CronEditorDialog({
       toast.success(job ? "Schedule updated" : "Schedule created");
       onOpenChange(false);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not save schedule");
+      toast.error("Could not save schedule", { error: err });
     } finally {
       setSaving(false);
     }

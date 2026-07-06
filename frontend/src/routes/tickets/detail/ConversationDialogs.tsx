@@ -6,7 +6,6 @@ import { Textarea, Input, Field } from "@/ui/Input";
 import { Select } from "@/ui/Select";
 import { Dialog } from "@/ui/Dialog";
 import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
 
 /** Start a fresh conversation (new session, no resumed history). */
 export function NewConversationDialog({
@@ -39,7 +38,7 @@ export function NewConversationDialog({
       onClose();
       onDone();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not start conversation");
+      toast.error("Could not start conversation", { error: err });
     } finally {
       setBusy(false);
     }
@@ -113,7 +112,7 @@ export function RestartDialog({
       onClose();
       onDone();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not restart");
+      toast.error("Could not restart", { error: err });
     } finally {
       setBusy(false);
     }
@@ -179,7 +178,7 @@ export function CloneDialog({
       onClose();
       onCloned(cloned.id);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not clone");
+      toast.error("Could not clone", { error: err });
     } finally {
       setBusy(false);
     }

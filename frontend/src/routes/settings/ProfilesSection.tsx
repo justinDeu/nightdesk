@@ -14,8 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/ui/DropdownMenu";
-import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
+import { toast, describeError } from "@/ui/Toast";
 import { profilesApi, useProfiles } from "@/api/profiles";
 import { profileTransferApi } from "@/api/profileTransfer";
 import { qk } from "@/api/keys";
@@ -192,7 +191,7 @@ function CreateProfileDialog({
       toast.success("Profile created", { description: "Fill in the details, then save." });
       onCreated(created.id);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not create profile");
+      toast.error("Could not create profile", { error: err });
     } finally {
       setBusy(false);
     }
@@ -275,9 +274,8 @@ function ImportDialog({
       });
       onImported(result.id);
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Import failed";
-      setError(msg);
-      toast.error(msg);
+      setError(describeError(err));
+      toast.error("Import failed", { error: err });
     } finally {
       setBusy(false);
     }

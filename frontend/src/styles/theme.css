@@ -13,7 +13,9 @@
 
 /*
  * dusk console — the nightdesk design language.
- * Dark-first (used at night). Deliberately NOT near-black + acid-green.
+ * Dark-first (used at night). Near-black + green, but deliberately NOT the
+ * acid terminal-green (#00ff00 / #4ade80) AI-slop cliché: the accent is a warm,
+ * slightly desaturated jade that glows against the neutrals.
  * Every token below is bespoke; no Tailwind default palette color is used.
  */
 @theme {
@@ -31,16 +33,28 @@
   --color-moon-400: #b7bbc4; /* secondary — comfortable at reading size */
   --color-moon-600: #7e828c; /* faint / draft — still passes text AA */
 
-  /* Accents */
-  --color-lamp: #e5a54b; /* desk-lamp amber — primary, focus, attention */
-  --color-lamp-soft: #f0c07f;
-  --color-dawn: #dc7264; /* pairs with lamp in the running gradient */
+  /* Accents — desk-lamp GREEN. A warm, slightly desaturated jade (not acid
+     terminal-green); ~8.7:1 against ink-950 so near-black text sits legibly on
+     the primary fill. -soft is the brighter hover tint; -dawn is the luminous
+     mint the running gradient breathes toward. */
+  --color-lamp: #45c084; /* desk-lamp jade — primary, focus, attention */
+  --color-lamp-soft: #6fd3a1;
+  --color-dawn: #7fe0ad; /* pairs with lamp in the running glow */
 
-  /* Status — nudged brighter to hold >= 4.5:1 text contrast on the darker ink. */
+  /* Status — nudged brighter to hold >= 4.5:1 text contrast on the darker ink.
+     Success is cooled toward mint (~162° vs the accent's ~151°) so a "done"
+     sage never blurs into the vivid jade accent. */
   --color-review: #9c93f0; /* violet */
   --color-queued: #8b99ae; /* steel */
-  --color-success: #63bd97; /* sage */
+  --color-success: #56b89a; /* sage — cooler than the accent */
   --color-failed: #e06b64; /* ember */
+
+  /* Warning — caution / incomplete / attention-needed (missing profile, unpriced
+     model, destructive-replace notices). Amber-gold, held clearly apart from BOTH
+     the jade accent (~151°) and the ember failed red so a "needs input" state
+     never reads as brand-primary or as a hard failure. ~7:1 text contrast on ink. */
+  --color-warn: #d9a13d;
+  --color-warn-soft: #e6b45c;
 
   /* Typography */
   --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
@@ -71,6 +85,14 @@
   /* Motion */
   --animate-dawn-drift: dawn-drift 6s ease-in-out infinite;
   --animate-spin-slow: spin 0.8s linear infinite;
+
+  /* Danger — error toasts and destructive affordances. A near-black surface
+     with a red cast (keeps the ink aesthetic, never a saturated red slab), a
+     muted red hairline border, and the ember accent for the icon + left rail +
+     progress bar. Text detail stays on the moon ramp for legibility. */
+  --color-danger-surface: #241619;
+  --color-danger-border: #5e2b2b;
+  --color-danger-accent: #e06b64;
 }
 
 @keyframes dawn-drift {
@@ -196,8 +218,9 @@
 }
 
 @layer utilities {
-  /* The signature "dawn edge": a slow amber→coral gradient hairline that marks
-     any running ticket. Static under reduced-motion. */
+  /* The signature "dawn edge": a slow jade→mint→jade gradient hairline that
+     breathes like a lamp warming up, marking any running ticket. Static under
+     reduced-motion. */
   .dawn-edge {
     background-image: linear-gradient(
       100deg,
@@ -235,6 +258,28 @@
       to right,
       color-mix(in srgb, var(--color-failed) 18%, transparent) 0%,
       color-mix(in srgb, var(--color-failed) 8%, transparent) 34%,
+      transparent 72%
+    );
+  }
+
+  /* Selected-surface wash: a left-anchored jade gradient, sibling to .wash-failed
+     but in the accent family — most present at the left edge, gone by ~70% across,
+     tuned subtle so card/row text stays fully legible over it. Background-only, so
+     selecting never changes geometry. Selected + failed layers the ember border on
+     top of this wash (selection wash wins, failed identity kept via border + pill). */
+  .wash-selected {
+    background-image: linear-gradient(
+      to right,
+      color-mix(in srgb, var(--color-lamp) 13%, transparent) 0%,
+      color-mix(in srgb, var(--color-lamp) 5%, transparent) 34%,
+      transparent 70%
+    );
+  }
+  .wash-selected:hover {
+    background-image: linear-gradient(
+      to right,
+      color-mix(in srgb, var(--color-lamp) 17%, transparent) 0%,
+      color-mix(in srgb, var(--color-lamp) 7%, transparent) 34%,
       transparent 72%
     );
   }

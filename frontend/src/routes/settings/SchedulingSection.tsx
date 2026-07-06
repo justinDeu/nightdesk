@@ -7,8 +7,7 @@ import { Input, Field } from "@/ui/Input";
 import { Select } from "@/ui/Select";
 import { Spinner } from "@/ui/Spinner";
 import { Badge } from "@/ui/Badge";
-import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
+import { toast, describeError } from "@/ui/Toast";
 import { configApi, useConfig, useWindows } from "@/api/config";
 import { qk } from "@/api/keys";
 import type { ScheduleWindowCreate } from "@/api/types";
@@ -144,9 +143,8 @@ export function SchedulingSection() {
       commit();
       toast.success("Schedule saved");
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Could not save schedule";
-      setError(msg);
-      toast.error(msg);
+      setError(describeError(err));
+      toast.error("Could not save schedule", { error: err });
     } finally {
       setSaving(false);
     }

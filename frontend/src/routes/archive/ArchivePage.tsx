@@ -14,7 +14,7 @@ import { ProjectTag } from "@/components/ProjectDot";
 import { useTicketPages, ticketsApi } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
 import { useProjectMap } from "@/api/projects";
-import { qk, ApiError } from "@/api";
+import { qk } from "@/api";
 import type { RunOut, TicketOut } from "@/api/types";
 import { toast } from "@/ui/Toast";
 import { formatUsd, runStatusKind } from "@/lib/status";
@@ -89,7 +89,7 @@ export function ArchivePage() {
       invalidate();
       toast.success("Ticket restored");
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Restore failed");
+      toast.error("Restore failed", { error: err });
     }
   }
 
@@ -101,7 +101,7 @@ export function ArchivePage() {
       setSelected(new Set());
       toast.success(`Restored ${ids.length} ticket${ids.length === 1 ? "" : "s"}`);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Restore failed");
+      toast.error("Restore failed", { error: err });
     }
   }
 
@@ -118,7 +118,7 @@ export function ArchivePage() {
       });
       toast.success("Ticket permanently deleted");
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Delete failed");
+      toast.error("Delete failed", { error: err });
     } finally {
       setDeleting(null);
     }
@@ -206,7 +206,7 @@ export function ArchivePage() {
                 key={t.id}
                 className={cn(
                   "group flex items-center gap-3 border-t border-ink-700/60 px-3 py-2.5 text-sm transition-colors hover:bg-ink-800",
-                  isSel && "bg-lamp/[0.06]",
+                  isSel && "wash-selected",
                 )}
               >
                 <input

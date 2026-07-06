@@ -13,7 +13,6 @@ import { ticketsApi, useInvalidateTickets } from "@/api/tickets";
 import { labelsApi, useLabels } from "@/api/labels";
 import { useProfiles } from "@/api/profiles";
 import { useProjects } from "@/api/projects";
-import { ApiError } from "@/api/client";
 import type { TicketCreate, WorkspaceKind } from "@/api/types";
 import { cn } from "@/lib/cn";
 
@@ -98,7 +97,7 @@ function QuickComposer({
       toast.success("Sent to Inbox", { description: "Flesh it out and promote to run." });
       onClose();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not create ticket");
+      toast.error("Could not create ticket", { error: err });
     } finally {
       setBusy(false);
     }
@@ -234,7 +233,7 @@ function FullEditor({
       onClose();
       navigate({ to: "/tickets/$id", params: { id: t.id } });
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not create ticket");
+      toast.error("Could not create ticket", { error: err });
     } finally {
       setBusy(false);
     }

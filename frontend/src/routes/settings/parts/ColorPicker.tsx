@@ -4,8 +4,8 @@ import { cn } from "@/lib/cn";
 /** Token-derived swatch palette for labels and project dots. Values are the
  *  literal hex the API stores on the record. */
 export const SWATCHES: string[] = [
-  "#e5a54b", // lamp
-  "#d96c5f", // dawn
+  "#45c084", // lamp
+  "#7fe0ad", // dawn
   "#d9605a", // ember
   "#8f86e8", // review violet
   "#5fae8b", // sage

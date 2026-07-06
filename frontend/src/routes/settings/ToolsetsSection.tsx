@@ -5,8 +5,7 @@ import { Button } from "@/ui/Button";
 import { IconButton } from "@/ui/IconButton";
 import { Input, Field } from "@/ui/Input";
 import { Spinner } from "@/ui/Spinner";
-import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
+import { toast, describeError } from "@/ui/Toast";
 import { configApi, useConfig } from "@/api/config";
 import { qk } from "@/api/keys";
 import { SectionHeader, SettingsCard } from "./parts/SettingsSection";
@@ -95,9 +94,8 @@ export function ToolsetsSection() {
       commit();
       toast.success("Toolsets saved");
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Could not save";
-      setError(msg);
-      toast.error(msg);
+      setError(describeError(err));
+      toast.error("Could not save toolsets", { error: err });
     } finally {
       setSaving(false);
     }

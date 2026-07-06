@@ -10,7 +10,6 @@ import { Spinner } from "@/ui/Spinner";
 import { EmptyState } from "@/ui/EmptyState";
 import { Tooltip } from "@/ui/Tooltip";
 import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
 import { projectsApi, useProjects } from "@/api/projects";
 import { useProjectActivity } from "@/api/projectActivity";
 import { qk } from "@/api/keys";
@@ -47,7 +46,7 @@ export function ProjectsSection() {
       toast.success(`Archived “${toArchive.name}”`);
       setToArchive(null);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not archive project");
+      toast.error("Could not archive project", { error: err });
     } finally {
       setBusy(false);
     }
@@ -227,7 +226,7 @@ function ProjectDialog({
       toast.success(project ? "Project updated" : "Project created");
       onSaved();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not save project");
+      toast.error("Could not save project", { error: err });
     } finally {
       setBusy(false);
     }

@@ -31,8 +31,8 @@ const sizes: Record<ButtonSize, string> = {
 const variants: Record<ButtonVariant, string> = {
   primary:
     "bg-lamp text-ink-950 font-semibold hover:bg-lamp-soft active:brightness-95 shadow-[0_1px_0_rgba(255,255,255,0.12)_inset] " +
-    // Distinct disabled: a flat inert chip, not dimmed amber (which read as a
-    // muddy half-strength primary). Enabled stays full-strength lamp.
+    // Distinct disabled: a flat inert chip, not a dimmed accent (which reads as
+    // a muddy half-strength primary). Enabled stays full-strength lamp.
     "disabled:bg-ink-800 disabled:text-moon-600 disabled:shadow-none disabled:opacity-100",
   ghost:
     "bg-transparent text-moon-100 border border-ink-700 hover:bg-ink-800 hover:border-ink-700 active:bg-ink-900",

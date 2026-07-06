@@ -15,7 +15,6 @@ import {
   DropdownMenuTrigger,
 } from "@/ui/DropdownMenu";
 import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
 import { relativeTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import { NewConversationDialog, RestartDialog, CloneDialog } from "./ConversationDialogs";
@@ -65,7 +64,7 @@ export function ActivityComposer({
       toast.success(label);
       onChange();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : `${label} failed`);
+      toast.error(`${label} failed`, { error: err });
     } finally {
       setBusy(false);
     }

@@ -31,7 +31,6 @@ import { ticketsApi } from "@/api/tickets";
 import { useProfiles } from "@/api/profiles";
 import { useProjectMap, useProjects } from "@/api/projects";
 import { useLabels, labelsApi } from "@/api/labels";
-import { ApiError } from "@/api";
 import type { InboxItemOut, TicketCreate, TicketOut } from "@/api/types";
 import { useTicketActions } from "@/lib/ticketActions";
 import { useKeybinds } from "@/lib/keymap";
@@ -147,7 +146,7 @@ export function InboxPage() {
                       {ready ? (
                         <Check size={14} className="text-success" />
                       ) : (
-                        <CircleDot size={14} className="text-lamp" />
+                        <CircleDot size={14} className="text-warn" />
                       )}
                     </span>
                     <span className="min-w-0 flex-1">
@@ -161,7 +160,7 @@ export function InboxPage() {
                     </span>
                     {!ready && (
                       <Tooltip content={`${item.blockers.length} blocker${item.blockers.length === 1 ? "" : "s"}`}>
-                        <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-lamp/25 bg-lamp/10 px-1.5 py-0.5 text-[10px] font-semibold text-lamp">
+                        <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-warn/25 bg-warn/10 px-1.5 py-0.5 text-[10px] font-semibold text-warn">
                           <AlertTriangle size={10} />
                           {item.blockers.length}
                         </span>
@@ -236,7 +235,7 @@ function QuickCapture({ onCaptured }: { onCaptured: () => void }) {
       setTitle("");
       onCaptured();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Capture failed");
+      toast.error("Capture failed", { error: err });
     } finally {
       setBusy(false);
     }
@@ -287,7 +286,7 @@ function TriageDetail({
       await fn();
       onChanged();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : msg);
+      toast.error(msg, { error: err });
     }
   }
 
@@ -381,7 +380,7 @@ function TriageDetail({
               <Check size={11} /> ready
             </span>
           ) : (
-            <span className="rounded-full border border-lamp/25 bg-lamp/10 px-1.5 py-0.5 text-lamp">
+            <span className="rounded-full border border-warn/25 bg-warn/10 px-1.5 py-0.5 text-warn">
               {blockers.length} to resolve
             </span>
           )}
@@ -445,7 +444,7 @@ function InlineTitle({ ticket, onSaved }: { ticket: TicketOut; onSaved: () => vo
       await ticketsApi.update(ticket.id, { title: next });
       onSaved();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not save title");
+      toast.error("Could not save title", { error: err });
       setValue(ticket.title);
     }
   }
@@ -480,7 +479,7 @@ function InlinePrompt({ ticket, onSaved }: { ticket: TicketOut; onSaved: () => v
       await ticketsApi.update(ticket.id, { prompt: value });
       onSaved();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not save prompt");
+      toast.error("Could not save prompt", { error: err });
       setValue(ticket.prompt);
     }
   }
@@ -522,14 +521,14 @@ function BlockerFix({
       await ticketsApi.update(ticket.id, body);
       onSaved();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : msg);
+      toast.error(msg, { error: err });
     }
   }
 
   return (
-    <div className="rounded-control border border-lamp/25 bg-lamp/[0.05] px-3 py-2.5">
+    <div className="rounded-control border border-warn/25 bg-warn/[0.05] px-3 py-2.5">
       <div className="mb-2 flex items-center gap-2 text-sm text-moon-100">
-        <AlertTriangle size={13} className="shrink-0 text-lamp" />
+        <AlertTriangle size={13} className="shrink-0 text-warn" />
         <span className="first-letter:uppercase">{text}</span>
       </div>
       {kind === "profile" && (

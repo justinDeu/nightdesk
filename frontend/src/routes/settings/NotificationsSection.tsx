@@ -4,8 +4,7 @@ import { Send } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { Input, Field } from "@/ui/Input";
 import { Spinner } from "@/ui/Spinner";
-import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
+import { toast, describeError } from "@/ui/Toast";
 import { configApi, useConfig } from "@/api/config";
 import { notificationsApi } from "@/api/notificationsApi";
 import { qk } from "@/api/keys";
@@ -52,9 +51,8 @@ export function NotificationsSection() {
       commit();
       toast.success("Webhook saved");
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Could not save";
-      setError(msg);
-      toast.error(msg);
+      setError(describeError(err));
+      toast.error("Could not save webhook", { error: err });
     } finally {
       setSaving(false);
     }
@@ -66,7 +64,7 @@ export function NotificationsSection() {
       await notificationsApi.test(url);
       toast.success("Test payload sent", { description: "Check the destination for a synthetic run-completion event." });
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Test failed");
+      toast.error("Test webhook failed", { error: err });
     } finally {
       setTesting(false);
     }

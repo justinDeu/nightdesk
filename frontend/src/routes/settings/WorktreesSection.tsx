@@ -5,7 +5,7 @@ import { Input, Field } from "@/ui/Input";
 import { Select } from "@/ui/Select";
 import { Spinner } from "@/ui/Spinner";
 import { Badge } from "@/ui/Badge";
-import { toast } from "@/ui/Toast";
+import { toast, describeError } from "@/ui/Toast";
 import { ApiError } from "@/api/client";
 import { configApi, useConfig } from "@/api/config";
 import { useProjects } from "@/api/projects";
@@ -53,9 +53,8 @@ export function WorktreesSection() {
       commit();
       toast.success("Worktree defaults saved");
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Could not save";
-      setError(msg);
-      toast.error(msg);
+      setError(describeError(err));
+      toast.error("Could not save worktree defaults", { error: err });
     } finally {
       setSaving(false);
     }

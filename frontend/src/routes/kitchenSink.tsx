@@ -312,7 +312,7 @@ export function KitchenSink() {
           <Check size={15} className="text-success" /> verified
         </div>
         <div className="flex items-center gap-2 text-sm text-moon-400">
-          <AlertTriangle size={15} className="text-lamp" /> attention
+          <AlertTriangle size={15} className="text-warn" /> attention
         </div>
       </Section>
 

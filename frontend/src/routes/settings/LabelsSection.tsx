@@ -8,7 +8,6 @@ import { Dialog } from "@/ui/Dialog";
 import { Spinner } from "@/ui/Spinner";
 import { EmptyState } from "@/ui/EmptyState";
 import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
 import { labelsApi, useLabels } from "@/api/labels";
 import { qk } from "@/api/keys";
 import type { LabelOut } from "@/api/types";
@@ -34,7 +33,7 @@ export function LabelsSection() {
       toast.success(`Deleted “${toDelete.name}”`);
       setToDelete(null);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not delete label");
+      toast.error("Could not delete label", { error: err });
     } finally {
       setBusy(false);
     }
@@ -143,7 +142,7 @@ function LabelDialog({
       toast.success(label ? "Label updated" : "Label created");
       onSaved();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not save label");
+      toast.error("Could not save label", { error: err });
     } finally {
       setBusy(false);
     }

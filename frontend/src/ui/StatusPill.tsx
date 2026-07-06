@@ -48,7 +48,7 @@ export function StatusPill({ status, className, label }: StatusPillProps) {
   const text = label ?? meta.label;
 
   if (status === "running") {
-    // The running pill IS the dawn edge: an amber→coral gradient hairline border
+    // The running pill IS the dawn edge: a jade→mint gradient hairline border
     // drifting slowly, with a pulsing dot. Static under reduced motion.
     return (
       <span

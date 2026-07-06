@@ -5,8 +5,7 @@ import { IconButton } from "@/ui/IconButton";
 import { Input, Textarea, Field } from "@/ui/Input";
 import { Select } from "@/ui/Select";
 import { Badge } from "@/ui/Badge";
-import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
+import { toast, describeError } from "@/ui/Toast";
 import { profilesApi } from "@/api/profiles";
 import { profileTransferApi } from "@/api/profileTransfer";
 import { qk } from "@/api/keys";
@@ -155,9 +154,8 @@ export function ProfileEditor({
       commit();
       toast.success("Profile saved");
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "Could not save profile";
-      setError(msg);
-      toast.error(msg);
+      setError(describeError(err));
+      toast.error("Could not save profile", { error: err });
     } finally {
       setSaving(false);
     }
@@ -171,7 +169,7 @@ export function ProfileEditor({
       toast.success(`Copied to “${created.name}”`);
       onCopied(created.id);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Copy failed");
+      toast.error("Copy failed", { error: err });
     } finally {
       setBusy(false);
     }
@@ -189,7 +187,7 @@ export function ProfileEditor({
       URL.revokeObjectURL(url);
       toast.success("Export downloaded", { description: "Secrets are redacted — re-enter on import." });
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Export failed");
+      toast.error("Export failed", { error: err });
     }
   }
 
@@ -202,7 +200,7 @@ export function ProfileEditor({
       setConfirmDelete(false);
       onDeleted();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Delete failed");
+      toast.error("Delete failed", { error: err });
     } finally {
       setBusy(false);
     }
@@ -411,8 +409,8 @@ export function ProfileEditor({
               Replace environment
             </label>
             {form.env_replace && (
-              <div className="rounded-control border border-lamp/30 bg-lamp/5 p-3">
-                <p className="mb-2 text-xs text-lamp">
+              <div className="rounded-control border border-warn/30 bg-warn/5 p-3">
+                <p className="mb-2 text-xs text-warn">
                   Saving replaces the entire environment with the pairs below. Existing values are
                   not shown — re-enter every variable you want to keep.
                 </p>

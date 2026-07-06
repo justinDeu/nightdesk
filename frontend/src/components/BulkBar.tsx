@@ -11,7 +11,6 @@ import {
   DropdownMenuTrigger,
 } from "@/ui/DropdownMenu";
 import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
 import { PRIORITY_SCALE } from "@/lib/priority";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectDot } from "@/components/ProjectDot";
@@ -58,7 +57,7 @@ export function BulkBar({
       // can chain without re-selecting. Escape or the X button clears it.
       toast.success(`${label} · ${count} ticket${count === 1 ? "" : "s"}`);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : `${label} failed`);
+      toast.error(`${label} failed`, { error: err });
     }
   }
 
@@ -68,7 +67,7 @@ export function BulkBar({
       await ticketsApi.bulkLabels({ ticket_ids: ids, label_ids: next });
       onDone();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Labels failed");
+      toast.error("Labels failed", { error: err });
     }
   }
 

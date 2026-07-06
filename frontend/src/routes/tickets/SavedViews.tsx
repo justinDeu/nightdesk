@@ -68,7 +68,7 @@ export function SavedViews({ current, activeId, onApply, onClearActive }: SavedV
       if (err instanceof ApiError && err.status === 404) {
         toast.error("Saved views aren't available on this server yet");
       } else {
-        toast.error(err instanceof ApiError ? err.message : "Could not save view");
+        toast.error("Could not save view", { error: err });
       }
     }
   }
@@ -81,7 +81,7 @@ export function SavedViews({ current, activeId, onApply, onClearActive }: SavedV
       setRenaming(null);
       setName("");
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not rename");
+      toast.error("Could not rename", { error: err });
     }
   }
 
@@ -91,7 +91,7 @@ export function SavedViews({ current, activeId, onApply, onClearActive }: SavedV
       if (activeId === v.id) onClearActive();
       toast.success("View deleted");
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not delete");
+      toast.error("Could not delete", { error: err });
     }
   }
 

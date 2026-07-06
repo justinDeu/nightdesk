@@ -11,7 +11,6 @@ import { ticketHref } from "@/lib/routes";
 import { relativeTime } from "@/lib/time";
 import { useTicketActions } from "@/lib/ticketActions";
 import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
 import { cn } from "@/lib/cn";
 
 /** Notable finished-run outcome for a row marker. Success is not notable. */
@@ -66,7 +65,7 @@ export function List({
       await labelsApi.setTicketLabels(t.id, ids);
       invalidate();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not update labels");
+      toast.error("Could not update labels", { error: err });
     }
   }
 
@@ -102,7 +101,7 @@ export function List({
                     "group flex items-center gap-2.5 border-t border-ink-700/60 px-3 py-2 text-sm",
                     "cursor-pointer transition-colors",
                     isSel
-                      ? "bg-lamp/[0.06] hover:bg-lamp/[0.09]"
+                      ? "wash-selected"
                       : failed
                         ? "wash-failed"
                         : "hover:bg-ink-800",

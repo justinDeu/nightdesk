@@ -23,7 +23,6 @@ import {
 } from "@/ui/DropdownMenu";
 import { Dialog } from "@/ui/Dialog";
 import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
 import { CloneDialog } from "./ConversationDialogs";
 import { useTicketActions } from "@/lib/ticketActions";
 import { ticketStatusKind, runStatusKind, formatUsd, formatTokens } from "@/lib/status";
@@ -52,7 +51,7 @@ export function DetailHeader({
       toast.success("Ticket deleted");
       navigate({ to: "/tickets" });
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not delete");
+      toast.error("Could not delete ticket", { error: err });
       setDeleting(false);
     }
   }

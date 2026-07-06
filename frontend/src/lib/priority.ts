@@ -13,8 +13,8 @@ export interface PriorityMeta {
 }
 
 // Severity ramp: the chip's tone encodes urgency, not just the label. It climbs
-// from faintest (none) through muted/neutral grays to amber-warm (high) and a
-// strong ember (urgent), so a glance reads severity by warmth + fill strength.
+// from faintest (none) through muted/neutral grays to the accent jade (high) and
+// a strong ember (urgent), so a glance reads severity by fill strength.
 export const PRIORITY_SCALE: PriorityMeta[] = [
   { value: 0, name: "none", label: "No priority", short: "P0", cls: "text-moon-600 border-ink-700 bg-ink-800/40", dot: "bg-moon-600/60" },
   { value: 1, name: "low", label: "Low", short: "P1", cls: "text-moon-400 border-ink-700 bg-ink-800", dot: "bg-moon-600" },

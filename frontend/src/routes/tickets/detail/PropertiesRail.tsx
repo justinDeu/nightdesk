@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { FolderGit2, GitBranch, Plus, X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { qk } from "@/api";
 import { ticketsApi } from "@/api/tickets";
 import { labelsApi } from "@/api/labels";
@@ -11,13 +11,11 @@ import { useProfiles } from "@/api/profiles";
 import { useLabels } from "@/api/labels";
 import { useTicketDependencies } from "@/api/tickets";
 import type { TicketOut } from "@/api/types";
-import { Badge } from "@/ui/Badge";
 import { Button } from "@/ui/Button";
 import { Input } from "@/ui/Input";
 import { StatusPill } from "@/ui/StatusPill";
-import { Tooltip } from "@/ui/Tooltip";
 import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
+import { WorkspaceList } from "@/components/WorkspaceList";
 import {
   PriorityPicker,
   ProjectPicker,
@@ -101,7 +99,7 @@ export function PropertiesRail({ ticket, className }: { ticket: TicketOut; class
       </Row>
 
       <Section title="Workspaces">
-        <Workspaces ticket={ticket} />
+        <WorkspaceList workspaces={ticket.workspaces} />
       </Section>
       <Section title="Additional directories">
         <AdditionalDirs ticket={ticket} onChange={invalidate} />
@@ -149,38 +147,6 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Workspaces({ ticket }: { ticket: TicketOut }) {
-  if (ticket.workspaces.length === 0) {
-    return <p className="text-xs text-moon-600">No workspace configured.</p>;
-  }
-  return (
-    <div className="space-y-2">
-      {ticket.workspaces.map((w) => (
-        <div key={w.id} className="rounded-control border border-ink-700 bg-ink-900 p-2.5">
-          <div className="mb-1 flex items-center gap-2">
-            <Badge tone={w.role === "primary" ? "lamp" : "neutral"}>{w.role}</Badge>
-            <span className="text-[11px] text-moon-400">{w.kind}</span>
-            <span className="ml-auto text-[10px] text-moon-600">{w.access}</span>
-          </div>
-          <div className="flex items-center gap-1.5 font-mono text-[11px] text-moon-100">
-            <FolderGit2 size={11} className="shrink-0 text-moon-600" />
-            <Tooltip content={w.resolved_path ?? w.source_path ?? ""} mono side="top">
-              <span className="truncate">{w.resolved_path ?? w.source_path ?? "—"}</span>
-            </Tooltip>
-          </div>
-          {w.branch && (
-            <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[11px] text-moon-400">
-              <GitBranch size={11} className="shrink-0 text-moon-600" />
-              <span className="truncate">{w.branch}</span>
-              {w.base_ref && <span className="text-moon-600">← {w.base_ref}</span>}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function AdditionalDirs({ ticket, onChange }: { ticket: TicketOut; onChange: () => void }) {
   const [adding, setAdding] = useState(false);
   const [path, setPath] = useState("");
@@ -194,7 +160,7 @@ function AdditionalDirs({ ticket, onChange }: { ticket: TicketOut; onChange: () 
       setAdding(false);
       onChange();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not add directory");
+      toast.error("Could not add directory", { error: err });
     }
   };
   const remove = async (p: string) => {

@@ -1,13 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ApiError, qk } from "@/api";
+import { qk } from "@/api";
 import { ticketsApi } from "@/api/tickets";
 import type { TicketOut } from "@/api/types";
 import { toast } from "@/ui/Toast";
-
-function errMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) return err.message || fallback;
-  return fallback;
-}
 
 /**
  * Common ticket lifecycle actions wrapped with a success/failure toast and
@@ -31,7 +26,7 @@ export function useTicketActions() {
       if (okMsg) toast.success(okMsg);
       return true;
     } catch (err) {
-      toast.error(errMessage(err, `${label} failed`));
+      toast.error(`${label} failed`, { error: err });
       return false;
     }
   }

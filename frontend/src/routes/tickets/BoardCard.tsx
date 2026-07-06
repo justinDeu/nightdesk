@@ -56,15 +56,17 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
       className={cn(
         "group relative shrink-0 cursor-pointer overflow-hidden rounded-card border p-3 pt-3.5",
         "shadow-[var(--shadow-raised)] transition-colors",
-        // Selection: a lamp fill + left edge (orthogonal to the focus ring).
-        // Failed: a left-anchored ember gradient wash + ember-tinted border so
-        // the whole card silhouette reads warm and pops out of a column (the pill
-        // names it). When a failed card is also selected, keep the ember gradient
-        // and let the lamp left edge sit cleanly on top of it.
+        // Selection: a left-anchored jade wash (.wash-selected), background-only so
+        // the 1px border stays uniform on every side in every state and the card
+        // never shifts/shrinks a pixel when (de)selected.
+        // Failed: a left-anchored ember gradient wash + ember-tinted border so the
+        // whole card silhouette reads warm and pops out of a column (the pill names
+        // it). Selected + failed: the jade selection wash wins, but the ember border
+        // is retained so the failed identity survives in the silhouette.
         selected
           ? outcome === "failed"
-            ? "wash-failed border-l-2 border-l-lamp border-y-failed/35 border-r-failed/35 bg-ink-900"
-            : "border-l-2 border-l-lamp border-y-ink-700 border-r-ink-700 bg-lamp/[0.07]"
+            ? "wash-selected border-failed/35 bg-ink-900"
+            : "wash-selected border-ink-700 bg-ink-900"
           : outcome === "failed"
             ? "wash-failed border-failed/35 bg-ink-900"
             : "border-ink-700 bg-ink-900 hover:bg-ink-800",
@@ -116,14 +118,21 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
         >
           <span className="line-clamp-3">{ticket.title}</span>
         </a>
-        {!selected && (
-          // pointer-events-none: once faded on hover this span still overlaps the
-          // corner select glyph; without it the click lands here (opening the
-          // peek) instead of on the glyph (E2E BUG-2).
-          <span className="pointer-events-none transition-opacity group-hover:opacity-0">
-            <PriorityChip value={ticket.priority} hideNone />
-          </span>
-        )}
+        {/* Kept mounted in every state (only its opacity changes) so selecting or
+            hovering never removes it from the flex row and reflows the title — that
+            unmount was the "card shrinks slightly on select" regression. Faded out
+            when selected (the corner check owns that spot) or on hover.
+            pointer-events-none: once faded this span still overlaps the corner
+            select glyph; without it the click lands here (opening the peek) instead
+            of on the glyph (E2E BUG-2). */}
+        <span
+          className={cn(
+            "pointer-events-none transition-opacity",
+            selected ? "opacity-0" : "group-hover:opacity-0",
+          )}
+        >
+          <PriorityChip value={ticket.priority} hideNone />
+        </span>
       </div>
 
       {ticket.labels.length > 0 && (

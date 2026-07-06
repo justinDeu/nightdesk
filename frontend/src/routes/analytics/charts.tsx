@@ -412,7 +412,7 @@ export function BreakdownTable({
           <span className="flex w-40 shrink-0 items-center gap-1.5">
             <span className="truncate font-mono text-[12px] text-moon-100">{r.name}</span>
             {r.unpriced && (
-              <span className="shrink-0 rounded-full border border-lamp/25 bg-lamp/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-lamp">
+              <span className="shrink-0 rounded-full border border-warn/25 bg-warn/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-warn">
                 unpriced
               </span>
             )}

@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/ui/DropdownMenu";
 import { useCronJobs, cronApi } from "@/api/cron";
-import { qk, ApiError } from "@/api";
+import { qk } from "@/api";
 import type { CronJobOut } from "@/api/types";
 import { toast } from "@/ui/Toast";
 import { absoluteTime, relativeTime } from "@/lib/time";
@@ -48,7 +48,7 @@ export function ScheduledPage() {
       invalidate();
       toast.success(ok);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : `${label} failed`);
+      toast.error(`${label} failed`, { error: err });
     }
   }
 
@@ -74,7 +74,7 @@ export function ScheduledPage() {
         },
       });
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Fire failed");
+      toast.error("Fire failed", { error: err });
     }
   }
 

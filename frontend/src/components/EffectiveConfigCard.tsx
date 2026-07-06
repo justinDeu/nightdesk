@@ -58,7 +58,7 @@ export function EffectiveConfigCard({ ticketId }: { ticketId: string }) {
       icon: ShieldCheck,
       label: "Permission mode",
       value: v,
-      tone: v === "bypassPermissions" ? "text-dawn" : undefined,
+      tone: v === "bypassPermissions" ? "text-failed" : undefined,
     });
   }
   if (backend) chips.push({ icon: Server, label: "Backend", value: display(backend.value) });

@@ -1,22 +1,32 @@
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Cpu, X } from "lucide-react";
+import { ArrowRight, CalendarClock, Cpu, Maximize2, Zap, X } from "lucide-react";
 import type { LabelOut, ProjectOut, RunOut, TicketOut } from "@/api/types";
 import { qk } from "@/api";
 import { labelsApi } from "@/api/labels";
+import { ticketsApi, useUpdateTicket } from "@/api/tickets";
+import { useProfiles } from "@/api/profiles";
 import { Button } from "@/ui/Button";
+import { Dialog } from "@/ui/Dialog";
+import { Textarea } from "@/ui/Input";
 import { StatusPill } from "@/ui/StatusPill";
 import { Tooltip } from "@/ui/Tooltip";
-import { PriorityPicker, ProjectPicker, LabelPicker } from "@/components/PropertyPickers";
+import { toast } from "@/ui/Toast";
+import { PriorityPicker, ProfilePicker, ProjectPicker, LabelPicker } from "@/components/PropertyPickers";
+import { EffectiveConfigCard } from "@/components/EffectiveConfigCard";
+import { WorkspaceList } from "@/components/WorkspaceList";
 import { useTicketActions } from "@/lib/ticketActions";
 import { cn } from "@/lib/cn";
 import { ticketStatusKind, runStatusKind, formatUsd } from "@/lib/status";
 import { durationBetween, relativeTime } from "@/lib/time";
-import { toast } from "@/ui/Toast";
 
 /**
  * Right-rail peek: a fast, dismissible summary of the selected ticket that does
  * NOT navigate. Full navigation is an explicit action (the Open button, Enter,
- * or cmd/middle-click on the card). Editable metadata mirrors the detail page.
+ * or cmd/middle-click on the card). The panel prioritizes the run-relevant
+ * configuration (profile, effective runtime, workspaces, scheduling) so the
+ * "is this ready to run?" judgment is possible without opening the ticket. The
+ * prompt is bounded to a few lines with an expand-to-edit popout.
  */
 export function TicketPeek({
   ticket,
@@ -37,7 +47,11 @@ export function TicketPeek({
 }) {
   const qc = useQueryClient();
   const actions = useTicketActions();
-  const invalidate = () => qc.invalidateQueries({ queryKey: qk.tickets.all });
+  const profiles = useProfiles();
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: qk.tickets.all });
+    qc.invalidateQueries({ queryKey: qk.tickets.detail(ticket.id) });
+  };
 
   const setLabels = (ids: string[]) =>
     labelsApi
@@ -45,9 +59,11 @@ export function TicketPeek({
       .then(invalidate)
       .catch(() => toast.error("Could not update labels"));
 
+  const needsProfile = !ticket.profile_id;
+
   return (
     <aside
-      className="fade-in fixed bottom-3 right-0 top-14 z-30 flex w-[420px] max-w-[92vw] flex-col overflow-hidden rounded-bl-card border-b border-l border-ink-700 bg-ink-900 shadow-[var(--shadow-pop)]"
+      className="fade-in fixed bottom-3 right-0 top-14 z-30 flex w-[440px] max-w-[92vw] flex-col overflow-hidden rounded-bl-card border-b border-l border-ink-700 bg-ink-900 shadow-[var(--shadow-pop)]"
       aria-label="Ticket preview"
     >
       {/* Header */}
@@ -95,13 +111,31 @@ export function TicketPeek({
           </Button>
         </div>
 
-        {/* Metadata */}
-        <div className="grid grid-cols-[80px_1fr] items-center gap-x-3 gap-y-2 text-sm">
-          <span className="text-xs text-moon-600">Priority</span>
+        {/* Editable metadata */}
+        <div className="grid grid-cols-[76px_1fr] items-center gap-x-3 gap-y-2 text-sm">
+          <Label>Priority</Label>
           <div>
             <PriorityPicker value={ticket.priority} onChange={(v) => actions.setPriority(ticket, v)} />
           </div>
-          <span className="text-xs text-moon-600">Project</span>
+
+          <Label>Profile</Label>
+          <div>
+            <ProfilePicker
+              value={ticket.profile_id}
+              profiles={profiles.data ?? []}
+              onChange={(pid) =>
+                ticketsApi
+                  .setProfile(ticket.id, pid)
+                  .then(invalidate)
+                  .catch(() => toast.error("Could not set profile"))
+              }
+            />
+            {needsProfile && (
+              <p className="mt-0.5 text-[10px] text-warn">Required to run</p>
+            )}
+          </div>
+
+          <Label>Project</Label>
           <div>
             <ProjectPicker
               value={ticket.project_id}
@@ -109,7 +143,8 @@ export function TicketPeek({
               onChange={(id) => actions.setProject(ticket, id)}
             />
           </div>
-          <span className="text-xs text-moon-600">Labels</span>
+
+          <Label>Labels</Label>
           <div>
             <LabelPicker value={ticket.labels.map((l) => l.id)} labels={labels} onChange={setLabels}>
               <div className="flex flex-wrap gap-1">
@@ -131,24 +166,46 @@ export function TicketPeek({
           </div>
         </div>
 
-        {/* Prompt preview */}
-        <div>
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-moon-600">Prompt</div>
-          {ticket.prompt.trim() ? (
-            <p className="whitespace-pre-wrap rounded-control border border-ink-700 bg-ink-950/40 p-3 text-[13px] leading-relaxed text-moon-100">
-              {ticket.prompt}
-            </p>
-          ) : (
-            <p className="text-sm italic text-moon-600">No prompt yet.</p>
-          )}
-        </div>
+        {/* Effective runtime — model, permission mode, backend, network, and the
+            full resolved config (with per-field origin) one click away. */}
+        <EffectiveConfigCard ticketId={ticket.id} />
+
+        {/* Scheduling — only surfaced when it affects the next run. */}
+        <Scheduling ticket={ticket} />
+
+        {/* Workspaces — where the run lands. */}
+        <section>
+          <SectionLabel>Workspaces</SectionLabel>
+          <WorkspaceList workspaces={ticket.workspaces} />
+        </section>
+
+        {/* Additional directories (read-only here; edit on the full ticket). */}
+        {ticket.additional_dirs.length > 0 && (
+          <section>
+            <SectionLabel>Additional directories</SectionLabel>
+            <div className="space-y-1">
+              {ticket.additional_dirs.map((d) => (
+                <div
+                  key={d.path}
+                  className="flex items-center gap-2 rounded-control border border-ink-700 bg-ink-900 px-2 py-1.5"
+                >
+                  <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-moon-100">
+                    {d.path}
+                  </span>
+                  <span className="text-[10px] text-moon-600">{d.mode ?? "rw"}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Prompt — bounded, with an expand-to-edit popout. */}
+        <PromptSection ticket={ticket} />
 
         {/* Latest run */}
         {latestRun && (
-          <div>
-            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-moon-600">
-              Latest run
-            </div>
+          <section>
+            <SectionLabel>Latest run</SectionLabel>
             <div
               className={cn(
                 "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-control border p-3 font-mono text-[11px] text-moon-400",
@@ -169,16 +226,175 @@ export function TicketPeek({
               )}
               <span className="text-moon-600">{relativeTime(latestRun.started_at)}</span>
             </div>
-          </div>
+          </section>
         )}
 
-        {project && (
-          <p className="text-xs text-moon-600">
-            Project: <span className="text-moon-400">{project.name}</span>
-          </p>
-        )}
+        {/* Footer meta */}
+        <div className="border-t border-ink-700/60 pt-3 text-[11px] text-moon-600">
+          {project && (
+            <div>
+              project <span className="text-moon-400">{project.name}</span>
+            </div>
+          )}
+          <div>created {relativeTime(ticket.created_at)}</div>
+          <div>updated {relativeTime(ticket.updated_at)}</div>
+          <div className="mt-1 font-mono text-moon-600/70">{ticket.id}</div>
+        </div>
       </div>
     </aside>
+  );
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return <span className="text-xs text-moon-600">{children}</span>;
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-moon-600">
+      {children}
+    </div>
+  );
+}
+
+/** run_now / schedule / commit-on-finish, shown only when set so the panel stays
+ *  quiet for the common default. */
+function Scheduling({ ticket }: { ticket: TicketOut }) {
+  const bits: React.ReactNode[] = [];
+  if (ticket.run_now) {
+    bits.push(
+      <span
+        key="run-now"
+        className="inline-flex items-center gap-1 rounded-full border border-lamp/40 bg-lamp/10 px-2 py-0.5 text-[11px] text-lamp"
+      >
+        <Zap size={11} /> Run now
+      </span>,
+    );
+  }
+  if (ticket.scheduled_after) {
+    bits.push(
+      <span
+        key="scheduled"
+        className="inline-flex items-center gap-1 rounded-full border border-ink-700 bg-ink-800 px-2 py-0.5 text-[11px] text-moon-100"
+      >
+        <CalendarClock size={11} className="text-moon-600" /> {relativeTime(ticket.scheduled_after)}
+      </span>,
+    );
+  }
+  if (ticket.commit_on_finish != null) {
+    bits.push(
+      <span
+        key="commit"
+        className="inline-flex items-center gap-1 rounded-full border border-ink-700 bg-ink-800 px-2 py-0.5 text-[11px] text-moon-100"
+      >
+        commit on finish: {ticket.commit_on_finish ? "yes" : "no"}
+      </span>,
+    );
+  }
+  if (bits.length === 0) return null;
+  return (
+    <section>
+      <SectionLabel>Scheduling</SectionLabel>
+      <div className="flex flex-wrap gap-1.5">{bits}</div>
+    </section>
+  );
+}
+
+/** Prompt bounded to a few lines with internal scroll; an expand affordance opens
+ *  a full-height, editable popout backed by the ticket update mutation. */
+function PromptSection({ ticket }: { ticket: TicketOut }) {
+  const [open, setOpen] = useState(false);
+  const hasPrompt = ticket.prompt.trim().length > 0;
+  return (
+    <section>
+      <div className="mb-1 flex items-center gap-2">
+        <SectionLabel>Prompt</SectionLabel>
+        <button
+          onClick={() => setOpen(true)}
+          className="ml-auto -mt-1 inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-[11px] text-moon-400 hover:bg-ink-800 hover:text-moon-100"
+        >
+          <Maximize2 size={11} /> {hasPrompt ? "Expand & edit" : "Write"}
+        </button>
+      </div>
+      {hasPrompt ? (
+        <button
+          onClick={() => setOpen(true)}
+          className="block max-h-32 w-full overflow-y-auto rounded-control border border-ink-700 bg-ink-950/40 p-3 text-left text-[13px] leading-relaxed text-moon-100 hover:border-ink-700/80"
+        >
+          <span className="whitespace-pre-wrap">{ticket.prompt}</span>
+        </button>
+      ) : (
+        <button
+          onClick={() => setOpen(true)}
+          className="text-sm italic text-moon-600 hover:text-moon-400"
+        >
+          No prompt yet — click to write one.
+        </button>
+      )}
+      <PromptDialog ticket={ticket} open={open} onOpenChange={setOpen} />
+    </section>
+  );
+}
+
+function PromptDialog({
+  ticket,
+  open,
+  onOpenChange,
+}: {
+  ticket: TicketOut;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const update = useUpdateTicket(ticket.id);
+  const [value, setValue] = useState(ticket.prompt);
+  // Re-sync when a different prompt loads or the dialog reopens after an edit.
+  useEffect(() => {
+    if (open) setValue(ticket.prompt);
+  }, [open, ticket.prompt]);
+
+  const dirty = value !== ticket.prompt;
+
+  const save = () => {
+    update.mutate(
+      { prompt: value },
+      {
+        onSuccess: () => onOpenChange(false),
+        onError: (err) => toast.error("Could not save prompt", { error: err }),
+      },
+    );
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Prompt"
+      description={ticket.title}
+      size="lg"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!dirty || update.isPending}
+            onClick={save}
+          >
+            {update.isPending ? "Saving…" : "Save prompt"}
+          </Button>
+        </>
+      }
+    >
+      <Textarea
+        autoFocus
+        className="max-h-[60vh] min-h-[320px]"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="Describe the work for this ticket…"
+      />
+    </Dialog>
   );
 }
 

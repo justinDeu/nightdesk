@@ -255,7 +255,7 @@ export function AnalyticsPage() {
                   <span translate="no">{m.model}</span>
                   {unpriced && (
                     <Tooltip content="No pricing for this model">
-                      <span className="text-lamp">
+                      <span className="text-warn">
                         *<span className="sr-only"> (no pricing)</span>
                       </span>
                     </Tooltip>
@@ -285,9 +285,9 @@ export function AnalyticsPage() {
             {scoped.unpriced > 0 && (
               <div
                 role="status"
-                className="mb-4 flex items-start gap-2 rounded-card border border-lamp/25 bg-lamp/[0.06] px-3 py-2 text-xs text-moon-100"
+                className="mb-4 flex items-start gap-2 rounded-card border border-warn/25 bg-warn/[0.06] px-3 py-2 text-xs text-moon-100"
               >
-                <AlertTriangle size={14} aria-hidden className="mt-0.5 shrink-0 text-lamp" />
+                <AlertTriangle size={14} aria-hidden className="mt-0.5 shrink-0 text-warn" />
                 <span>
                   <span className="font-semibold">{scoped.unpriced}</span> model
                   {scoped.unpriced === 1 ? "" : "s"} in this range have no pricing — reported cost
@@ -488,7 +488,7 @@ function StatTile({
         <div
           className={cn(
             "mt-0.5 truncate font-mono text-[11px]",
-            warn ? "text-lamp" : "text-moon-600",
+            warn ? "text-warn" : "text-moon-600",
           )}
         >
           {sub}

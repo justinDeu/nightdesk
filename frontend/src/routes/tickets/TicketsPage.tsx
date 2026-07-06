@@ -27,7 +27,6 @@ import { useRuns, runsApi } from "@/api/runs";
 import { useProjects } from "@/api/projects";
 import { useProfiles } from "@/api/profiles";
 import { useLabels } from "@/api/labels";
-import { ApiError } from "@/api/client";
 import type { RunOut, TicketOut } from "@/api/types";
 import { applyFilter, parseFilter, type FilterContext } from "./filterModel";
 import { useTicketActions } from "@/lib/ticketActions";
@@ -261,7 +260,7 @@ export function TicketsPage() {
         qc.invalidateQueries({ queryKey: qk.tickets.all });
         clearSelect();
       } catch (err) {
-        toast.error(err instanceof ApiError ? err.message : "Bulk action failed");
+        toast.error("Bulk action failed", { error: err });
       }
     } else if (focused) {
       single(focused);
@@ -297,7 +296,7 @@ export function TicketsPage() {
       if (hasSel) clearSelect();
       toast.success(`Sent ${drafts.length} to inbox`);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not send to inbox");
+      toast.error("Could not send to inbox", { error: err });
     }
   };
 

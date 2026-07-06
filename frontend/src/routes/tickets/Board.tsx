@@ -11,7 +11,6 @@ import type { ProjectOut, RunOut, TicketOut, TicketStatus } from "@/api/types";
 import { BoardCard } from "./BoardCard";
 import { orderComparator, type OrderBy } from "./displayModel";
 import { toast } from "@/ui/Toast";
-import { ApiError } from "@/api/client";
 import { cn } from "@/lib/cn";
 
 const COLUMNS: { status: TicketStatus; label: string }[] = [
@@ -125,7 +124,7 @@ export function Board({
         .reorder({ status: fromStatus as TicketStatus, ticket_ids: arr.map((t) => t.id) })
         .then(invalidate)
         .catch((err) => {
-          toast.error(err instanceof ApiError ? err.message : "Reorder failed");
+          toast.error("Reorder failed", { error: err });
           invalidate();
         });
       return;
@@ -146,9 +145,7 @@ export function Board({
         invalidate();
       })
       .catch((err) => {
-        toast.error(
-          err instanceof ApiError ? err.message : `Can't move to ${toStatus}`,
-        );
+        toast.error(`Can't move to ${toStatus}`, { error: err });
         invalidate();
       });
   }
