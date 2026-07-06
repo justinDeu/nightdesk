@@ -55,6 +55,14 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
   const actions = useTicketActions();
   const moves = ticketStatusMoves(ticket, actions);
 
+  // Selection / peek / keyboard-cursor all render as ONE fused edge: the card's
+  // own 1px border and the box-shadow ring share a single hue so they never read
+  // as two separate lines a pixel apart. The keyboard cursor (focused) forces the
+  // jade hue even on a failed card so its edge stays one color; failed cards
+  // otherwise carry the ember hue, everything else jade.
+  const edgeHue = outcome === "failed" && !focused ? "failed" : "lamp";
+  const emphasis = focused || selected ? "strong" : peeked ? "soft" : "none";
+
   return (
     <div
       ref={ref}
@@ -63,38 +71,28 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
       }
       data-ticket-id={ticket.id}
       className={cn(
-        "cv-card group relative shrink-0 cursor-pointer overflow-hidden rounded-card border p-3 pt-3.5",
+        "cv-card group relative shrink-0 cursor-pointer overflow-hidden rounded-card border bg-ink-900 p-3 pt-3.5",
         "shadow-[var(--shadow-raised)] transition-colors",
-        // Surface tint. Background-only so the 1px border stays uniform on every side
-        // in every state and the card never shifts/shrinks a pixel when (de)selected.
-        // Failed: a left-anchored ember wash + ember border so the whole silhouette
-        // reads warm and pops out of a column. Selected failed cards KEEP the ember
-        // wash (not the jade one) so a red card never turns green on select — the
-        // 2px selection ring below goes red to match. Selected non-failed cards take
-        // the jade wash + jade ring.
-        selected
-          ? outcome === "failed"
-            ? "wash-failed border-failed/45 bg-ink-900"
-            : "wash-selected border-ink-700 bg-ink-900"
-          : outcome === "failed"
-            ? "wash-failed border-failed/35 bg-ink-900"
-            : "border-ink-700 bg-ink-900 hover:bg-ink-800",
-        // Ring precedence (a box-shadow ring, so it never shifts geometry):
-        //  1. keyboard cursor (focused) — always the strongest, jade 2px.
-        //  2. selection — a clear 2px ring; red for failed cards, jade otherwise.
-        //  3. side-peek — a soft 1px; red for failed cards, jade otherwise, so a
-        //     peeked failed card never gets a jade halo over its ember border.
-        focused
-          ? "ring-2 ring-lamp"
-          : selected
-            ? outcome === "failed"
-              ? "ring-2 ring-failed"
-              : "ring-2 ring-lamp"
-            : peeked
-              ? outcome === "failed"
-                ? "ring-1 ring-failed/50"
-                : "ring-1 ring-lamp/50"
-              : "",
+        // Left-anchored wash (background-only, so geometry never shifts on select):
+        // failed cards keep the ember wash even when selected so a red card never
+        // turns green; a selected non-failed card gets the jade wash.
+        outcome === "failed" ? "wash-failed" : selected ? "wash-selected" : "",
+        // Fused edge = border hue + ring hue always match (see edgeHue/emphasis).
+        //  strong (selected / keyboard cursor): full-strength border + a 3px ring
+        //    in the SAME hue → one solid ~4px edge, no two-tone gap.
+        //  soft (side-peek only): a tinted border + a 1px ring in the same hue.
+        //  none: resting border (ember tint for failed, neutral otherwise).
+        emphasis === "strong"
+          ? edgeHue === "failed"
+            ? "border-failed ring-[3px] ring-failed"
+            : "border-lamp ring-[3px] ring-lamp"
+          : emphasis === "soft"
+            ? edgeHue === "failed"
+              ? "border-failed/60 ring-1 ring-failed/50"
+              : "border-lamp/55 ring-1 ring-lamp/50"
+            : outcome === "failed"
+              ? "border-failed/35"
+              : "border-ink-700 hover:bg-ink-800",
         dragging && "opacity-40",
       )}
     >
