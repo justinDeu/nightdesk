@@ -36,6 +36,71 @@ ticket_labels = Table(
 )
 
 
+class Provider(Base):
+    """A vendor identity: the pricing anchor plus the set of endpoints it owns.
+
+    Slim by design — see ``docs/design/providers-and-endpoints.md``. Credentials,
+    protocol, and model menus live on :class:`ProviderEndpoint`, not here, because
+    one vendor's surfaces can authenticate differently (Anthropic: API key vs
+    subscription file; OpenAI: API key vs Codex OAuth).
+    """
+
+    __tablename__ = "providers"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    # Canonical pricing key: zai, openrouter, anthropic, openai, ollama, custom.
+    # Distinct from `name` (the user's label) and from any endpoint's protocol.
+    vendor: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    endpoints: Mapped[list["ProviderEndpoint"]] = relationship(
+        back_populates="provider", cascade="all, delete-orphan",
+    )
+
+
+class ProviderEndpoint(Base):
+    """One API surface a :class:`Provider` exposes.
+
+    Deliberately no ``UNIQUE(provider_id, protocol_kind)`` — real vendors expose
+    two surfaces on one protocol (ZAI's coding-plan vs pay-as-you-go base URLs).
+    ``credential`` and ``extra`` are Fernet-encrypted (same scheme as
+    ``Profile.claude_credentials``); ``extra`` may carry secret routing headers.
+    """
+
+    __tablename__ = "provider_endpoints"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    provider_id: Mapped[str] = mapped_column(
+        ForeignKey("providers.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    label: Mapped[str] = mapped_column(String, default="", nullable=False)
+    # anthropic | anthropic_compat | openai | openai_compat | openai_codex |
+    # openrouter | ollama
+    protocol_kind: Mapped[str] = mapped_column(String, nullable=False)
+    # Null where the protocol implies it (openai_codex).
+    base_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # api_key | oauth_file | subscription_file | env_var | none
+    credential_source: Mapped[str] = mapped_column(String, default="api_key", nullable=False)
+    # Encrypted: the secret itself (api_key), or a reference to it (an env var
+    # name for env_var, a filesystem path for oauth_file/subscription_file).
+    credential: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Harness code exclusively allowed to use this endpoint (e.g. a Claude
+    # subscription endpoint locks to "claude_sdk" per Anthropic's terms), or None.
+    harness_lock: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    default_model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    models: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    models_pulled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Encrypted JSON: vendor-quirk overrides (headers, env, options), interpreted
+    # per protocol by the renderer. May contain secrets (routing tokens).
+    extra: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    provider: Mapped["Provider"] = relationship(back_populates="endpoints")
+
+
 class Profile(Base):
     __tablename__ = "profiles"
 
@@ -63,6 +128,13 @@ class Profile(Base):
     cc_settings_passthrough: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     # Run-token scopes this profile grants beyond the self-scope defaults.
     run_token_scopes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    # Optional primary endpoint reference. When set the worker uses the
+    # resolved endpoint in preference to the legacy claude_credentials blob.
+    endpoint_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("provider_endpoints.id"), nullable=True,
+    )
+    # Backend-specific extra configuration forwarded to the launch context.
+    backend_config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -305,6 +377,20 @@ class Run(Base):
     # the conversation (`claude --resume <session_id>` / SDK resume=).
     session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     sandbox_tool_paths: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # Which backend produced this run, and against which endpoint. NULL on
+    # rows created before multi-backend support; display falls back to the
+    # claude_sdk defaults.
+    backend: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    endpoint_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("provider_endpoints.id"), nullable=True,
+    )
+    # Backend-shaped resume handle (e.g. {"session_id": ...} for claude,
+    # {"session_id": ..., "data_dir": ...} for opencode). Opaque to the worker.
+    session_ref: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # Prices in effect when this run launched, keyed by model id. Computed
+    # once at run finish; never re-derived from current prices. See
+    # docs/design/providers-and-endpoints.md#pricing-integration.
+    pricing_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     ticket: Mapped["Ticket"] = relationship(back_populates="runs", foreign_keys=[ticket_id])
     conversation: Mapped[Optional["Conversation"]] = relationship(
@@ -399,6 +485,8 @@ class ConfigRow(Base):
     max_run_duration_seconds: Mapped[int] = mapped_column(Integer, default=86400, nullable=False)
     run_token_grace_seconds: Mapped[int] = mapped_column(Integer, default=300, nullable=False)
     claude_binary_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Empty/NULL means "auto-discover" (PATH, then ~/.opencode/bin).
+    opencode_binary_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     session_cookie_ttl_seconds: Mapped[int] = mapped_column(
         Integer, default=60 * 60 * 24 * 30, nullable=False,
     )
