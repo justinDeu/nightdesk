@@ -214,7 +214,7 @@ export function DeskPage() {
             </span>
           </Link>
           {needs.length > 0 && (
-            <span className="flex items-center gap-1.5 text-xs text-moon-600">
+            <span className="hidden items-center gap-1.5 text-xs text-moon-600 md:flex">
               <Kbd>j</Kbd>
               <Kbd>k</Kbd> move
               <Kbd>o</Kbd> open
@@ -340,15 +340,29 @@ const NeedsRow = forwardRef<
         </span>
       </a>
       <PriorityChip value={ticket.priority} hideNone />
-      <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100">
-        <Button size="sm" variant="ghost" onClick={onOpen}>
+      <div className="flex shrink-0 items-center gap-1 opacity-70 group-hover:opacity-100">
+        {/* Open is redundant on a phone (tapping the title opens); requeue and
+            archive collapse to icon-only below sm so the row never overflows. */}
+        <Button size="sm" variant="ghost" onClick={onOpen} className="hidden sm:inline-flex">
           Open
         </Button>
-        <Button size="sm" variant="subtle" leadingIcon={<RotateCcw size={13} />} onClick={onRequeue}>
-          Requeue
+        <Button
+          size="sm"
+          variant="subtle"
+          leadingIcon={<RotateCcw size={13} />}
+          onClick={onRequeue}
+          aria-label="Requeue"
+        >
+          <span className="hidden sm:inline">Requeue</span>
         </Button>
-        <Button size="sm" variant="ghost" leadingIcon={<Archive size={13} />} onClick={onArchive}>
-          Archive
+        <Button
+          size="sm"
+          variant="ghost"
+          leadingIcon={<Archive size={13} />}
+          onClick={onArchive}
+          aria-label="Archive"
+        >
+          <span className="hidden sm:inline">Archive</span>
         </Button>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import {
   Bell,
   CalendarClock,
+  ChevronLeft,
   FolderGit2,
   Hexagon,
   Layers,
@@ -49,6 +50,11 @@ export function SettingsPage() {
   } catch {
     section = undefined;
   }
+  // A section is genuinely selected only when the URL names a valid one. On a
+  // phone that drives a list → detail flow: no section = the section list, a
+  // section = the detail with a back link. At md+ both panes show together and
+  // the first section is the default.
+  const hasSection = !!section && SECTIONS.some((s) => s.slug === section);
   const active = SECTIONS.find((s) => s.slug === section) ?? SECTIONS[0];
   const ActiveComponent = active.component;
 
@@ -56,7 +62,11 @@ export function SettingsPage() {
     <div className="flex min-h-[calc(100vh-3.5rem)] w-full">
       <nav
         aria-label="Settings sections"
-        className="sticky top-0 h-[calc(100vh-3.5rem)] w-[210px] shrink-0 overflow-y-auto border-r border-ink-700/70 py-6 pl-5 pr-4"
+        className={cn(
+          "shrink-0 overflow-y-auto border-r border-ink-700/70 py-6 pl-5 pr-4 md:sticky md:top-0 md:h-[calc(100vh-3.5rem)] md:w-[210px]",
+          // Phone: the list is a full-width page; hide it once a section opens.
+          hasSection ? "hidden md:block" : "w-full",
+        )}
       >
         <div className="mb-4 flex items-center gap-2 px-2.5 text-moon-400">
           <Settings2 size={15} />
@@ -74,7 +84,7 @@ export function SettingsPage() {
                 to="/settings/$section"
                 params={{ section: s.slug }}
                 className={cn(
-                  "flex items-center gap-2.5 rounded-control px-2.5 py-1.5 text-sm transition-colors",
+                  "flex min-h-[40px] items-center gap-2.5 rounded-control px-2.5 py-1.5 text-sm transition-colors md:min-h-0",
                   isActive
                     ? "bg-ink-800 text-moon-100"
                     : "text-moon-400 hover:bg-ink-800/60 hover:text-moon-100",
@@ -91,7 +101,19 @@ export function SettingsPage() {
         </div>
       </nav>
 
-      <div className="min-w-0 flex-1 px-8 py-8 2xl:px-10">
+      <div
+        className={cn(
+          "min-w-0 flex-1 px-5 py-6 sm:px-8 sm:py-8 2xl:px-10",
+          // Phone: the detail only shows once a section is chosen.
+          hasSection ? "block" : "hidden md:block",
+        )}
+      >
+        <Link
+          to="/settings"
+          className="mb-4 inline-flex items-center gap-1 text-sm text-moon-400 hover:text-moon-100 md:hidden"
+        >
+          <ChevronLeft size={15} /> Settings
+        </Link>
         <ActiveComponent />
       </div>
     </div>

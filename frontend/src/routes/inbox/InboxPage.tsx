@@ -186,7 +186,7 @@ export function InboxPage() {
         )}
       </div>
 
-      <p className="mt-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-moon-600">
+      <p className="mt-3 hidden shrink-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-moon-600 md:flex">
         <span>
           <Kbd>j</Kbd> <Kbd>k</Kbd> move
         </span>

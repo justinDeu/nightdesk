@@ -1,39 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import {
-  Archive,
-  BarChart3,
-  CalendarClock,
-  Inbox,
-  LayoutDashboard,
-  ListTodo,
-  LogOut,
-  PanelLeftClose,
-  PanelLeft,
-  Settings,
-} from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { LogOut, PanelLeftClose, PanelLeft } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Tooltip } from "@/ui/Tooltip";
-import { logout } from "@/api/auth";
-
-interface NavEntry {
-  to: string;
-  label: string;
-  icon: LucideIcon;
-  /** exact match only (the Desk root) */
-  exact?: boolean;
-}
-
-const ENTRIES: NavEntry[] = [
-  { to: "/", label: "Desk", icon: LayoutDashboard, exact: true },
-  { to: "/tickets", label: "Tickets", icon: ListTodo },
-  { to: "/inbox", label: "Inbox", icon: Inbox },
-  { to: "/scheduled", label: "Scheduled", icon: CalendarClock },
-  { to: "/analytics", label: "Analytics", icon: BarChart3 },
-  { to: "/archive", label: "Archive", icon: Archive },
-  { to: "/settings", label: "Settings", icon: Settings },
-];
+import { ENTRIES, signOut } from "./navEntries";
 
 const COLLAPSE_KEY = "nightdesk:nav-collapsed";
 
@@ -56,19 +26,12 @@ export function SideNav() {
     return () => window.removeEventListener("nightdesk:toggle-sidebar", toggle);
   }, []);
 
-  const signOut = async () => {
-    await logout();
-    // Hard redirect so all in-memory query state is dropped and the session
-    // cookie's absence is re-evaluated by the login route. BASE_URL is "/" in
-    // dev and "/app/" in prod.
-    window.location.assign(`${import.meta.env.BASE_URL}login`);
-  };
-
   return (
     <nav
       aria-label="Primary"
       className={cn(
-        "flex h-full flex-col border-r border-ink-700 bg-ink-900 transition-[width] duration-150",
+        // Desktop-only rail; below md the nav lives in the TopStrip drawer.
+        "hidden h-full flex-col border-r border-ink-700 bg-ink-900 transition-[width] duration-150 md:flex",
         collapsed ? "w-[60px]" : "w-[212px]",
       )}
     >

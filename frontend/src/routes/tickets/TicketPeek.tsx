@@ -63,7 +63,13 @@ export function TicketPeek({
 
   return (
     <aside
-      className="fade-in fixed bottom-3 right-0 top-14 z-30 flex w-[440px] max-w-[92vw] flex-col overflow-hidden rounded-bl-card border-b border-l border-ink-700 bg-ink-900 shadow-[var(--shadow-pop)]"
+      className={cn(
+        "fade-in fixed z-40 flex flex-col overflow-hidden border-ink-700 bg-ink-900 shadow-[var(--shadow-pop)]",
+        // Phone: a full-screen overlay so the panel is readable instead of a
+        // squeezed side rail. md+: the original bottom-right rail.
+        "inset-0 w-full",
+        "md:inset-auto md:bottom-3 md:right-0 md:top-14 md:w-[440px] md:max-w-[92vw] md:rounded-bl-card md:border-b md:border-l",
+      )}
       aria-label="Ticket preview"
     >
       {/* Header */}
@@ -96,7 +102,7 @@ export function TicketPeek({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4">
         <button onClick={onOpenFull} className="block w-full text-left">
           <h2 className="font-display text-base font-semibold leading-snug text-moon-100 hover:text-lamp">
             {ticket.title}

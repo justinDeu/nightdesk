@@ -125,6 +125,15 @@
   }
 }
 
+@keyframes drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
 @keyframes overlay-in {
   from {
     opacity: 0;
@@ -189,6 +198,19 @@
   input[type="date"]::-webkit-calendar-picker-indicator:hover,
   input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
     opacity: 0.95;
+  }
+
+  /* Touch hygiene: kill the 300ms tap delay and double-tap zoom on the app's
+     interactive controls so taps register instantly on a phone. */
+  button,
+  a,
+  [role="button"],
+  input,
+  select,
+  textarea,
+  summary,
+  label {
+    touch-action: manipulation;
   }
 
   /* One consistent, visible focus ring everywhere. */
@@ -293,13 +315,17 @@
   .overlay-in {
     animation: overlay-in 140ms ease-out;
   }
+  .drawer-in {
+    animation: drawer-in 180ms ease-out;
+  }
 
   @media (prefers-reduced-motion: reduce) {
     .dawn-edge,
     .dawn-text,
     .pop-in,
     .fade-in,
-    .overlay-in {
+    .overlay-in,
+    .drawer-in {
       animation: none;
       background-position: 0% 50%;
     }

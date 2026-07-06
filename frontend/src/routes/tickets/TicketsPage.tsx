@@ -383,8 +383,9 @@ export function TicketsPage() {
           leadingIcon={<Plus size={14} />}
           onClick={() => openComposer()}
           className="shrink-0"
+          aria-label="New ticket"
         >
-          New ticket
+          <span className="hidden sm:inline">New ticket</span>
         </Button>
       </header>
 
