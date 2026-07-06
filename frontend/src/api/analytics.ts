@@ -26,6 +26,9 @@ export interface TokenBucket {
   cache_hit_rate: number;
   run_count: number;
   cost: number;
+  // Runs in this bucket with no stored pricing snapshot, repriced at current
+  // prices rather than their historical cost. Absent on older API builds.
+  estimated_runs?: number;
 }
 
 export interface AnalyticsSummary {
@@ -78,6 +81,10 @@ export interface ProjectRollupRow {
   run_count: number;
   cost: number;
   success_rate: number;
+  // Count of this project's runs priced by repricing rather than a stamped
+  // snapshot, and whether any are (see TokenBucket.estimated_runs).
+  estimated_runs?: number;
+  estimated?: boolean;
 }
 
 export interface TokensResponse {
@@ -125,12 +132,17 @@ export interface SpendModelRow {
   cache_hit_rate: number;
   run_count: number;
   cost: number;
+  // See TokenBucket.estimated_runs; `estimated` is true iff estimated_runs > 0.
+  estimated_runs?: number;
+  estimated?: boolean;
 }
 export interface SpendProfileRow {
   name: string;
   total_tokens: number;
   run_count: number;
   cost: number;
+  estimated_runs?: number;
+  estimated?: boolean;
 }
 export interface SpendTicketRow {
   ticket_id: string;
@@ -138,6 +150,8 @@ export interface SpendTicketRow {
   total_tokens: number;
   run_count: number;
   cost: number;
+  estimated_runs?: number;
+  estimated?: boolean;
 }
 export interface SpendResponse {
   range: string;

@@ -17,18 +17,19 @@ import {
 import { toast, describeError } from "@/ui/Toast";
 import { profilesApi, useProfiles } from "@/api/profiles";
 import { profileTransferApi } from "@/api/profileTransfer";
+import { useBackends } from "@/api/backends";
 import { qk } from "@/api/keys";
 import { cn } from "@/lib/cn";
 import { ProfileEditor } from "./ProfileEditor";
 
-const BACKEND_LABEL: Record<string, string> = {
-  claude_sdk: "Claude Code",
-  omp_rpc: "OMP / RPC",
-};
-
 export function ProfilesSection() {
   const qc = useQueryClient();
   const profiles = useProfiles();
+  const backends = useBackends();
+  const backendLabel = useMemo(
+    () => Object.fromEntries((backends.data ?? []).map((b) => [b.code, b.label])),
+    [backends.data],
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [importKind, setImportKind] = useState<"native" | "cc" | null>(null);
@@ -102,7 +103,7 @@ export function ProfilesSection() {
                   </div>
                   <div className="mt-1 flex items-center gap-1.5">
                     <Badge tone="neutral" mono>
-                      {BACKEND_LABEL[p.backend] ?? p.backend}
+                      {backendLabel[p.backend] ?? p.backend}
                     </Badge>
                     <span className="text-[11px] text-moon-600">net {p.network_mode}</span>
                   </div>
@@ -173,20 +174,34 @@ function CreateProfileDialog({
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
+  const backends = useBackends();
+  const list = backends.data ?? [];
   const [name, setName] = useState("");
   const [backend, setBackend] = useState("claude_sdk");
   const [busy, setBusy] = useState(false);
+
+  // Once the backend catalog loads, default to the first enabled backend
+  // rather than assuming claude_sdk exists or is selectable.
+  useEffect(() => {
+    if (list.length === 0) return;
+    if (list.some((b) => b.code === backend && b.enabled)) return;
+    const firstEnabled = list.find((b) => b.enabled);
+    if (firstEnabled) setBackend(firstEnabled.code);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list.length]);
 
   async function create() {
     if (!name.trim()) return;
     setBusy(true);
     try {
+      const usesClaudeAuth = list.find((b) => b.code === backend)?.group_keys.includes("claude_auth") ?? false;
       const created = await profilesApi.create({
         name: name.trim(),
         backend,
-        // claude_sdk requires an auth source at create time; inherit is the
-        // zero-config default. Non-Claude backends ignore credentials.
-        ...(backend === "claude_sdk" ? { claude_credentials: { source: "inherit" } } : {}),
+        // Backends that consume the claude_auth field group require a source
+        // at create time; inherit is the zero-config default. Others ignore
+        // credentials entirely.
+        ...(usesClaudeAuth ? { claude_credentials: { source: "inherit" } } : {}),
       });
       toast.success("Profile created", { description: "Fill in the details, then save." });
       onCreated(created.id);
@@ -221,8 +236,12 @@ function CreateProfileDialog({
         </Field>
         <Field label="Backend">
           <Select value={backend} onChange={(e) => setBackend(e.target.value)}>
-            <option value="claude_sdk">Claude Code</option>
-            <option value="omp_rpc">OMP / RPC</option>
+            {list.map((b) => (
+              <option key={b.code} value={b.code} disabled={!b.enabled}>
+                {b.label}
+                {!b.enabled ? " (not selectable)" : ""}
+              </option>
+            ))}
           </Select>
         </Field>
       </div>

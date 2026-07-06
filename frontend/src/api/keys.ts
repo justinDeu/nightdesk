@@ -20,6 +20,12 @@ export const qk = {
     all: ["profiles"] as const,
     detail: (id: string) => ["profiles", "detail", id] as const,
   },
+  providers: {
+    all: ["providers"] as const,
+    detail: (id: string) => ["providers", "detail", id] as const,
+    catalog: ["providers", "catalog"] as const,
+  },
+  backends: ["backends"] as const,
   labels: ["labels"] as const,
   config: ["config"] as const,
   windows: ["config", "windows"] as const,

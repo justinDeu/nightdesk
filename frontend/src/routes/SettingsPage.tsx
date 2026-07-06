@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import {
   Bell,
+  Cable,
   CalendarClock,
   FolderGit2,
   Hexagon,
@@ -20,6 +21,7 @@ import { NotificationsSection } from "@/routes/settings/NotificationsSection";
 import { LabelsSection } from "@/routes/settings/LabelsSection";
 import { ProjectsSection } from "@/routes/settings/ProjectsSection";
 import { ProfilesSection } from "@/routes/settings/ProfilesSection";
+import { ProvidersSection } from "@/routes/settings/ProvidersSection";
 import { ToolsetsSection } from "@/routes/settings/ToolsetsSection";
 import { DiagnosticsSection } from "@/routes/settings/DiagnosticsSection";
 
@@ -32,7 +34,10 @@ interface SectionMeta {
 
 const SECTIONS: SectionMeta[] = [
   { slug: "scheduling", label: "Scheduling", icon: CalendarClock, component: SchedulingSection },
-  { slug: "claude", label: "Claude runtime", icon: Terminal, component: ClaudeSection },
+  // Slug stays "claude" for URL stability even though the section now covers
+  // every harness (Claude Code + opencode) — see ClaudeSection.tsx.
+  { slug: "claude", label: "Harnesses", icon: Terminal, component: ClaudeSection },
+  { slug: "providers", label: "Providers", icon: Cable, component: ProvidersSection },
   { slug: "worktrees", label: "Worktrees", icon: FolderGit2, component: WorktreesSection },
   { slug: "notifications", label: "Notifications", icon: Bell, component: NotificationsSection },
   { slug: "labels", label: "Labels", icon: Tag, component: LabelsSection },

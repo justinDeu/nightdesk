@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { formatTokens, formatUsd } from "@/lib/status";
 import { cn } from "@/lib/cn";
+import { Tooltip as UiTooltip } from "@/ui/Tooltip";
 
 /**
  * Recharts styled to the dusk-console tokens. No default palette: series are
@@ -387,6 +388,14 @@ export interface BreakdownRow {
   cost: number;
   runs: number;
   unpriced?: boolean;
+  // True when some of this row's runs have no stored pricing snapshot and
+  // were repriced at current prices; estimatedRuns is that count.
+  estimated?: boolean;
+  estimatedRuns?: number;
+}
+
+function estimatedTooltip(n: number): string {
+  return `Includes ${n} run${n === 1 ? "" : "s"} estimated at current prices`;
 }
 
 export function BreakdownTable({
@@ -427,13 +436,22 @@ export function BreakdownTable({
           <span className="w-14 shrink-0 text-right font-mono text-[11px] text-moon-400">
             {formatTokens(r.tokens)}
           </span>
-          <span
-            className={cn(
-              "w-16 shrink-0 text-right font-mono text-[11px]",
-              r.unpriced ? "text-moon-600" : "text-moon-100",
+          <span className="flex w-20 shrink-0 items-center justify-end gap-1">
+            <span
+              className={cn(
+                "font-mono text-[11px]",
+                r.unpriced ? "text-moon-600" : "text-moon-100",
+              )}
+            >
+              {r.unpriced ? "—" : formatUsd(r.cost)}
+            </span>
+            {!r.unpriced && r.estimated && (
+              <UiTooltip content={estimatedTooltip(r.estimatedRuns ?? 0)}>
+                <span className="cursor-default font-mono text-[9px] uppercase tracking-wide text-moon-600">
+                  est.
+                </span>
+              </UiTooltip>
             )}
-          >
-            {r.unpriced ? "—" : formatUsd(r.cost)}
           </span>
         </div>
       ))}

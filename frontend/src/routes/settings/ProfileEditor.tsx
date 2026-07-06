@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Copy, Download, KeyRound, ShieldCheck, Trash2 } from "lucide-react";
+import { Copy, Download, KeyRound, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { Button } from "@/ui/Button";
 import { IconButton } from "@/ui/IconButton";
 import { Input, Textarea, Field } from "@/ui/Input";
 import { Select } from "@/ui/Select";
@@ -8,18 +9,24 @@ import { Badge } from "@/ui/Badge";
 import { toast, describeError } from "@/ui/Toast";
 import { profilesApi } from "@/api/profiles";
 import { profileTransferApi } from "@/api/profileTransfer";
+import { useProviders } from "@/api/providers";
+import { useBackends } from "@/api/backends";
 import { qk } from "@/api/keys";
-import type { ProfileCreate, ProfileOut } from "@/api/types";
+import type {
+  BackendConfigAgent,
+  BackendOut,
+  EndpointOut,
+  ModelSlotOut,
+  ProfileCreate,
+  ProfileOut,
+  ProviderOut,
+} from "@/api/types";
 import { SettingsCard } from "./parts/SettingsSection";
 import { SaveBar, useEditableForm } from "./parts/SaveBar";
 import { ListEditor } from "./parts/ListEditor";
 import { KeyValueEditor, type KvPair } from "./parts/KeyValueEditor";
 import { ConfirmDialog } from "./parts/ConfirmDialog";
 
-const BACKENDS = [
-  { value: "claude_sdk", label: "Claude Code" },
-  { value: "omp_rpc", label: "OMP / RPC" },
-];
 const PERMISSION_MODES = [
   { value: "", label: "Inherit (prompt)" },
   { value: "default", label: "Default (prompt)" },
@@ -31,11 +38,38 @@ const CRED_SOURCES = [
   { value: "api_key", label: "API key (ANTHROPIC_API_KEY)" },
   { value: "auth_token", label: "Auth token (ANTHROPIC_AUTH_TOKEN)" },
 ];
-const MODEL_SUGGESTIONS = ["sonnet", "opus", "haiku"];
 
-/** Backends that consume Claude credentials — only these show the auth group. */
-function usesClaudeAuth(backend: string) {
-  return backend === "claude_sdk";
+/** ``compatible(harness, endpoint) = protocol intersection AND lock match``.
+ *  Client-side mirror of ``nightdesk.domain.providers.endpoint_compatible``;
+ *  the server re-checks on save, this only drives UI resolution. See
+ *  docs/design/providers-and-endpoints.md ("Compatibility is protocol
+ *  intersection plus the lock"). */
+function endpointCompatible(backend: BackendOut, ep: EndpointOut): boolean {
+  if (!backend.protocol_kinds.includes(ep.protocol_kind)) return false;
+  if (ep.harness_lock && ep.harness_lock !== backend.code) return false;
+  return true;
+}
+
+function compatibleEndpoints(backend: BackendOut | null, provider: ProviderOut | null): EndpointOut[] {
+  if (!backend || !provider) return [];
+  return provider.endpoints.filter((ep) => endpointCompatible(backend, ep));
+}
+
+/** ``*_compat`` endpoints need every model position pinned or CC's own alias
+ *  escalation falls back to a Claude model the endpoint can't serve — see
+ *  "The CC alias-escape pitfall" in the design doc. First-party endpoints
+ *  (and profiles with no endpoint yet) default to unpinned. */
+function isCompatProtocol(ep: EndpointOut | null): boolean {
+  return !!ep && ep.protocol_kind.endsWith("_compat");
+}
+
+function offMenuBadge(value: string, ep: EndpointOut | null) {
+  if (!value.trim() || !ep || ep.models.length === 0 || ep.models.includes(value)) return null;
+  return (
+    <Badge tone="lamp" mono>
+      off-menu
+    </Badge>
+  );
 }
 
 interface ProfileForm {
@@ -57,6 +91,8 @@ interface ProfileForm {
   cred_value: string;
   env_replace: boolean;
   env_pairs: KvPair[];
+  endpoint_id: string | null;
+  backend_config: Record<string, unknown>;
 }
 
 function buildForm(p: ProfileOut): ProfileForm {
@@ -79,7 +115,100 @@ function buildForm(p: ProfileOut): ProfileForm {
     cred_value: "",
     env_replace: false,
     env_pairs: [],
+    endpoint_id: p.endpoint_id ?? null,
+    backend_config: JSON.parse(JSON.stringify(p.backend_config ?? {})),
   };
+}
+
+/** Rows editor for a multi_endpoint backend's ``backend_config.agents[]``
+ *  (opencode). Each row maps 1:1 onto an agent: name, model, an endpoint
+ *  picker that defaults to the profile's primary endpoint, tools, and an
+ *  optional prompt. */
+function AgentsEditor({
+  agents,
+  onChange,
+  backend,
+  providers,
+}: {
+  agents: BackendConfigAgent[];
+  onChange: (next: BackendConfigAgent[]) => void;
+  backend: BackendOut;
+  providers: ProviderOut[];
+}) {
+  const endpointOptions = useMemo(
+    () =>
+      providers.flatMap((p) =>
+        p.endpoints
+          .filter((ep) => endpointCompatible(backend, ep))
+          .map((ep) => ({ id: ep.id, label: `${p.name} · ${ep.label || ep.protocol_kind}` })),
+      ),
+    [providers, backend],
+  );
+
+  function update(i: number, patch: Partial<BackendConfigAgent>) {
+    onChange(agents.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
+  }
+  function remove(i: number) {
+    onChange(agents.filter((_, idx) => idx !== i));
+  }
+  function add() {
+    onChange([...agents, { name: `agent${agents.length + 1}`, model: "", endpoint_id: null, tools: [], prompt: "" }]);
+  }
+
+  return (
+    <div className="space-y-3">
+      {agents.map((agent, i) => (
+        <div key={i} className="space-y-3 rounded-control border border-ink-700 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <Input
+              mono
+              className="max-w-[12rem]"
+              value={agent.name}
+              onChange={(e) => update(i, { name: e.target.value })}
+            />
+            <IconButton label="Remove agent" icon={<Trash2 size={14} />} onClick={() => remove(i)} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Model">
+              <Input mono value={agent.model ?? ""} onChange={(e) => update(i, { model: e.target.value })} />
+            </Field>
+            <Field label="Endpoint" hint="Defaults to the profile's primary endpoint.">
+              <Select
+                value={agent.endpoint_id ?? ""}
+                onChange={(e) => update(i, { endpoint_id: e.target.value || null })}
+              >
+                <option value="">(same as primary)</option>
+                {endpointOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <Field label="Tools">
+            <ListEditor
+              mono={false}
+              value={agent.tools ?? []}
+              onChange={(v) => update(i, { tools: v })}
+              placeholder="webfetch"
+              emptyHint="All tools allowed."
+            />
+          </Field>
+          <Field label="System prompt" hint="Optional.">
+            <Textarea
+              className="min-h-[72px]"
+              value={agent.prompt ?? ""}
+              onChange={(e) => update(i, { prompt: e.target.value })}
+            />
+          </Field>
+        </div>
+      ))}
+      <Button variant="ghost" size="sm" leadingIcon={<Plus size={13} />} onClick={add}>
+        Add agent
+      </Button>
+    </div>
+  );
 }
 
 export function ProfileEditor({
@@ -92,10 +221,27 @@ export function ProfileEditor({
   onCopied: (id: string) => void;
 }) {
   const qc = useQueryClient();
+  const backendsQ = useBackends();
+  const providersQ = useProviders();
+  const backends = useMemo(() => backendsQ.data ?? [], [backendsQ.data]);
+  const providers = useMemo(() => providersQ.data ?? [], [providersQ.data]);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
+  const [customizeOverride, setCustomizeOverride] = useState<boolean | null>(null);
+  // Gates the resolution effect below until the provider seeded from
+  // profile.endpoint_id has actually landed in state. Without this, the
+  // resolution effect (which also runs on the same initial commit, before
+  // setSelectedProviderId's update is visible) sees a transient provider=null
+  // and wipes a perfectly valid endpoint_id — stranding the radio selection
+  // and diverging `form` from the useEditableForm baseline into a spurious
+  // dirty state. Plain state (not a ref) matters here: it updates in the same
+  // batched re-render as selectedProviderId, so the two are only ever read
+  // together, never mid-transition.
+  const [providerHydrated, setProviderHydrated] = useState(false);
 
   const { form, setForm, dirty, discard, commit } = useEditableForm<ProfileOut, ProfileForm>(
     profile,
@@ -103,14 +249,108 @@ export function ProfileEditor({
     profile.id + profile.updated_at,
   );
 
+  const profileKey = profile.id + profile.updated_at;
+
+  // Re-seed the provider selection and the customize-toggle override whenever
+  // a different profile (or a fresh save) loads — otherwise a previous
+  // profile's UI state would bleed into the next one. Waits for the
+  // providers query so a fresh mount doesn't seed "no provider" before the
+  // list has even loaded.
+  useEffect(() => {
+    setCustomizeOverride(null);
+    setProviderHydrated(false);
+    if (!providersQ.isSuccess) return;
+    setSelectedProviderId(
+      providers.find((p) => p.endpoints.some((e) => e.id === profile.endpoint_id))?.id ?? null,
+    );
+    setProviderHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileKey, providersQ.isSuccess, providers]);
+
+  const backend = backends.find((b) => b.code === form?.backend) ?? null;
+  const provider = providers.find((p) => p.id === selectedProviderId) ?? null;
+  const compatible = useMemo(() => compatibleEndpoints(backend, provider), [backend, provider]);
+  const allEndpoints = useMemo(
+    () => providers.flatMap((p) => p.endpoints),
+    [providers],
+  );
+  const selectedEndpoint = allEndpoints.find((e) => e.id === form?.endpoint_id) ?? null;
+
+  // Resolve the primary endpoint whenever the backend or the chosen provider
+  // changes: auto-select on a single match, block on none, otherwise let the
+  // radio list below decide. Also clears a stale endpoint_id after a backend
+  // switch that no longer passes the compatibility gate. Gated on
+  // providerHydrated so this never runs against the pre-hydration transient
+  // state described above — a freshly loaded profile's endpoint_id is left
+  // untouched as long as it still passes the compatibility gate.
+  useEffect(() => {
+    if (!form || !backend || !providerHydrated) return;
+    if (!provider) {
+      if (form.endpoint_id) setForm((f) => ({ ...f, endpoint_id: null }));
+      return;
+    }
+    if (compatible.length === 1) {
+      if (form.endpoint_id !== compatible[0].id) {
+        setForm((f) => ({ ...f, endpoint_id: compatible[0].id }));
+      }
+    } else if (compatible.length === 0) {
+      if (form.endpoint_id) setForm((f) => ({ ...f, endpoint_id: null }));
+    } else if (form.endpoint_id && !compatible.some((e) => e.id === form.endpoint_id)) {
+      setForm((f) => ({ ...f, endpoint_id: null }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backend?.code, provider?.id, compatible.map((e) => e.id).join(","), providerHydrated]);
+
   if (!form) return null;
   const set = <K extends keyof ProfileForm>(k: K, v: ProfileForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  const staticSlots: ModelSlotOut[] = backend?.model_slots ?? [];
+  const isCompat = isCompatProtocol(selectedEndpoint);
+  const hasSlotOverrides = staticSlots.some((s) => {
+    const v = form.backend_config[s.name];
+    return typeof v === "string" && v.trim() !== "";
+  });
+  const customize = customizeOverride ?? hasSlotOverrides;
+  const datalistId = `model-menu-${form.endpoint_id ?? "none"}`;
+  const agents = (form.backend_config.agents as BackendConfigAgent[] | undefined) ?? [];
+
+  function setCustomize(next: boolean) {
+    setCustomizeOverride(next);
+    if (!next) {
+      setForm((f) => {
+        const cfg = { ...f.backend_config };
+        for (const s of staticSlots) delete cfg[s.name];
+        return { ...f, backend_config: cfg };
+      });
+    }
+  }
+
+  function setSlotOverride(name: string, value: string) {
+    setForm((f) => {
+      const cfg = { ...f.backend_config };
+      if (value.trim()) cfg[name] = value;
+      else delete cfg[name];
+      return { ...f, backend_config: cfg };
+    });
+  }
+
+  function setAgents(next: BackendConfigAgent[]) {
+    setForm((f) => ({ ...f, backend_config: { ...f.backend_config, agents: next } }));
+  }
 
   async function save() {
     if (!form) return;
     if (!form.name.trim()) {
       setError("Name is required.");
+      return;
+    }
+    if (provider && compatible.length === 0) {
+      setError(`No endpoint on “${provider.name}” is compatible with ${backend?.label ?? form.backend}.`);
+      return;
+    }
+    if (backend?.requires_provider && !form.endpoint_id) {
+      setError(`${backend.label} requires a provider endpoint before it can run.`);
       return;
     }
     setSaving(true);
@@ -130,8 +370,10 @@ export function ProfileEditor({
         network_allowlist: form.network_allowlist,
         system_prompt: form.system_prompt.trim() || null,
         run_token_scopes: form.run_token_scopes,
+        endpoint_id: form.endpoint_id,
+        backend_config: form.backend_config,
       };
-      if (usesClaudeAuth(form.backend)) {
+      if (backend?.group_keys.includes("claude_auth")) {
         // Omit value unless the user typed one: env-based sources keep the
         // existing secret (rotation semantics); inherit needs no value.
         body.claude_credentials = {
@@ -149,10 +391,16 @@ export function ProfileEditor({
         }
         body.env = env;
       }
-      await profilesApi.update(profile.id, body);
+      const saved = await profilesApi.update(profile.id, body);
       await qc.invalidateQueries({ queryKey: qk.profiles.all });
       commit();
-      toast.success("Profile saved");
+      if (saved.warnings.length > 0) {
+        // No dedicated "warning" toast variant — these are non-blocking, so
+        // `info` (not `error`) is the right severity.
+        for (const w of saved.warnings) toast.info(w);
+      } else {
+        toast.success("Profile saved");
+      }
     } catch (err) {
       setError(describeError(err));
       toast.error("Could not save profile", { error: err });
@@ -206,7 +454,10 @@ export function ProfileEditor({
     }
   }
 
-  const showAuth = usesClaudeAuth(form.backend);
+  const showAuth = backend?.group_keys.includes("claude_auth") ?? false;
+  const showPermissionMode = backend?.group_keys.includes("permission_mode") ?? false;
+  const showProvider = backend?.group_keys.includes("provider") ?? false;
+  const showModels = staticSlots.length > 0;
   const secretOnFile = profile.claude_credentials?.value_set;
 
   return (
@@ -218,8 +469,13 @@ export function ProfileEditor({
               {form.name || "Untitled profile"}
             </h2>
             <Badge tone="neutral" mono>
-              {BACKENDS.find((b) => b.value === form.backend)?.label ?? form.backend}
+              {backend?.label ?? form.backend}
             </Badge>
+            {backend && !backend.executable && (
+              <Badge tone="failed" mono>
+                not yet wired
+              </Badge>
+            )}
           </div>
           <p className="mt-0.5 font-mono text-xs text-moon-600">{profile.id}</p>
         </div>
@@ -245,9 +501,10 @@ export function ProfileEditor({
               </Field>
               <Field label="Backend">
                 <Select value={form.backend} onChange={(e) => set("backend", e.target.value)}>
-                  {BACKENDS.map((b) => (
-                    <option key={b.value} value={b.value}>
+                  {backends.map((b) => (
+                    <option key={b.code} value={b.code} disabled={!b.enabled}>
                       {b.label}
+                      {!b.enabled ? " (not selectable)" : ""}
                     </option>
                   ))}
                 </Select>
@@ -256,23 +513,9 @@ export function ProfileEditor({
             <Field label="Description">
               <Input value={form.description} placeholder="What this profile is for" onChange={(e) => set("description", e.target.value)} />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Default model" hint="Model alias or full id.">
-                <Input
-                  mono
-                  list="model-suggestions"
-                  placeholder="sonnet"
-                  value={form.default_model}
-                  onChange={(e) => set("default_model", e.target.value)}
-                />
-                <datalist id="model-suggestions">
-                  {MODEL_SUGGESTIONS.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-              </Field>
+            {showPermissionMode && (
               <Field label="Permission mode">
-                <Select value={form.permission_mode} onChange={(e) => set("permission_mode", e.target.value)}>
+                <Select value={form.permission_mode} onChange={(e) => set("permission_mode", e.target.value)} className="max-w-xs">
                   {PERMISSION_MODES.map((m) => (
                     <option key={m.value} value={m.value}>
                       {m.label}
@@ -280,9 +523,149 @@ export function ProfileEditor({
                   ))}
                 </Select>
               </Field>
-            </div>
+            )}
           </div>
         </SettingsCard>
+
+        {showProvider && (
+          <SettingsCard
+            title="Provider & endpoint"
+            description={
+              backend?.requires_provider
+                ? "Required — this harness cannot run without a configured provider."
+                : "Optional — leave blank to use ambient/inherited credentials."
+            }
+          >
+            <div className="space-y-3">
+              <Field label="Provider">
+                <Select
+                  value={selectedProviderId ?? ""}
+                  onChange={(e) => setSelectedProviderId(e.target.value || null)}
+                >
+                  <option value="">— none —</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.vendor})
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              {provider && backend && (
+                compatible.length === 0 ? (
+                  <p className="text-xs text-failed">
+                    No endpoint on “{provider.name}” speaks a protocol {backend.label} supports
+                    (supports {backend.protocol_kinds.join(", ")}).
+                  </p>
+                ) : compatible.length === 1 ? (
+                  <p className="text-xs text-moon-400">
+                    {provider.name} · <span className="font-mono">{compatible[0].protocol_kind}</span>
+                    {compatible[0].label ? ` (${compatible[0].label})` : ""}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {compatible.map((ep) => (
+                      <label key={ep.id} className="flex items-center gap-2 text-sm text-moon-100">
+                        <input
+                          type="radio"
+                          name="primary-endpoint"
+                          checked={form.endpoint_id === ep.id}
+                          onChange={() => set("endpoint_id", ep.id)}
+                          className="accent-lamp"
+                        />
+                        <span>
+                          {ep.label || ep.protocol_kind}{" "}
+                          <span className="font-mono text-xs text-moon-600">({ep.protocol_kind})</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )
+              )}
+              {backend?.requires_provider && !form.endpoint_id && (
+                <p className="text-xs text-failed">This harness requires a provider endpoint before it can run.</p>
+              )}
+            </div>
+          </SettingsCard>
+        )}
+
+        {showModels && backend && (
+          <SettingsCard title="Models" description="Model assignments this profile's harness resolves at launch.">
+            <div className="space-y-4">
+              {isCompat ? (
+                <>
+                  <Field
+                    label="Model"
+                    hint={`Applied to every position — ${staticSlots.length} position${staticSlots.length === 1 ? "" : "s"}.`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Input
+                        mono
+                        list={datalistId}
+                        value={form.default_model}
+                        placeholder="glm-5.2"
+                        onChange={(e) => set("default_model", e.target.value)}
+                      />
+                      {offMenuBadge(form.default_model, selectedEndpoint)}
+                    </div>
+                  </Field>
+                  <button
+                    type="button"
+                    className="text-xs text-lamp hover:underline"
+                    onClick={() => setCustomize(!customize)}
+                  >
+                    {customize ? "Use one model for every position" : "Customize per position"}
+                  </button>
+                  {customize && (
+                    <div className="grid grid-cols-2 gap-3">
+                      {staticSlots.map((slot) => {
+                        const value = (form.backend_config[slot.name] as string) ?? "";
+                        return (
+                          <Field key={slot.name} label={slot.label}>
+                            <div className="flex items-center gap-2">
+                              <Input
+                                mono
+                                list={datalistId}
+                                value={value}
+                                placeholder={form.default_model || "(unset)"}
+                                onChange={(e) => setSlotOverride(slot.name, e.target.value)}
+                              />
+                              {offMenuBadge(value, selectedEndpoint)}
+                            </div>
+                          </Field>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <Field label="Model" hint="Leave empty to use the harness's own defaults.">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      mono
+                      list={datalistId}
+                      value={form.default_model}
+                      placeholder="(unpinned)"
+                      onChange={(e) => set("default_model", e.target.value)}
+                    />
+                    {offMenuBadge(form.default_model, selectedEndpoint)}
+                  </div>
+                </Field>
+              )}
+              <datalist id={datalistId}>
+                {(selectedEndpoint?.models ?? []).map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+
+              {backend.multi_endpoint && (
+                <div className="border-t border-ink-700/70 pt-4">
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-moon-400">Agents</h4>
+                  <AgentsEditor agents={agents} onChange={setAgents} backend={backend} providers={providers} />
+                </div>
+              )}
+            </div>
+          </SettingsCard>
+        )}
 
         <SettingsCard title="Filesystem" description="Paths the sandbox may read or write. Absolute paths only.">
           <div className="grid grid-cols-2 gap-4">

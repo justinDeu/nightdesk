@@ -104,6 +104,7 @@ export function AnalyticsPage() {
       cache_write: 0,
       cache_read: 0,
       unpriced: 0,
+      estimatedRuns: 0,
     };
     for (const m of visibleModels) {
       acc.cost += m.cost ?? 0;
@@ -113,6 +114,7 @@ export function AnalyticsPage() {
       acc.output += m.output_tokens;
       acc.cache_write += m.cache_write_tokens;
       acc.cache_read += m.cache_read_tokens;
+      acc.estimatedRuns += m.estimated_runs ?? 0;
       if (isUnpriced(m)) acc.unpriced += 1;
     }
     const totalTok = acc.input + acc.output + acc.cache_write + acc.cache_read;
@@ -157,6 +159,8 @@ export function AnalyticsPage() {
     cost: m.cost ?? 0,
     runs: m.run_count,
     unpriced: isUnpriced(m),
+    estimated: m.estimated,
+    estimatedRuns: m.estimated_runs,
   }));
 
   // Native per-project rollup — range- and project-scoped server-side.
@@ -168,6 +172,8 @@ export function AnalyticsPage() {
     cost: p.cost,
     runs: p.run_count,
     unpriced: isUnpriced(p),
+    estimated: p.estimated,
+    estimatedRuns: p.estimated_runs,
   }));
 
   // Range-scoped run stats, run-weighted across the project rollup; falls back
@@ -320,6 +326,13 @@ export function AnalyticsPage() {
                   value={formatUsd(scoped.cost)}
                   sub={scoped.unpriced > 0 ? `${scoped.unpriced} unpriced` : "priced"}
                   warn={scoped.unpriced > 0}
+                  estimatedNote={
+                    scoped.estimatedRuns > 0
+                      ? `Includes ${scoped.estimatedRuns} run${
+                          scoped.estimatedRuns === 1 ? "" : "s"
+                        } estimated at current prices`
+                      : undefined
+                  }
                 />
                 <StatTile
                   icon={<BarChart3 size={14} />}
@@ -468,12 +481,16 @@ function StatTile({
   value,
   sub,
   warn,
+  estimatedNote,
 }: {
   icon: ReactNode;
   label: string;
   value: string;
   sub?: string;
   warn?: boolean;
+  /** Tooltip text shown on a small "~" marker next to the value when some of
+   *  the figure is repriced at current prices rather than exact history. */
+  estimatedNote?: string;
 }) {
   return (
     <div className="rounded-card border border-ink-700/50 bg-ink-900 px-4 py-3 shadow-[var(--shadow-raised)]">
@@ -483,7 +500,14 @@ function StatTile({
         </span>
         {label}
       </div>
-      <div className="font-display text-2xl font-semibold tabular-nums text-moon-100">{value}</div>
+      <div className="flex items-baseline gap-1.5">
+        <div className="font-display text-2xl font-semibold tabular-nums text-moon-100">{value}</div>
+        {estimatedNote && (
+          <Tooltip content={estimatedNote}>
+            <span className="cursor-default pb-0.5 text-sm font-medium text-moon-600">~</span>
+          </Tooltip>
+        )}
+      </div>
       {sub && (
         <div
           className={cn(

@@ -332,6 +332,16 @@ export interface ClaudeCredentialsIn {
 
 export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions";
 
+/** One entry of a multi_endpoint backend's ``backend_config.agents[]`` (opencode). */
+export interface BackendConfigAgent {
+  name: string;
+  model?: string | null;
+  endpoint_id?: string | null;
+  tools?: string[];
+  prompt?: string | null;
+  [key: string]: unknown;
+}
+
 export interface ProfileOut {
   id: string;
   name: string;
@@ -345,6 +355,8 @@ export interface ProfileOut {
   secret_keys: string[];
   default_model: string | null;
   backend: string;
+  endpoint_id: string | null;
+  backend_config: Record<string, unknown>;
   claude_credentials: ClaudeCredentialsOut | null;
   claude_binary_path: string | null;
   env_keys: string[];
@@ -352,6 +364,8 @@ export interface ProfileOut {
   permission_mode: string | null;
   cc_settings_passthrough: Record<string, unknown>;
   run_token_scopes: string[];
+  /** Non-blocking save-time notices (e.g. an off-menu model assignment). */
+  warnings: string[];
   created_at: string;
   updated_at: string;
 }
@@ -368,6 +382,8 @@ export interface ProfileCreate {
   secret_keys?: string[];
   default_model?: string | null;
   backend?: string;
+  endpoint_id?: string | null;
+  backend_config?: Record<string, unknown>;
   claude_credentials?: ClaudeCredentialsIn | null;
   claude_binary_path?: string | null;
   env?: Record<string, string> | null;
@@ -418,6 +434,8 @@ export interface ConfigOut {
   schedule_timezone: string;
   windows: ScheduleWindowOut[];
   toolchain_presets: Record<string, string[]>;
+  claude_binary_path: string | null;
+  opencode_binary_path: string | null;
 }
 
 export interface ConfigUpdate {
@@ -428,6 +446,123 @@ export interface ConfigUpdate {
   notify_webhook_url?: string | null;
   schedule_timezone?: string | null;
   toolchain_presets?: Record<string, string[]> | null;
+  claude_binary_path?: string | null;
+  opencode_binary_path?: string | null;
+}
+
+// --- Providers & endpoints -------------------------------------------------
+// See docs/design/providers-and-endpoints.md ("Layer 1"). Credentials are
+// write-only: responses never carry plaintext, only *_set booleans.
+
+export type ProtocolKind =
+  | "anthropic"
+  | "anthropic_compat"
+  | "openai"
+  | "openai_compat"
+  | "openai_codex"
+  | "openrouter"
+  | "ollama";
+
+export type CredentialSource = "api_key" | "oauth_file" | "subscription_file" | "env_var" | "none";
+
+export interface EndpointOut {
+  id: string;
+  provider_id: string;
+  label: string;
+  protocol_kind: ProtocolKind;
+  base_url: string | null;
+  credential_source: CredentialSource;
+  credential_set: boolean;
+  harness_lock: string | null;
+  default_model: string | null;
+  models: string[];
+  models_pulled_at: string | null;
+  extra_set: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EndpointCreate {
+  label?: string;
+  protocol_kind: ProtocolKind;
+  base_url?: string | null;
+  credential_source?: CredentialSource;
+  credential_value?: string | null;
+  harness_lock?: string | null;
+  default_model?: string | null;
+  models?: string[];
+  extra?: Record<string, unknown> | null;
+}
+
+export type EndpointUpdate = Partial<EndpointCreate>;
+
+export interface ProviderOut {
+  id: string;
+  name: string;
+  vendor: string;
+  endpoints: EndpointOut[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProviderCreate {
+  name: string;
+  vendor: string;
+  endpoints?: EndpointCreate[];
+  /** Seeded into every nested api_key endpoint above that sets no credential_value of its own. */
+  credential_value?: string | null;
+}
+
+export interface ProviderUpdate {
+  name?: string;
+  vendor?: string;
+}
+
+export interface ProviderRotateCredential {
+  credential_value: string;
+}
+
+export interface ProviderRotateResult {
+  rotated: number;
+}
+
+export interface CatalogEndpointOut {
+  label: string;
+  protocol_kind: ProtocolKind;
+  base_url: string | null;
+  credential_source: CredentialSource;
+  harness_lock: string | null;
+  default_model: string | null;
+}
+
+export interface CatalogVendorOut {
+  vendor: string;
+  label: string;
+  endpoints: CatalogEndpointOut[];
+}
+
+// --- Backends (Layer 2: harness capability catalog) ------------------------
+// See docs/design/providers-and-endpoints.md ("Layer 2: Harnesses"). Mirrors
+// nightdesk.domain.backend_capabilities.BackendCapability.
+
+export interface ModelSlotOut {
+  name: string;
+  label: string;
+  required: boolean;
+}
+
+export interface BackendOut {
+  code: string;
+  label: string;
+  summary: string;
+  protocol_kinds: ProtocolKind[];
+  multi_endpoint: boolean;
+  requires_provider: boolean;
+  enabled: boolean;
+  executable: boolean;
+  group_keys: string[];
+  model_slots: ModelSlotOut[];
+  capabilities: string[];
 }
 
 export interface WorkerStatusOut {
