@@ -31,6 +31,8 @@ import { useKeybinds } from "@/lib/keymap";
 import { getLastVisit, setLastVisit } from "@/lib/lastVisit";
 import { parseTs, relativeTime, durationBetween } from "@/lib/time";
 import { formatUsd, runStatusKind } from "@/lib/status";
+import { humanizeRunError } from "@/lib/runError";
+import { Tooltip } from "@/ui/Tooltip";
 import { ticketHref } from "@/lib/routes";
 import { cn } from "@/lib/cn";
 import { openComposer } from "@/components/composerBus";
@@ -339,7 +341,11 @@ const NeedsRow = forwardRef<
             )}
             {run?.finished_at && <span>{relativeTime(run.finished_at)}</span>}
             {reason === "failed" && run?.error_summary && (
-              <span className="min-w-0 truncate text-failed">{run.error_summary}</span>
+              <Tooltip content={run.error_summary} mono>
+                <span className="min-w-0 truncate text-failed">
+                  {humanizeRunError(run.error_summary)}
+                </span>
+              </Tooltip>
             )}
           </span>
         </a>

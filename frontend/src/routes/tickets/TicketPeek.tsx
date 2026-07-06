@@ -16,6 +16,7 @@ import { PriorityPicker, ProfilePicker, ProjectPicker, LabelPicker } from "@/com
 import { EffectiveConfigCard } from "@/components/EffectiveConfigCard";
 import { WorkspaceList } from "@/components/WorkspaceList";
 import { useTicketActions } from "@/lib/ticketActions";
+import { useUnsavedGuard } from "@/lib/useUnsavedGuard";
 import { cn } from "@/lib/cn";
 import { ticketStatusKind, runStatusKind, formatUsd } from "@/lib/status";
 import { durationBetween, relativeTime } from "@/lib/time";
@@ -360,6 +361,14 @@ function PromptDialog({
 
   const dirty = value !== ticket.prompt;
 
+  // Guard navigation / reload while the popout holds unsaved edits, and confirm
+  // before an explicit close (Cancel / Esc / overlay / X) discards them.
+  useUnsavedGuard(open && dirty);
+  const requestClose = (next: boolean) => {
+    if (!next && dirty && !window.confirm("Discard your unsaved prompt changes?")) return;
+    onOpenChange(next);
+  };
+
   const save = () => {
     update.mutate(
       { prompt: value },
@@ -373,13 +382,13 @@ function PromptDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={requestClose}
       title="Prompt"
       description={ticket.title}
       size="lg"
       footer={
         <>
-          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" size="sm" onClick={() => requestClose(false)}>
             Cancel
           </Button>
           <Button

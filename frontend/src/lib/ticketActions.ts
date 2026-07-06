@@ -3,6 +3,7 @@ import { qk } from "@/api";
 import { ticketsApi } from "@/api/tickets";
 import type { TicketOut } from "@/api/types";
 import { toast } from "@/ui/Toast";
+import { confirm } from "@/ui/confirm";
 
 /**
  * Common ticket lifecycle actions wrapped with a success/failure toast and
@@ -39,7 +40,20 @@ export function useTicketActions() {
     runNow: (t: TicketOut) => run("Run now", () => ticketsApi.runNow(t.id), "Run dispatched"),
     cancelRunNow: (t: TicketOut) =>
       run("Cancel", () => ticketsApi.cancelRunNow(t.id), "Run-now cancelled"),
-    cancel: (t: TicketOut) => run("Cancel run", () => ticketsApi.cancel(t.id), "Run cancelled"),
+    // Cancelling an in-flight run is destructive and one click away in four
+    // places (running card, detail header, peek, board Move menu). Gate it once
+    // here so every entry point gets the same confirm.
+    cancel: async (t: TicketOut): Promise<boolean> => {
+      const ok = await confirm({
+        title: "Cancel this run?",
+        body: "The agent stops immediately and the ticket returns to review. Work already done is kept, but the run ends where it is.",
+        confirmLabel: "Cancel run",
+        cancelLabel: "Keep running",
+        danger: true,
+      });
+      if (!ok) return false;
+      return run("Cancel run", () => ticketsApi.cancel(t.id), "Run cancelled");
+    },
     promote: (t: TicketOut, target: "draft" | "queued") =>
       run("Promote", () => ticketsApi.promote(t.id, { target }), `Promoted to ${target}`),
     decline: (t: TicketOut) => run("Decline", () => ticketsApi.decline(t.id), "Ticket declined"),

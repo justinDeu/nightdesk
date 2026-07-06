@@ -306,6 +306,20 @@
     );
   }
 
+  /* Cheap render containment for long boards / lists: skip rendering the guts of
+     off-screen cards and rows while reserving their space, so a 200-item board
+     stays responsive without pulling in a virtualization dependency. The `auto`
+     keyword lets the browser remember each element's real height after its first
+     paint, keeping scroll position and the scrollbar honest. */
+  .cv-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 116px;
+  }
+  .cv-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 41px;
+  }
+
   .pop-in {
     animation: pop-in 120ms ease-out;
   }

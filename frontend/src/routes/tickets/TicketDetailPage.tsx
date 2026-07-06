@@ -26,6 +26,7 @@ import { PropertiesRail } from "./detail/PropertiesRail";
 import { ActivityComposer } from "./detail/ActivityComposer";
 import { RunTimeline } from "./RunTimeline";
 import { relativeTime } from "@/lib/time";
+import { useUnsavedGuard } from "@/lib/useUnsavedGuard";
 import { cn } from "@/lib/cn";
 
 /**
@@ -274,6 +275,9 @@ function PromptPanel({
   const [open, setOpen] = useState(mode === "edit");
   const [value, setValue] = useState(ticket.prompt);
   useEffect(() => setValue(ticket.prompt), [ticket.prompt]);
+
+  // Block navigation / reload while an in-progress prompt edit is unsaved.
+  useUnsavedGuard(editing && value !== ticket.prompt);
 
   if (editing) {
     return (

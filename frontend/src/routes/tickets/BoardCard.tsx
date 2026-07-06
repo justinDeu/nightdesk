@@ -63,7 +63,7 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
       }
       data-ticket-id={ticket.id}
       className={cn(
-        "group relative shrink-0 cursor-pointer overflow-hidden rounded-card border p-3 pt-3.5",
+        "cv-card group relative shrink-0 cursor-pointer overflow-hidden rounded-card border p-3 pt-3.5",
         "shadow-[var(--shadow-raised)] transition-colors",
         // Surface tint. Background-only so the 1px border stays uniform on every side
         // in every state and the card never shifts/shrinks a pixel when (de)selected.
@@ -82,7 +82,8 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
         // Ring precedence (a box-shadow ring, so it never shifts geometry):
         //  1. keyboard cursor (focused) — always the strongest, jade 2px.
         //  2. selection — a clear 2px ring; red for failed cards, jade otherwise.
-        //  3. side-peek — a soft jade 1px.
+        //  3. side-peek — a soft 1px; red for failed cards, jade otherwise, so a
+        //     peeked failed card never gets a jade halo over its ember border.
         focused
           ? "ring-2 ring-lamp"
           : selected
@@ -90,7 +91,9 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
               ? "ring-2 ring-failed"
               : "ring-2 ring-lamp"
             : peeked
-              ? "ring-1 ring-lamp/50"
+              ? outcome === "failed"
+                ? "ring-1 ring-failed/50"
+                : "ring-1 ring-lamp/50"
               : "",
         dragging && "opacity-40",
       )}

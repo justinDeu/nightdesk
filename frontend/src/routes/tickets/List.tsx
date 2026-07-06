@@ -98,7 +98,7 @@ export function List({
                         : onSelect(t.id)
                   }
                   className={cn(
-                    "group flex items-center gap-2 border-t border-ink-700/60 px-3 py-2 text-sm md:gap-2.5",
+                    "cv-row group flex items-center gap-2 border-t border-ink-700/60 px-3 py-2 text-sm md:gap-2.5",
                     "cursor-pointer transition-colors",
                     isSel
                       ? "wash-selected"
