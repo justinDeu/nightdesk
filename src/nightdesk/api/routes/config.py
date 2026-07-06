@@ -56,6 +56,8 @@ def _config_out(session: Session, row: ConfigRow) -> ConfigOut:
         schedule_timezone=row.schedule_timezone,
         windows=windows,
         toolchain_presets=row.toolchain_presets or {},
+        claude_binary_path=row.claude_binary_path,
+        opencode_binary_path=row.opencode_binary_path,
     )
 
 
@@ -78,9 +80,13 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
         for k, v in payload.model_dump().items():
             if v is not None:
                 setattr(row, k, v)
-        # Empty-string webhook URL means "clear it" — set to None.
+        # Empty-string clears the override, falling back to auto-discovery.
         if row.notify_webhook_url is not None and not row.notify_webhook_url.strip():
             row.notify_webhook_url = None
+        if row.claude_binary_path is not None and not row.claude_binary_path.strip():
+            row.claude_binary_path = None
+        if row.opencode_binary_path is not None and not row.opencode_binary_path.strip():
+            row.opencode_binary_path = None
         session.commit()
         session.refresh(row)
         return _config_out(session, row)

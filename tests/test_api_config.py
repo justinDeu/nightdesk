@@ -263,6 +263,31 @@ async def test_patch_config_sets_and_clears_worktree_base_ref(client):
     assert r.status_code == 200
     assert (r.json()["worktree_base_ref"] or "") == ""
 
+async def test_patch_config_sets_and_clears_harness_binary_paths(client):
+    r = await client.get("/api/v1/config")
+    assert r.status_code == 200
+    assert r.json()["claude_binary_path"] is None
+    assert r.json()["opencode_binary_path"] is None
+
+    r = await client.patch("/api/v1/config", json={
+        "claude_binary_path": "/usr/local/bin/claude",
+        "opencode_binary_path": "/usr/local/bin/opencode",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["claude_binary_path"] == "/usr/local/bin/claude"
+    assert body["opencode_binary_path"] == "/usr/local/bin/opencode"
+
+    # Empty string clears the override (falls back to auto-discovery).
+    r = await client.patch("/api/v1/config", json={
+        "claude_binary_path": "", "opencode_binary_path": "",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["claude_binary_path"] is None
+    assert body["opencode_binary_path"] is None
+
+
 async def test_config_api_persists_global_toolchain_presets(client):
     response = await client.patch("/api/v1/config", json={
         "toolchain_presets": {

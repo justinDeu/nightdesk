@@ -8,6 +8,7 @@ from sqlalchemy.engine import Engine
 from nightdesk.api.deps import get_session_dep
 from nightdesk.api.routes import analytics as analytics_routes
 from nightdesk.api.routes import auth as auth_routes
+from nightdesk.api.routes import backends as backends_routes
 from nightdesk.api.routes import config as config_routes
 from nightdesk.api.routes import cron_jobs as cron_jobs_routes
 from nightdesk.api.routes import effective_config as effective_config_routes
@@ -18,6 +19,7 @@ from nightdesk.api.routes import inbox as inbox_routes
 from nightdesk.api.routes import labels as labels_routes
 from nightdesk.api.routes import profiles as profiles_routes
 from nightdesk.api.routes import projects as projects_routes
+from nightdesk.api.routes import providers as providers_routes
 from nightdesk.api.routes import runs as runs_routes
 from nightdesk.api.routes import search as search_routes
 from nightdesk.api.routes import tickets as tickets_routes
@@ -64,6 +66,8 @@ def create_app(
 
     get_session = get_session_dep(engine)
     app.include_router(profiles_routes.build_router(get_session, bearer_token))
+    app.include_router(providers_routes.build_router(get_session, bearer_token))
+    app.include_router(backends_routes.build_router(bearer_token))
     app.include_router(projects_routes.build_router(get_session, bearer_token))
     app.include_router(tickets_routes.build_router(get_session, bearer_token))
     app.include_router(runs_routes.build_router(get_session, bearer_token))

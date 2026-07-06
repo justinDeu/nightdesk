@@ -1,18 +1,28 @@
 """Merge-semantics and provenance tests for the effective-config resolver."""
 import json
 
+import pytest
+
 from nightdesk.domain.effective_config import (
     DERIVED,
     GLOBAL,
+    MASKED_VALUE,
     PROFILE,
     PROJECT,
     TICKET,
     resolve_for_draft,
     resolve_for_ticket,
 )
+from nightdesk.domain.profile_secrets import ProfileSecretBox
 from nightdesk.domain.profiles import create_profile
 from nightdesk.domain.projects import create_project
+from nightdesk.domain.providers import create_endpoint, create_provider
 from nightdesk.domain.tickets import create_ticket
+
+
+@pytest.fixture
+def box() -> ProfileSecretBox:
+    return ProfileSecretBox("test-bearer-token")
 
 
 def _profile(session, **over):
@@ -537,3 +547,150 @@ def test_no_spurious_issues_for_valid_encrypted_credentials(session):
     eff = resolve_for_ticket(session, t)
     # No credential-structure issue must appear — the Fernet token check is silent.
     assert not any("source" in issue and "credential" in issue.lower() for issue in eff.issues)
+
+
+# --- Launch plan group (dry-run render + credential masking) ---------------
+
+
+def _launch_group(eff):
+    return next((g for g in eff.groups if g.title == "Launch plan"), None)
+
+
+def test_legacy_profile_without_endpoint_has_no_launch_group(session, box):
+    """Regression: a profile with no endpoint attached must not gain a
+    Launch plan group, and every pre-existing group stays untouched."""
+    p = _profile(session)
+    t = create_ticket(session, title="T", prompt="x", profile_id=p.id, source_path="/tmp")
+    eff = resolve_for_ticket(session, t, box)
+    assert _launch_group(eff) is None
+    titles = [g.title for g in eff.groups]
+    assert titles == [
+        "Project & workspace", "Execution backend", "Filesystem reach",
+        "Tools", "Network & secrets", "Toolchain & PATH",
+    ]
+
+
+def test_claude_code_compat_endpoint_shows_masked_credential(session, box):
+    provider = create_provider(session, name="ZAI", vendor="zai")
+    ep = create_endpoint(
+        session, provider_id=provider.id, label="Anthropic-compatible",
+        protocol_kind="anthropic_compat", base_url="https://api.z.ai/api/anthropic",
+        credential_source="api_key", credential=box.encrypt("secret-zai-key"),
+        default_model="glm-5.2",
+    )
+    p = _profile(session, endpoint_id=ep.id, default_model="glm-5.2")
+    t = create_ticket(session, title="T", prompt="x", profile_id=p.id, source_path="/tmp")
+    eff = resolve_for_ticket(session, t, box)
+    group = _launch_group(eff)
+    assert group is not None
+    fm = {f.key: f for f in group.fields}
+    assert fm["launch_env_ANTHROPIC_BASE_URL"].value == "https://api.z.ai/api/anthropic"
+    assert fm["launch_env_ANTHROPIC_MODEL"].value == "glm-5.2"
+    assert fm["launch_env_ANTHROPIC_API_KEY"].value == MASKED_VALUE
+    assert "secret-zai-key" not in json.dumps(eff.as_dict())
+
+
+def test_claude_subscription_endpoint_masks_auth_token(session, box, tmp_path):
+    creds_file = tmp_path / "creds.json"
+    creds_file.write_text(json.dumps({"claudeAiOauth": {"accessToken": "tok-abc-123"}}))
+    provider = create_provider(session, name="Anthropic", vendor="anthropic")
+    ep = create_endpoint(
+        session, provider_id=provider.id, label="Subscription",
+        protocol_kind="anthropic", credential_source="subscription_file",
+        credential=box.encrypt(str(creds_file)), harness_lock="claude_sdk",
+    )
+    p = _profile(session, endpoint_id=ep.id, default_model=None)
+    t = create_ticket(session, title="T", prompt="x", profile_id=p.id, source_path="/tmp")
+    eff = resolve_for_ticket(session, t, box)
+    group = _launch_group(eff)
+    assert group is not None
+    fm = {f.key: f for f in group.fields}
+    assert fm["launch_env_ANTHROPIC_AUTH_TOKEN"].value == MASKED_VALUE
+    assert "tok-abc-123" not in json.dumps(eff.as_dict())
+
+
+def test_opencode_profile_masks_config_and_auth_content(session, box):
+    provider = create_provider(session, name="ZAI", vendor="zai")
+    ep = create_endpoint(
+        session, provider_id=provider.id, label="OpenAI-compatible",
+        protocol_kind="openai_compat", base_url="https://api.z.ai/api/paas/v4",
+        credential_source="api_key", credential=box.encrypt("secret-zai-openai-key"),
+        default_model="glm-5.2",
+    )
+    p = _profile(
+        session, endpoint_id=ep.id, backend="opencode", default_model="glm-5.2",
+    )
+    t = create_ticket(session, title="T", prompt="x", profile_id=p.id, source_path="/tmp")
+    eff = resolve_for_ticket(session, t, box)
+    group = _launch_group(eff)
+    assert group is not None
+    fm = {f.key: f for f in group.fields}
+    assert fm["launch_env_OPENCODE_CONFIG_CONTENT"].value == MASKED_VALUE
+    assert fm["launch_env_OPENCODE_SERVER_PASSWORD"].value == MASKED_VALUE
+    assert "secret-zai-openai-key" not in json.dumps(eff.as_dict())
+
+
+def test_extra_env_values_masked_as_vendor_quirks(session, box):
+    provider = create_provider(session, name="Requesty", vendor="requesty")
+    ep = create_endpoint(
+        session, provider_id=provider.id, label="Anthropic-compatible",
+        protocol_kind="anthropic_compat", base_url="https://router.requesty.ai",
+        credential_source="none",
+        extra=box.encrypt({"env": {"X-ROUTING-TOKEN": "route-secret-789"}}),
+    )
+    p = _profile(session, endpoint_id=ep.id, default_model="glm-5.2")
+    t = create_ticket(session, title="T", prompt="x", profile_id=p.id, source_path="/tmp")
+    eff = resolve_for_ticket(session, t, box)
+    group = _launch_group(eff)
+    assert group is not None
+    fm = {f.key: f for f in group.fields}
+    assert fm["launch_env_X-ROUTING-TOKEN"].value == MASKED_VALUE
+    assert "route-secret-789" not in json.dumps(eff.as_dict())
+
+
+def test_incompatible_endpoint_yields_issue_not_error(session, box):
+    """A CC profile pointed at an endpoint locked to another harness must
+    degrade to an issue message, never raise."""
+    provider = create_provider(session, name="ZAI", vendor="zai")
+    ep = create_endpoint(
+        session, provider_id=provider.id, label="opencode-only",
+        protocol_kind="openai_compat",
+        credential_source="none",
+    )
+    p = _profile(session, endpoint_id=ep.id, backend="claude_sdk", default_model="glm-5.2")
+    t = create_ticket(session, title="T", prompt="x", profile_id=p.id, source_path="/tmp")
+    eff = resolve_for_ticket(session, t, box)
+    assert any("not compatible" in issue or "does not support" in issue for issue in eff.issues)
+
+
+def test_launch_plan_dry_run_creates_no_directories(session, box, tmp_path, monkeypatch):
+    """Under dry_run, prepare_launch must not touch the filesystem."""
+    provider = create_provider(session, name="ZAI", vendor="zai")
+    ep = create_endpoint(
+        session, provider_id=provider.id, label="Anthropic-compatible",
+        protocol_kind="anthropic_compat", credential_source="api_key",
+        credential=box.encrypt("secret-key"), default_model="glm-5.2",
+    )
+    p = _profile(session, endpoint_id=ep.id, default_model="glm-5.2")
+    t = create_ticket(session, title="T", prompt="x", profile_id=p.id, source_path="/tmp")
+
+    before = set(tmp_path.iterdir())
+    resolve_for_ticket(session, t, box)
+    after = set(tmp_path.iterdir())
+    assert before == after
+
+
+def test_bare_resolve_input_without_session_skips_launch_group(session):
+    """No-session case in a bare ResolveInput (e.g. constructed directly
+    without a live session) must not crash and simply omits the group."""
+    from nightdesk.domain.effective_config import ResolveInput, resolve_effective_config
+
+    p = _profile(session)
+    inp = ResolveInput(
+        profile=p, project=None, config=None, permission_overrides=None,
+        toolchain_overrides=None, additional_dirs=[], workspaces=[],
+        source_path="/tmp", workspace_mode="directory", base_ref=None,
+        session=None, secret_box=None,
+    )
+    eff = resolve_effective_config(inp)
+    assert _launch_group(eff) is None

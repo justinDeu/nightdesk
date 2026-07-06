@@ -21,6 +21,11 @@ from nightdesk.api.schemas import (
 )
 from nightdesk.domain.backend_capabilities import DEFAULT_BACKEND, capability_or_default
 from nightdesk.domain.profile_secrets import ProfileSecretBox
+from nightdesk.domain.providers import (
+    EndpointNotFound,
+    endpoint_compatible,
+    get_endpoint,
+)
 from nightdesk.domain.profiles import (
     create_profile,
     delete_profile,
@@ -73,6 +78,8 @@ def _copy_fields(src) -> dict[str, Any]:
         "secret_keys": list(src.secret_keys or []),
         "default_model": src.default_model,
         "backend": src.backend,
+        "endpoint_id": src.endpoint_id,
+        "backend_config": dict(src.backend_config or {}),
         "claude_credentials": src.claude_credentials,
         "claude_binary_path": src.claude_binary_path,
         "env": src.env,
@@ -99,6 +106,8 @@ def _encrypt_credentials_in(
     box: Optional[ProfileSecretBox],
     payload: Any,
     existing_blob: Optional[str],
+    *,
+    endpoint_id: Optional[str] = None,
 ) -> Optional[str]:
     """Encrypt an inbound credentials payload for storage.
 
@@ -106,9 +115,16 @@ def _encrypt_credentials_in(
     ``ClaudeCredentialsIn``, or ``{}`` to clear. For env-based sources
     a missing ``value`` reuses the previous secret so PATCH callers can
     flip the source without rotating the secret.
+
+    ``endpoint_id``, when set, means a ``ProviderEndpoint`` supplies
+    authentication, so ``payload is None`` with no ``existing_blob`` is
+    not an error — legacy credentials are only mandatory as a fallback
+    when there's no endpoint to rely on.
     """
     if payload is None:
         if existing_blob is None:
+            if endpoint_id:
+                return None
             raise HTTPException(
                 400,
                 "claude_credentials is required; pick an authentication source",
@@ -204,7 +220,89 @@ def _encrypt_env_in(
     return box.encrypt(cleaned)
 
 
-def _profile_out(profile, box: Optional[ProfileSecretBox]) -> dict:
+def _compat_message(capability, ep) -> str:
+    """Human-readable reason ``ep`` fails the compatibility gate for ``capability``.
+
+    See ``docs/design/providers-and-endpoints.md`` ("Compatibility is protocol
+    intersection plus the lock").
+    """
+    protocol_kinds = getattr(capability, "protocol_kinds", None)
+    if not protocol_kinds:
+        protocol_kinds = getattr(capability, "provider_kinds", frozenset())
+    if ep.protocol_kind not in protocol_kinds:
+        return (
+            f"endpoint {ep.label!r} speaks {ep.protocol_kind!r}, which "
+            f"{capability.label} does not support "
+            f"(supports {sorted(protocol_kinds)})"
+        )
+    if ep.harness_lock and ep.harness_lock != capability.code:
+        return (
+            f"endpoint {ep.label!r} is locked to the {ep.harness_lock!r} "
+            f"harness and cannot be used by {capability.code!r}"
+        )
+    return f"endpoint {ep.label!r} is not compatible with {capability.code!r}"
+
+
+def _validate_endpoint_compat(session: Session, capability, endpoint_id: str) -> None:
+    """404 for an unknown endpoint, 400 for one that fails the compat gate."""
+    try:
+        ep = get_endpoint(session, endpoint_id)
+    except EndpointNotFound:
+        raise HTTPException(404, f"unknown endpoint {endpoint_id!r}")
+    if not endpoint_compatible(capability, ep):
+        raise HTTPException(400, _compat_message(capability, ep))
+
+
+def _validate_profile_compat(
+    session: Session, capability, endpoint_id: Optional[str], backend_config: Optional[dict],
+) -> None:
+    """Blocking gate: the primary endpoint and every per-agent endpoint
+    reference (``backend_config["agents"][].endpoint_id``) must pass
+    :func:`endpoint_compatible` for the profile's backend."""
+    if endpoint_id:
+        _validate_endpoint_compat(session, capability, endpoint_id)
+    for agent in (backend_config or {}).get("agents", []) or []:
+        if isinstance(agent, dict) and agent.get("endpoint_id"):
+            _validate_endpoint_compat(session, capability, agent["endpoint_id"])
+
+
+def _model_menu_warnings(
+    session: Session,
+    endpoint_id: Optional[str],
+    default_model: Optional[str],
+    backend_config: Optional[dict],
+) -> list[str]:
+    """Warn-only: model assignments not present in their endpoint's model
+    menu don't block the save (vendors serve underdocumented models), but
+    are surfaced back to the caller."""
+    warnings: list[str] = []
+
+    def _check(eid: Optional[str], model: Optional[str], where: str) -> None:
+        if not eid or not model:
+            return
+        try:
+            ep = get_endpoint(session, eid)
+        except EndpointNotFound:
+            return
+        menu = ep.models or []
+        if menu and model not in menu:
+            warnings.append(
+                f"{where}: model {model!r} is not in endpoint {ep.label!r}'s model menu"
+            )
+
+    _check(endpoint_id, default_model, "default_model")
+    for agent in (backend_config or {}).get("agents", []) or []:
+        if not isinstance(agent, dict):
+            continue
+        agent_endpoint_id = agent.get("endpoint_id") or endpoint_id
+        name = agent.get("name") or "agent"
+        _check(agent_endpoint_id, agent.get("model"), f"agents[{name!r}]")
+    return warnings
+
+
+def _profile_out(
+    profile, box: Optional[ProfileSecretBox], *, warnings: Optional[list[str]] = None,
+) -> dict:
     """Serialize a Profile for JSON responses, redacting secrets."""
     creds_out = None
     if profile.claude_credentials:
@@ -243,6 +341,8 @@ def _profile_out(profile, box: Optional[ProfileSecretBox]) -> dict:
         "secret_keys": profile.secret_keys or [],
         "default_model": profile.default_model,
         "backend": profile.backend,
+        "endpoint_id": profile.endpoint_id,
+        "backend_config": profile.backend_config or {},
         "claude_credentials": creds_out,
         "claude_binary_path": profile.claude_binary_path,
         "env_keys": env_keys,
@@ -250,6 +350,7 @@ def _profile_out(profile, box: Optional[ProfileSecretBox]) -> dict:
         "permission_mode": profile.permission_mode,
         "cc_settings_passthrough": profile.cc_settings_passthrough or {},
         "run_token_scopes": profile.run_token_scopes or [],
+        "warnings": warnings or [],
         "created_at": profile.created_at,
         "updated_at": profile.updated_at,
     }
@@ -290,10 +391,12 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         env_in = fields.pop("env", None)
         # Only require / encrypt credentials for backends that actually use them
         # (those consuming the claude_auth field group). omp_rpc and any future
-        # non-Claude backend must be creatable without supplying credentials.
+        # non-Claude backend (e.g. opencode) must be creatable without supplying credentials.
         backend = fields.get("backend", DEFAULT_BACKEND)
         if capability_or_default(backend).consumes("claude_auth"):
-            fields["claude_credentials"] = _encrypt_credentials_in(box, creds_in, None)
+            fields["claude_credentials"] = _encrypt_credentials_in(
+                box, creds_in, None, endpoint_id=fields.get("endpoint_id"),
+            )
         else:
             fields.pop("claude_credentials", None)
         env_token = _encrypt_env_in(box, env_in)
@@ -305,11 +408,18 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         for scope in fields.get("run_token_scopes") or []:
             if scope not in _VALID_RUN_TOKEN_SCOPES:
                 raise HTTPException(400, f"unknown run_token_scope {scope!r}")
+        capability = capability_or_default(backend)
+        endpoint_id = fields.get("endpoint_id")
+        backend_config = fields.get("backend_config")
+        _validate_profile_compat(session, capability, endpoint_id, backend_config)
         try:
             profile = create_profile(session, **fields)
         except ProfileNameTaken:
             raise HTTPException(409, "name taken")
-        return _profile_out(profile, box)
+        warnings = _model_menu_warnings(
+            session, profile.endpoint_id, profile.default_model, profile.backend_config,
+        )
+        return _profile_out(profile, box, warnings=warnings)
 
     @router.get("", response_model=list[ProfileOut])
     async def lst(session: Session = Depends(get_session)):
@@ -332,8 +442,10 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         fields: dict[str, Any] = {k: v for k, v in raw.items()
                                   if k not in ("claude_credentials", "env")}
         if "claude_credentials" in raw:
+            effective_endpoint_id = raw.get("endpoint_id", existing.endpoint_id)
             fields["claude_credentials"] = _encrypt_credentials_in(
                 box, raw["claude_credentials"], existing.claude_credentials,
+                endpoint_id=effective_endpoint_id,
             )
         if "env" in raw:
             env_token = _encrypt_env_in(box, raw["env"])
@@ -348,13 +460,27 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         for scope in fields.get("run_token_scopes") or []:
             if scope not in _VALID_RUN_TOKEN_SCOPES:
                 raise HTTPException(400, f"unknown run_token_scope {scope!r}")
+        # Re-run the compatibility gate whenever backend, endpoint_id, or
+        # backend_config change — e.g. changing backend on a profile whose
+        # endpoint no longer passes the gate must 400, not save silently.
+        if "backend" in raw or "endpoint_id" in raw or "backend_config" in raw:
+            effective_backend = fields.get("backend", existing.backend)
+            effective_endpoint_id = fields.get("endpoint_id", existing.endpoint_id)
+            effective_backend_config = fields.get("backend_config", existing.backend_config)
+            capability = capability_or_default(effective_backend)
+            _validate_profile_compat(
+                session, capability, effective_endpoint_id, effective_backend_config,
+            )
         try:
             profile = update_profile(session, pid, **fields)
         except ProfileNotFound:
             raise HTTPException(404, "not found")
         except ProfileNameTaken:
             raise HTTPException(409, "name taken")
-        return _profile_out(profile, box)
+        warnings = _model_menu_warnings(
+            session, profile.endpoint_id, profile.default_model, profile.backend_config,
+        )
+        return _profile_out(profile, box, warnings=warnings)
 
     @router.delete("/{pid}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete(pid: str, session: Session = Depends(get_session)):
@@ -409,7 +535,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         allowed_keys = {
             "name", "description", "fs_read", "fs_write", "allowed_tools",
             "denied_tools", "network_mode", "network_allowlist", "secret_keys",
-            "default_model", "backend", "claude_binary_path",
+            "default_model", "backend", "endpoint_id", "backend_config", "claude_binary_path",
             "system_prompt", "permission_mode", "cc_settings_passthrough",
             "run_token_scopes",
         }

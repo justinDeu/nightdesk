@@ -45,6 +45,7 @@ from nightdesk.domain.permissions import (
     PermissionSpec,
     merge_permissions,
 )
+from nightdesk.domain.profile_secrets import ProfileSecretBox
 from nightdesk.domain.profiles import _CC_PERMISSION_MODES, get_profile
 from nightdesk.domain.projects import apply_project_defaults, get_project
 from nightdesk.domain.toolchains import (
@@ -174,6 +175,10 @@ class ResolveInput:
     source_path: Optional[str]
     workspace_mode: Optional[str]
     base_ref: Optional[str]
+    # Used only by the "Launch plan" group to resolve endpoints/credentials
+    # for the dry-run render — the rest of the resolver stays pure/session-free.
+    session: Optional[Session] = None
+    secret_box: Optional[ProfileSecretBox] = None
 
 
 def _clean_list(values: object) -> list[str]:
@@ -227,7 +232,9 @@ def _primary(workspaces: list[dict]) -> Optional[dict]:
     return workspaces[0] if workspaces else None
 
 
-def input_from_ticket(session: Session, ticket: Ticket) -> ResolveInput:
+def input_from_ticket(
+    session: Session, ticket: Ticket, secret_box: Optional[ProfileSecretBox] = None,
+) -> ResolveInput:
     workspaces = [_ws_from_row(w) for w in (ticket.workspaces or [])]
     primary = _primary(workspaces)
     return ResolveInput(
@@ -241,10 +248,14 @@ def input_from_ticket(session: Session, ticket: Ticket) -> ResolveInput:
         source_path=(primary or {}).get("source_path"),
         workspace_mode=(primary or {}).get("kind"),
         base_ref=(primary or {}).get("base_ref"),
+        session=session,
+        secret_box=secret_box,
     )
 
 
-def input_from_draft(session: Session, fields: dict[str, Any]) -> ResolveInput:
+def input_from_draft(
+    session: Session, fields: dict[str, Any], secret_box: Optional[ProfileSecretBox] = None,
+) -> ResolveInput:
     """Normalize a draft ticket dict (ticket preview / promote-from-inbox).
 
     Runs ``apply_project_defaults`` so the preview reflects exactly what
@@ -297,6 +308,8 @@ def input_from_draft(session: Session, fields: dict[str, Any]) -> ResolveInput:
         source_path=(primary or {}).get("source_path") or merged.get("source_path"),
         workspace_mode=(primary or {}).get("kind") or merged.get("workspace_mode"),
         base_ref=(primary or {}).get("base_ref"),
+        session=session,
+        secret_box=secret_box,
     )
 
 
@@ -560,6 +573,150 @@ def _collect_issues(inp: ResolveInput, spec: PermissionSpec) -> list[str]:
     return unique
 
 
+# --- launch plan (dry-run render against the resolved endpoints) -----------
+
+MASKED_VALUE = "••• (from credential)"
+
+
+def _compat_message(capability, ep) -> str:
+    """Mirrors ``api.routes.profiles._compat_message`` (kept as a small,
+    independent copy rather than an import: the API layer depends on domain,
+    never the reverse)."""
+    protocol_kinds = getattr(capability, "protocol_kinds", None)
+    if not protocol_kinds:
+        protocol_kinds = getattr(capability, "provider_kinds", frozenset())
+    protocol_kind = getattr(ep, "protocol_kind", None)
+    label = getattr(ep, "label", "?")
+    if protocol_kind not in protocol_kinds:
+        return (
+            f"endpoint {label!r} speaks {protocol_kind!r}, which "
+            f"{capability.label} does not support (supports {sorted(protocol_kinds)})"
+        )
+    harness_lock = getattr(ep, "harness_lock", None)
+    if harness_lock and harness_lock != capability.code:
+        return (
+            f"endpoint {label!r} is locked to the {harness_lock!r} harness "
+            f"and cannot be used by {capability.code!r}"
+        )
+    return f"endpoint {label!r} is not compatible with {capability.code!r}"
+
+
+def _describe_transport(transport: object) -> str:
+    port = getattr(transport, "port", None)
+    if port is not None:
+        ready = getattr(transport, "ready_path", None)
+        return f"http (port {port}{f', ready {ready}' if ready else ''})"
+    return "stdio"
+
+
+def _launch_plan_group(inp: ResolveInput, spec: PermissionSpec) -> tuple[Optional[ConfigGroup], list[str]]:
+    """Dry-run render the profile's backend against its resolved endpoints.
+
+    Never raises: any failure (incompatible endpoint, renderer exception,
+    missing session) degrades to an ``issues`` entry and no group, so the
+    rest of the effective config still renders. See the design doc's
+    "Effective-config preview redacts secrets".
+    """
+    profile = inp.profile
+    if profile is None or not getattr(profile, "endpoint_id", None):
+        return None, []
+    session = inp.session
+    if session is None:
+        return None, []
+
+    issues: list[str] = []
+    try:
+        from nightdesk.backends import get_backend
+        from nightdesk.backends.base import LaunchContext
+        from nightdesk.domain.providers import (
+            endpoint_compatible,
+            resolve_endpoints_for_profile,
+        )
+    except Exception as exc:
+        return None, [f"launch preview failed: {exc}"]
+
+    try:
+        backend = get_backend(spec.backend)
+    except Exception as exc:
+        return None, [f"launch preview failed: unknown backend {spec.backend!r} ({exc})"]
+
+    try:
+        endpoints = resolve_endpoints_for_profile(session, profile, inp.secret_box)
+    except Exception as exc:
+        return None, [f"launch preview failed: could not resolve endpoints ({exc})"]
+
+    # Surface the compatibility gate independently of the render attempt —
+    # every referenced endpoint (primary and per-agent) must pass.
+    for ep in endpoints.values():
+        if not endpoint_compatible(backend.descriptor, ep):
+            issues.append(_compat_message(backend.descriptor, ep))
+
+    credential_values = {ep.credential for ep in endpoints.values() if ep.credential}
+
+    try:
+        from nightdesk.worker.run_one import compute_model_assignments
+
+        primary = endpoints.get(profile.endpoint_id)
+        default_model = profile.default_model or (
+            primary.default_model if primary is not None else None
+        )
+        model_assignments = compute_model_assignments(
+            backend.descriptor,
+            spec.backend_config,
+            primary=primary,
+            default_model=default_model,
+        )
+        ctx = LaunchContext(
+            spec=spec,
+            endpoint=primary,
+            endpoints=endpoints,
+            model_assignments=model_assignments,
+            run_id="preview",
+            ticket_id="preview",
+            workspace_dir=Path("/nightdesk-preview/workspace"),
+            scratch_root=Path("/nightdesk-preview/scratch"),
+            http_port=None,
+            dry_run=True,
+        )
+        plan = backend.prepare_launch(ctx)
+    except Exception as exc:
+        issues.append(f"launch preview failed: {exc}")
+        return None, issues
+
+    rows: list[ConfigField] = []
+    for ep in endpoints.values():
+        rows.append(ConfigField(
+            key=f"launch_endpoint_{ep.id}",
+            label=f"Endpoint ({ep.label})",
+            source=PROFILE,
+            value=f"{ep.provider_name or '(unknown provider)'} · {ep.protocol_kind}",
+        ))
+    rows.append(ConfigField(
+        key="launch_command", label="Command", source=DERIVED,
+        value=" ".join(plan.cmd),
+    ))
+    for key in sorted(plan.env):
+        value = plan.env[key]
+        masked = key in plan.secret_env_keys or value in credential_values
+        rows.append(ConfigField(
+            key=f"launch_env_{key}", label=f"env {key}", source=DERIVED,
+            value=MASKED_VALUE if masked else value,
+        ))
+    rows.append(ConfigField(
+        key="launch_transport", label="Transport", source=DERIVED,
+        value=_describe_transport(plan.transport),
+    ))
+    if plan.mounts:
+        rows.append(ConfigField(
+            key="launch_mounts", label="Mounts", source=DERIVED,
+            items=tuple(
+                Contribution(value=f"{m.host} -> {m.sandbox} ({m.mode})", source=DERIVED)
+                for m in plan.mounts
+            ),
+        ))
+    return ConfigGroup(title="Launch plan", fields=tuple(rows)), issues
+
+
 # --- public resolver --------------------------------------------------------
 
 
@@ -582,6 +739,7 @@ def resolve_effective_config(inp: ResolveInput) -> EffectiveConfig:
             secret_keys=list(profile.secret_keys or []),
             default_model=profile.default_model,
             backend=getattr(profile, "backend", None) or "claude_sdk",
+            backend_config=dict(getattr(profile, "backend_config", None) or {}),
             claude_binary_path=getattr(profile, "claude_binary_path", None),
             permission_mode=getattr(profile, "permission_mode", None),
             system_prompt=getattr(profile, "system_prompt", None),
@@ -890,7 +1048,10 @@ def resolve_effective_config(inp: ResolveInput) -> EffectiveConfig:
         network_group,
         toolchain_group,
     )
-    issues = _collect_issues(inp, spec)
+    launch_group, launch_issues = _launch_plan_group(inp, spec)
+    if launch_group is not None:
+        groups = groups + (launch_group,)
+    issues = _collect_issues(inp, spec) + launch_issues
     return EffectiveConfig(groups=groups, issues=tuple(issues))
 
 
@@ -931,9 +1092,13 @@ def _safe_resolve_tool_paths(inp: ResolveInput) -> list[str]:
 # --- convenience entry points ----------------------------------------------
 
 
-def resolve_for_ticket(session: Session, ticket: Ticket) -> EffectiveConfig:
-    return resolve_effective_config(input_from_ticket(session, ticket))
+def resolve_for_ticket(
+    session: Session, ticket: Ticket, secret_box: Optional[ProfileSecretBox] = None,
+) -> EffectiveConfig:
+    return resolve_effective_config(input_from_ticket(session, ticket, secret_box))
 
 
-def resolve_for_draft(session: Session, fields: dict[str, Any]) -> EffectiveConfig:
-    return resolve_effective_config(input_from_draft(session, fields))
+def resolve_for_draft(
+    session: Session, fields: dict[str, Any], secret_box: Optional[ProfileSecretBox] = None,
+) -> EffectiveConfig:
+    return resolve_effective_config(input_from_draft(session, fields, secret_box))

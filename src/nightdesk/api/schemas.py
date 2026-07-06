@@ -47,6 +47,8 @@ class ProfileCreate(BaseModel):
     secret_keys: list[str] = []
     default_model: Optional[str] = None
     backend: str = "claude_sdk"
+    endpoint_id: Optional[str] = None
+    backend_config: dict = {}
     claude_credentials: Optional[ClaudeCredentialsIn] = None
     claude_binary_path: Optional[str] = None
     env: Optional[dict[str, str]] = None
@@ -68,6 +70,8 @@ class ProfileUpdate(BaseModel):
     secret_keys: Optional[list[str]] = None
     default_model: Optional[str] = None
     backend: Optional[str] = None
+    endpoint_id: Optional[str] = None
+    backend_config: Optional[dict] = None
     claude_credentials: Optional[ClaudeCredentialsIn] = None
     claude_binary_path: Optional[str] = None
     env: Optional[dict[str, str]] = None
@@ -90,6 +94,8 @@ class ProfileOut(BaseModel):
     secret_keys: list[str]
     default_model: Optional[str] = None
     backend: str = "claude_sdk"
+    endpoint_id: Optional[str] = None
+    backend_config: dict = {}
     claude_credentials: Optional[ClaudeCredentialsOut] = None
     claude_binary_path: Optional[str] = None
     env_keys: list[str] = []
@@ -97,9 +103,138 @@ class ProfileOut(BaseModel):
     permission_mode: Optional[str] = None
     cc_settings_passthrough: dict = {}
     run_token_scopes: list[str] = []
+    # Non-blocking save-time notices (e.g. a model assignment outside its
+    # endpoint's model menu). Empty when there is nothing to warn about.
+    warnings: list[str] = []
     created_at: datetime
     updated_at: datetime
 
+
+# --- Providers & endpoints -------------------------------------------------
+#
+# See docs/design/providers-and-endpoints.md ("Layer 1"). A Provider is a
+# vendor identity; each ProviderEndpoint it owns carries its own protocol,
+# base URL, credential, credential source, optional harness lock, and model
+# menu. Credential/extra fields are write-only: requests carry
+# `credential_value` / `extra`, responses expose only `credential_set` /
+# `extra_set` booleans, never the plaintext.
+
+
+class EndpointCreate(BaseModel):
+    label: str = ""
+    protocol_kind: str
+    base_url: Optional[str] = None
+    credential_source: str = "api_key"
+    credential_value: Optional[str] = None
+    harness_lock: Optional[str] = None
+    default_model: Optional[str] = None
+    models: list[str] = []
+    extra: Optional[dict] = None
+
+
+class EndpointUpdate(BaseModel):
+    label: Optional[str] = None
+    protocol_kind: Optional[str] = None
+    base_url: Optional[str] = None
+    credential_source: Optional[str] = None
+    credential_value: Optional[str] = None
+    harness_lock: Optional[str] = None
+    default_model: Optional[str] = None
+    models: Optional[list[str]] = None
+    extra: Optional[dict] = None
+
+
+class EndpointOut(BaseModel):
+    id: str
+    provider_id: str
+    label: str
+    protocol_kind: str
+    base_url: Optional[str] = None
+    credential_source: str
+    credential_set: bool = False
+    harness_lock: Optional[str] = None
+    default_model: Optional[str] = None
+    models: list[str] = []
+    models_pulled_at: Optional[datetime] = None
+    extra_set: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProviderCreate(BaseModel):
+    name: str
+    vendor: str
+    # Create-flow nesting: endpoints to seed alongside the provider.
+    endpoints: list[EndpointCreate] = []
+    # Seeded into every nested endpoint above whose own `credential_value` is
+    # unset and whose `credential_source` is "api_key" (the ZAI convenience:
+    # paste the key once, it lands on every selected endpoint).
+    credential_value: Optional[str] = None
+
+
+class ProviderUpdate(BaseModel):
+    name: Optional[str] = None
+    vendor: Optional[str] = None
+
+
+class ProviderOut(BaseModel):
+    id: str
+    name: str
+    vendor: str
+    endpoints: list[EndpointOut] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProviderRotateCredential(BaseModel):
+    credential_value: str
+
+
+class ProviderRotateResult(BaseModel):
+    rotated: int
+
+
+class CatalogEndpointOut(BaseModel):
+    label: str
+    protocol_kind: str
+    base_url: Optional[str] = None
+    credential_source: str
+    harness_lock: Optional[str] = None
+    default_model: Optional[str] = None
+
+
+class CatalogVendorOut(BaseModel):
+    vendor: str
+    label: str
+    endpoints: list[CatalogEndpointOut] = []
+
+
+# --- Backends (Layer 2: harness capability catalog) ------------------------
+#
+# Mirrors ``nightdesk.domain.backend_capabilities.BackendCapability`` so the
+# profile editor can render backend choice, field-group visibility, and model
+# slots from data instead of a hard-coded list. See
+# ``docs/design/providers-and-endpoints.md`` ("Layer 2: Harnesses").
+
+
+class ModelSlotOut(BaseModel):
+    name: str
+    label: str
+    required: bool = False
+
+
+class BackendOut(BaseModel):
+    code: str
+    label: str
+    summary: str
+    protocol_kinds: list[str] = []
+    multi_endpoint: bool = False
+    requires_provider: bool = False
+    enabled: bool = True
+    executable: bool = True
+    group_keys: list[str] = []
+    model_slots: list[ModelSlotOut] = []
+    capabilities: list[str] = []
 
 
 class TicketWorkspaceIn(BaseModel):
@@ -547,6 +682,10 @@ class ConfigOut(BaseModel):
     schedule_timezone: str = "UTC"
     windows: list[ScheduleWindowOut] = Field(default_factory=list)
     toolchain_presets: dict[str, list[str]] = Field(default_factory=dict)
+    # Harness-global runtime paths (Layer 2). Empty/unset means auto-discover
+    # from PATH (and, for opencode, ~/.opencode/bin).
+    claude_binary_path: Optional[str] = None
+    opencode_binary_path: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -570,6 +709,9 @@ class ConfigUpdate(BaseModel):
     notify_webhook_url: Optional[str] = None
     schedule_timezone: Optional[str] = None
     toolchain_presets: Optional[dict[str, list[str]]] = None
+    # Empty string clears the override (falls back to PATH discovery).
+    claude_binary_path: Optional[str] = None
+    opencode_binary_path: Optional[str] = None
 
     @field_validator("window_start", "window_end", mode="before")
     @classmethod
