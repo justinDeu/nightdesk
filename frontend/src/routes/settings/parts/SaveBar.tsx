@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { useBlocker } from "@tanstack/react-router";
 import { Button } from "@/ui/Button";
 import { cn } from "@/lib/cn";
+import { useUnsavedGuard } from "@/lib/useUnsavedGuard";
 
 /**
  * Editable-form state with dirty tracking against a server baseline.
@@ -29,14 +29,7 @@ export function useEditableForm<S, F>(
 
   const dirty = form != null && JSON.stringify(form) !== baseline;
 
-  // Guard both a full-page unload (browser's native confirm) and in-app route
-  // changes (our own confirm) while there are unsaved edits, so navigating away
-  // from any section that uses this hook can't silently drop changes.
-  useBlocker({
-    shouldBlockFn: () =>
-      dirty && !window.confirm("You have unsaved changes. Leave without saving?"),
-    enableBeforeUnload: () => dirty,
-  });
+  useUnsavedGuard(dirty, "You have unsaved changes. Leave without saving?");
 
   return {
     form,
