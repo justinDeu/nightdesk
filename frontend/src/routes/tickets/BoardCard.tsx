@@ -65,22 +65,33 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
       className={cn(
         "group relative shrink-0 cursor-pointer overflow-hidden rounded-card border p-3 pt-3.5",
         "shadow-[var(--shadow-raised)] transition-colors",
-        // Selection: a left-anchored jade wash (.wash-selected), background-only so
-        // the 1px border stays uniform on every side in every state and the card
-        // never shifts/shrinks a pixel when (de)selected.
-        // Failed: a left-anchored ember gradient wash + ember-tinted border so the
-        // whole card silhouette reads warm and pops out of a column (the pill names
-        // it). Selected + failed: the jade selection wash wins, but the ember border
-        // is retained so the failed identity survives in the silhouette.
+        // Surface tint. Background-only so the 1px border stays uniform on every side
+        // in every state and the card never shifts/shrinks a pixel when (de)selected.
+        // Failed: a left-anchored ember wash + ember border so the whole silhouette
+        // reads warm and pops out of a column. Selected failed cards KEEP the ember
+        // wash (not the jade one) so a red card never turns green on select — the
+        // 2px selection ring below goes red to match. Selected non-failed cards take
+        // the jade wash + jade ring.
         selected
           ? outcome === "failed"
-            ? "wash-selected border-failed/35 bg-ink-900"
+            ? "wash-failed border-failed/45 bg-ink-900"
             : "wash-selected border-ink-700 bg-ink-900"
           : outcome === "failed"
             ? "wash-failed border-failed/35 bg-ink-900"
             : "border-ink-700 bg-ink-900 hover:bg-ink-800",
-        // Cursor/focus: a strong ring that sits on top of any selection tint.
-        focused ? "ring-2 ring-lamp" : peeked ? "ring-1 ring-lamp/50" : "",
+        // Ring precedence (a box-shadow ring, so it never shifts geometry):
+        //  1. keyboard cursor (focused) — always the strongest, jade 2px.
+        //  2. selection — a clear 2px ring; red for failed cards, jade otherwise.
+        //  3. side-peek — a soft jade 1px.
+        focused
+          ? "ring-2 ring-lamp"
+          : selected
+            ? outcome === "failed"
+              ? "ring-2 ring-failed"
+              : "ring-2 ring-lamp"
+            : peeked
+              ? "ring-1 ring-lamp/50"
+              : "",
         dragging && "opacity-40",
       )}
     >
@@ -121,7 +132,10 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
         </span>
       </button>
 
-      <div className="mb-2 flex items-start gap-2">
+      {/* Title owns the full width now; pr-7 keeps the 3-line clamp clear of the
+          corner select toggle (absolute, top-right, 24px). Priority moved to the
+          meta row so nothing crowds the checkbox during multi-select. */}
+      <div className="mb-2 pr-7">
         {/* Real anchor so middle/cmd-click open a new tab natively; plain click
             still opens the peek (preventDefault). draggable=false keeps the
             card's pragmatic-DnD drag intact instead of dragging the link. */}
@@ -135,25 +149,10 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
             if (e.shiftKey) onRangeSelect();
             else onSelect();
           }}
-          className="block min-w-0 flex-1 rounded-[4px] text-sm font-medium leading-snug text-moon-100 hover:text-lamp focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp group-hover:text-lamp"
+          className="block min-w-0 rounded-[4px] text-sm font-medium leading-snug text-moon-100 hover:text-lamp focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp group-hover:text-lamp"
         >
           <span className="line-clamp-3">{ticket.title}</span>
         </a>
-        {/* Kept mounted in every state (only its opacity changes) so selecting or
-            hovering never removes it from the flex row and reflows the title — that
-            unmount was the "card shrinks slightly on select" regression. Faded out
-            when selected (the corner check owns that spot) or on hover.
-            pointer-events-none: once faded this span still overlaps the corner
-            select glyph; without it the click lands here (opening the peek) instead
-            of on the glyph (E2E BUG-2). */}
-        <span
-          className={cn(
-            "pointer-events-none transition-opacity",
-            selected ? "opacity-0" : "group-hover:opacity-0",
-          )}
-        >
-          <PriorityChip value={ticket.priority} hideNone />
-        </span>
       </div>
 
       {ticket.labels.length > 0 && (
@@ -171,11 +170,13 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
       )}
 
       <div className="flex items-center justify-between gap-2 text-[11px] text-moon-600">
-        {hideProject ? (
-          <span className="min-w-0" />
-        ) : (
-          <ProjectTag project={project} showNone className="min-w-0" />
-        )}
+        {/* Left meta cluster: project + priority ride together here (priority left
+            the title row so it can't crowd the corner checkbox). min-w-0 lets the
+            project name truncate before the priority chip. */}
+        <div className="flex min-w-0 items-center gap-1.5">
+          {!hideProject && <ProjectTag project={project} showNone className="min-w-0" />}
+          <PriorityChip value={ticket.priority} hideNone className="shrink-0" />
+        </div>
         <div className="flex shrink-0 items-center gap-2">
           {outcome === "failed" && (
             <span className="inline-flex items-center gap-1 rounded-full border border-failed/30 bg-failed/10 px-1.5 py-0.5 text-[10px] font-medium text-failed">
