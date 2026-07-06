@@ -57,3 +57,48 @@ export function useTicketActions() {
       ),
   };
 }
+
+export interface StatusMove {
+  label: string;
+  run: () => void;
+  danger?: boolean;
+}
+
+/**
+ * The legal status moves for a board card, expressed as ready-to-fire actions.
+ * Single source of truth for the touch "Move to…" menu so it never re-derives
+ * transition legality — it mirrors the same lifecycle the DetailHeader /
+ * TicketPeek quick-action buttons drive (draft/queued can run-now or shuffle,
+ * running can cancel, review requeues, everything runnable can archive).
+ */
+export function ticketStatusMoves(
+  t: TicketOut,
+  actions: ReturnType<typeof useTicketActions>,
+): StatusMove[] {
+  switch (t.status) {
+    case "draft":
+      return [
+        { label: "Run now", run: () => actions.runNow(t) },
+        { label: "Move to Queued", run: () => actions.transition(t.id, "queued") },
+        { label: "Send to inbox", run: () => actions.sendToInbox(t) },
+        { label: "Archive", run: () => actions.archive(t) },
+      ];
+    case "queued":
+      return [
+        { label: "Run now", run: () => actions.runNow(t) },
+        { label: "Move to Draft", run: () => actions.transition(t.id, "draft") },
+        { label: "Archive", run: () => actions.archive(t) },
+      ];
+    case "running":
+      return [{ label: "Cancel run", run: () => actions.cancel(t), danger: true }];
+    case "review":
+      return [
+        { label: "Requeue", run: () => actions.requeue(t) },
+        { label: "Archive", run: () => actions.archive(t) },
+      ];
+    case "archived":
+      return [{ label: "Restore", run: () => actions.unarchive(t) }];
+    default:
+      return [];
+  }
+}

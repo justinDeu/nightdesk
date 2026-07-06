@@ -304,7 +304,7 @@ export function ArchivePage() {
                   </span>
                 </Tooltip>
                 <span
-                  className="flex w-16 shrink-0 items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+                  className="flex w-16 shrink-0 items-center justify-end gap-0.5 opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <Tooltip content="Restore">

@@ -253,7 +253,17 @@ export function Toaster() {
     <SonnerToaster
       position="bottom-right"
       gap={8}
-      offset={16}
+      // Respect the phone's safe areas (home indicator / rounded corners) so a
+      // toast never tucks under system chrome; falls back to 16px elsewhere.
+      offset={{
+        bottom: "max(16px, env(safe-area-inset-bottom))",
+        right: "max(16px, env(safe-area-inset-right))",
+      }}
+      mobileOffset={{
+        bottom: "max(16px, env(safe-area-inset-bottom))",
+        right: "max(16px, env(safe-area-inset-right))",
+        left: "max(16px, env(safe-area-inset-left))",
+      }}
       toastOptions={{ unstyled: true }}
     />
   );

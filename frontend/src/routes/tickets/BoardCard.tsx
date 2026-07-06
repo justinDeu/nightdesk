@@ -1,10 +1,17 @@
 import { forwardRef } from "react";
-import { Ban, Check, Zap } from "lucide-react";
+import { Ban, Check, MoreHorizontal, Zap } from "lucide-react";
 import type { ProjectOut, RunOut, TicketOut } from "@/api/types";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/ui/DropdownMenu";
 import { formatUsd } from "@/lib/status";
 import { ticketHref } from "@/lib/routes";
+import { useTicketActions, ticketStatusMoves } from "@/lib/ticketActions";
 import { cn } from "@/lib/cn";
 
 /** Notable finished-run outcome for a card badge/edge. Success is not notable. */
@@ -45,6 +52,8 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
 ) {
   const running = ticket.status === "running";
   const outcome = running ? null : runOutcome(latestRun);
+  const actions = useTicketActions();
+  const moves = ticketStatusMoves(ticket, actions);
 
   return (
     <div
@@ -79,8 +88,11 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           pill below (no top line — it read as bolted-on). */}
       {running && <span aria-hidden className="dawn-edge absolute inset-x-0 top-0 h-[2px]" />}
 
-      {/* Corner select toggle: always visible once selected; on hover it shows a
-          faint outline target so the mouse has an obvious way to (de)select. */}
+      {/* Corner select toggle: a low-emphasis outline target that sits at rest
+          (so touch users can always (de)select) and brightens on hover/focus;
+          fully lit once selected. The 24px button is a comfortable tap target;
+          the inner span carries the small visual glyph so the footprint stays
+          tight. */}
       <button
         type="button"
         aria-label={selected ? "Deselect ticket" : "Select ticket"}
@@ -90,14 +102,23 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           onToggleSelect();
         }}
         className={cn(
-          "absolute right-1.5 top-1.5 grid h-4 w-4 place-items-center rounded-full transition",
+          "absolute right-0.5 top-0.5 grid h-6 w-6 place-items-center rounded-full transition",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp",
           selected
-            ? "bg-lamp text-ink-950"
-            : "border border-moon-600/70 text-transparent opacity-0 hover:border-lamp hover:text-lamp group-hover:opacity-100",
+            ? "opacity-100"
+            : "opacity-60 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
         )}
       >
-        <Check size={11} strokeWidth={3} />
+        <span
+          className={cn(
+            "grid h-4 w-4 place-items-center rounded-full transition",
+            selected
+              ? "bg-lamp text-ink-950"
+              : "border border-moon-600/70 text-transparent hover:border-lamp hover:text-lamp",
+          )}
+        >
+          <Check size={11} strokeWidth={3} />
+        </span>
       </button>
 
       <div className="mb-2 flex items-start gap-2">
@@ -173,6 +194,35 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           )}
           {latestRun?.cost_usd != null && (
             <span className="font-mono tabular-nums">{formatUsd(latestRun.cost_usd)}</span>
+          )}
+          {/* Touch-safe status move: HTML5 drag can't work on a touchscreen, so
+              every card carries an overflow menu of its legal transitions. Shown
+              at rest on coarse pointers, hover/focus-gated on a mouse where drag
+              already works. */}
+          {moves.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Move ticket"
+                  onClick={(e) => e.stopPropagation()}
+                  className={cn(
+                    "-mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-control text-moon-400 transition",
+                    "hover:bg-ink-800 hover:text-moon-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp",
+                    "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
+                  )}
+                >
+                  <MoreHorizontal size={15} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {moves.map((m) => (
+                  <DropdownMenuItem key={m.label} danger={m.danger} onSelect={m.run}>
+                    {m.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </div>

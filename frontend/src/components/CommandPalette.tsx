@@ -148,7 +148,9 @@ export function CommandPalette() {
               placeholder="Search tickets or jump to…"
               className="flex-1 bg-transparent text-sm text-moon-100 placeholder:text-moon-600 focus:outline-none"
             />
-            <Kbd>esc</Kbd>
+            <span className="hidden sm:block">
+              <Kbd>esc</Kbd>
+            </span>
           </div>
 
           <div className="max-h-[50vh] overflow-y-auto p-1.5">
@@ -169,7 +171,11 @@ export function CommandPalette() {
                     <>
                       <span className="text-moon-400">{row.cmd.icon}</span>
                       <span className="flex-1">{row.cmd.label}</span>
-                      {row.cmd.hint && <Kbd>{row.cmd.hint}</Kbd>}
+                      {row.cmd.hint && (
+                        <span className="hidden sm:block">
+                          <Kbd>{row.cmd.hint}</Kbd>
+                        </span>
+                      )}
                     </>
                   ) : (
                     <>

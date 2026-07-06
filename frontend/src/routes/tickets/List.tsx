@@ -98,7 +98,7 @@ export function List({
                         : onSelect(t.id)
                   }
                   className={cn(
-                    "group flex items-center gap-2.5 border-t border-ink-700/60 px-3 py-2 text-sm",
+                    "group flex items-center gap-2 border-t border-ink-700/60 px-3 py-2 text-sm md:gap-2.5",
                     "cursor-pointer transition-colors",
                     isSel
                       ? "wash-selected"
@@ -110,31 +110,38 @@ export function List({
                       : focusedId === t.id && "ring-1 ring-inset ring-lamp/40",
                   )}
                 >
-                  <input
-                    type="checkbox"
-                    checked={isSel}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (e.shiftKey) {
-                        e.preventDefault();
-                        onRangeSelect(t.id);
-                      }
-                    }}
-                    onChange={() => onToggleSelect(t.id)}
+                  {/* Padded label = ≥24px tap target without widening the row
+                      (the negative margin cancels the pad in layout). Low-emphasis
+                      at rest so touch users can always select; full once anything
+                      is selected. */}
+                  <label
+                    onClick={(e) => e.stopPropagation()}
                     className={cn(
-                      "accent-lamp transition-opacity",
-                      // Match the board: the checkbox hides until hover, and stays
-                      // visible whenever this row (or any row) is selected.
+                      "-m-1.5 grid shrink-0 cursor-pointer place-items-center p-1.5 transition-opacity",
                       isSel || anySelected
                         ? "opacity-100"
-                        : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                        : "opacity-60 group-hover:opacity-100 group-focus-within:opacity-100",
                     )}
-                    aria-label={`Select ${t.title}`}
-                  />
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSel}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (e.shiftKey) {
+                          e.preventDefault();
+                          onRangeSelect(t.id);
+                        }
+                      }}
+                      onChange={() => onToggleSelect(t.id)}
+                      className="h-4 w-4 accent-lamp"
+                      aria-label={`Select ${t.title}`}
+                    />
+                  </label>
                   {t.status === "running" ? (
                     <StatusPill status="running" />
                   ) : (
-                    <span className="w-1.5" />
+                    <span className="hidden w-1.5 md:block" />
                   )}
                   <div onClick={(e) => e.stopPropagation()}>
                     <PriorityPicker

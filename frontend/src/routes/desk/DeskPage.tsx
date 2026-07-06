@@ -303,7 +303,10 @@ const NeedsRow = forwardRef<
       ref={ref}
       onMouseEnter={onFocus}
       className={cn(
-        "group flex items-center gap-3 rounded-control border px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors",
+        // Phone: pill+title stack on top, then the meta line, then actions.
+        // md+: the original single row. md:contents on the pill+title wrapper
+        // hoists them into the row so the layout is unchanged there.
+        "group flex flex-col gap-2 rounded-control border px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors md:flex-row md:items-center md:gap-3",
         focused
           ? "border-lamp/40 bg-ink-800"
           : reason === "failed"
@@ -311,36 +314,38 @@ const NeedsRow = forwardRef<
             : "border-ink-700 bg-ink-900 hover:bg-ink-800",
       )}
     >
-      {reason === "failed" ? (
-        <StatusPill status="failed" label="Failed" />
-      ) : (
-        <StatusPill status="review" />
-      )}
-      <a
-        href={ticketHref(ticket.id)}
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey) return;
-          e.preventDefault();
-          onOpen();
-        }}
-        className="min-w-0 flex-1 rounded-[4px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
-      >
-        <span className="block truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
-          {ticket.title}
-        </span>
-        <span className="mt-0.5 flex items-center gap-2 text-xs text-moon-600">
-          <ProjectTag project={project} showNone />
-          {run?.cost_usd != null && (
-            <span className="font-mono tabular-nums">{formatUsd(run.cost_usd)}</span>
-          )}
-          {run?.finished_at && <span>{relativeTime(run.finished_at)}</span>}
-          {reason === "failed" && run?.error_summary && (
-            <span className="truncate text-failed">{run.error_summary}</span>
-          )}
-        </span>
-      </a>
-      <PriorityChip value={ticket.priority} hideNone />
-      <div className="flex shrink-0 items-center gap-1 opacity-70 group-hover:opacity-100">
+      <div className="flex min-w-0 items-start gap-2.5 md:contents md:items-center">
+        {reason === "failed" ? (
+          <StatusPill status="failed" label="Failed" />
+        ) : (
+          <StatusPill status="review" />
+        )}
+        <a
+          href={ticketHref(ticket.id)}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey) return;
+            e.preventDefault();
+            onOpen();
+          }}
+          className="min-w-0 flex-1 rounded-[4px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
+        >
+          <span className="block text-sm font-medium text-moon-100 group-hover:text-lamp line-clamp-2 md:truncate">
+            {ticket.title}
+          </span>
+          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-moon-600 md:flex-nowrap">
+            <ProjectTag project={project} showNone />
+            {run?.cost_usd != null && (
+              <span className="font-mono tabular-nums">{formatUsd(run.cost_usd)}</span>
+            )}
+            {run?.finished_at && <span>{relativeTime(run.finished_at)}</span>}
+            {reason === "failed" && run?.error_summary && (
+              <span className="min-w-0 truncate text-failed">{run.error_summary}</span>
+            )}
+          </span>
+        </a>
+      </div>
+      <div className="flex shrink-0 items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
+        <PriorityChip value={ticket.priority} hideNone />
         {/* Open is redundant on a phone (tapping the title opens); requeue and
             archive collapse to icon-only below sm so the row never overflows. */}
         <Button size="sm" variant="ghost" onClick={onOpen} className="hidden sm:inline-flex">

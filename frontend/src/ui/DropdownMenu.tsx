@@ -29,6 +29,7 @@ export function DropdownMenuContent({
         collisionPadding={8}
         className={cn(
           "pop-in z-50 min-w-[200px] rounded-card border border-ink-700 bg-ink-800 p-1",
+          "max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overscroll-contain",
           "shadow-[var(--shadow-pop)] focus:outline-none",
           className,
         )}
