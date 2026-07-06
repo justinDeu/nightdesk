@@ -39,10 +39,23 @@ export type TicketListParams = {
   status?: TicketStatus;
   profile_id?: string;
   project_id?: string;
+  /** Exact priority band (0-4). */
+  priority?: number;
+  /** Label name (case-insensitive) or id. */
+  label?: string;
+  /** Latest-run outcome. */
+  outcome?: "succeeded" | "failed";
+  /** Free-text substring over title + prompt. */
+  q?: string;
   limit?: number;
   offset?: number;
-  /** "board" (position-stable, default) or "recent" (updated_at desc). */
-  sort?: "board" | "recent";
+  /**
+   * Sort key. "board" (position-stable, default) leaves ordering unchanged for
+   * the board callers; "recent"/"created"/"priority"/"cost" pair with `order`.
+   */
+  sort?: "board" | "recent" | "created" | "priority" | "cost";
+  /** Direction for every `sort` except "board" (which ignores it). */
+  order?: "asc" | "desc";
 };
 
 /** One page of a paginated ticket list plus the server's total for the filter. */

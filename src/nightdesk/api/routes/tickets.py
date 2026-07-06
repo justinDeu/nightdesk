@@ -144,9 +144,14 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         status: str | None = Query(default=None),
         profile_id: str | None = Query(default=None),
         project_id: str | None = Query(default=None),
+        priority: int | None = Query(default=None, ge=0, le=4),
+        label: str | None = Query(default=None),
+        outcome: str | None = Query(default=None, pattern="^(succeeded|failed)$"),
+        q: str | None = Query(default=None),
         limit: int = Query(default=200, ge=1, le=MAX_LIST_LIMIT),
         offset: int = Query(default=0, ge=0),
-        sort: str = Query(default="board", pattern="^(board|recent)$"),
+        sort: str = Query(default="board", pattern="^(board|recent|created|priority|cost)$"),
+        order: str = Query(default="desc", pattern="^(asc|desc)$"),
         session: Session = Depends(get_session),
     ):
         """List tickets, one page at a time.
@@ -158,17 +163,26 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         completeness — the original bug was exactly that a larger ``limit`` was
         ignored and 200 rows were returned with no signal of truncation.
 
+        Filter dimensions (all optional, AND-combined, applied server-side so
+        the count and paging stay honest): ``status``, ``profile_id``,
+        ``project_id`` (``null`` matches no-project), ``priority`` (0-4),
+        ``label`` (name or id), ``outcome`` (``succeeded``/``failed`` on the
+        latest run), and ``q`` (free-text substring over title + prompt).
+
         ``sort`` defaults to ``board`` (position-stable, unchanged for existing
-        callers). ``sort=recent`` orders by ``updated_at`` desc — the newest-
-        first order the Archive page uses so page 1 is the most recently
-        archived. Any other value is a 422.
+        callers). Other keys — ``recent`` (updated_at), ``created``,
+        ``priority``, ``cost`` (latest run) — pair with ``order`` (``desc``
+        default / ``asc``). ``sort=recent`` with the default ``order`` is the
+        newest-first order the Archive page uses. Any other value is a 422.
         """
         tickets = list_tickets(
             session, status=status, profile_id=profile_id,
             project_id=project_id, limit=limit, offset=offset, sort=sort,
+            order=order, priority=priority, label=label, outcome=outcome, q=q,
         )
         total = count_tickets(
             session, status=status, profile_id=profile_id, project_id=project_id,
+            priority=priority, label=label, outcome=outcome, q=q,
         )
         response.headers["X-Total-Count"] = str(total)
         response.headers["X-Has-More"] = "true" if (offset + len(tickets)) < total else "false"

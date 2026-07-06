@@ -9,8 +9,43 @@
 import type { LabelOut, ProfileOut, ProjectOut, TicketOut } from "@/api/types";
 import { PRIORITY_SCALE } from "@/lib/priority";
 
-export const FILTER_KEYS = ["status", "project", "label", "priority", "profile"] as const;
-export type FilterKey = (typeof FILTER_KEYS)[number];
+/** Every filter dimension the parser knows how to type. A given surface offers
+ *  a subset (see ``TICKETS_FILTER_KEYS`` / ``ARCHIVE_FILTER_KEYS``): a colon
+ *  fragment whose key is outside the active subset falls through to free text,
+ *  so the same parser drives both boards without one leaking the other's
+ *  vocabulary. */
+export const ALL_FILTER_KEYS = [
+  "status",
+  "project",
+  "label",
+  "priority",
+  "profile",
+  "outcome",
+] as const;
+export type FilterKey = (typeof ALL_FILTER_KEYS)[number];
+
+/** The tracker board keys — unchanged from before ``outcome`` existed, so the
+ *  Tickets page (which also runs ``applyFilter`` client-side) is untouched. */
+export const TICKETS_FILTER_KEYS = [
+  "status",
+  "project",
+  "label",
+  "priority",
+  "profile",
+] as const satisfies readonly FilterKey[];
+
+/** Archive board keys: no ``status`` (every row is archived) but adds
+ *  ``outcome`` (the ticket's last run succeeded/failed). */
+export const ARCHIVE_FILTER_KEYS = [
+  "project",
+  "label",
+  "priority",
+  "profile",
+  "outcome",
+] as const satisfies readonly FilterKey[];
+
+/** Default subset for callers that don't pass one (the Tickets board). */
+export const FILTER_KEYS = TICKETS_FILTER_KEYS;
 
 export interface FilterToken {
   key: FilterKey;
@@ -22,10 +57,13 @@ export interface ParsedFilter {
   text: string;
 }
 
-const KEY_SET = new Set<string>(FILTER_KEYS);
-
-/** Parse a raw filter string into typed tokens + residual free text. */
-export function parseFilter(raw: string): ParsedFilter {
+/** Parse a raw filter string into typed tokens + residual free text. Only
+ *  colon fragments whose key is in ``keys`` become tokens; the rest is text. */
+export function parseFilter(
+  raw: string,
+  keys: readonly FilterKey[] = FILTER_KEYS,
+): ParsedFilter {
+  const allowed = new Set<string>(keys);
   const tokens: FilterToken[] = [];
   const words: string[] = [];
   for (const part of raw.split(/\s+/)) {
@@ -34,7 +72,7 @@ export function parseFilter(raw: string): ParsedFilter {
     if (idx > 0) {
       const key = part.slice(0, idx).toLowerCase();
       const value = part.slice(idx + 1);
-      if (KEY_SET.has(key) && value) {
+      if (allowed.has(key) && value) {
         tokens.push({ key: key as FilterKey, value });
         continue;
       }
@@ -125,6 +163,102 @@ export function applyFilter(
   });
 }
 
+/**
+ * Normalize a filter string set *programmatically* (a restored Saved View, a
+ * deep link) so the FilterBar renders it fully as pills. If it ends in a
+ * complete `key:value` token with no trailing space, append one so that token
+ * commits to a pill instead of landing in the input as editable draft text
+ * (the FilterBar only pills a token once whitespace follows it).
+ *
+ * A no-op for values that already end in whitespace or in free text — a
+ * trailing free-text word must stay editable. Do NOT call this on the live
+ * typing round-trip: it would commit a half-typed token mid-keystroke (e.g.
+ * `project:n` is a "complete" token while you're still typing `project:night`).
+ */
+export function commitTrailingToken(
+  raw: string,
+  keys: readonly FilterKey[] = FILTER_KEYS,
+): string {
+  if (!raw || /\s$/.test(raw)) return raw;
+  const last = raw.match(/\S+$/)?.[0] ?? "";
+  const idx = last.indexOf(":");
+  if (idx > 0) {
+    const key = last.slice(0, idx).toLowerCase();
+    const val = last.slice(idx + 1);
+    if (new Set<string>(keys).has(key) && val) return `${raw} `;
+  }
+  return raw;
+}
+
+/** Server-side query shape a parsed filter resolves to. Names are resolved to
+ *  ids here (client-side, where the project/profile lists live) so the API only
+ *  ever filters by id/exact value. Mirrors the query params `GET
+ *  /api/v1/tickets` accepts. */
+export interface ServerFilterParams {
+  project_id?: string;
+  profile_id?: string;
+  priority?: number;
+  label?: string;
+  outcome?: "succeeded" | "failed";
+  q?: string;
+}
+
+/**
+ * Translate a parsed filter into server query params (the Archive page's path —
+ * server-side filtering that composes with limit/offset paging, unlike the
+ * Tickets board which filters `applyFilter` client-side over an already-loaded
+ * page). Each dimension is single-valued (last token wins) and AND-combined; a
+ * token that resolves to nothing (unknown project/profile/priority) is dropped
+ * rather than sent, so a typo never silently empties the list server-side.
+ */
+export function filterToQuery(parsed: ParsedFilter, ctx: FilterContext): ServerFilterParams {
+  const out: ServerFilterParams = {};
+  for (const tok of parsed.tokens) {
+    switch (tok.key) {
+      case "project": {
+        const v = tok.value.toLowerCase();
+        if (v === "none" || v === "null") {
+          out.project_id = "null";
+          break;
+        }
+        const id = matchProject(tok.value, ctx.projects);
+        if (id) out.project_id = id;
+        break;
+      }
+      case "profile": {
+        const prof = ctx.profiles.find(
+          (p) => p.name.toLowerCase() === tok.value.toLowerCase() || p.id === tok.value,
+        );
+        if (prof) out.profile_id = prof.id;
+        break;
+      }
+      case "priority": {
+        const pv = priorityValue(tok.value);
+        if (pv != null) out.priority = pv;
+        break;
+      }
+      case "label": {
+        // Send the raw value; the server matches label name (case-insensitive)
+        // or id, so no client-side id resolution is needed.
+        out.label = tok.value;
+        break;
+      }
+      case "outcome": {
+        const v = tok.value.toLowerCase();
+        if (v === "succeeded" || v === "success" || v === "ok") out.outcome = "succeeded";
+        else if (v === "failed" || v === "fail" || v === "error") out.outcome = "failed";
+        break;
+      }
+      case "status":
+        // Not a dimension the Archive exposes (every row is archived).
+        break;
+    }
+  }
+  const text = parsed.text.trim();
+  if (text) out.q = text;
+  return out;
+}
+
 /** Suggestions for the active partial token (`key:partial`). */
 export function suggestValues(key: FilterKey, partial: string, ctx: FilterContext): string[] {
   const p = partial.toLowerCase();
@@ -141,6 +275,8 @@ export function suggestValues(key: FilterKey, partial: string, ctx: FilterContex
       return pick(PRIORITY_SCALE.map((x) => x.name));
     case "profile":
       return pick(ctx.profiles.map((x) => x.name));
+    case "outcome":
+      return pick(["succeeded", "failed"]);
     default:
       return [];
   }

@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from nightdesk.db.models import Ticket, TicketDependency, TicketWorkspace
+from nightdesk.db.models import Label, Run, Ticket, TicketDependency, TicketWorkspace
 from nightdesk.domain.projects import apply_project_defaults, get_project
 from nightdesk.domain.priority import validate_priority
 from nightdesk.domain.toolchains import (
@@ -302,16 +302,45 @@ def get_ticket(session: Session, ticket_id: str) -> Ticket:
     return t
 
 
+def _latest_run_scalar(column):
+    """Correlated scalar subquery for a column of a ticket's *latest* run.
+
+    "Latest" is by ``started_at`` desc (``id`` desc breaks ties), matching the
+    newest-run-first order the runs list and the Archive row use. Correlates on
+    ``Ticket.id`` so it composes into both the filter WHERE and the ORDER BY of
+    ``list_tickets``/``count_tickets`` without a GROUP BY or row-duplicating
+    join — the count and the page therefore stay in lockstep.
+    """
+    return (
+        select(column)
+        .where(Run.ticket_id == Ticket.id)
+        .order_by(Run.started_at.desc(), Run.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
+
 def _ticket_filters(
     status: Optional[str],
     profile_id: Optional[str],
     project_id: Optional[str],
+    priority: Optional[int] = None,
+    label: Optional[str] = None,
+    outcome: Optional[str] = None,
+    q: Optional[str] = None,
 ) -> list:
     """Shared WHERE-clause builder for ``list_tickets`` / ``count_tickets``.
 
     Centralized so the page (``list_tickets``) and the total
     (``count_tickets``) can never drift apart — a mismatch would defeat the
     truncation metadata callers rely on to detect incomplete results.
+
+    Beyond the original status/profile/project dimensions the Archive page adds:
+    ``priority`` (exact 0-4), ``label`` (name case-insensitive OR id, via an
+    EXISTS so no row is duplicated), ``q`` (free-text substring over title and
+    prompt), and ``outcome`` (the latest run's terminal state — ``succeeded``
+    is ``exit_status == 'success'``; ``failed`` is any other finished status,
+    mirroring the binary the UI's run pill shows).
     """
     filters: list = []
     if status is not None:
@@ -323,6 +352,25 @@ def _ticket_filters(
             filters.append(Ticket.project_id.is_(None))
         else:
             filters.append(Ticket.project_id == project_id)
+    if priority is not None:
+        filters.append(Ticket.priority == priority)
+    if q:
+        like = f"%{q}%"
+        filters.append(or_(Ticket.title.ilike(like), Ticket.prompt.ilike(like)))
+    if label is not None:
+        filters.append(
+            Ticket.labels.any(
+                or_(func.lower(Label.name) == label.lower(), Label.id == label)
+            )
+        )
+    if outcome is not None:
+        latest_status = _latest_run_scalar(Run.exit_status)
+        if outcome == "succeeded":
+            filters.append(latest_status == "success")
+        elif outcome == "failed":
+            filters.append(
+                and_(latest_status.is_not(None), latest_status != "success")
+            )
     return filters
 
 
@@ -334,6 +382,11 @@ def list_tickets(
     limit: int = 200,
     offset: int = 0,
     sort: str = "board",
+    order: str = "desc",
+    priority: Optional[int] = None,
+    label: Optional[str] = None,
+    outcome: Optional[str] = None,
+    q: Optional[str] = None,
 ) -> list[Ticket]:
     """One page of tickets matching the filters.
 
@@ -352,15 +405,43 @@ def list_tickets(
       tickets have no dedicated ``archived_at`` column — archiving bumps
       ``updated_at`` — so this is the newest-first order the Archive page pages
       through. ``id`` breaks ties for a stable page boundary.
+    - ``"created"``: by ``created_at`` (age of the ticket).
+    - ``"priority"``: by the 0-4 priority scale, ``updated_at`` breaking ties.
+    - ``"cost"``: by the latest run's ``cost_usd`` (a correlated subquery);
+      tickets with no run sort as NULL (last under ``desc``, first under
+      ``asc``).
+
+    ``order`` (``desc`` default / ``asc``) flips the direction of every sort
+    except ``board``, whose fixed board order ignores it. ``sort=recent`` with
+    the default ``order`` is byte-identical to the pre-``order`` behavior, so
+    the Archive's existing call is unchanged.
     """
+    descending = order != "asc"
+
+    def _dir(col):
+        return col.desc() if descending else col.asc()
+
     if sort == "recent":
-        order = (Ticket.updated_at.desc(), Ticket.id.desc())
+        order_by = (_dir(Ticket.updated_at), Ticket.id.desc())
+    elif sort == "created":
+        order_by = (_dir(Ticket.created_at), Ticket.id.desc())
+    elif sort == "priority":
+        order_by = (_dir(Ticket.priority), Ticket.updated_at.desc(), Ticket.id.desc())
+    elif sort == "cost":
+        order_by = (
+            _dir(_latest_run_scalar(Run.cost_usd)),
+            Ticket.updated_at.desc(),
+            Ticket.id.desc(),
+        )
     else:
-        order = (Ticket.position.asc(), Ticket.priority.desc(), Ticket.created_at.asc())
+        order_by = (Ticket.position.asc(), Ticket.priority.desc(), Ticket.created_at.asc())
     stmt = (
         select(Ticket)
-        .where(*_ticket_filters(status, profile_id, project_id))
-        .order_by(*order)
+        .where(*_ticket_filters(
+            status, profile_id, project_id,
+            priority=priority, label=label, outcome=outcome, q=q,
+        ))
+        .order_by(*order_by)
         .limit(limit)
         .offset(offset)
     )
@@ -372,6 +453,10 @@ def count_tickets(
     status: Optional[str] = None,
     profile_id: Optional[str] = None,
     project_id: Optional[str] = None,
+    priority: Optional[int] = None,
+    label: Optional[str] = None,
+    outcome: Optional[str] = None,
+    q: Optional[str] = None,
 ) -> int:
     """Total tickets matching the filters, ignoring ``limit``/``offset``.
 
@@ -381,7 +466,10 @@ def count_tickets(
     results are always detectable rather than silently clamped.
     """
     stmt = select(func.count(Ticket.id)).where(
-        *_ticket_filters(status, profile_id, project_id)
+        *_ticket_filters(
+            status, profile_id, project_id,
+            priority=priority, label=label, outcome=outcome, q=q,
+        )
     )
     return int(session.scalar(stmt) or 0)
 

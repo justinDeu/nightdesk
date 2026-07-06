@@ -28,7 +28,7 @@ import { useProjects } from "@/api/projects";
 import { useProfiles } from "@/api/profiles";
 import { useLabels } from "@/api/labels";
 import type { RunOut, TicketOut } from "@/api/types";
-import { applyFilter, parseFilter, type FilterContext } from "./filterModel";
+import { applyFilter, commitTrailingToken, parseFilter, type FilterContext } from "./filterModel";
 import { useTicketActions } from "@/lib/ticketActions";
 import { useKeybinds, type Keybind } from "@/lib/keymap";
 import { openComposer } from "@/components/composerBus";
@@ -358,7 +358,7 @@ export function TicketsPage() {
           <SavedViews
             current={currentViewState}
             activeId={activeViewId}
-            onApply={(state, id) => setSearch({ view: state.view, f: state.filter || undefined, viewId: id })}
+            onApply={(state, id) => setSearch({ view: state.view, f: commitTrailingToken(state.filter) || undefined, viewId: id })}
             onClearActive={() => setSearch({ viewId: undefined })}
           />
         </div>

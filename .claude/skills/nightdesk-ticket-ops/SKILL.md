@@ -15,8 +15,6 @@ draft  ──► queued ──► running ──► review ──► archived
   │         │           │          ▼           │
   └── direct drop ──────┘        queued ◄──────┘
       (running flips run_now=true)
-
-draft, queued ──► archived   (discard; ticket never ran / abandoned)
 ```
 
 Valid transitions (`_VALID_TRANSITIONS`, `src/nightdesk/domain/tickets.py:28`):
@@ -33,8 +31,17 @@ Valid transitions (`_VALID_TRANSITIONS`, `src/nightdesk/domain/tickets.py:28`):
 Anything else returns `409 invalid transition`. Dropping into `running` from `draft` or `queued` sets `run_now=true` so the scheduler picks it on the next tick.
 
 **API surface caveats — the state machine and the JSON API don't fully line up:**
-- `POST /api/v1/tickets/{tid}/transition` only accepts targets `draft|queued|running|review|archived`. **`inbox` is NOT a valid `/transition` target** even though `draft → inbox` is state-machine-legal. Tickets move *into* `inbox` only via the HTMX inbox routes (`/inbox/...`); the JSON API has no `→ inbox` path.
-- `archived` is reachable from `draft`, `queued`, or `review` (`/archive` or `transition status=archived`), or from `inbox` (decline). `running` is deliberately excluded — cancel or finish the run (→ `review`) first. Archiving a `draft`/`queued` ticket is the non-destructive way to discard one that will never run (vs. `DELETE`, which is destructive).
+- `POST /api/v1/tickets/{tid}/transition` only accepts targets `draft|queued|running|review|archived`. **`inbox` is NOT a valid `/transition` target** even though `draft → inbox` is state-machine-legal. There is a dedicated endpoint for that one hop instead — `POST /api/v1/tickets/{tid}/send-to-inbox`, valid ONLY from `draft` (`409` from any other status; see "Send to inbox" below). Tickets otherwise move *into* `inbox` by being captured there directly at creation (`status: "inbox"`).
+- `archived` is reachable from `review` (`/archive` or `transition status=archived`), from `draft`/`queued` directly (`/archive` or `transition status=archived` — both now archivable, not just `review`), or from `inbox` (decline).
+
+### Send to inbox
+
+```bash
+# draft -> inbox only; 409 from queued/running/review/archived.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/send-to-inbox" | jq '{status}'
+```
+
+The single JSON path back into the inbox for an existing ticket — mirrors the old UI's "send to inbox" action for a draft created too soon. It does not chain through other statuses first: a `queued`/`review`/`archived` ticket must be walked back to `draft` via its own path (`transition status=draft` where legal) before this will accept it. The ticket then shows up in `GET /api/v1/inbox` with `blockers` recomputed from its current fields (see "Inbox (triage)" below) — a well-specified ticket sent back has none, since send-to-inbox doesn't strip its profile/workspace.
 
 ## Before creating a ticket
 
@@ -76,6 +83,8 @@ Before sending the POST, confirm:
 ## Create a ticket
 
 Required: `title`, `profile_id`. New tickets default to `status="draft"`.
+
+**`profile_id` is optional only for `status="inbox"`** — a captured-but-under-specified inbox item can be created with no profile at all (`profile_id: null` in the response). Any other status still requires it: `422 "profile_id is required"` if omitted. This is the same completeness boundary `ticket_completeness` enforces at promotion time (see "Promote/decline" below) — an inbox item missing a profile just can't be promoted yet, not that it can't exist.
 
 **A workspace is required (exactly one primary). There is no `cwd` field.** Provide the primary workspace one of two ways:
 - **Simple:** set top-level `source_path` (absolute; normalized server-side) plus optional `workspace_mode` / `worktree_name`. The server synthesizes the single primary workspace from these.
@@ -385,7 +394,7 @@ curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
 
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/cancel"     # running → review
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/requeue"    # review|archived → queued
-curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/archive"    # draft|queued|review → archived
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/archive"    # review → archived
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/unarchive"  # archived → queued
 ```
 
@@ -410,10 +419,60 @@ A run's `started_as_run_now` flag is run-level history; it survives even after t
 
 Runs are grouped into **conversations**. A ticket has many conversations (1:N) with exactly one active at a time; each run is one turn within its conversation. The conversation is the continuous thread of work and holds the Claude/OpenCode session id used to resume.
 
-- **Continue** extends the active conversation: same runtime, same workspace, full message history resumed via the SDK session. The typed text becomes the next user turn. JSON route: `POST /api/v1/tickets/{tid}/continue` with body `{"message": "..."}` (browser HTMX form `POST /tickets/{tid}/continue` with field `next_run_context` still exists).
-- **New conversation** starts a fresh session (no history). Use it to switch runtime (e.g. Claude Code to OpenCode) or start over. JSON route: `POST /api/v1/tickets/{tid}/new-conversation` with body `{"message"?, "profile_id"?, "workspace"?: "keep"|"fresh"}` (browser HTMX `POST /tickets/{tid}/new-conversation` still exists).
+- **Continue** extends the active conversation: same runtime, same workspace, full message history resumed via the SDK session. The typed text becomes the next user turn. JSON route: `POST /api/v1/tickets/{tid}/continue` with body `{"message": "..."}`.
+- **New conversation** starts a fresh session (no history). Use it to switch runtime (e.g. Claude Code to OpenCode) or start over. JSON route: `POST /api/v1/tickets/{tid}/new-conversation` with body `{"message"?, "profile_id"?, "workspace"?: "keep"|"fresh"}`.
 - Conversations are **runtime-bound**. You cannot continue a conversation across an incompatible runtime; switching runtime requires a new conversation.
-- Legacy re-run verbs still exist as HTMX routes: `/tickets/{tid}/resume`, `/retry`, `/restart`. `resume`/`retry` start fresh-context on the same worktree; `restart` uses a fresh worktree.
+- `resume`, `retry`, `restart`, and `clone` all have JSON routes (see below) — the SPA's ticket detail page calls the same routes.
+
+### resume / retry / restart / clone
+
+All four require the ticket to be in `review` or `archived` (`409` otherwise) and, like `continue`/`new-conversation`, stage a queued run-now and return the ticket as `TicketOut`.
+
+```bash
+# resume / retry: fresh-context agent on the SAME worktree (a new conversation
+# internally). Body: {"message"?: "..."}.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/resume" \
+  -H 'Content-Type: application/json' -d '{"message":"pick up where you left off"}' | jq '{status}'
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/retry" -d '{}' \
+  -H 'Content-Type: application/json' | jq '{status}'
+
+# restart: fresh worktree, fresh context. workspace_policy is required:
+# "recreate_in_place" (wipe + recreate the same path) or "fresh_path" (new path).
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/restart" \
+  -H 'Content-Type: application/json' \
+  -d '{"workspace_policy":"fresh_path","message":"start clean"}' | jq '{status}'
+
+# clone: create a new draft ticket copying prompt/profile/workspaces.
+# carry_context=true folds the source ticket's staged next_run_context into
+# the clone's prompt. Returns 201 with the NEW ticket (different id).
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/clone" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"retry with a tweak","carry_context":true}' | jq '{id, title}'
+```
+
+### Steering: next-run-context
+
+Stage (or clear) a note that either rides along on the next `continue`/`resume`/etc., or gets folded permanently into the prompt:
+
+```bash
+# Stage a steering note (empty body clears it).
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/next-run-context" \
+  -H 'Content-Type: application/json' -d '{"body":"also handle the edge case with empty input"}' | jq '.next_run_context'
+
+# Fold the staged note into the prompt permanently and clear it. 422 if nothing is staged.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/merge-next-run-context" | jq '{prompt, next_run_context}'
+```
+
+### Additional directories
+
+```bash
+# Add (idempotent by path). mode is "rw" (default) or "ro". path must be absolute (422 otherwise).
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/additional-dirs" \
+  -H 'Content-Type: application/json' -d '{"path":"/opt/shared-lib","mode":"ro"}' | jq '.additional_dirs'
+
+# Remove (path as a query param, not a body).
+curl -s "${AUTH[@]}" -X DELETE "$BASE/api/v1/tickets/$TID/additional-dirs?path=/opt/shared-lib" | jq '.additional_dirs'
+```
 
 ```bash
 # Continue the active conversation (message = next user turn on the resumed session).
@@ -428,6 +487,40 @@ curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/new-conversation" \
 
 Both endpoints stage a queued run-now the worker picks up and return the affected ticket as `TicketOut` JSON. **`continue` requires a resumable active conversation** (one whose turn recorded a session id): if there is no active conversation, or its session id is null, `continue` returns `409 {"detail": "... start a new conversation ..."}` — call `new-conversation` instead (this is also the only way to switch runtime, since sessions are not portable across runtimes). Other errors: ticket not found → `404`; from a non-`review`/`archived` status → `409`; empty `continue` message → `422`; unknown `profile_id` → `404`.
 
+## Inbox (triage)
+
+`inbox` sits outside the runnable board; items there may be missing a profile/workspace and are captured via `POST /api/v1/tickets` with `"status":"inbox"` (workspace/profile optional there only).
+
+```bash
+curl -s "${AUTH[@]}" "$BASE/api/v1/inbox" | jq '.[] | {id: .ticket.id, blockers}'   # blockers: [] means promotable
+curl -s "${AUTH[@]}" "$BASE/api/v1/inbox/count" | jq .count
+
+# Promote onto the board. 422 with the blocker list if still incomplete.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/promote" \
+  -H 'Content-Type: application/json' -d '{"target":"queued"}' | jq '{status}'
+
+# Decline (inbox -> archived). Always allowed, no completeness gate.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/decline"
+```
+
+**`inbox` is still not a valid `/transition` target** — see the lifecycle caveats above; promotion is the only supported `inbox -> {draft,queued}` path.
+
+## Bulk actions
+
+```bash
+# Replace (not merge) the label set on every listed ticket.
+curl -s "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -X PATCH "$BASE/api/v1/tickets/bulk/labels" \
+  -d '{"ticket_ids":["'"$T1"'","'"$T2"'"],"label_ids":["'"$LABEL_ID"'"]}' | jq '.skipped'
+
+curl -s "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -X POST "$BASE/api/v1/tickets/bulk/archive" -d '{"ticket_ids":["'"$T1"'"]}' | jq .
+curl -s "${AUTH[@]}" -H 'Content-Type: application/json' \
+  -X POST "$BASE/api/v1/tickets/bulk/unarchive" -d '{"ticket_ids":["'"$T1"'"]}' | jq .
+```
+
+Each bulk call returns `{"updated": [...TicketOut], "skipped": [{"ticket_id", "reason"}]}` — a partial failure never fails the whole batch.
+
 ## Transcript (SSE)
 
 ```bash
@@ -435,6 +528,12 @@ curl -N "${AUTH[@]}" "$BASE/api/v1/tickets/$TID/transcript"
 ```
 
 Server-Sent Events stream of the most recent run's canonical transcript. Use `-N` to disable curl buffering. The stream resolves the current run via `ticket.current_run_id` then falls back to the latest run for that ticket.
+
+```bash
+curl -N "${AUTH[@]}" "$BASE/api/v1/runs/$RID/transcript"
+```
+
+Same SSE protocol, but for one **specific** run by id — use it to view an older run's transcript instead of just the ticket's latest. `404` if the run doesn't exist or its transcript file is missing. A finished run (`finished_at` set) replays its transcript once and immediately sends `event: end`, since nothing further will ever be appended; a run that's still in flight (`finished_at` null) tails exactly like the ticket endpoint, polling until it finishes. Both endpoints share the same event framing (`id: <seq>` per canonical event, `Last-Event-ID` resume support, `?since_seq=` to skip already-rendered events).
 
 ## Profiles, config, worker, search, fs
 
@@ -451,11 +550,9 @@ curl -s "${AUTH[@]}" "$BASE/api/v1/fs/suggest?path=~/f" | jq .
 ## Common mistakes
 
 - **Stacking without `commit_on_finish` on the prerequisite.** A dependency edge + `base_ref` is not enough: runs leave work *uncommitted* by default, so the prerequisite's branch never advances and the dependent provisions an empty tree (then improvises a duplicate implementation). Set `commit_on_finish: true` on the prerequisite, or commit its worktree manually, before the dependent provisions. If you forget, watch for the `provision_warning` transcript event at the dependent's provision time. See "Dependent / stacked tickets".
-- Calling `POST /board/tickets/{tid}` from a script. That's the HTMX update endpoint; it returns `204 + HX-Redirect`. Use `PATCH /api/v1/tickets/{tid}` instead.
 - Sending a sparse PATCH and expecting omitted fields to clear. They don't — see `nightdesk-api`.
 - Trying to transition `draft → review`. Not allowed; go through `running` or use `archive`/`requeue` paths.
 - Passing `cwd` on create. That field was removed — the server ignores it and you get `422 "workspaces must include exactly one primary workspace"`. Use top-level `source_path` (or a `workspaces` list with one primary).
-- Trying to archive a `running` ticket. `/archive` and `transition status=archived` work from `draft`, `queued`, or `review` — not `running`. Cancel or finish the run (→ `review`) first.
 - Forgetting `-N` on the SSE curl — output looks frozen.
 - Passing both `--data @file.json` AND a second `-d` (or `-d @-` from a heredoc) on the same `curl`. Multiple `-d` flags **concatenate with `&`**, which produces malformed JSON and silently posts garbage; the server returns a 4xx and `jq '{id,title,status}'` shows `{id: null, title: null, status: null}`. Use a single `--data @file.json` and inject any extra fields with Python BEFORE the POST.
 - Using an unquoted heredoc tag (`<<JSON` instead of `<<'JSON'`) when the prompt contains backticks or `$`. The shell will expand them and either run commands or empty out variables silently. Always quote the tag.
