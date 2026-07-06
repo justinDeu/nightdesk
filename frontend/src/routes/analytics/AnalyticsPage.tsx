@@ -197,6 +197,7 @@ export function AnalyticsPage() {
             <button
               key={r.key}
               onClick={() => setSearch({ range: r.key === "7d" ? undefined : r.key })}
+              aria-pressed={range === r.key}
               className={cn(
                 "rounded-[6px] px-3 py-1 text-xs font-medium transition-colors",
                 range === r.key ? "bg-ink-800 text-moon-100" : "text-moon-400 hover:text-moon-100",
@@ -221,6 +222,7 @@ export function AnalyticsPage() {
                 project: e.target.value === ALL_PROJECTS ? undefined : e.target.value,
               })
             }
+            aria-label="Project"
             className="h-8 w-48"
           >
             <option value={ALL_PROJECTS}>All projects</option>
@@ -413,7 +415,9 @@ export function AnalyticsPage() {
                 className="xl:col-span-2"
                 hint="p50 · p90 · p95 · p99"
               >
-                {latencyRows.length > 0 ? (
+                {latencyQ.isLoading ? (
+                  <SparseState label="Loading latency…" />
+                ) : latencyRows.length > 0 ? (
                   <LatencyGroupedBars data={latencyRows} />
                 ) : (
                   <SparseState label="No latency samples in this range" />

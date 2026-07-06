@@ -66,7 +66,7 @@ export function LabelsSection() {
                 className="h-3.5 w-3.5 shrink-0 rounded-full ring-1 ring-inset ring-black/20"
                 style={{ backgroundColor: l.color }}
               />
-              <span className="flex-1 text-sm text-moon-100">{l.name}</span>
+              <span className="min-w-0 flex-1 truncate text-sm text-moon-100">{l.name}</span>
               <span className="font-mono text-xs text-moon-600">{l.color}</span>
               <IconButton label="Edit" size="sm" icon={<Pencil size={14} />} onClick={() => setEditing(l)} />
               <IconButton

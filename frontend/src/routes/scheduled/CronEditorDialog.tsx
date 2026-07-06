@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { CalendarClock, Loader2 } from "lucide-react";
 import { Dialog } from "@/ui/Dialog";
 import { Button } from "@/ui/Button";
 import { Input, Textarea, Field } from "@/ui/Input";
 import { Select } from "@/ui/Select";
+import { Switch } from "@/ui/Switch";
 import { PathInput } from "@/components/PathInput";
 import { ProfilePicker } from "@/components/PropertyPickers";
 import { useProfiles } from "@/api/profiles";
@@ -328,29 +329,16 @@ function Toggle({
   label: string;
   hint?: string;
 }) {
+  const labelId = useId();
   return (
-    <button
-      type="button"
-      onClick={() => onChange(!checked)}
-      className="flex items-start gap-2.5 text-left"
-    >
-      <span
-        className={cn(
-          "mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border px-0.5 transition-colors",
-          checked ? "border-lamp/40 bg-lamp/25" : "border-ink-700 bg-ink-800",
-        )}
-      >
-        <span
-          className={cn(
-            "h-3.5 w-3.5 rounded-full transition-transform",
-            checked ? "translate-x-4 bg-lamp" : "translate-x-0 bg-moon-600",
-          )}
-        />
-      </span>
-      <span>
-        <span className="block text-sm text-moon-100">{label}</span>
+    <div className="flex items-start gap-2.5 text-left">
+      <Switch checked={checked} onChange={onChange} aria-labelledby={labelId} className="mt-0.5" />
+      <span className="cursor-pointer" onClick={() => onChange(!checked)}>
+        <span id={labelId} className="block text-sm text-moon-100">
+          {label}
+        </span>
         {hint && <span className="block text-[11px] text-moon-600">{hint}</span>}
       </span>
-    </button>
+    </div>
   );
 }

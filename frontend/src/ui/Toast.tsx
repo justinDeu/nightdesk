@@ -13,7 +13,8 @@ import { ApiError } from "@/api/client";
  *     is unmistakable next to the quiet neutral success/info cards;
  *   - a thin progress bar that drains over the toast's lifetime, pauses on
  *     hover, and dismisses the toast when it empties;
- *   - a close (×) button plus click-to-dismiss on the body.
+ *   - a dedicated close (×) button (the card body is not itself a dismiss
+ *     target, so links/text inside a toast stay usable).
  *
  * Errors also get better copy for free: pass the caught error as `error` and
  * the card derives a plain-language line from the status + server `detail`
@@ -165,9 +166,8 @@ function ToastCard({ id, variant, title, description, duration, action }: CardPr
       onMouseLeave={() => {
         pausedRef.current = false;
       }}
-      onClick={() => sonnerToast.dismiss(id)}
       className={cx(
-        "group relative flex w-[356px] max-w-[calc(100vw-2rem)] cursor-pointer items-start gap-3",
+        "group relative flex w-[356px] max-w-[calc(100vw-2rem)] items-start gap-3",
         "overflow-hidden rounded-card border px-3.5 py-3 font-sans text-sm shadow-[var(--shadow-overlay)]",
         isError
           ? "border-[var(--color-danger-border)] border-l-2 border-l-[var(--color-danger-accent)] bg-[var(--color-danger-surface)]"

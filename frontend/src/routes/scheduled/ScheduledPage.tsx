@@ -6,6 +6,7 @@ import { Page } from "@/components/Page";
 import { Button } from "@/ui/Button";
 import { Dialog } from "@/ui/Dialog";
 import { EmptyState } from "@/ui/EmptyState";
+import { Switch } from "@/ui/Switch";
 import { Tooltip } from "@/ui/Tooltip";
 import {
   DropdownMenu,
@@ -193,21 +194,11 @@ function JobCard({
         </div>
 
         <Tooltip content={job.enabled ? "Enabled — click to pause" : "Paused — click to enable"}>
-          <button
-            onClick={onToggle}
+          <Switch
+            checked={job.enabled}
+            onChange={onToggle}
             aria-label={job.enabled ? "Pause schedule" : "Enable schedule"}
-            className={cn(
-              "inline-flex h-5 w-9 shrink-0 items-center rounded-full border px-0.5 transition-colors",
-              job.enabled ? "border-lamp/40 bg-lamp/25" : "border-ink-700 bg-ink-800",
-            )}
-          >
-            <span
-              className={cn(
-                "h-3.5 w-3.5 rounded-full transition-transform",
-                job.enabled ? "translate-x-4 bg-lamp" : "translate-x-0 bg-moon-600",
-              )}
-            />
-          </button>
+          />
         </Tooltip>
       </div>
 

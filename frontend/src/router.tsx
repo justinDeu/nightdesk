@@ -74,9 +74,26 @@ const inboxRoute = createRoute({
   component: InboxPage,
 });
 
+export type ArchiveSortKey = "recent" | "created" | "priority" | "cost";
+export interface ArchiveSearch {
+  /** Raw filter-bar text. */
+  f?: string;
+  sort?: ArchiveSortKey;
+  dir?: "asc" | "desc";
+}
+
+const ARCHIVE_SORT_KEYS: ArchiveSortKey[] = ["recent", "created", "priority", "cost"];
+
 const archiveRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/archive",
+  validateSearch: (search: Record<string, unknown>): ArchiveSearch => ({
+    f: typeof search.f === "string" && search.f ? search.f : undefined,
+    sort: ARCHIVE_SORT_KEYS.includes(search.sort as ArchiveSortKey)
+      ? (search.sort as ArchiveSortKey)
+      : undefined,
+    dir: search.dir === "asc" || search.dir === "desc" ? search.dir : undefined,
+  }),
   component: ArchivePage,
 });
 

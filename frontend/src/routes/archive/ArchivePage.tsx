@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import type { ArchiveSearch } from "@/router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Archive, ArchiveRestore, ArrowDownWideNarrow, ArrowUpWideNarrow, Trash2, X } from "lucide-react";
 import { Page } from "@/components/Page";
@@ -75,13 +76,29 @@ export function ArchivePage() {
   const labelsQ = useLabels();
   const profilesQ = useProfiles();
 
-  const [filter, setFilter] = useState("");
-  const [sort, setSortState] = useState(() => loadSort());
+  // Filter + sort live in the URL (deep-linkable, survives reload/back-forward,
+  // same as the tickets and analytics filters). localStorage stays only as the
+  // default sort applied when the URL carries no sort param.
+  const search = useSearch({ from: "/app/archive" });
+  const navigate = useNavigate();
+
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState<TicketOut | null>(null);
 
+  const storedSort = useMemo(() => loadSort(), []);
+  const filter = search.f ?? "";
+  const sort = {
+    key: search.sort ?? storedSort.key,
+    dir: search.dir ?? storedSort.dir,
+  };
+
+  const setSearch = (next: Partial<ArchiveSearch>) =>
+    navigate({ to: "/archive", search: (prev) => ({ ...prev, ...next }), replace: true });
+
+  const setFilter = (v: string) => setSearch({ f: v || undefined });
+
   const setSort = (next: { key: SortKey; dir: SortDir }) => {
-    setSortState(next);
+    setSearch({ sort: next.key, dir: next.dir });
     try {
       localStorage.setItem(SORT_STORAGE_KEY, `${next.key}:${next.dir}`);
     } catch {
@@ -295,7 +312,7 @@ export function ArchivePage() {
                     <span className="text-[11px] text-moon-600">no runs</span>
                   )}
                 </span>
-                <span className="hidden w-16 shrink-0 text-right font-mono text-[11px] text-moon-400 sm:block">
+                <span className="hidden w-16 shrink-0 text-right font-mono text-[11px] tabular-nums text-moon-400 sm:block">
                   {run?.cost_usd != null ? formatUsd(run.cost_usd) : "—"}
                 </span>
                 <Tooltip content={absoluteTime(sort.key === "created" ? t.created_at : t.updated_at)}>
