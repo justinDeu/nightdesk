@@ -46,12 +46,28 @@ html, body { overflow: hidden !important; }
 
 | File | Page |
 | --- | --- |
-| `board-kanban.png` | `/`, with `Implement CSV export for reports` selected |
-| `ticket-transcript.png` | `/tickets/<selected-ticket-id>` |
-| `runs-table.png` | `/?view=runs` |
+| `desk.png` | `/` (the Desk overview) |
+| `board-kanban.png` | `/tickets?view=board`, then click `Implement CSV export for reports` so the side-peek is open |
+| `ticket-transcript.png` | `/tickets/<id>` — fetch the id of `Implement CSV export for reports` from `/api/v1/tickets` first; seeded ids change on every `--reset` |
 | `archive.png` | `/archive` |
 | `analytics.png` | `/analytics` |
-| `profiles.png` | `/profiles` |
+| `profiles.png` | `/settings/profiles` |
 | `settings.png` | `/settings/scheduling` |
+| `mobile-board.png` | `/tickets?view=board` at a 390x844 viewport (phone frame for the README's mobile section) |
 
-Authenticate through `/auth/login` with `nightdesk-demo-token` before capture.
+Authenticate through the `/login` form with `nightdesk-demo-token` before capture.
+
+Two gotchas:
+
+- The seeded worker heartbeat goes stale a few minutes after seeding, flipping the
+  header pill to a red "Worker stale". Either capture immediately after seeding or
+  push the heartbeat forward first:
+
+  ```bash
+  sqlite3 <demo-db> "UPDATE worker_heartbeat SET last_seen_at = datetime('now','+30 minutes')"
+  ```
+
+- `nightdesk-seed-demo --reset` deletes and recreates the DB file. A server that
+  was already running keeps its connection to the old, deleted file — restart the
+  demo API after every reseed or you'll capture stale data (and fetch stale
+  ticket ids).

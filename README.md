@@ -14,17 +14,17 @@ Local-first work queue for LLM agents. Schedule a Claude Code run against a dire
 
 ## A look at Nightdesk
 
-![Nightdesk board showing lifecycle columns and selected ticket sidebar](docs/screenshots/board-kanban.png)
+![Nightdesk board showing lifecycle columns and selected ticket side-peek](docs/screenshots/board-kanban.png)
 
 Track work from draft to review, inspect running jobs, and open a ticket without losing board context.
+
+![Desk overview showing tickets that need you, live runs, and what changed while you were away](docs/screenshots/desk.png)
+
+The Desk answers three questions at a glance: what needs you, what's running, and what changed while you were away.
 
 ![Ticket detail page showing prompt, workspace access, dependencies, and transcript events](docs/screenshots/ticket-transcript.png)
 
 Review prompts, filesystem scope, dependency chains, run history, and transcript events in one place.
-
-![Run history table with outcomes, models, token usage, and costs](docs/screenshots/runs-table.png)
-
-Search across runs, compare outcomes, and keep an eye on model usage and spend.
 
 ![Archive filters and completed ticket history](docs/screenshots/archive.png)
 
@@ -41,6 +41,10 @@ Define profiles for sandbox permissions, credentials, allowed tools, models, and
 ![Scheduling settings for worker windows and concurrency](docs/screenshots/settings.png)
 
 Control work windows, worker cadence, and dispatch limits from the UI.
+
+<img src="docs/screenshots/mobile-board.png" alt="Board on a phone: full-width snap-scrolling columns behind a drawer navigation" width="300" />
+
+The whole app works on a phone: drawer navigation, snap-scrolling board columns, and touch-safe status moves.
 
 ## Install
 
