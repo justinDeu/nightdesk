@@ -78,6 +78,11 @@ To re-open the UI later without copy-pasting the bearer:
 nightdesk-login
 ```
 
+> **Note:** the `uv tool install` above packages only the Python backend —
+> it does not include the built web UI. Until packaging bundles the
+> frontend, use a source checkout instead (see Development below) if you
+> want the full board UI rather than the JSON API alone.
+
 ## Installing skills into other coding agents
 
 nightdesk ships a few bundled skills (`nightdesk-api`, `nightdesk-ticket-ops`,
@@ -218,17 +223,41 @@ Each run executes inside a fresh bubblewrap sandbox with:
 
 ## Development
 
-If you want to hack on nightdesk rather than just use it:
+If you want to hack on nightdesk rather than just use it, this gets you a
+full checkout with the web UI on a fresh machine:
 
 ```bash
 git clone <repo>
 cd nightdesk
-python3.12 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-.venv/bin/nightdesk-init        # creates the DB + default config
-.venv/bin/nightdesk-dev         # runs API + worker with hot reload
-.venv/bin/pytest                # runs the test suite
+
+# 1. Python environment (uv, or fall back to venv+pip if you don't have it).
+uv sync                            # creates .venv from uv.lock
+# .venv (or the equivalent uv run) has nightdesk-* on PATH from here on.
+
+# 2. Build the SPA. Requires Node 20+.
+./scripts/build-frontend.sh        # npm ci + vite build -> frontend/dist
+# frontend/dist is served at the app root `/` by nightdesk-api once it exists;
+# skip this step and you get the JSON API only, with nothing useful at `/`.
+
+# 3. Create the DB + default config.
+nightdesk-init
+
+# 4. Run it. Either the combined dev command, or the two processes separately:
+nightdesk-dev                      # API + worker together, hot reload
+# --- or ---
+nightdesk-api                      # in one terminal
+nightdesk-worker                   # in another
+
+pytest                             # runs the test suite
 ```
+
+If you don't use uv: `python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"`,
+then prefix the commands above with `.venv/bin/`.
+
+`nightdesk-dev` serves whatever is currently in `frontend/dist` — it does not
+build or watch the frontend itself. For frontend-only iteration with instant
+hot reload (no rebuild-and-refresh loop), run a throwaway API and the Vite
+dev server instead; see `frontend/README.md`.
 
 `nightdesk-migrate` exposes Alembic subcommands (`up`, `down`, `current`,
 `history`, `heads`, `stamp`).

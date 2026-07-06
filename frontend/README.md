@@ -8,7 +8,7 @@ from scratch. Talks only to the `/api/v1/*` JSON surface.
 
 Dark-first, used at night, deliberately not the near-black + acid-green look.
 All tokens live in `src/styles/theme.css` (`@theme` block). Surfaces are `ink-*`,
-text is `moon-*`, the accent is `lamp` (desk-lamp amber). Running work carries
+text is `moon-*`, the accent is `lamp` (desk-lamp jade/green). Running work carries
 the **dawn edge**: an animated amber→coral hairline (static under
 `prefers-reduced-motion`). See `/dev/kitchen-sink` for every primitive in every
 state — that page is how the design is reviewed.
@@ -58,7 +58,9 @@ src/
   api/          typed fetch client + TanStack Query hooks, one file per resource
   ui/           primitive component set (Button, Dialog, StatusPill, …)
   components/   app shell (SideNav, TopStrip, WorkerPill, Page)
-  routes/       page components (pages.tsx stubs, login, kitchenSink)
+  routes/       page components, one directory per page (tickets/, analytics/,
+                archive/, desk/, inbox/, scheduled/, settings/, plus login.tsx
+                and kitchenSink.tsx)
   lib/          queryClient, cn, status/format helpers
   styles/       theme.css (tokens, base, animations)
   router.tsx    code-based typed route tree
@@ -67,5 +69,6 @@ src/
 
 ## Status
 
-P1[A] scaffold: design system, app shell, auth, typed API client, primitive set,
-and routes stubbed with empty states. Screens are filled in P2–P3.
+Shipped SPA: design system, app shell, auth, typed API client, primitive set,
+and every page fully built out (board/tickets, inbox, desk, analytics, archive,
+scheduled, settings, kitchen sink). Not a scaffold.
