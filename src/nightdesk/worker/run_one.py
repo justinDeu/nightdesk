@@ -49,20 +49,12 @@ from nightdesk.domain.notifications import (
 from nightdesk.domain.runs import finish_run, start_run
 from nightdesk.domain.tickets import transition_status
 from nightdesk.domain.toolchains import resolve_tool_paths
-from nightdesk.transcript import append_event, append_worker_error, next_transcript_seq
-from nightdesk.backends import Assignment, LaunchContext, get_backend
-from nightdesk.worker.executor import ExecutionRequest, ExecutionResult, Executor
-from nightdesk.worker.headless_prompt import (
-    HEADLESS_POLICY_VERSION,
-    build_continue_prompt,
-    build_headless_prompt,
-)
-from nightdesk.worker.sandbox import (
-    SANDBOX_HOME,
-    build_bwrap_argv,
-    run_cc_sessions_dir,
-    seed_cc_session,
-)
+from nightdesk.transcript import append_event, append_worker_error
+from nightdesk.backends import Assignment, get_backend
+from nightdesk.executors import RunContext, get_executor
+from nightdesk.worker.executor import ExecutionResult, Executor
+from nightdesk.worker.headless_prompt import HEADLESS_POLICY_VERSION
+from nightdesk.worker.sandbox import SANDBOX_HOME
 from nightdesk.worker.workspace import (
     Workspace, WorkspaceBundle, WorkspaceSpec, cleanup_workspace,
     prepare_workspace_bundle,
@@ -649,20 +641,6 @@ def _build_env(
     return env
 
 
-def _alloc_free_port() -> int:
-    """Reserve a free localhost TCP port for an HTTP-transport backend.
-
-    Bind to port 0, read the assigned port, close. The window between close
-    and the backend's server binding is a benign race on a single-host
-    worker; the agent shares the host net namespace so the port is reachable.
-    """
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _make_session_id_persister(
     session_factory: Callable[[], Session], run_id: str, conversation_id: str,
 ) -> Callable[[str], None]:
@@ -693,30 +671,6 @@ def _make_session_id_persister(
             s.close()
 
     return _persist
-
-
-async def _cancel_watcher(
-    session_factory: Callable[[], Session],
-    ticket_id: str,
-    cancel_event: asyncio.Event,
-) -> None:
-    """Poll the ticket; set the cancel event if status leaves 'running'."""
-    try:
-        while not cancel_event.is_set():
-            session = session_factory()
-            try:
-                t = session.get(Ticket, ticket_id)
-                if t is not None and t.status != "running":
-                    cancel_event.set()
-                    return
-            finally:
-                session.close()
-            try:
-                await asyncio.sleep(0.5)
-            except asyncio.CancelledError:
-                return
-    except asyncio.CancelledError:
-        return
 
 
 def _handoff_to_dependents(session: Session, ticket_id: str, run: Run) -> None:
@@ -767,7 +721,6 @@ async def run_one(
     """
     session = session_factory()
     cancel_event = asyncio.Event()
-    watcher: Optional[asyncio.Task] = None
     ws: Optional[Workspace] = None
     bundle: Optional[WorkspaceBundle] = None
     issued_token = None
@@ -1054,240 +1007,50 @@ async def run_one(
                 except Exception:
                     pass
 
-            _setup_phase = "prepare_launch"
-            # Per-run scratch, anchored as a sibling of worktree_root — outside
-            # the protected ~/.local/share/nightdesk data dir so it can be
-            # bind-mounted into the sandbox (same reason worktrees live there).
-            scratch_root = cfg.worktree_root.parent / "nightdesk-backend-scratch" / run.id
-            launch_ctx = LaunchContext(
-                spec=spec,
-                endpoint=primary,
+            _setup_phase = "execute"
+            # Hand the fully-resolved run to its execution target. Profiles have
+            # no ``execution_target`` field yet, so "local" is hardcoded here
+            # (TODO: resolve ``get_executor(profile.execution_target)`` once the
+            # k8s executor lands -- k8s-executor.md Phase 4). run_one keeps ALL
+            # DB/state orchestration around this call; the executor only owns
+            # launch composition + running the agent to completion.
+            on_session_id = _make_session_id_persister(
+                session_factory, run.id, conversation.id,
+            )
+            ctx = RunContext(
                 run_id=run.id,
                 ticket_id=ticket.id,
-                workspace_dir=ws.path,
-                scratch_root=scratch_root,
-                http_port=_alloc_free_port() if backend.wants_http else None,
+                ticket_title=ticket.title,
+                base_prompt=ticket.prompt,
+                run_intent=run_intent,
+                spec=spec,
+                backend=backend,
+                primary=primary,
                 endpoints=endpoints,
                 model_assignments=model_assignments,
-            )
-            plan = backend.prepare_launch(launch_ctx)
-
-            base_env = _build_env(
-                spec,
-                cfg.secrets,
-                run_token=issued_token.cleartext,
-                run_id=run.id,
-                ticket_id=ticket.id,
-                api_url=cfg.api_url,
-            )
-            # Backend launch env (provider creds, agent-specific knobs) layers
-            # over the base run env.
-            env = {**base_env, **plan.env}
-            # Per-run Claude session store, only set for backends that model
-            # one (claude_sdk); the continue/resume block below is a no-op for
-            # backends that leave this None. Legacy root kept as a seed-source
-            # fallback for continuations whose parent turn predates the
-            # unified per-run scratch layout.
-            cc_sessions_dir = plan.cc_sessions_dir
-            cc_sessions_root = cfg.worktree_root.parent / "nightdesk-cc-sessions"
-
-            # ``continue`` intent: resume the CONVERSATION's Claude Code
-            # conversation by replaying its authoritative session id into the
-            # SDK. Each run gets an isolated per-run session store bound over
-            # the sandbox's CLAUDE_CONFIG_DIR/projects, so the prior turn's
-            # session file must be seeded into THIS run's store for the SDK's
-            # ``resume=<id>`` to resolve inside the sandbox. If the conversation
-            # has no session id or the file is gone, fall back to a fresh-context
-            # resume (same worktree, no conversation history) and record it.
-            resume_session_id: Optional[str] = None
-            fell_back_to_fresh_context = False
-            if run_intent == "continue" and cc_sessions_dir is None:
-                # This backend doesn't model a resumable Claude-style session
-                # store (e.g. opencode's resume path is backend-native, not
-                # this seeded-jsonl mechanism); always run as a fresh-context
-                # resume on the same worktree.
-                fell_back_to_fresh_context = True
-                log.warning(
-                    "continue turn %s: backend %s has no session store; "
-                    "falling back to fresh-context resume", run.id, spec.backend,
-                )
-            elif run_intent == "continue":
-                conv_sid = conversation.session_id
-                seed_source = prior_turn.id if prior_turn is not None else None
-                if conv_sid and seed_source is not None:
-                    seeded = seed_cc_session(
-                        cc_sessions_dir,
-                        conv_sid,
-                        [
-                            run_cc_sessions_dir(str(cc_sessions_root), seed_source),
-                            # A parent turn that ran after the backend refactor
-                            # stores its session under the unified per-run
-                            # scratch layout instead of the legacy root above.
-                            str(cfg.worktree_root.parent / "nightdesk-backend-scratch"
-                                / seed_source / "cc-sessions"),
-                            os.path.expanduser("~/.claude/projects"),
-                        ],
-                    )
-                    if seeded is not None:
-                        resume_session_id = conv_sid
-                        log.info(
-                            "continue turn %s: resuming conversation session %s (seeded %s)",
-                            run.id, conv_sid, seeded,
-                        )
-                    else:
-                        fell_back_to_fresh_context = True
-                        log.warning(
-                            "continue turn %s: conversation session %s not found "
-                            "in any store; falling back to fresh-context resume",
-                            run.id, conv_sid,
-                        )
-                elif conv_sid:
-                    # Session id present but no prior turn to seed from; the SDK
-                    # may still resolve it from the published host store.
-                    resume_session_id = conv_sid
-                else:
-                    fell_back_to_fresh_context = True
-                    log.warning(
-                        "continue turn %s: conversation has no session_id; "
-                        "falling back to fresh-context resume", run.id,
-                    )
-
-            # Seed this turn's seq counter from the shared conversation
-            # transcript so the file keeps ONE monotonic seq space across turns.
-            seq_start = next_transcript_seq(transcript_path)
-
-            log.debug("building bwrap argv for ticket %s run %s (backend=%s)",
-                      ticket.id, run.id, spec.backend)
-            _setup_phase = "bwrap_build"
-            argv = build_bwrap_argv(
-                spec,
-                working_dir=str(ws.path),
-                cmd=plan.cmd,
-                env=env,
-                cc_sessions_dir=plan.cc_sessions_dir,
-                git_dirs=_git_metadata_dirs(bundle),
-                mounts=plan.mounts,
-                require_claude=plan.needs_claude_binary,
-            )
-            log.debug("building headless prompt for ticket %s run %s", ticket.id, run.id)
-            _setup_phase = "prompt_build"
-            # ``continue`` intent: when the user typed a message AND we are
-            # genuinely resuming the prior SDK conversation, send that message
-            # as the next user turn on top of the resumed history — not buried
-            # as "NEXT RUN CONTEXT" inside the reconstructed headless blob. The
-            # base ticket prompt plus every prior turn are already in the
-            # resumed session, so build_continue_prompt emits the user's text as
-            # the body of the SDK prompt, which the SDK appends verbatim as the
-            # next user message. Textless continues (the header button) and
-            # every fresh-context fallback keep the existing reconstructed prompt.
-            continue_message = (next_run_context or "").strip() if run_intent == "continue" else ""
-            genuine_continue = bool(
-                run_intent == "continue" and resume_session_id and continue_message
-            )
-            if genuine_continue:
-                prompt = build_continue_prompt(
+                workspace_dir=ws.path,
+                worktree_root=cfg.worktree_root,
+                transcript_path=run.transcript_path,
+                base_env=_build_env(
+                    spec,
+                    cfg.secrets,
+                    run_token=issued_token.cleartext,
+                    run_id=run.id,
                     ticket_id=ticket.id,
-                    ticket_title=ticket.title,
-                    user_message=continue_message,
-                    workspace_path=str(ws.path),
-                )
-            else:
-                # When a ``continue`` fell back to fresh context, the agent is NOT
-                # resuming the prior conversation, so don't hand it the
-                # "resuming the prior conversation" instruction — use the honest
-                # resume (fresh-context) wording instead. The Run.intent DB column
-                # still records "continue" for traceability.
-                prompt_intent = "resume" if fell_back_to_fresh_context else run_intent
-                prompt = build_headless_prompt(
-                    ticket_id=ticket.id,
-                    ticket_title=ticket.title,
-                    base_prompt=ticket.prompt,
-                    run_intent=prompt_intent,
-                    workspace_path=str(ws.path),
-                    next_run_context=next_run_context,
-                    last_run_summary=(prior_turn.error_summary or prior_turn.exit_status) if prior_turn is not None else None,
-                )
-            request = ExecutionRequest(
-                ticket_id=ticket.id, prompt=prompt,
-                working_dir=ws.path, transcript_path=Path(run.transcript_path),
-                bwrap_argv=argv, env=env, permission_spec=spec,
-                cancel_event=cancel_event,
-                resume_session_id=resume_session_id,
-                # Surface the typed continue message at the transcript boundary
-                # for any continue that carried one (genuine resume or fallback),
-                # so the resumed run visibly opens with what the user typed.
-                continue_message=continue_message or None,
-                seq_start=seq_start,
-                # Eagerly persist the conversation.session_id the moment the SDK
-                # emits it (init event), so a cancel/crash afterward never leaves
-                # the conversation null-session.
-                on_session_id=_make_session_id_persister(
-                    session_factory, run.id, conversation.id,
+                    api_url=cfg.api_url,
                 ),
-                http_port=launch_ctx.http_port,
-                launch_meta=launch_ctx.backend_state,
+                git_dirs=_git_metadata_dirs(bundle),
+                conversation_session_id=conversation.session_id,
+                prior_turn=prior_turn,
+                next_run_context=next_run_context,
+                cancel_event=cancel_event,
+                on_session_id=on_session_id,
+                session_factory=session_factory,
+                override_executor=cfg.executor,
             )
-
-            watcher = asyncio.create_task(
-                _cancel_watcher(session_factory, ticket.id, cancel_event)
-            )
-            executor_error_kind: Optional[str] = None
-            executor_error_tb: Optional[str] = None
-            try:
-                if cfg.executor is not None:
-                    # Test/override seam: run the supplied executor directly.
-                    result: ExecutionResult = await cfg.executor.run(request)
-                else:
-                    result = await backend.execute(request)
-            except Exception as exc:
-                log.exception("executor crashed for ticket %s", ticket.id)
-                executor_error_kind = "executor_error"
-                executor_error_tb = traceback.format_exc()
-                result = ExecutionResult(
-                    exit_status="failed",
-                    error_summary=f"executor error: {exc}",
-                )
-            finally:
-                if watcher is not None and not watcher.done():
-                    watcher.cancel()
-                    try:
-                        await watcher
-                    except asyncio.CancelledError:
-                        pass
-
-            # Worker-level error surfacing: any failed run gets a final
-            # ``worker_error`` event tacked onto its transcript so the user
-            # sees the failure cause in the same view they read the rest of
-            # the run. Cancellations stay quiet because the user already
-            # knows they cancelled.
-            if result.exit_status not in ("success", "cancelled") and result.error_summary:
-                kind = executor_error_kind or "run_failed"
-                append_worker_error(
-                    run.transcript_path,
-                    kind=kind,
-                    summary=result.error_summary,
-                    traceback_text=executor_error_tb,
-                )
-
-            # Record a continue→fresh-context fallback on the transcript so the
-            # reason is discoverable from the run's own artifact (a ``system``
-            # event is persisted but not rendered as an error card). Paired with
-            # the WARNING log line above; best-effort, never fails the run.
-            if fell_back_to_fresh_context:
-                try:
-                    append_event(run.transcript_path, {
-                        "type": "system",
-                        "subtype": "continue_session_unavailable",
-                        "data": {
-                            "message": (
-                                "Continue was requested but the prior run had no "
-                                "resumable Claude session; ran as a fresh-context "
-                                "resume on the same worktree instead."
-                            ),
-                        },
-                    })
-                except Exception:
-                    log.exception("could not record continue-fallback breadcrumb for run %s", run.id)
+            outcome = await get_executor("local").execute(ctx)
+            result = outcome.result
+            launch_ctx = outcome.launch_ctx
 
             finish_run(session, run.id, exit_status=result.exit_status,
                        error_summary=result.error_summary,
