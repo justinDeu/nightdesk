@@ -355,6 +355,7 @@ export interface ProfileOut {
   secret_keys: string[];
   default_model: string | null;
   backend: string;
+  execution_target: string;
   endpoint_id: string | null;
   backend_config: Record<string, unknown>;
   claude_credentials: ClaudeCredentialsOut | null;
@@ -382,6 +383,7 @@ export interface ProfileCreate {
   secret_keys?: string[];
   default_model?: string | null;
   backend?: string;
+  execution_target?: "local" | "k8s";
   endpoint_id?: string | null;
   backend_config?: Record<string, unknown>;
   claude_credentials?: ClaudeCredentialsIn | null;
@@ -436,6 +438,17 @@ export interface ConfigOut {
   toolchain_presets: Record<string, string[]>;
   claude_binary_path: string | null;
   opencode_binary_path: string | null;
+  k8s_kubeconfig_path: string | null;
+  k8s_in_cluster: boolean;
+  k8s_namespace: string;
+  k8s_runner_image: string | null;
+  k8s_cpu_request: string | null;
+  k8s_cpu_limit: string | null;
+  k8s_mem_request: string | null;
+  k8s_mem_limit: string | null;
+  k8s_node_selector: Record<string, string>;
+  k8s_runtime_class: string | null;
+  k8s_git_credentials_secret: string | null;
 }
 
 export interface ConfigUpdate {
@@ -448,6 +461,17 @@ export interface ConfigUpdate {
   toolchain_presets?: Record<string, string[]> | null;
   claude_binary_path?: string | null;
   opencode_binary_path?: string | null;
+  k8s_kubeconfig_path?: string | null;
+  k8s_in_cluster?: boolean | null;
+  k8s_namespace?: string | null;
+  k8s_runner_image?: string | null;
+  k8s_cpu_request?: string | null;
+  k8s_cpu_limit?: string | null;
+  k8s_mem_request?: string | null;
+  k8s_mem_limit?: string | null;
+  k8s_node_selector?: Record<string, string> | null;
+  k8s_runtime_class?: string | null;
+  k8s_git_credentials_secret?: string | null;
 }
 
 // --- Providers & endpoints -------------------------------------------------
