@@ -305,6 +305,46 @@ export interface RunDiff {
   repo_root: string | null;
 }
 
+// --- Diff comments (line-anchored review comments on a run's diff) -------------
+
+export interface DiffCommentOut {
+  id: string;
+  run_id: string;
+  ticket_id: string;
+  conversation_id: string | null;
+  parent_id: string | null;
+  file_path: string | null;
+  side: string | null;
+  line: number | null;
+  anchor_head_sha: string | null;
+  anchor_text: string | null;
+  body: string;
+  author_kind: string;
+  author_run_id: string | null;
+  resolved: boolean;
+  resolved_at: string | null;
+  delivered_at: string | null;
+  created_at: string;
+  updated_at: string | null;
+  /** Anchor head differs from the live diff head — render against anchor_text. */
+  outdated: boolean;
+}
+
+export interface DiffCommentCreate {
+  parent_id?: string | null;
+  file_path?: string | null;
+  side?: "old" | "new" | null;
+  line?: number | null;
+  anchor_head_sha?: string | null;
+  anchor_text?: string | null;
+  body: string;
+}
+
+export interface RequestChangesResult {
+  ticket_id: string;
+  next_run_context: string | null;
+}
+
 // --- Projects ------------------------------------------------------------------
 
 export interface ProjectOut {

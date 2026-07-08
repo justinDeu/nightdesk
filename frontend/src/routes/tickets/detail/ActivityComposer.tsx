@@ -124,6 +124,7 @@ export function ActivityComposer({
         <PendingChip
           text={pending}
           updatedAt={ticket.next_run_context_updated_at}
+          fromReview={pending.includes("Review comments to address")}
           onEdit={() => {
             setIntent("guidance");
             setMessage(pending);
@@ -246,12 +247,14 @@ export function ActivityComposer({
 function PendingChip({
   text,
   updatedAt,
+  fromReview,
   onEdit,
   onMerge,
   onClear,
 }: {
   text: string;
   updatedAt: string | null;
+  fromReview?: boolean;
   onEdit: () => void;
   onMerge: () => void;
   onClear: () => void;
@@ -265,6 +268,9 @@ function PendingChip({
             Guidance staged for next run
           </span>
           {updatedAt && <span className="text-[10px] text-moon-600">{relativeTime(updatedAt)}</span>}
+          {fromReview && (
+            <span className="text-[10px] text-moon-500">· from review comments</span>
+          )}
         </div>
         <p className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-[12px] text-moon-100">{text}</p>
       </div>

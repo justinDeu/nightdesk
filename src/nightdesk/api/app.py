@@ -20,6 +20,7 @@ from nightdesk.api.routes import labels as labels_routes
 from nightdesk.api.routes import profiles as profiles_routes
 from nightdesk.api.routes import projects as projects_routes
 from nightdesk.api.routes import providers as providers_routes
+from nightdesk.api.routes import review_comments as review_comments_routes
 from nightdesk.api.routes import runs as runs_routes
 from nightdesk.api.routes import search as search_routes
 from nightdesk.api.routes import sessions as sessions_routes
@@ -75,6 +76,7 @@ def create_app(
         get_session, bearer_token, worktree_root=worktree_root,
     ))
     app.include_router(runs_routes.build_router(get_session, bearer_token, engine=engine))
+    app.include_router(review_comments_routes.build_router(get_session, bearer_token))
     app.include_router(config_routes.build_router(
         get_session, bearer_token,
         worktree_root=str(worktree_root), transcript_root=str(transcript_root),

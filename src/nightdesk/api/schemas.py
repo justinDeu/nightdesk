@@ -1426,3 +1426,55 @@ class BackendRuntimeOut(BaseModel):
     source: Optional[Literal["override", "path", "default"]] = None
     found: bool = False
     version: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Diff comments (line-anchored review comments on a run's diff)
+# ---------------------------------------------------------------------------
+
+
+class DiffCommentCreate(BaseModel):
+    """Create a root comment (anchored) or a reply (``parent_id`` set).
+
+    For a root, the anchor fields describe the diff line the client clicked;
+    the route resolves ``outdated`` against the live diff head. For a reply,
+    only ``parent_id`` + ``body`` are used and anchor fields are ignored.
+    """
+
+    parent_id: Optional[str] = None
+    file_path: Optional[str] = None
+    side: Optional[Literal["old", "new"]] = None
+    line: Optional[int] = None
+    anchor_head_sha: Optional[str] = None
+    anchor_text: Optional[str] = None
+    body: str
+
+
+class DiffCommentEdit(BaseModel):
+    body: str
+
+
+class DiffCommentOut(BaseModel):
+    id: str
+    run_id: str
+    ticket_id: str
+    conversation_id: Optional[str] = None
+    parent_id: Optional[str] = None
+    file_path: Optional[str] = None
+    side: Optional[str] = None
+    line: Optional[int] = None
+    anchor_head_sha: Optional[str] = None
+    anchor_text: Optional[str] = None
+    body: str
+    author_kind: str = "admin"
+    author_run_id: Optional[str] = None
+    resolved: bool = False
+    resolved_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    # Computed: anchor head differs from the live diff head, so the stored
+    # line number can no longer be trusted (render against anchor_text).
+    outdated: bool = False
+
+    model_config = {"from_attributes": True}

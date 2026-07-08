@@ -1,12 +1,16 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Cpu, Download } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Cpu, Download, MessageSquareWarning } from "lucide-react";
 import { useRun, runsApi } from "@/api/runs";
 import { useTicket } from "@/api/tickets";
+import { useRunComments, diffCommentsApi } from "@/api/diffComments";
+import { qk } from "@/api/keys";
 import { Button } from "@/ui/Button";
+import { Badge } from "@/ui/Badge";
 import { ErrorState } from "@/ui/ErrorState";
 import { StatusPill } from "@/ui/StatusPill";
+import { toast } from "@/ui/Toast";
 import { LiveTranscript } from "@/components/LiveTranscript";
 import { DiffView } from "@/components/DiffView";
 import { runStatusKind, formatUsd, formatTokens } from "@/lib/status";
@@ -49,6 +53,25 @@ export function RunTheater() {
     enabled: tab === "diff",
     retry: false,
   });
+  const queryClient = useQueryClient();
+  const commentsQ = useRunComments(rid, { enabled: tab === "diff" });
+  const comments = commentsQ.data ?? [];
+  const unresolvedCount = comments.filter((c) => c.parent_id === null && !c.resolved).length;
+  const invalidateComments = () =>
+    queryClient.invalidateQueries({ queryKey: qk.runs.comments(rid) });
+
+  const requestChanges = async () => {
+    try {
+      const res = await diffCommentsApi.requestChanges(rid);
+      toast.success(
+        `${unresolvedCount} comment${unresolvedCount === 1 ? "" : "s"} sent to next run`,
+      );
+      invalidateComments();
+      queryClient.invalidateQueries({ queryKey: qk.tickets.detail(res.ticket_id) });
+    } catch (err) {
+      toast.error("Request changes failed", { error: err });
+    }
+  };
 
   const tokens =
     (run?.input_tokens ?? 0) + (run?.output_tokens ?? 0) + (run?.cache_read_tokens ?? 0);
@@ -123,6 +146,11 @@ export function RunTheater() {
           </TabButton>
           <TabButton active={tab === "diff"} onClick={() => setTab("diff")}>
             Diff
+            {unresolvedCount > 0 && (
+              <Badge tone="review" className="ml-1.5">
+                {unresolvedCount}
+              </Badge>
+            )}
           </TabButton>
           <TabButton active={tab === "log"} onClick={() => setTab("log")}>
             Worker log
@@ -143,8 +171,32 @@ export function RunTheater() {
           diff.isLoading ? (
             <p className="text-sm text-moon-600">Loading diff…</p>
           ) : (
-            <div className="h-full overflow-auto">
-              <DiffView diff={diff.data} />
+            <div className="flex h-full flex-col">
+              {unresolvedCount > 0 && (
+                <div className="mb-3 flex items-center gap-2 rounded-card border border-review/25 bg-review/[0.06] px-3 py-2">
+                  <span className="text-[12px] text-moon-100">
+                    {unresolvedCount} unresolved review comment{unresolvedCount === 1 ? "" : "s"}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    className="ml-auto"
+                    leadingIcon={<MessageSquareWarning size={13} />}
+                    onClick={requestChanges}
+                  >
+                    Request changes
+                  </Button>
+                </div>
+              )}
+              <div className="min-h-0 flex-1 overflow-auto">
+                <DiffView
+                  diff={diff.data}
+                  runId={rid}
+                  headSha={diff.data?.head_sha}
+                  comments={comments}
+                  onCommentsChange={invalidateComments}
+                />
+              </div>
             </div>
           )
         ) : log.isLoading ? (

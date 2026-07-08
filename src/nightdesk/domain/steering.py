@@ -210,11 +210,11 @@ def drain_pending_to_context(
     bodies = [r.body.strip() for r in rows if r.body.strip()]
     drained = "\n\n".join(bodies) if bodies else None
     if drained:
-        from nightdesk.domain.tickets import get_ticket
-        t = get_ticket(session, ticket_id)
-        existing = (t.next_run_context or "").rstrip()
-        t.next_run_context = (existing + "\n\n" + drained) if existing else drained
-        t.next_run_context_updated_at = _now()
+        # Converge on the single append helper (shared with diff-comments'
+        # request-changes) so next_run_context stays one channel with one
+        # append/stamp implementation. See docs/design/session-suite.
+        from nightdesk.domain.tickets import append_next_run_context
+        append_next_run_context(session, ticket_id, drained)
     for r in rows:
         r.state = "cancelled"
     session.commit()
