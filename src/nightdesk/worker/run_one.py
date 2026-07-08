@@ -1129,6 +1129,11 @@ async def run_one(
 
             session.expire_all()
             cur = session.get(Ticket, ticket.id)
+            # Interactive sessions (kind='session') reuse the run pipeline but are
+            # ad-hoc chat, not board work: their turn ending is just the session
+            # going idle. Skip the run-completion webhook and the dependent
+            # (stacking) handoff — neither applies to a session.
+            is_session = cur is not None and cur.kind == "session"
             if cur is not None and cur.status == "running":
                 try:
                     transition_status(session, ticket.id, "review")
@@ -1137,17 +1142,18 @@ async def run_one(
                 except Exception:
                     log.exception("could not transition to review for %s",
                                   ticket.id)
-                try:
-                    _maybe_fire_webhook(
-                        session,
-                        ticket_id=ticket.id,
-                        run_id=run.id,
-                        exit_status=result.exit_status,
-                        error_summary=result.error_summary,
-                        base_url=cfg.api_url,
-                    )
-                except Exception:
-                    log.exception("webhook fire failed for ticket %s", ticket.id)
+                if not is_session:
+                    try:
+                        _maybe_fire_webhook(
+                            session,
+                            ticket_id=ticket.id,
+                            run_id=run.id,
+                            exit_status=result.exit_status,
+                            error_summary=result.error_summary,
+                            base_url=cfg.api_url,
+                        )
+                    except Exception:
+                        log.exception("webhook fire failed for ticket %s", ticket.id)
             else:
                 log.info("run %s completed for ticket %s: exit=%s (status already %s)",
                          run.id, ticket.id, result.exit_status,
@@ -1156,7 +1162,7 @@ async def run_one(
             # Context handoff: when a ticket finishes successfully, push a
             # summary into each dependent ticket's next_run_context so the
             # downstream stage sees what happened upstream.
-            if result.exit_status == "success":
+            if result.exit_status == "success" and not is_session:
                 try:
                     _handoff_to_dependents(session, ticket.id, run)
                 except Exception:
@@ -1252,7 +1258,9 @@ async def run_one(
                               "to review", ticket_id)
             try:
                 cur_ticket = session.get(Ticket, ticket_id)
-                if cur_ticket is not None and cur_ticket.current_run_id is not None:
+                if (cur_ticket is not None
+                        and cur_ticket.current_run_id is not None
+                        and cur_ticket.kind != "session"):
                     _maybe_fire_webhook(
                         session,
                         ticket_id=ticket_id,
