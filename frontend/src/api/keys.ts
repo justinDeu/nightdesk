@@ -12,6 +12,11 @@ export const qk = {
     list: (ticketId?: string) => ["runs", "list", ticketId ?? null] as const,
     detail: (id: string) => ["runs", "detail", id] as const,
   },
+  sessions: {
+    all: ["sessions"] as const,
+    list: ["sessions", "list"] as const,
+    detail: (id: string) => ["sessions", "detail", id] as const,
+  },
   projects: {
     all: ["projects"] as const,
     detail: (id: string) => ["projects", "detail", id] as const,

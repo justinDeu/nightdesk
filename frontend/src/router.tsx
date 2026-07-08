@@ -12,6 +12,8 @@ import { DeskPage } from "@/routes/desk/DeskPage";
 import { TicketsPage } from "@/routes/tickets/TicketsPage";
 import { TicketDetailPage } from "@/routes/tickets/TicketDetailPage";
 import { RunTheater } from "@/routes/tickets/RunTheater";
+import { SessionsPage } from "@/routes/sessions/SessionsPage";
+import { SessionChatPage } from "@/routes/sessions/SessionChatPage";
 import { InboxPage } from "@/routes/InboxPage";
 import { ArchivePage } from "@/routes/ArchivePage";
 import { ScheduledPage } from "@/routes/ScheduledPage";
@@ -66,6 +68,18 @@ const runTheaterRoute = createRoute({
         : undefined,
   }),
   component: RunTheater,
+});
+
+const sessionsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/sessions",
+  component: SessionsPage,
+});
+
+const sessionChatRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/sessions/$id",
+  component: SessionChatPage,
 });
 
 const inboxRoute = createRoute({
@@ -169,6 +183,8 @@ const routeTree = rootRoute.addChildren([
     ticketsRoute,
     ticketDetailRoute,
     runTheaterRoute,
+    sessionsRoute,
+    sessionChatRoute,
     inboxRoute,
     archiveRoute,
     scheduledRoute,
