@@ -56,6 +56,8 @@ class Capability(str, Enum):
     SUBAGENTS = "subagents"               # emits subagent lifecycle events
     THINKING = "thinking"                 # emits extended-thinking blocks
     RATE_LIMIT_SIGNAL = "rate_limit_signal"  # emits rate-limit events
+    STEER_QUEUE = "steer_queue"    # accepts a queued follow-up delivered at the next turn boundary
+    STEER_INJECT = "steer_inject"  # delivers a queued follow-up into the SAME live run without a new Run
 
 
 # --- field groups ----------------------------------------------------------
@@ -269,7 +271,15 @@ CLAUDE_SDK = BackendCapability(
         CLAUDE_BEHAVIOR.key,
         *_SHARED_TAIL,
     ),
-    capabilities=frozenset(Capability),  # every capability
+    # Every capability EXCEPT STEER_INJECT. claude_sdk's one-shot ``query()``
+    # closes stdin right after the runner spec is written, so there is no live
+    # input channel into a running turn: mid-run follow-ups are queued and
+    # delivered as the NEXT turn (STEER_QUEUE), never injected into the same
+    # run. This is the one place the "claude has every capability" shortcut is
+    # deliberately broken so STEER_INJECT actually gates (see the mid-run
+    # steering design). STEER_INJECT for claude needs a ClaudeSDKClient
+    # streaming-input rework (deferred follow-up).
+    capabilities=frozenset(Capability) - {Capability.STEER_INJECT},
     protocol_kinds=frozenset(("anthropic", "anthropic_compat")),
     multi_endpoint=False,
     model_slots=(
@@ -305,6 +315,11 @@ OPENCODE = BackendCapability(
         Capability.MODEL_SELECT,
         Capability.SYSTEM_PROMPT,
         Capability.FOLLOW_UP_CONTEXT,
+        # opencode drives a persistent localhost HTTP session and finishes on
+        # session.idle; POSTing another prompt before idle keeps the same
+        # session/run alive, so a queued follow-up injects into the SAME run.
+        Capability.STEER_QUEUE,
+        Capability.STEER_INJECT,
     }),
     protocol_kinds=frozenset(
         ("anthropic", "anthropic_compat", "openai", "openai_compat",

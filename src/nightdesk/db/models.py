@@ -336,6 +336,45 @@ class Conversation(Base):
     workspaces: Mapped[list["TicketWorkspace"]] = relationship(back_populates="conversation")
 
 
+class SteerMessage(Base):
+    """A follow-up the user queues while a run is live (mid-run steering).
+
+    Belongs to a Conversation (the live unit of work), NOT a specific Run: a
+    message authored during run N is delivered into run N (inject-capable
+    backends) or run N+1 (queue-only backends, via the run-completion drain +
+    auto-continue). Conversation is the same anchor the transcript file,
+    session_id, and ``latest_turn()`` already use, so a message survives run N
+    ending and can drive run N+1.
+
+    State machine: ``pending -> delivering -> delivered`` (happy path) and
+    ``pending -> cancelled`` (deleted, or folded into next_run_context at the
+    run-completion drain). ``delivering`` is a short-lived claim state; a
+    ``delivering`` row on a finished/orphaned run is reset to ``pending`` by
+    orphan recovery.
+    """
+
+    __tablename__ = "steer_messages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    ticket_id: Mapped[str] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # pending -> delivering -> delivered ; or pending -> cancelled
+    state: Mapped[str] = mapped_column(String, default="pending", nullable=False, index=True)
+    # "at_turn" (default) or "inject"; inject downgrades to at_turn without STEER_INJECT.
+    delivery_mode: Mapped[str] = mapped_column(String, default="at_turn", nullable=False)
+    delivered_run_id: Mapped[Optional[str]] = mapped_column(ForeignKey("runs.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    conversation: Mapped["Conversation"] = relationship()
+
+
 class Run(Base):
     __tablename__ = "runs"
 

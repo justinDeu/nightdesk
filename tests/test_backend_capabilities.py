@@ -55,12 +55,27 @@ def test_opencode_specific_and_inert_groups():
 def test_runtime_capabilities_are_declared():
     claude = bc.get_capability("claude_sdk")
     opencode = bc.get_capability("opencode")
-    # Claude provides every capability; opencode a conservative subset.
-    assert claude.capabilities == frozenset(bc.Capability)
+    # Claude provides every capability EXCEPT STEER_INJECT — its one-shot
+    # query() has no live input channel into a running turn, so the "claude has
+    # every capability" shortcut is deliberately broken here (see mid-run
+    # steering). It still provides STEER_QUEUE.
+    assert claude.capabilities == frozenset(bc.Capability) - {bc.Capability.STEER_INJECT}
+    assert not claude.provides(bc.Capability.STEER_INJECT)
+    assert claude.provides(bc.Capability.STEER_QUEUE)
     assert opencode.provides(bc.Capability.COST_USAGE)
     assert opencode.provides(bc.Capability.TOOL_POLICY)
     assert not opencode.provides(bc.Capability.THINKING)
     assert not opencode.provides(bc.Capability.RATE_LIMIT_SIGNAL)
+
+
+def test_steer_capabilities_gate():
+    claude = bc.get_capability("claude_sdk")
+    opencode = bc.get_capability("opencode")
+    # Both accept a queued follow-up; only opencode injects into the live run.
+    assert claude.provides(bc.Capability.STEER_QUEUE)
+    assert opencode.provides(bc.Capability.STEER_QUEUE)
+    assert opencode.provides(bc.Capability.STEER_INJECT)
+    assert not claude.provides(bc.Capability.STEER_INJECT)
 
 
 def test_provider_requirements():
