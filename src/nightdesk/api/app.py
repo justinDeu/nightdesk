@@ -70,7 +70,7 @@ def create_app(
     app.include_router(backends_routes.build_router(get_session, bearer_token))
     app.include_router(projects_routes.build_router(get_session, bearer_token))
     app.include_router(tickets_routes.build_router(get_session, bearer_token))
-    app.include_router(runs_routes.build_router(get_session, bearer_token))
+    app.include_router(runs_routes.build_router(get_session, bearer_token, engine=engine))
     app.include_router(config_routes.build_router(
         get_session, bearer_token,
         worktree_root=str(worktree_root), transcript_root=str(transcript_root),
