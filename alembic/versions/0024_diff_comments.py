@@ -21,7 +21,7 @@ import sqlalchemy as sa
 
 
 revision: str = "0024_diff_comments"
-down_revision: Union[str, Sequence[str], None] = "0022_providers_and_endpoints"
+down_revision: Union[str, Sequence[str], None] = "0023_steer_messages"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

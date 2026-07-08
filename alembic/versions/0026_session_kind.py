@@ -21,7 +21,7 @@ import sqlalchemy as sa
 
 
 revision: str = "0026_session_kind"
-down_revision: Union[str, Sequence[str], None] = "0022_providers_and_endpoints"
+down_revision: Union[str, Sequence[str], None] = "0025_execution_target"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
