@@ -102,6 +102,8 @@ export interface TicketOut {
   title: string;
   prompt: string;
   status: string;
+  /** 'ticket' (board work) | 'session' (ad-hoc interactive chat). */
+  kind: string;
   priority: number;
   position: number;
   project_id: string | null;
@@ -759,3 +761,39 @@ export interface LabelCreate {
   color?: string;
 }
 export type LabelUpdate = Partial<LabelCreate>;
+
+// --- Interactive sessions ------------------------------------------------------
+
+export interface SessionConversationOut {
+  id: string;
+  backend: string;
+  status: string;
+  session_id: string | null;
+  position: number;
+  started_at: string;
+  finished_at: string | null;
+  cost_usd: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+}
+
+export interface SessionOut extends TicketOut {
+  conversations: SessionConversationOut[];
+}
+
+export interface SessionCreate {
+  title?: string | null;
+  profile_id: string;
+  project_id?: string | null;
+  source_path?: string | null;
+}
+
+export interface SessionMessage {
+  message: string;
+}
+
+export interface SessionPromote {
+  title: string;
+  prompt?: string | null;
+  target_status?: "review" | "draft";
+}
