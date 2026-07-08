@@ -32,6 +32,12 @@ dev = [
     "freezegun>=1.5",
     "watchfiles>=0.21",
 ]
+# Only needed to actually talk to a cluster (execution_target='k8s'). The
+# kubernetes import is lazy, so the core install and the full test suite run
+# without this extra; FakeK8sClient covers the executor in CI.
+k8s = [
+    "kubernetes>=29",
+]
 
 [project.scripts]
 nightdesk-api = "nightdesk.cli:run_api"
@@ -40,6 +46,7 @@ nightdesk-dev = "nightdesk.cli:run_dev"
 nightdesk-init = "nightdesk.cli:init"
 nightdesk-migrate = "nightdesk.cli:migrate"
 nightdesk-run-ticket = "nightdesk.cli:run_ticket"
+nightdesk-runner = "nightdesk.runner.main:main"
 nightdesk-setup = "nightdesk.cli:setup"
 nightdesk-stop = "nightdesk.cli:stop"
 nightdesk-uninstall = "nightdesk.cli:uninstall"

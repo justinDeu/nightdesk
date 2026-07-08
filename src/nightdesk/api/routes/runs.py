@@ -1,54 +1,78 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pathlib import Path
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.api.auth import (
+    Principal,
+    enforce_self_ticket,
+    require_scopes,
+    require_token_cookie_or_bearer,
+)
 from nightdesk.api.schemas import RunOut
 from nightdesk.db.models import TicketWorkspace
 from nightdesk.domain.diff import (
-    RunDiff, compute_workspace_diff, select_diff_workspace,
+    RunDiff, compute_workspace_diff, diff_sidecar_path, diff_to_json,
+    read_diff_sidecar, run_diff_from_json, select_diff_workspace,
+    write_diff_sidecar,
 )
+from nightdesk.domain.run_result import result_sidecar_path, write_result_sidecar
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
 from nightdesk.logging_setup import run_log_path
+from nightdesk.transcript import KNOWN_TYPES, append_events
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
-    router = APIRouter(
+def build_router(get_session, bearer_token: str, engine=None) -> APIRouter:
+    # Bare parent (no global auth dep). The read routes carry the UI
+    # cookie/bearer gate; the run-token write-back routes carry their own
+    # per-route scope gate — a run's ndr_ token would 401 against the
+    # cookie/bearer gate, so the two auth models must not share one router-level
+    # dependency.
+    router = APIRouter(tags=["runs"])
+    read = APIRouter(
         prefix="/api/v1/runs",
-        tags=["runs"],
         dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
     )
 
-    @router.get("", response_model=list[RunOut])
+    @read.get("", response_model=list[RunOut])
     async def lst(ticket_id: str | None = Query(default=None),
                    session: Session = Depends(get_session)):
         return list_runs(session, ticket_id=ticket_id)
 
-    @router.get("/{rid}", response_model=RunOut)
+    @read.get("/{rid}", response_model=RunOut)
     async def show(rid: str, session: Session = Depends(get_session)):
         try:
             return get_run(session, rid)
         except RunNotFound:
             raise HTTPException(404, "not found")
 
-    @router.get("/{rid}/diff")
+    @read.get("/{rid}/diff")
     async def run_diff(rid: str, session: Session = Depends(get_session)):
         """Return a structured unified diff for the run's workspace changes.
 
-        Selects the run's diffable workspace by kind and dispatches: git
-        workspaces diff ``start_sha..end`` via git; non-git (directory)
-        workspaces diff the run-start filesystem snapshot against the current
-        tree. Both render through the same RunDiff structure.
+        A remote (k8s) run has no host worktree to diff, so it uploads a
+        structured diff sidecar from the pod; when that sidecar is present it is
+        served verbatim (it is already the canonical RunDiff JSON shape).
+        Otherwise the run's diffable workspace is selected by kind and
+        dispatched: git workspaces diff ``start_sha..end`` via git; non-git
+        (directory) workspaces diff the run-start filesystem snapshot against the
+        current tree.
         """
         try:
             run = get_run(session, rid)
         except RunNotFound:
             raise HTTPException(404, "not found")
+
+        # Prefer the pod-uploaded sidecar (k8s runs) — the host has no worktree.
+        sidecar = read_diff_sidecar(
+            diff_sidecar_path(Path(run.transcript_path).parent, rid)
+        )
+        if sidecar is not None:
+            return JSONResponse(diff_to_json(run_diff_from_json(sidecar)))
 
         ws = select_diff_workspace(_run_workspaces(session, run))
         result = compute_workspace_diff(
@@ -72,9 +96,9 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
                 "repo_root": "",
             })
 
-        return JSONResponse(_diff_to_json(result))
+        return JSONResponse(diff_to_json(result))
 
-    @router.get("/{rid}/log")
+    @read.get("/{rid}/log")
     async def download_log(rid: str, session: Session = Depends(get_session)):
         """Download the per-run worker log file as plain text."""
         try:
@@ -90,6 +114,120 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             filename=f"nightdesk-run-{rid}.log",
         )
 
+    # --- Run-token write-back surface ------------------------------------
+    # These accept the run's own scoped ndr_ token (or an admin bearer). They
+    # are how an off-host agent (a k8s pod) streams its transcript and uploads
+    # its diff/result back over HTTP: the pod holds only its run token, so every
+    # route is require_scopes(...self) + enforce_self_ticket. See
+    # docs/design/session-suite/k8s-executor.md ("API Additions").
+    wb = APIRouter(prefix="/api/v1/runs")
+    if engine is not None:
+        _append = require_scopes(bearer_token, engine, ["run.append_transcript.self"])
+        _mark_done = require_scopes(bearer_token, engine, ["run.mark_done.self"])
+
+        def _self_run(session: Session, rid: str, principal: Principal):
+            try:
+                run = get_run(session, rid)
+            except RunNotFound:
+                raise HTTPException(404, "not found")
+            enforce_self_ticket(principal, run.ticket_id)
+            return run
+
+        @wb.post("/{rid}/transcript")
+        async def post_transcript(
+            rid: str,
+            request: Request,
+            session: Session = Depends(get_session),
+            principal: Principal = Depends(_append),
+        ):
+            """Append a batch of canonical NDJSON transcript events.
+
+            Body is newline-delimited JSON, one canonical event per line. Each
+            line must be a JSON object with a recognized ``type``; the host
+            reassigns ``seq`` to keep the transcript's monotonic space. Makes the
+            host SSE tail light up live for pod runs.
+            """
+            run = _self_run(session, rid, principal)
+            raw = (await request.body()).decode("utf-8", errors="replace")
+            events: list[dict] = []
+            for lineno, line in enumerate(raw.splitlines(), start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    import json as _json
+                    evt = _json.loads(line)
+                except ValueError:
+                    raise HTTPException(400, f"line {lineno}: not valid JSON")
+                if not isinstance(evt, dict):
+                    raise HTTPException(400, f"line {lineno}: event must be an object")
+                etype = evt.get("type")
+                if not isinstance(etype, str) or etype not in KNOWN_TYPES:
+                    raise HTTPException(400, f"line {lineno}: unknown event type {etype!r}")
+                events.append(evt)
+            written = append_events(run.transcript_path, events)
+            return {"appended": written}
+
+        @wb.post("/{rid}/diff")
+        async def post_diff(
+            rid: str,
+            request: Request,
+            session: Session = Depends(get_session),
+            principal: Principal = Depends(_mark_done),
+        ):
+            """Upload the run's structured diff (RunDiff JSON) as a sidecar.
+
+            Stored next to the transcript; ``GET /diff`` prefers it. Round-tripped
+            through ``run_diff_from_json``/``diff_to_json`` so a malformed payload
+            is normalized rather than served raw.
+            """
+            run = _self_run(session, rid, principal)
+            try:
+                import json as _json
+                payload = _json.loads((await request.body()).decode("utf-8"))
+            except ValueError:
+                raise HTTPException(400, "body must be a JSON RunDiff object")
+            if not isinstance(payload, dict):
+                raise HTTPException(400, "body must be a JSON RunDiff object")
+            normalized = diff_to_json(run_diff_from_json(payload))
+            write_diff_sidecar(
+                diff_sidecar_path(Path(run.transcript_path).parent, rid),
+                normalized,
+            )
+            return {"stored": True}
+
+        @wb.post("/{rid}/result")
+        async def post_result(
+            rid: str,
+            request: Request,
+            session: Session = Depends(get_session),
+            principal: Principal = Depends(_mark_done),
+        ):
+            """Persist the run's reported outcome (exit/usage/session) as a sidecar.
+
+            The host stays the authority: it reads this back into an
+            ExecutionResult and runs the same finish_run + pricing path a local
+            run takes. This route never finalizes the run row itself.
+            """
+            run = _self_run(session, rid, principal)
+            try:
+                import json as _json
+                payload = _json.loads((await request.body()).decode("utf-8"))
+            except ValueError:
+                raise HTTPException(400, "body must be a JSON object")
+            if not isinstance(payload, dict):
+                raise HTTPException(400, "body must be a JSON object")
+            status = payload.get("exit_status")
+            if status not in ("success", "failed", "cancelled"):
+                raise HTTPException(400, f"invalid exit_status {status!r}")
+            write_result_sidecar(
+                result_sidecar_path(Path(run.transcript_path).parent, rid),
+                payload,
+            )
+            return {"stored": True}
+
+    router.include_router(read)
+    router.include_router(wb)
     return router
 
 
@@ -123,41 +261,3 @@ def _run_workspaces(session: Session, run) -> list:
         .where(TicketWorkspace.ticket_id == run.ticket_id)
         .order_by(TicketWorkspace.position)
     ).scalars())
-
-
-def _diff_to_json(d: RunDiff) -> dict:
-    """Serialize a RunDiff to a JSON-friendly dict."""
-    return {
-        "files": [
-            {
-                "path": f.path,
-                "old_path": f.old_path,
-                "new_path": f.new_path,
-                "binary": f.binary,
-                "lines_added": f.lines_added,
-                "lines_deleted": f.lines_deleted,
-                "hunks": [
-                    {
-                        "kind": h.kind,
-                        "gutter": h.gutter,
-                        "text": h.text,
-                        "line_no_old": h.line_no_old,
-                        "line_no_new": h.line_no_new,
-                    }
-                    for h in f.hunks
-                ],
-            }
-            for f in d.files
-        ],
-        "total_added": d.total_added,
-        "total_deleted": d.total_deleted,
-        "total_files": d.total_files,
-        "truncated": d.truncated,
-        "hidden_files": d.hidden_files,
-        "hidden_lines": d.hidden_lines,
-        "error": d.error,
-        "branch": d.branch,
-        "base_sha": d.base_sha,
-        "head_sha": d.head_sha,
-        "repo_root": d.repo_root,
-    }

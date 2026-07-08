@@ -188,3 +188,26 @@ Selection: `executors/registry.py` (`register/get_executor`), seeded with `Local
 - **API reachability:** default `bind_host=127.0.0.1` is unreachable from a cluster — k8s mode requires a cluster-routable API address (or tunnel/Service). Validated at executor init; fail fast.
 - **State ownership:** SQLite host-only; pods stateless/DB-less, HTTP-only via scoped token. Migration race story unchanged.
 - **Behavior preservation:** Phase-1 extraction is the highest-risk change; pure motion, full suite is the gate. K8s code lands only after it's green.
+
+## Addendum — implementation decisions (Phases 2–4)
+
+### Provisioning API: two-phase `provision()` → `execute()`
+The known gap the extraction flagged — `RunContext.workspace_dir` was host-resolved because `run_one` prepared the workspace bundle (and stamped pricing) before selecting an executor — is resolved by adding a **`provision()` phase** to the `Executor` ABC ahead of `execute()`. `run_one` now:
+1. selects `get_executor(profile.execution_target)` (default `"local"`) once;
+2. calls `executor.provision(ProvisionContext)`, which returns a `ProvisionOutcome(workspace_dir, bundle, git_dirs)`;
+3. runs every host-side workspace record (`_record_workspace_resolution`, fs snapshots, tool-path resolution, `run.worktree_path`, git-metadata mounts) **guarded on `bundle is not None`**;
+4. stamps the pricing snapshot after provision; then calls `executor.execute()`.
+
+`LocalExecutor.provision` is a pure move of the existing `prepare_workspace_bundle` call and returns the host bundle, so the local flow is **byte-identical** — the guards are always true for local, and the full suite stays green (1400 → 1427 with the new tests). `K8sExecutor.provision` validates config + preflights the workspace and returns `bundle=None` (no host tree); `run_one` then records the pod-reported branch/SHAs from `ExecutionOutcome.workspaces` after `execute()`. This was chosen over "carry raw specs + move all host records into `LocalExecutor`" because it keeps DB mutation in `run_one` (executors stay DB-light) and touches the byte-identical path minimally. `RunContext` also carries raw `workspace_specs` so `K8sExecutor` can build the pod clone RunSpec.
+
+### Result flow (host stays the authority)
+The pod POSTs `/result` to a **sidecar** (`domain/run_result.py`), not the Run row. `K8sExecutor.execute` reads it back into an `ExecutionResult`, and `run_one` runs the *same* `finish_run` + usage-persist + pricing path a local run takes. `ExecutionResult` gained a `failure_kind` field (None for local; mapped onto `Run.failure_kind` by `run_one`) so the k8s failure matrix (timeout/oom/provision_error/pod_lost/workspace_error/run_failed) reaches the DB without a k8s branch in `run_one`.
+
+### Registry
+`K8sExecutor` is **always registered** (not conditionally on config presence, which is DB-driven and unknown at import). It validates its config at `provision()` and fails fast (`K8sConfigError`) when unconfigured — that is the "clear error when unconfigured" the plan asks for.
+
+### Runner: coarse-grained sink swap
+The pod reuses `backend.prepare_launch` + `backend.execute` verbatim (no bwrap — `bwrap_argv = plan.cmd`), writing the transcript to a **local pod file**; a concurrent tailer batches new NDJSON lines to `POST /transcript`. This satisfies "file→HTTP sink swap" at the tail-and-forward grain rather than injecting a sink into `ClaudeExecutor`, keeping `ClaudeExecutor` untouched (zero risk to the local suite). The `kubernetes` import is lazy (`executors/k8s/client.py`), so `uv run pytest` is green without the `[k8s]` extra; `FakeK8sClient` covers the executor and a local git fixture + stubbed backend covers the runner.
+
+### Deliberate omissions (unchanged from the cutlines)
+`directory`/`in_place` workspaces on k8s (rejected at preflight); additional/linked workspaces; branch push/merge; multi-turn transcript seq seeding for a k8s `continue` (v1 pods are single-shot fresh-context); live cluster e2e (no cluster in CI). The real `K8sClient` cluster methods are `# pragma: no cover` — exercised only against a real cluster.

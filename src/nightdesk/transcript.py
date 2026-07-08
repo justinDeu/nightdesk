@@ -279,6 +279,47 @@ def append_event(path: str | Path, event: dict, *, _type: str | None = None) -> 
         log.exception("failed to append event to transcript: %s", p)
 
 
+def append_events(path: str | Path, events: list[dict]) -> int:
+    """Append a batch of canonical events, assigning host-authoritative seqs.
+
+    Used by the run-token transcript write-back endpoint (a k8s pod POSTs
+    batched NDJSON events computed in-pod). The host reassigns each event's
+    ``seq`` to continue the file's single monotonic space from
+    ``max(seq)+1`` — so a shared conversation transcript stays monotonic across
+    turns and the SSE ``since_seq`` tail never collides, regardless of the seq
+    the sender computed against its own (possibly empty) view of the file. ``ts``
+    is stamped if absent. Returns the number of events written. Reads the file
+    once up front, then writes the whole batch in a single open.
+    """
+    p = Path(path)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        import logging
+        logging.getLogger(__name__).exception(
+            "could not create transcript dir for batch: %s", p)
+        return 0
+
+    seq = next_transcript_seq(p) if p.exists() else 0
+    written = 0
+    try:
+        with p.open("ab") as f:
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                out = dict(event)
+                out.setdefault("ts", now_iso())
+                out["seq"] = seq
+                write_event(f, out)
+                seq += 1
+                written += 1
+    except OSError:
+        import logging
+        logging.getLogger(__name__).exception(
+            "failed to append event batch to transcript: %s", p)
+    return written
+
+
 def append_worker_error(
     path: str | Path,
     *,

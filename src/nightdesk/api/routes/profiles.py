@@ -341,6 +341,7 @@ def _profile_out(
         "secret_keys": profile.secret_keys or [],
         "default_model": profile.default_model,
         "backend": profile.backend,
+        "execution_target": getattr(profile, "execution_target", None) or "local",
         "endpoint_id": profile.endpoint_id,
         "backend_config": profile.backend_config or {},
         "claude_credentials": creds_out,

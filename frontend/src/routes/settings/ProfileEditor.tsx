@@ -128,6 +128,7 @@ interface ProfileForm {
   name: string;
   description: string;
   backend: string;
+  execution_target: "local" | "k8s";
   default_model: string;
   permission_mode: string;
   fs_read: string[];
@@ -152,6 +153,7 @@ function buildForm(p: ProfileOut): ProfileForm {
     name: p.name,
     description: p.description ?? "",
     backend: p.backend,
+    execution_target: (p.execution_target as ProfileForm["execution_target"]) ?? "local",
     default_model: p.default_model ?? "",
     permission_mode: p.permission_mode ?? "",
     fs_read: [...p.fs_read],
@@ -412,6 +414,7 @@ export function ProfileEditor({
         name: form.name.trim(),
         description: form.description,
         backend: form.backend,
+        execution_target: form.execution_target,
         default_model: form.default_model.trim() || null,
         permission_mode: (form.permission_mode || null) as ProfileCreate["permission_mode"],
         fs_read: form.fs_read,
@@ -607,6 +610,26 @@ export function ProfileEditor({
                   </Select>
                 </Field>
               </div>
+
+              <Field
+                label="Execution target"
+                className="max-w-xs"
+                hint={
+                  form.execution_target === "k8s"
+                    ? "Runs each ticket in a per-run Kubernetes pod. Configure the runner image under Settings → Cloud sandbox. Requires a git_worktree workspace with a reachable remote."
+                    : "Runs in the on-host sandbox (default)."
+                }
+              >
+                <Select
+                  value={form.execution_target}
+                  onChange={(e) =>
+                    set("execution_target", e.target.value as ProfileForm["execution_target"])
+                  }
+                >
+                  <option value="local">Local (on-host sandbox)</option>
+                  <option value="k8s">Kubernetes (cloud sandbox)</option>
+                </Select>
+              </Field>
 
               {showPermissionMode && (
                 <Field label="Permission mode" className="max-w-xs">

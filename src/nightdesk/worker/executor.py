@@ -79,6 +79,12 @@ class ExecutionResult:
     # sets this (one model per run environment); opencode sets it whenever
     # its transcript carried at least one per-message usage event.
     usage_by_model: Optional[dict[str, dict[str, int]]] = None
+    # Machine tag for *why* a run failed, mapped onto Run.failure_kind by
+    # run_one when present (e.g. the k8s failure matrix: timeout, oom,
+    # provision_error, pod_lost, workspace_error). None for the local path,
+    # which leaves failure_kind untouched — so this is additive and inert for
+    # existing executors.
+    failure_kind: Optional[str] = None
 
 
 class Executor(Protocol):

@@ -9,6 +9,7 @@ target.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +61,116 @@ _MAX_LINES = 5000
 _MAX_FILES = 200
 
 
+
+
+def diff_sidecar_path(transcript_root: Path | str, run_id: str) -> Path:
+    """Deterministic location of a run's uploaded structured diff.
+
+    A k8s run provisions its tree in-pod, so the host has no worktree to diff at
+    review time. Instead the pod computes the structured diff (``run_start_sha..
+    HEAD`` plus untracked files) and POSTs it to ``/api/v1/runs/{rid}/diff``; the
+    route persists it here, next to the run's transcript, mirroring the
+    ``fs_snapshot`` sidecar pattern. ``GET /diff`` prefers this file when present
+    (see ``select_diff_source``). Keyed by ``run_id`` only — one diff per run.
+    """
+    return Path(transcript_root) / "diffs" / f"{run_id}.json"
+
+
+def write_diff_sidecar(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def read_diff_sidecar(path: Path) -> Optional[dict]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def diff_to_json(d: RunDiff) -> dict:
+    """Serialize a RunDiff to the canonical JSON-friendly dict.
+
+    Shared by the ``GET /diff`` route and the in-pod runner so the on-the-wire
+    diff shape has one definition. Mirrors the route's historical ``_diff_to_json``.
+    """
+    return {
+        "files": [
+            {
+                "path": f.path,
+                "old_path": f.old_path,
+                "new_path": f.new_path,
+                "binary": f.binary,
+                "lines_added": f.lines_added,
+                "lines_deleted": f.lines_deleted,
+                "hunks": [
+                    {
+                        "kind": h.kind,
+                        "gutter": h.gutter,
+                        "text": h.text,
+                        "line_no_old": h.line_no_old,
+                        "line_no_new": h.line_no_new,
+                    }
+                    for h in f.hunks
+                ],
+            }
+            for f in d.files
+        ],
+        "total_added": d.total_added,
+        "total_deleted": d.total_deleted,
+        "total_files": d.total_files,
+        "truncated": d.truncated,
+        "hidden_files": d.hidden_files,
+        "hidden_lines": d.hidden_lines,
+        "error": d.error,
+        "branch": d.branch,
+        "base_sha": d.base_sha,
+        "head_sha": d.head_sha,
+        "repo_root": d.repo_root,
+    }
+
+
+def run_diff_from_json(payload: dict) -> RunDiff:
+    """Reconstruct a RunDiff from the canonical dict (inverse of ``diff_to_json``).
+
+    Tolerant of missing keys so a partial or hand-built payload still yields a
+    valid RunDiff rather than raising.
+    """
+    files: list[FileDiff] = []
+    for f in payload.get("files") or []:
+        hunks = [
+            DiffLine(
+                kind=str(h.get("kind", "ctx")),
+                gutter=str(h.get("gutter", " ")),
+                text=str(h.get("text", "")),
+                line_no_old=str(h.get("line_no_old", "")),
+                line_no_new=str(h.get("line_no_new", "")),
+            )
+            for h in (f.get("hunks") or [])
+        ]
+        files.append(FileDiff(
+            path=str(f.get("path", "")),
+            old_path=str(f.get("old_path", "")),
+            new_path=str(f.get("new_path", "")),
+            binary=bool(f.get("binary", False)),
+            lines_added=int(f.get("lines_added", 0)),
+            lines_deleted=int(f.get("lines_deleted", 0)),
+            hunks=hunks,
+        ))
+    return RunDiff(
+        files=files,
+        total_added=int(payload.get("total_added", 0)),
+        total_deleted=int(payload.get("total_deleted", 0)),
+        total_files=int(payload.get("total_files", len(files))),
+        truncated=bool(payload.get("truncated", False)),
+        hidden_files=int(payload.get("hidden_files", 0)),
+        hidden_lines=int(payload.get("hidden_lines", 0)),
+        error=str(payload.get("error", "")),
+        branch=str(payload.get("branch", "")),
+        base_sha=str(payload.get("base_sha", "")),
+        head_sha=str(payload.get("head_sha", "")),
+        repo_root=str(payload.get("repo_root", "")),
+    )
 
 
 def diff_repo_path(workspace) -> str:

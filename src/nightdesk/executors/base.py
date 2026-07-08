@@ -27,6 +27,7 @@ from nightdesk.domain.permissions import PermissionSpec
 from nightdesk.domain.providers import ResolvedEndpoint
 from nightdesk.worker.executor import ExecutionResult
 from nightdesk.worker.executor import Executor as RunExecutor
+from nightdesk.worker.workspace import WorkspaceBundle, WorkspaceSpec
 
 if TYPE_CHECKING:  # avoid a runtime import cycle for a type-only reference
     from sqlalchemy.orm import Session
@@ -60,9 +61,18 @@ class RunContext:
     model_assignments: dict[str, Assignment]
 
     # Resolved primary workspace directory (host path the agent runs in) and
-    # the worktree root the per-run scratch/session dirs anchor beside.
+    # the worktree root the per-run scratch/session dirs anchor beside. For a
+    # remote executor (k8s) ``workspace_dir`` is a nominal in-pod path (the host
+    # never provisions the tree); the pod clones the repo itself.
     workspace_dir: Path
     worktree_root: Path
+
+    # Raw (unresolved) workspace specs for the ticket. The ``LocalExecutor``
+    # ignores these (it runs against the host-provisioned ``workspace_dir``);
+    # the ``K8sExecutor`` reads them to build the in-pod clone RunSpec (primary
+    # git_worktree remote + base_ref + branch). Populated by run_one regardless
+    # of target so the executor decides how to use them.
+    workspace_specs: list[WorkspaceSpec]
 
     transcript_path: str
     # Precomputed by run_one so the executor needs neither ``_build_env`` nor
@@ -86,6 +96,55 @@ class RunContext:
 
 
 @dataclass
+class ProvisionContext:
+    """Inputs the executor needs to acquire (or preflight) the run's workspace.
+
+    This is the first of the two-phase Executor API (``provision`` then
+    ``execute`` — see the addendum in
+    ``docs/design/session-suite/k8s-executor.md``). ``run_one`` builds this
+    before it knows anything workspace-shaped and lets the executor decide *how*
+    the tree is materialised: ``LocalExecutor`` provisions a host bwrap worktree
+    bundle now; ``K8sExecutor`` only preflights (the pod clones later). The
+    design doc's sketch resolved ``workspace_dir`` on the host unconditionally;
+    the two-phase split is the adjustment that lets k8s provision in-pod without
+    a host worktree while keeping the local path byte-identical.
+    """
+
+    run_id: str
+    ticket_id: str
+    worktree_root: Path
+    specs: list[WorkspaceSpec]
+    run_intent: str
+    reuse_existing_worktrees: bool
+    fresh_worktree_paths: bool
+    transcript_path: str
+    # Cluster-routable API address and a session factory — used by remote
+    # executors (k8s) to load + validate their config at preflight. The local
+    # executor ignores both.
+    api_url: str = ""
+    session_factory: Optional[Callable[[], "Session"]] = None
+
+
+@dataclass
+class ProvisionOutcome:
+    """What ``provision`` hands back so ``run_one`` can continue setup.
+
+    ``bundle`` is the host workspace bundle for on-host executors and ``None``
+    for remote ones; ``run_one`` guards its host-side workspace records
+    (``_record_workspace_resolution``, fs snapshots, tool-path resolution,
+    ``run.worktree_path``) on ``bundle is not None`` — that is the seam that
+    keeps the local flow byte-identical while letting k8s skip host prep
+    entirely. ``workspace_dir`` is the primary working dir the agent runs in
+    (a host path for local, a nominal in-pod path for k8s). ``git_dirs`` are the
+    host git-metadata mounts (empty for k8s).
+    """
+
+    workspace_dir: Path
+    bundle: Optional[WorkspaceBundle] = None
+    git_dirs: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ResolvedWorkspace:
     """A workspace as an executor resolved it — the shape ``run_one`` writes
     into ``TicketWorkspace`` rows. Populated by remote executors (k8s) that
@@ -104,6 +163,7 @@ class ResolvedWorkspace:
     branch: Optional[str] = None
     base_ref: Optional[str] = None
     base_sha: Optional[str] = None
+    head_sha: Optional[str] = None
     run_start_sha: Optional[str] = None
     retention: Optional[str] = None
     state: str = "active"
@@ -131,6 +191,17 @@ class Executor(ABC):
     the run's transcript (+ diff) artifacts."""
 
     code: ClassVar[str]
+
+    @abstractmethod
+    async def provision(self, ctx: ProvisionContext) -> ProvisionOutcome:
+        """Acquire (or preflight) the isolated environment's workspace.
+
+        First phase of the two-phase API. ``LocalExecutor`` builds the host
+        worktree bundle here; ``K8sExecutor`` validates the primary workspace is
+        a clonable git remote and returns no host bundle. run_one stamps the
+        pricing snapshot *after* this returns.
+        """
+        ...
 
     @abstractmethod
     async def execute(self, ctx: RunContext) -> ExecutionOutcome:

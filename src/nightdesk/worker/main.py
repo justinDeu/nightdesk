@@ -21,6 +21,22 @@ from nightdesk.domain.cron_jobs import materialize_due_cron_jobs
 from nightdesk.domain.tickets import transition_status
 from nightdesk.worker.executor import Executor
 from nightdesk.worker.heartbeat import recover_orphaned_runs, write_heartbeat
+
+
+def _reconcile_executor_orphans(session, *, host: str) -> None:
+    """Run each remote executor's orphan reconciliation (adopt/GC pods).
+
+    Best-effort and self-guarding: an unconfigured k8s executor returns
+    immediately, and any error is logged rather than allowed to wedge the tick.
+    """
+    from nightdesk.executors import available_executors, get_executor
+    for code in available_executors():
+        if code == "local":
+            continue
+        try:
+            get_executor(code).reconcile_orphans(session, host=host)
+        except Exception:
+            log.exception("executor %s orphan reconcile failed (continuing)", code)
 from nightdesk.worker.scheduler import pick_eligible
 
 
@@ -200,6 +216,11 @@ class WorkerLoop:
             except Exception:
                 log.exception("orphan sweep failed (continuing)")
 
+            # Remote executors (k8s) own their own orphan reconciliation: the
+            # pid-liveness sweep above can't see pods. No-op when k8s isn't
+            # configured (reconcile swallows the config error).
+            _reconcile_executor_orphans(session, host=self.settings.host)
+
             # Capacity is driven by actual unfinished Run rows so the count
             # survives restarts and isn't polluted by tickets stuck in
             # 'running' without a Run row (which orphan recovery resets to
@@ -259,6 +280,7 @@ class WorkerLoop:
         session = self._session_factory()
         try:
             recover_orphaned_runs(session, host=self.settings.host)
+            _reconcile_executor_orphans(session, host=self.settings.host)
         finally:
             session.close()
         # Signals do two things: SIGTERM each child subprocess so users get a

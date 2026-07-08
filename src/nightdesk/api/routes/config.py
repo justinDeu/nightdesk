@@ -58,6 +58,17 @@ def _config_out(session: Session, row: ConfigRow) -> ConfigOut:
         toolchain_presets=row.toolchain_presets or {},
         claude_binary_path=row.claude_binary_path,
         opencode_binary_path=row.opencode_binary_path,
+        k8s_kubeconfig_path=getattr(row, "k8s_kubeconfig_path", None),
+        k8s_in_cluster=bool(getattr(row, "k8s_in_cluster", False)),
+        k8s_namespace=getattr(row, "k8s_namespace", None) or "nightdesk",
+        k8s_runner_image=getattr(row, "k8s_runner_image", None),
+        k8s_cpu_request=getattr(row, "k8s_cpu_request", None),
+        k8s_cpu_limit=getattr(row, "k8s_cpu_limit", None),
+        k8s_mem_request=getattr(row, "k8s_mem_request", None),
+        k8s_mem_limit=getattr(row, "k8s_mem_limit", None),
+        k8s_node_selector=getattr(row, "k8s_node_selector", None) or {},
+        k8s_runtime_class=getattr(row, "k8s_runtime_class", None),
+        k8s_git_credentials_secret=getattr(row, "k8s_git_credentials_secret", None),
     )
 
 
@@ -87,6 +98,13 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
             row.claude_binary_path = None
         if row.opencode_binary_path is not None and not row.opencode_binary_path.strip():
             row.opencode_binary_path = None
+        # Empty-string clears optional k8s string overrides (disables the field).
+        for _k in ("k8s_kubeconfig_path", "k8s_runner_image", "k8s_cpu_request",
+                   "k8s_cpu_limit", "k8s_mem_request", "k8s_mem_limit",
+                   "k8s_runtime_class", "k8s_git_credentials_secret"):
+            _v = getattr(row, _k, None)
+            if isinstance(_v, str) and not _v.strip():
+                setattr(row, _k, None)
         session.commit()
         session.refresh(row)
         return _config_out(session, row)
