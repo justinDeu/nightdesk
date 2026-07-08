@@ -47,6 +47,7 @@ class ProfileCreate(BaseModel):
     secret_keys: list[str] = []
     default_model: Optional[str] = None
     backend: str = "claude_sdk"
+    execution_target: Literal["local", "k8s"] = "local"
     endpoint_id: Optional[str] = None
     backend_config: dict = {}
     claude_credentials: Optional[ClaudeCredentialsIn] = None
@@ -70,6 +71,7 @@ class ProfileUpdate(BaseModel):
     secret_keys: Optional[list[str]] = None
     default_model: Optional[str] = None
     backend: Optional[str] = None
+    execution_target: Optional[Literal["local", "k8s"]] = None
     endpoint_id: Optional[str] = None
     backend_config: Optional[dict] = None
     claude_credentials: Optional[ClaudeCredentialsIn] = None
@@ -94,6 +96,7 @@ class ProfileOut(BaseModel):
     secret_keys: list[str]
     default_model: Optional[str] = None
     backend: str = "claude_sdk"
+    execution_target: str = "local"
     endpoint_id: Optional[str] = None
     backend_config: dict = {}
     claude_credentials: Optional[ClaudeCredentialsOut] = None
@@ -694,6 +697,19 @@ class ConfigOut(BaseModel):
     # from PATH (and, for opencode, ~/.opencode/bin).
     claude_binary_path: Optional[str] = None
     opencode_binary_path: Optional[str] = None
+    # Cloud sandbox (Kubernetes executor). All optional; a k8s profile is only
+    # runnable once a runner image + cluster-routable API address are set.
+    k8s_kubeconfig_path: Optional[str] = None
+    k8s_in_cluster: bool = False
+    k8s_namespace: str = "nightdesk"
+    k8s_runner_image: Optional[str] = None
+    k8s_cpu_request: Optional[str] = None
+    k8s_cpu_limit: Optional[str] = None
+    k8s_mem_request: Optional[str] = None
+    k8s_mem_limit: Optional[str] = None
+    k8s_node_selector: dict[str, str] = Field(default_factory=dict)
+    k8s_runtime_class: Optional[str] = None
+    k8s_git_credentials_secret: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -720,6 +736,18 @@ class ConfigUpdate(BaseModel):
     # Empty string clears the override (falls back to PATH discovery).
     claude_binary_path: Optional[str] = None
     opencode_binary_path: Optional[str] = None
+    # Cloud sandbox (Kubernetes executor). Empty string clears a string field.
+    k8s_kubeconfig_path: Optional[str] = None
+    k8s_in_cluster: Optional[bool] = None
+    k8s_namespace: Optional[str] = None
+    k8s_runner_image: Optional[str] = None
+    k8s_cpu_request: Optional[str] = None
+    k8s_cpu_limit: Optional[str] = None
+    k8s_mem_request: Optional[str] = None
+    k8s_mem_limit: Optional[str] = None
+    k8s_node_selector: Optional[dict[str, str]] = None
+    k8s_runtime_class: Optional[str] = None
+    k8s_git_credentials_secret: Optional[str] = None
 
     @field_validator("window_start", "window_end", mode="before")
     @classmethod

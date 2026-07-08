@@ -117,6 +117,12 @@ class Profile(Base):
     secret_keys: Mapped[list] = mapped_column(JSON, default=list)
     default_model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     backend: Mapped[str] = mapped_column(String, default="claude_sdk", nullable=False)
+    # Where runs of this profile execute: "local" (on-host bwrap sandbox,
+    # default) or "k8s" (per-run pod). The executor is orthogonal to backend;
+    # see docs/design/session-suite/k8s-executor.md.
+    execution_target: Mapped[str] = mapped_column(
+        String, default="local", nullable=False,
+    )
     # Encrypted JSON blob: {"source": "inherit"|"api_key"|"auth_token", "value": "..."}.
     claude_credentials: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     claude_binary_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -500,6 +506,23 @@ class ConfigRow(Base):
     # "UTC" reproduces the pre-timezone-fix behavior.
     schedule_timezone: Mapped[str] = mapped_column(String, default="UTC", nullable=False)
     toolchain_presets: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    # --- Cloud sandbox (Kubernetes executor) ---------------------------------
+    # All optional; k8s runs are only possible once a runner image + a
+    # cluster-routable API address are configured (see domain/k8s_config.py).
+    # kubeconfig path for out-of-cluster access; empty when running in-cluster.
+    k8s_kubeconfig_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    k8s_in_cluster: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    k8s_namespace: Mapped[str] = mapped_column(String, default="nightdesk", nullable=False)
+    k8s_runner_image: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    k8s_cpu_request: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    k8s_cpu_limit: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    k8s_mem_request: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    k8s_mem_limit: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    k8s_node_selector: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    k8s_runtime_class: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Name of a pre-existing cluster Secret providing clone/push git auth
+    # (HTTPS token or deploy key), mounted into the runner pod.
+    k8s_git_credentials_secret: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 class ScheduleWindow(Base):
