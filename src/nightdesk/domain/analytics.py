@@ -182,16 +182,21 @@ def _token_row(it, ot, cr, cw, n, cost) -> dict:
 
 
 def _scope_to_project(stmt, *, project_id: Optional[str] = None):
-    """Join ``Ticket`` and filter to one project, when ``project_id`` is given.
+    """Join ``Ticket``, always excluding interactive sessions, and optionally
+    scope to one project.
 
-    Shared by every ``Run``-rooted aggregate below so ``project_id`` is an
-    optional, additive filter everywhere: omit it and behavior is unchanged.
+    Shared by every ``Run``-rooted aggregate below. The ``Ticket`` join is now
+    unconditional so ``kind='session'`` runs are excluded from every analytics
+    aggregate whether or not a project is selected (an inner join on the NOT
+    NULL ``Run.ticket_id`` FK is 1:1, so it never changes row multiplicity).
+    ``project_id`` remains an optional additive filter.
     """
-    if project_id is None:
-        return stmt
-    return stmt.join(Ticket, Run.ticket_id == Ticket.id).where(
-        Ticket.project_id == project_id
+    stmt = stmt.join(Ticket, Run.ticket_id == Ticket.id).where(
+        Ticket.kind == "ticket"
     )
+    if project_id is not None:
+        stmt = stmt.where(Ticket.project_id == project_id)
+    return stmt
 
 
 def _window_cost_and_estimated(
@@ -331,7 +336,7 @@ def usage_by_profile(
         .select_from(Run)
         .join(Ticket, Run.ticket_id == Ticket.id)
         .join(Profile, Ticket.profile_id == Profile.id)
-        .where(Run.started_at >= start)
+        .where(Run.started_at >= start, Ticket.kind == "ticket")
         .group_by(Profile.name, Run.model_used, _HAS_SNAPSHOT)
     )
     if end is not None:
@@ -388,7 +393,7 @@ def usage_by_ticket(
         )
         .select_from(Run)
         .join(Ticket, Run.ticket_id == Ticket.id)
-        .where(Run.started_at >= start)
+        .where(Run.started_at >= start, Ticket.kind == "ticket")
         .group_by(Ticket.id, Ticket.title, Run.model_used, _HAS_SNAPSHOT)
     )
     if end is not None:
@@ -625,14 +630,13 @@ def _latency_window_stmt(columns, session: Session, *, start: datetime,
         select(*columns)
         .select_from(RunLatency)
         .join(Run, RunLatency.run_id == Run.id)
-        .where(Run.started_at >= start)
+        .join(Ticket, Run.ticket_id == Ticket.id)
+        .where(Run.started_at >= start, Ticket.kind == "ticket")
     )
     if end is not None:
         stmt = stmt.where(Run.started_at < end)
     if project_id is not None:
-        stmt = stmt.join(Ticket, Run.ticket_id == Ticket.id).where(
-            Ticket.project_id == project_id
-        )
+        stmt = stmt.where(Ticket.project_id == project_id)
     return stmt
 
 
@@ -717,12 +721,11 @@ def daily_latency_by_model_series(
         select(day_expr, RunLatency.model, RunLatency.turn_latencies)
         .select_from(RunLatency)
         .join(Run, RunLatency.run_id == Run.id)
-        .where(Run.started_at >= start)
+        .join(Ticket, Run.ticket_id == Ticket.id)
+        .where(Run.started_at >= start, Ticket.kind == "ticket")
     )
     if project_id is not None:
-        stmt = stmt.join(Ticket, Run.ticket_id == Ticket.id).where(
-            Ticket.project_id == project_id
-        )
+        stmt = stmt.where(Ticket.project_id == project_id)
     by_day: dict[str, dict[str, list[float]]] = {}
     for day, model, lats in session.execute(stmt).all():
         floats = _as_floats(lats)
@@ -777,7 +780,7 @@ def project_rollups(
         .select_from(Run)
         .join(Ticket, Run.ticket_id == Ticket.id)
         .outerjoin(Project, Ticket.project_id == Project.id)
-        .where(Run.started_at >= start)
+        .where(Run.started_at >= start, Ticket.kind == "ticket")
         .group_by(Ticket.project_id, Project.name, Project.slug, Run.model_used, _HAS_SNAPSHOT)
     )
     if end is not None:

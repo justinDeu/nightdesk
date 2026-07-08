@@ -191,6 +191,10 @@ class Ticket(Base):
     permission_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     toolchain_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    # 'ticket' (board work) | 'session' (ad-hoc chat, hidden from board/inbox/
+    # analytics/search). Sessions reuse the entire run pipeline; only the ticket
+    # list surfaces filter them out.
+    kind: Mapped[str] = mapped_column(String, default="ticket", nullable=False, index=True)
     run_now: Mapped[bool] = mapped_column(Boolean, default=False)
     # Opt-in: on a successful run, commit this ticket's working-tree changes
     # onto its git_worktree branch so dependent (stacked) tickets whose base_ref
