@@ -500,6 +500,8 @@ class TicketOut(BaseModel):
     title: str
     prompt: str
     status: str
+    # 'ticket' (board work) | 'session' (ad-hoc interactive chat).
+    kind: str = "ticket"
     priority: int
     position: int
     project_id: Optional[str] = None
@@ -906,6 +908,80 @@ class TicketNewConversation(BaseModel):
         if v is not None and not v.strip():
             return None
         return v
+
+
+# --------------------------------------------------------------------------
+# Interactive sessions (ticketless chat)
+# --------------------------------------------------------------------------
+class SessionCreate(BaseModel):
+    """Start an interactive session against a profile.
+
+    ``source_path`` omitted -> a per-session scratch directory is provisioned as
+    the primary workspace. A path -> the agent works in-place on that directory.
+    """
+
+    title: Optional[str] = None
+    profile_id: str
+    project_id: Optional[str] = None
+    source_path: Optional[str] = None
+
+    @field_validator("source_path", mode="before")
+    @classmethod
+    def _source_path_abs(cls, v):
+        return _normalize_source_path_optional(v)
+
+
+class SessionMessage(BaseModel):
+    """One chat turn. Empty/whitespace is rejected (nothing to send)."""
+
+    message: str
+
+    @field_validator("message")
+    @classmethod
+    def _nonempty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("message must not be empty")
+        return v
+
+
+class SessionPromote(BaseModel):
+    """Promote a session into a real board ticket, keeping its history.
+
+    ``target_status`` is ``review`` (default — history stays visible) or
+    ``draft``. ``prompt`` optionally overrides the ticket's prompt.
+    """
+
+    title: str
+    prompt: Optional[str] = None
+    target_status: Literal["review", "draft"] = "review"
+
+    @field_validator("title")
+    @classmethod
+    def _nonempty_title(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("title must not be empty")
+        return v
+
+
+class SessionConversationOut(BaseModel):
+    """One conversation (chat thread) of a session, for the detail view."""
+
+    id: str
+    backend: str
+    status: str
+    session_id: Optional[str] = None
+    position: int
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    cost_usd: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+
+
+class SessionOut(TicketOut):
+    """A session: the full TicketOut shape plus its conversations."""
+
+    conversations: list[SessionConversationOut] = []
 
 
 class BulkPriorityUpdate(BaseModel):
