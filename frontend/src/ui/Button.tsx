@@ -21,6 +21,9 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 const base =
   "inline-flex items-center justify-center gap-2 rounded-control font-medium " +
   "whitespace-nowrap select-none transition-colors duration-100 " +
+  // Touch: guarantee a ~40px tap target on coarse pointers regardless of the
+  // dense sm/md heights used on the desktop layout.
+  "pointer-coarse:min-h-10 " +
   "disabled:pointer-events-none disabled:opacity-60";
 
 const sizes: Record<ButtonSize, string> = {

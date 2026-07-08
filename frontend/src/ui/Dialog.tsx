@@ -39,6 +39,10 @@ export function Dialog({
           className={cn(
             "pop-in fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2",
             "rounded-card border border-ink-700 bg-ink-900 shadow-[var(--shadow-overlay)]",
+            // Viewport safety net: never taller than the (dynamic) viewport, and
+            // scroll internally if a consumer's body overflows. Consumers with
+            // their own scroll region (Composer's full editor) stay within this.
+            "max-h-[85dvh] overflow-y-auto overscroll-contain",
             "focus:outline-none",
             sizes[size],
             className,

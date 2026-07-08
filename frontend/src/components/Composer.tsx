@@ -262,7 +262,7 @@ function FullEditor({
         </>
       }
     >
-      <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
+      <div className="max-h-[65vh] space-y-4 overflow-y-auto overscroll-contain pr-1">
         <Field label="Title">
           <Input
             autoFocus
@@ -280,7 +280,7 @@ function FullEditor({
           />
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Project">
             <Select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               <option value="">No project</option>
@@ -313,7 +313,7 @@ function FullEditor({
           <PathInput value={sourcePath} onChange={setSourcePath} invalid={needsWorkspace && !sourcePath.trim()} />
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Workspace mode">
             <Select
               value={workspaceMode}
@@ -367,7 +367,7 @@ function FullEditor({
           </Field>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Initial status">
             <Select
               value={initialStatus}

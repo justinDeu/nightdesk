@@ -75,7 +75,7 @@ export function RunTheater() {
   return (
     <div className="flex h-full flex-col">
       {/* Sticky header */}
-      <header className="sticky top-0 z-10 border-b border-ink-700 bg-ink-950/80 px-6 py-3 backdrop-blur">
+      <header className="sticky top-0 z-10 border-b border-ink-700 bg-ink-950/80 px-4 py-3 backdrop-blur sm:px-6">
         <div className="flex items-center gap-3">
           <Link
             to="/tickets/$id"
@@ -130,7 +130,7 @@ export function RunTheater() {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-hidden px-6 py-4">
+      <div className="min-h-0 flex-1 overflow-hidden px-4 py-4 sm:px-6">
         {tab === "transcript" ? (
           <LiveTranscript
             runId={rid}

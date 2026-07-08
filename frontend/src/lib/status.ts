@@ -21,13 +21,15 @@ export function runStatusKind(exitStatus: string | null | undefined): StatusKind
   return "failed";
 }
 
-/** Format USD for the mono cost chips. Money is always two decimals; a nonzero
- *  amount that would round to $0.00 shows "<$0.01" so sub-cent spend still reads
- *  as real rather than free. */
+const USD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+/** Format USD for the mono cost chips. Money is always two decimals with
+ *  thousands separators; a nonzero amount that would round to $0.00 shows
+ *  "<$0.01" so sub-cent spend still reads as real rather than free. */
 export function formatUsd(value: number | null | undefined): string {
   if (value === null || value === undefined) return "$0.00";
   if (value > 0 && value < 0.005) return "<$0.01";
-  return `$${value.toFixed(2)}`;
+  return USD.format(value);
 }
 
 /** Compact token counts: 12400 -> "12.4k". */

@@ -1,10 +1,17 @@
 import { forwardRef } from "react";
-import { Ban, Check, Zap } from "lucide-react";
+import { Ban, Check, MoreHorizontal, Zap } from "lucide-react";
 import type { ProjectOut, RunOut, TicketOut } from "@/api/types";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/ui/DropdownMenu";
 import { formatUsd } from "@/lib/status";
 import { ticketHref } from "@/lib/routes";
+import { useTicketActions, ticketStatusMoves } from "@/lib/ticketActions";
 import { cn } from "@/lib/cn";
 
 /** Notable finished-run outcome for a card badge/edge. Success is not notable. */
@@ -45,6 +52,16 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
 ) {
   const running = ticket.status === "running";
   const outcome = running ? null : runOutcome(latestRun);
+  const actions = useTicketActions();
+  const moves = ticketStatusMoves(ticket, actions);
+
+  // Selection / peek / keyboard-cursor all render as ONE fused edge: the card's
+  // own 1px border and the box-shadow ring share a single hue so they never read
+  // as two separate lines a pixel apart. The keyboard cursor (focused) forces the
+  // jade hue even on a failed card so its edge stays one color; failed cards
+  // otherwise carry the ember hue, everything else jade.
+  const edgeHue = outcome === "failed" && !focused ? "failed" : "lamp";
+  const emphasis = focused || selected ? "strong" : peeked ? "soft" : "none";
 
   return (
     <div
@@ -54,24 +71,28 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
       }
       data-ticket-id={ticket.id}
       className={cn(
-        "group relative shrink-0 cursor-pointer overflow-hidden rounded-card border p-3 pt-3.5",
+        "cv-card group relative shrink-0 cursor-pointer overflow-hidden rounded-card border bg-ink-900 p-3 pt-3.5",
         "shadow-[var(--shadow-raised)] transition-colors",
-        // Selection: a left-anchored jade wash (.wash-selected), background-only so
-        // the 1px border stays uniform on every side in every state and the card
-        // never shifts/shrinks a pixel when (de)selected.
-        // Failed: a left-anchored ember gradient wash + ember-tinted border so the
-        // whole card silhouette reads warm and pops out of a column (the pill names
-        // it). Selected + failed: the jade selection wash wins, but the ember border
-        // is retained so the failed identity survives in the silhouette.
-        selected
-          ? outcome === "failed"
-            ? "wash-selected border-failed/35 bg-ink-900"
-            : "wash-selected border-ink-700 bg-ink-900"
-          : outcome === "failed"
-            ? "wash-failed border-failed/35 bg-ink-900"
-            : "border-ink-700 bg-ink-900 hover:bg-ink-800",
-        // Cursor/focus: a strong ring that sits on top of any selection tint.
-        focused ? "ring-2 ring-lamp" : peeked ? "ring-1 ring-lamp/50" : "",
+        // Left-anchored wash (background-only, so geometry never shifts on select):
+        // failed cards keep the ember wash even when selected so a red card never
+        // turns green; a selected non-failed card gets the jade wash.
+        outcome === "failed" ? "wash-failed" : selected ? "wash-selected" : "",
+        // Fused edge = border hue + ring hue always match (see edgeHue/emphasis).
+        //  strong (selected / keyboard cursor): full-strength border + a 3px ring
+        //    in the SAME hue → one solid ~4px edge, no two-tone gap.
+        //  soft (side-peek only): a tinted border + a 1px ring in the same hue.
+        //  none: resting border (ember tint for failed, neutral otherwise).
+        emphasis === "strong"
+          ? edgeHue === "failed"
+            ? "border-failed ring-[3px] ring-failed"
+            : "border-lamp ring-[3px] ring-lamp"
+          : emphasis === "soft"
+            ? edgeHue === "failed"
+              ? "border-failed/60 ring-1 ring-failed/50"
+              : "border-lamp/55 ring-1 ring-lamp/50"
+            : outcome === "failed"
+              ? "border-failed/35"
+              : "border-ink-700 hover:bg-ink-800",
         dragging && "opacity-40",
       )}
     >
@@ -79,8 +100,11 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           pill below (no top line — it read as bolted-on). */}
       {running && <span aria-hidden className="dawn-edge absolute inset-x-0 top-0 h-[2px]" />}
 
-      {/* Corner select toggle: always visible once selected; on hover it shows a
-          faint outline target so the mouse has an obvious way to (de)select. */}
+      {/* Corner select toggle: a low-emphasis outline target that sits at rest
+          (so touch users can always (de)select) and brightens on hover/focus;
+          fully lit once selected. The 24px button is a comfortable tap target;
+          the inner span carries the small visual glyph so the footprint stays
+          tight. */}
       <button
         type="button"
         aria-label={selected ? "Deselect ticket" : "Select ticket"}
@@ -90,17 +114,29 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           onToggleSelect();
         }}
         className={cn(
-          "absolute right-1.5 top-1.5 grid h-4 w-4 place-items-center rounded-full transition",
+          "absolute right-0.5 top-0.5 grid h-6 w-6 place-items-center rounded-full transition",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp",
           selected
-            ? "bg-lamp text-ink-950"
-            : "border border-moon-600/70 text-transparent opacity-0 hover:border-lamp hover:text-lamp group-hover:opacity-100",
+            ? "opacity-100"
+            : "opacity-60 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
         )}
       >
-        <Check size={11} strokeWidth={3} />
+        <span
+          className={cn(
+            "grid h-4 w-4 place-items-center rounded-full transition",
+            selected
+              ? "bg-lamp text-ink-950"
+              : "border border-moon-600/70 text-transparent hover:border-lamp hover:text-lamp",
+          )}
+        >
+          <Check size={11} strokeWidth={3} />
+        </span>
       </button>
 
-      <div className="mb-2 flex items-start gap-2">
+      {/* Title owns the full width now; pr-7 keeps the 3-line clamp clear of the
+          corner select toggle (absolute, top-right, 24px). Priority moved to the
+          meta row so nothing crowds the checkbox during multi-select. */}
+      <div className="mb-2 pr-7">
         {/* Real anchor so middle/cmd-click open a new tab natively; plain click
             still opens the peek (preventDefault). draggable=false keeps the
             card's pragmatic-DnD drag intact instead of dragging the link. */}
@@ -114,25 +150,10 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
             if (e.shiftKey) onRangeSelect();
             else onSelect();
           }}
-          className="block min-w-0 flex-1 rounded-[4px] text-sm font-medium leading-snug text-moon-100 hover:text-lamp focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp group-hover:text-lamp"
+          className="block min-w-0 rounded-[4px] text-sm font-medium leading-snug text-moon-100 hover:text-lamp focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp group-hover:text-lamp"
         >
           <span className="line-clamp-3">{ticket.title}</span>
         </a>
-        {/* Kept mounted in every state (only its opacity changes) so selecting or
-            hovering never removes it from the flex row and reflows the title — that
-            unmount was the "card shrinks slightly on select" regression. Faded out
-            when selected (the corner check owns that spot) or on hover.
-            pointer-events-none: once faded this span still overlaps the corner
-            select glyph; without it the click lands here (opening the peek) instead
-            of on the glyph (E2E BUG-2). */}
-        <span
-          className={cn(
-            "pointer-events-none transition-opacity",
-            selected ? "opacity-0" : "group-hover:opacity-0",
-          )}
-        >
-          <PriorityChip value={ticket.priority} hideNone />
-        </span>
       </div>
 
       {ticket.labels.length > 0 && (
@@ -150,11 +171,13 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
       )}
 
       <div className="flex items-center justify-between gap-2 text-[11px] text-moon-600">
-        {hideProject ? (
-          <span className="min-w-0" />
-        ) : (
-          <ProjectTag project={project} showNone className="min-w-0" />
-        )}
+        {/* Left meta cluster: project + priority ride together here (priority left
+            the title row so it can't crowd the corner checkbox). min-w-0 lets the
+            project name truncate before the priority chip. */}
+        <div className="flex min-w-0 items-center gap-1.5">
+          {!hideProject && <ProjectTag project={project} showNone className="min-w-0" />}
+          <PriorityChip value={ticket.priority} hideNone className="shrink-0" />
+        </div>
         <div className="flex shrink-0 items-center gap-2">
           {outcome === "failed" && (
             <span className="inline-flex items-center gap-1 rounded-full border border-failed/30 bg-failed/10 px-1.5 py-0.5 text-[10px] font-medium text-failed">
@@ -173,6 +196,35 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           )}
           {latestRun?.cost_usd != null && (
             <span className="font-mono tabular-nums">{formatUsd(latestRun.cost_usd)}</span>
+          )}
+          {/* Touch-safe status move: HTML5 drag can't work on a touchscreen, so
+              every card carries an overflow menu of its legal transitions. Shown
+              at rest on coarse pointers, hover/focus-gated on a mouse where drag
+              already works. */}
+          {moves.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Move ticket"
+                  onClick={(e) => e.stopPropagation()}
+                  className={cn(
+                    "-mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-control text-moon-400 transition",
+                    "hover:bg-ink-800 hover:text-moon-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp",
+                    "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
+                  )}
+                >
+                  <MoreHorizontal size={15} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {moves.map((m) => (
+                  <DropdownMenuItem key={m.label} danger={m.danger} onSelect={m.run}>
+                    {m.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </div>

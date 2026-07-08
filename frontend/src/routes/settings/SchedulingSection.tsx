@@ -7,6 +7,7 @@ import { Input, Field } from "@/ui/Input";
 import { Select } from "@/ui/Select";
 import { Spinner } from "@/ui/Spinner";
 import { Badge } from "@/ui/Badge";
+import { Tooltip } from "@/ui/Tooltip";
 import { toast, describeError } from "@/ui/Toast";
 import { configApi, useConfig, useWindows } from "@/api/config";
 import { qk } from "@/api/keys";
@@ -326,21 +327,22 @@ function WindowRow({
         {DAYS.map((d) => {
           const on = (w.day_mask & d.bit) !== 0;
           return (
-            <button
-              key={d.bit}
-              type="button"
-              aria-pressed={on}
-              title={d.label}
-              onClick={() => onChange({ day_mask: on ? w.day_mask & ~d.bit : w.day_mask | d.bit })}
-              className={cn(
-                "rounded-control border px-2 py-0.5 text-xs transition-colors",
-                on
-                  ? "border-lamp bg-lamp/15 text-lamp"
-                  : "border-ink-700 text-moon-400 hover:text-moon-100",
-              )}
-            >
-              {d.short}
-            </button>
+            <Tooltip key={d.bit} content={d.label}>
+              <button
+                type="button"
+                aria-pressed={on}
+                aria-label={d.label}
+                onClick={() => onChange({ day_mask: on ? w.day_mask & ~d.bit : w.day_mask | d.bit })}
+                className={cn(
+                  "rounded-control border px-2 py-0.5 text-xs transition-colors",
+                  on
+                    ? "border-lamp bg-lamp/15 text-lamp"
+                    : "border-ink-700 text-moon-400 hover:text-moon-100",
+                )}
+              >
+                {d.short}
+              </button>
+            </Tooltip>
           );
         })}
         <div className="ml-1 flex gap-1">

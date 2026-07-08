@@ -4,6 +4,8 @@ export { IconButton } from "./IconButton";
 export type { IconButtonProps } from "./IconButton";
 export { Input, Textarea, Field } from "./Input";
 export { Select } from "./Select";
+export { Switch } from "./Switch";
+export type { SwitchProps } from "./Switch";
 export { Badge } from "./Badge";
 export type { BadgeTone } from "./Badge";
 export { StatusPill } from "./StatusPill";

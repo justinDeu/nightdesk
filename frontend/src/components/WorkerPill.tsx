@@ -56,19 +56,22 @@ export function WorkerPill() {
         </div>
       </Tooltip>
 
-      <Tooltip content="Today's completed-run spend · month-to-date">
-        <div className="flex h-8 items-center gap-1.5 rounded-control border border-ink-700 bg-ink-900 px-2.5 font-mono text-xs">
-          <span className="text-lamp">{formatUsd(data?.day_spend_usd)}</span>
-          <span className="text-moon-600">today</span>
-          {data && data.month_spend_usd > 0 && (
-            <>
-              <span className="text-moon-600">·</span>
-              <span className="text-moon-400">{formatUsd(data.month_spend_usd)}</span>
-              <span className="text-moon-600">mo</span>
-            </>
-          )}
-        </div>
-      </Tooltip>
+      {/* Spend chip folds away on the narrowest screens to keep the strip clear. */}
+      <div className="hidden sm:block">
+        <Tooltip content="Today's completed-run spend · month-to-date">
+          <div className="flex h-8 items-center gap-1.5 rounded-control border border-ink-700 bg-ink-900 px-2.5 font-mono text-xs">
+            <span className="text-lamp">{formatUsd(data?.day_spend_usd)}</span>
+            <span className="text-moon-600">today</span>
+            {data && data.month_spend_usd > 0 && (
+              <>
+                <span className="text-moon-600">·</span>
+                <span className="text-moon-400">{formatUsd(data.month_spend_usd)}</span>
+                <span className="text-moon-600">mo</span>
+              </>
+            )}
+          </div>
+        </Tooltip>
+      </div>
     </div>
   );
 }

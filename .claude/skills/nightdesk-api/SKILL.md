@@ -1,18 +1,13 @@
 ---
 name: nightdesk-api
-description: Use when calling the nightdesk HTTP API from scripts, curl, tests, or ad-hoc tooling. Covers bearer-token auth, base URL discovery, the two parallel API surfaces (JSON `/api/v1/*` vs HTMX `/board/*` `/tickets/*` `/archive/*`), `openapi.json` discovery, and PATCH semantics.
+description: Use when calling the nightdesk HTTP API from scripts, curl, tests, or ad-hoc tooling. Covers bearer-token auth, base URL discovery, the JSON `/api/v1/*` surface (the only API — the legacy HTMX UI was removed in favor of a React SPA served at `/`), `openapi.json` discovery, and PATCH semantics.
 ---
 
 # nightdesk API access
 
-The nightdesk server exposes two parallel surfaces on the same host. Pick the right one or you will get 405s, HTML fragments, or auth errors.
+`/api/v1/*` is the entire HTTP API — JSON in, JSON out. There is no separate HTMX/HTML API surface anymore: the old server-rendered UI (`/board/*`, `/tickets/{tid}/*` HTML page, `/archive/*`, `/header/*`, `/settings/*`, `/profiles/*` HTML editor, `/diagnostics` page, `/cron/*` page, `/fs/suggest` HTML partial) was removed and replaced by a React SPA that talks exclusively to `/api/v1`. The SPA itself is served at `/` (see "SPA / static serving" below) — everything under `/` that isn't `/api/v1/*`, `/auth/*`, or `/healthz` is the SPA's own client-side routing, not a server route.
 
-| Surface | Auth | Content type | Use for |
-|---|---|---|---|
-| `/api/v1/*` | `Authorization: Bearer <token>` | JSON in, JSON out | Scripts, tests, tooling, anything that isn't a browser |
-| `/board/*`, `/tickets/{tid}/*`, `/archive/*`, `/header/*`, `/fs/*` | Browser session cookie | HTML fragments, `204` + `HX-Redirect: /` | HTMX UI only — do not call from scripts |
-
-If you find yourself reaching for an HTMX endpoint from curl, stop and look for the `/api/v1` equivalent. The HTMX routes are not stable contracts.
+`/api/v1/*` admin routes accept `Authorization: Bearer <token>` **or** the signed `nightdesk_session` browser cookie — the cookie support exists so the browser SPA can call the JSON API directly without also sending a bearer header; scripts should keep using the bearer header. `ndr_`-prefixed run-scoped tokens (issued to sandboxed agent runs) are unaffected — they still only work via the bearer header and only on the scopes granted to that run.
 
 ## Auth
 
@@ -55,10 +50,13 @@ For Python-side schema details (field types, defaults, validators), read `src/ni
 
 ## Response conventions
 
-- `/api/v1/*` mutations return the affected resource as JSON (or `204` for cancel/transition).
+- `/api/v1/*` mutations return the affected resource as JSON (or `204` for delete/cancel-style actions).
 - **Update endpoints are PATCH with sparse semantics**: only fields included in the body are touched; omitted fields are preserved. Sending `{"title": "x"}` will NOT wipe the prompt.
 - Errors: FastAPI `{"detail": "..."}` with appropriate status code (`401` missing bearer, `404` not found, `409` invalid transition, `422` validation).
-- HTMX routes return `204 No Content` with an `HX-Redirect: /` header — useless to a script.
+
+## SPA / static serving
+
+The built frontend (`frontend/dist`, a Vite/React app) is mounted at `/` when present: `GET /` and any unmatched path serve `index.html` (client-side routing owns everything that isn't `/api/v1`, `/auth`, or `/healthz`), `GET /assets/{path}` serves hashed build assets with an immutable cache header. `/app/*` 308-redirects to the equivalent `/*` path (a transition shim from when the SPA was mounted at `/app`; safe to use but prefer `/` in new links). None of this is relevant to a script driving the JSON API — it only matters if you're checking whether the UI itself is being served.
 
 ## Listing / paging tickets
 
@@ -69,9 +67,16 @@ For Python-side schema details (field types, defaults, validators), read `src/ni
 | `status` | all | `inbox`/`draft`/`queued`/`running`/`review`/`archived` |
 | `profile_id` | all | |
 | `project_id` | all | `null` selects tickets with no project |
+| `priority` | all | exact band on the `0`-`4` scale; out-of-range is a `422` |
+| `label` | all | label **name** (case-insensitive) or label id; matches tickets carrying that label |
+| `outcome` | all | latest-run terminal state: `succeeded` (last run `exit_status == success`) or `failed` (any other finished status). Any other value is a `422`. |
+| `q` | all | free-text substring (case-insensitive) over ticket `title` + `prompt` |
 | `limit` | `200` | honored up to a hard max of `1000`; **above the max is a `422`, not a clamp** |
 | `offset` | `0` | page past the limit / the hard max |
-| `sort` | `board` | `board` = position-stable board order (unchanged default); `recent` = `updated_at` desc (newest first). Any other value is a `422`. The Archive page uses `sort=recent` so page 1 is the most recently archived. |
+| `sort` | `board` | `board` = position-stable board order (unchanged default); `recent` = `updated_at`, `created` = `created_at`, `priority` = the 0-4 band, `cost` = latest run `cost_usd` (runless tickets sort as NULL). Any other value is a `422`. The Archive page uses `sort=recent` so page 1 is the most recently archived. |
+| `order` | `desc` | direction for every `sort` except `board` (which ignores it); `asc` or `desc`. |
+
+All filter params are optional and **AND-combined**, applied server-side, so `X-Total-Count` and paging stay honest — a filtered list never undercounts by filtering only already-loaded rows.
 
 Because the body is a bare JSON array, paging metadata is in response **headers** — always check these, never assume a full result set:
 
@@ -96,12 +101,24 @@ In Python, just read `resp.headers["x-total-count"]` / `resp.headers["x-has-more
 
 ## Common gotchas
 
-- `GET /board/tickets/{id}` → `405 Method Not Allowed`. The board surface has no per-ticket GET; use `GET /api/v1/tickets/{tid}`.
 - `POST /api/v1/...` without `Authorization` → `{"detail":"missing bearer"}`. Always set the header.
 - A `PATCH` body that omits a field does not clear it. To clear, send an explicit `null` (where the `*Update` schema allows `Optional[...]`).
 - Tickets in `status="running"` cannot be deleted — `409` from `DELETE /api/v1/tickets/{tid}`. Cancel or wait first.
 - `bind_host = "127.0.0.1"` by default — `localhost` works, but a stale `0.0.0.0` assumption from elsewhere will hang.
-- Continuing/resuming a conversation has JSON endpoints now (see **Conversations** below); only the legacy `/resume`, `/retry`, `/restart` verbs remain HTMX-only.
+- Continuing/resuming a conversation has JSON endpoints now (see **Conversations** below); `resume`, `retry`, `restart`, and `clone` also have JSON parity — see `nightdesk-ticket-ops`.
+
+## Endpoint families added for the SPA rebuild
+
+All under `/api/v1`, same cookie-or-bearer auth as everything else in this table:
+
+- **Inbox**: `GET /inbox` (items + completeness `blockers`), `GET /inbox/count`, `POST /tickets/{tid}/promote` (`{"target": "draft"|"queued"}`, 422 with blockers when incomplete), `POST /tickets/{tid}/decline`.
+- **Saved views**: `POST /views` (`{"name", "surface", "params"}`), `PATCH /views/{id}` (rename only), `DELETE /views/{id}`, `POST /views/reorder` (`{"view_ids": [...]}`) — alongside the existing `GET /views`. `surface` is `"tickets"` for the live SPA surface; its `params` are `{"f": "<filter string>", "view": "board"|"list"}` (both optional, empty values stripped). The legacy `"board"`/`"list"` surfaces (params `q`/`group`/`order`/`props`) stay valid for older stored views. Unknown surface or unknown param key → 422; duplicate name → 409.
+- **Analytics**: `GET /analytics/summary`, `/analytics/spend?range=today|7d|30d`, `/analytics/tokens?range=`, `/analytics/latency?range=` — same numbers the `/analytics` HTML dashboard renders, sliced by range. All four accept an optional `?project_id=` that scopes the whole response to one project (404 if unknown). `summary` and `spend` include a `by_project` rollup (`{project_id, project_name, project_slug, total_tokens, cost, run_count, success_rate, ...}` per project); `spend`'s and `tokens`' `daily_series` entries carry the full token breakdown (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `cost`, `run_count`, `by_model`) so one series covers spend-over-time, tokens-over-time, and runs-over-time.
+- **Bulk**: `PATCH /tickets/bulk/labels` (replaces, not merges, each ticket's label set), `POST /tickets/bulk/archive`, `POST /tickets/bulk/unarchive`.
+- **Profiles**: `POST /profiles/{pid}/copy`, `GET /profiles/{pid}/export` (secrets redacted), `POST /profiles/import` (JSON body `{"payload": {...}}`, not multipart), `POST /profiles/import-from-cc` (`{"settings": {...}, "name"?}`).
+- **Helpers**: `POST /preview/worktree-name`, `POST /preview/cron` (`{"schedule", "timezone", "count"}` → next N fire times), `POST /notifications/test` (`{"url"}`), `GET /projects/{id}/activity` (recent runs feed), `GET /diagnostics` (CC install check, no log tails).
+
+See `nightdesk-ticket-ops` for the per-ticket conversation/run-action recipes (resume/retry/restart/clone/next-run-context/additional-dirs) and lifecycle recipes (`POST /tickets/{tid}/send-to-inbox` — the only JSON path back into the inbox; `draft` only, `409` otherwise).
 
 ## Conversations
 

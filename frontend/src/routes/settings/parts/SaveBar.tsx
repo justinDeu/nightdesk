@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/ui/Button";
 import { cn } from "@/lib/cn";
+import { useUnsavedGuard } from "@/lib/useUnsavedGuard";
 
 /**
  * Editable-form state with dirty tracking against a server baseline.
@@ -27,6 +28,8 @@ export function useEditableForm<S, F>(
   }, [key]);
 
   const dirty = form != null && JSON.stringify(form) !== baseline;
+
+  useUnsavedGuard(dirty, "You have unsaved changes. Leave without saving?");
 
   return {
     form,

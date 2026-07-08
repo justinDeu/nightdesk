@@ -432,14 +432,16 @@ export function BreakdownTable({
               style={{ width: `${(r.tokens / max) * 100}%`, backgroundColor: barColor, opacity: 0.7 }}
             />
           </div>
-          <span className="w-8 shrink-0 text-right font-mono text-[10px] text-moon-600">{r.runs}</span>
-          <span className="w-14 shrink-0 text-right font-mono text-[11px] text-moon-400">
+          <span className="w-8 shrink-0 text-right font-mono text-[10px] tabular-nums text-moon-600">
+            {r.runs}
+          </span>
+          <span className="w-14 shrink-0 text-right font-mono text-[11px] tabular-nums text-moon-400">
             {formatTokens(r.tokens)}
           </span>
           <span className="flex w-20 shrink-0 items-center justify-end gap-1">
             <span
               className={cn(
-                "font-mono text-[11px]",
+                "font-mono text-[11px] tabular-nums",
                 r.unpriced ? "text-moon-600" : "text-moon-100",
               )}
             >

@@ -401,3 +401,185 @@ async def test_sort_invalid_value_rejected(client):
     """An unknown ``sort`` is a 422, not a silent fallback to some ordering."""
     r = await client.get("/api/v1/tickets?sort=sideways")
     assert r.status_code == 422
+
+
+# --- Archive filter dimensions: priority / label / q / outcome ---------------
+#
+# These compose with the existing status filter and with limit/offset paging;
+# X-Total-Count reflects the *filtered* set so the Archive page never
+# undercounts by filtering only the rows it has already loaded.
+
+
+def _attach_run(session, ticket_id, *, exit_status, cost_usd=None, started_at=None):
+    """Insert a finished Run row directly so a ticket has a controllable latest
+    run (outcome + cost). ``started_at`` decides which run is 'latest' when a
+    ticket has several."""
+    from datetime import datetime, timezone
+    from nightdesk.db.models import Run
+    run = Run(
+        ticket_id=ticket_id,
+        started_at=started_at or datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+        exit_status=exit_status,
+        cost_usd=cost_usd,
+        worktree_path="/tmp/wt",
+        transcript_path="/tmp/t.jsonl",
+        pid=None,
+        host="test",
+    )
+    session.add(run)
+    session.commit()
+    return run
+
+
+async def test_priority_filter_and_count(client, session):
+    """``priority=N`` returns only that band and X-Total-Count is the filtered
+    total, not the whole table."""
+    pid = await _create_profile(client)
+    from nightdesk.domain.tickets import create_ticket
+    hi = create_ticket(session, title="hi", prompt="p", profile_id=pid,
+                        source_path="/tmp", priority=4, status="archived")
+    create_ticket(session, title="lo", prompt="p", profile_id=pid,
+                  source_path="/tmp", priority=1, status="archived")
+
+    r = await client.get("/api/v1/tickets?status=archived&priority=4")
+    assert r.status_code == 200
+    rows = r.json()
+    assert [t["id"] for t in rows] == [hi.id]
+    assert r.headers["X-Total-Count"] == "1"
+
+
+async def test_priority_out_of_range_rejected(client):
+    """Priority is the 0-4 scale; 9 is a 422, never a silent empty result."""
+    assert (await client.get("/api/v1/tickets?priority=9")).status_code == 422
+
+
+async def test_label_filter_by_name_and_id(client, session):
+    """``label=`` matches by case-insensitive name OR id, via EXISTS (no dupes)."""
+    pid = await _create_profile(client)
+    from nightdesk.domain.tickets import create_ticket
+    tagged = create_ticket(session, title="tagged", prompt="p", profile_id=pid,
+                           source_path="/tmp", status="archived")
+    create_ticket(session, title="bare", prompt="p", profile_id=pid,
+                  source_path="/tmp", status="archived")
+    label = create_label(session, name="Urgent", color="#ef4444")
+    set_ticket_labels(session, tagged.id, [label.id])
+
+    by_name = await client.get("/api/v1/tickets?status=archived&label=urgent")
+    assert [t["id"] for t in by_name.json()] == [tagged.id]
+    assert by_name.headers["X-Total-Count"] == "1"
+
+    by_id = await client.get(f"/api/v1/tickets?status=archived&label={label.id}")
+    assert [t["id"] for t in by_id.json()] == [tagged.id]
+
+
+async def test_q_free_text_matches_title_and_prompt(client, session):
+    """``q`` is a substring match over title and prompt, case-insensitive."""
+    pid = await _create_profile(client)
+    from nightdesk.domain.tickets import create_ticket
+    a = create_ticket(session, title="Migrate database", prompt="do it",
+                      profile_id=pid, source_path="/tmp", status="archived")
+    b = create_ticket(session, title="unrelated", prompt="touch the DATABASE layer",
+                      profile_id=pid, source_path="/tmp", status="archived")
+    create_ticket(session, title="nope", prompt="nope", profile_id=pid,
+                  source_path="/tmp", status="archived")
+
+    r = await client.get("/api/v1/tickets?status=archived&q=database")
+    ids = {t["id"] for t in r.json()}
+    assert ids == {a.id, b.id}
+    assert r.headers["X-Total-Count"] == "2"
+
+
+async def test_outcome_filter_uses_latest_run(client, session):
+    """``outcome`` keys off the *latest* run: succeeded == last exit 'success',
+    failed == any other finished status. A later failed run flips a ticket whose
+    first run succeeded."""
+    pid = await _create_profile(client)
+    from datetime import datetime, timezone
+    from nightdesk.domain.tickets import create_ticket
+    won = create_ticket(session, title="won", prompt="p", profile_id=pid,
+                        source_path="/tmp", status="archived")
+    lost = create_ticket(session, title="lost", prompt="p", profile_id=pid,
+                        source_path="/tmp", status="archived")
+    flipped = create_ticket(session, title="flipped", prompt="p", profile_id=pid,
+                            source_path="/tmp", status="archived")
+    _attach_run(session, won.id, exit_status="success")
+    _attach_run(session, lost.id, exit_status="failed")
+    # flipped: an early success then a later failure — latest wins.
+    _attach_run(session, flipped.id, exit_status="success",
+                started_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    _attach_run(session, flipped.id, exit_status="failed",
+                started_at=datetime(2026, 2, 1, tzinfo=timezone.utc))
+
+    ok = await client.get("/api/v1/tickets?status=archived&outcome=succeeded")
+    assert {t["id"] for t in ok.json()} == {won.id}
+    assert ok.headers["X-Total-Count"] == "1"
+
+    bad = await client.get("/api/v1/tickets?status=archived&outcome=failed")
+    assert {t["id"] for t in bad.json()} == {lost.id, flipped.id}
+    assert bad.headers["X-Total-Count"] == "2"
+
+
+async def test_outcome_invalid_value_rejected(client):
+    """Outcome is a closed set; a typo is a 422, not a silent all-rows result."""
+    assert (await client.get("/api/v1/tickets?outcome=maybe")).status_code == 422
+
+
+async def test_sort_cost_orders_by_latest_run_cost(client, session):
+    """``sort=cost`` orders by the latest run's cost; a runless ticket (NULL
+    cost) sorts last under the default desc order."""
+    pid = await _create_profile(client)
+    from nightdesk.domain.tickets import create_ticket
+    cheap = create_ticket(session, title="cheap", prompt="p", profile_id=pid,
+                          source_path="/tmp", status="archived")
+    dear = create_ticket(session, title="dear", prompt="p", profile_id=pid,
+                        source_path="/tmp", status="archived")
+    runless = create_ticket(session, title="runless", prompt="p", profile_id=pid,
+                            source_path="/tmp", status="archived")
+    _attach_run(session, cheap.id, exit_status="success", cost_usd=0.10)
+    _attach_run(session, dear.id, exit_status="success", cost_usd=5.00)
+
+    desc = await client.get("/api/v1/tickets?status=archived&sort=cost")
+    got = [t["id"] for t in desc.json()]
+    assert got[:2] == [dear.id, cheap.id]
+    assert got[-1] == runless.id  # NULL cost sinks to the bottom
+
+    asc = await client.get("/api/v1/tickets?status=archived&sort=cost&order=asc")
+    got_asc = [t["id"] for t in asc.json()]
+    # cheap before dear once the NULL-cost ticket is set aside.
+    non_null = [i for i in got_asc if i in (cheap.id, dear.id)]
+    assert non_null == [cheap.id, dear.id]
+
+
+async def test_sort_created_respects_order_direction(client, session):
+    """``sort=created`` with ``order`` flips oldest/newest first."""
+    from datetime import datetime, timezone
+    pid = await _create_profile(client)
+    ids = await _seed_tickets(session, n=3, pid=pid, status="archived")
+    from nightdesk.domain.tickets import get_ticket
+    for tid, d in zip(ids, (1, 2, 3)):
+        get_ticket(session, tid).created_at = datetime(2026, 1, d, tzinfo=timezone.utc)
+    session.commit()
+
+    newest = await client.get("/api/v1/tickets?status=archived&sort=created&order=desc")
+    oldest = await client.get("/api/v1/tickets?status=archived&sort=created&order=asc")
+    assert [t["id"] for t in newest.json()] == [ids[2], ids[1], ids[0]]
+    assert [t["id"] for t in oldest.json()] == [ids[0], ids[1], ids[2]]
+
+
+async def test_filter_composes_with_offset_paging(client, session):
+    """A filter + limit/offset pages the *filtered* set: total is the filtered
+    count and walking offset yields every match once."""
+    pid = await _create_profile(client)
+    match_ids = set(await _seed_tickets(
+        session, n=5, pid=pid, status="archived", title_prefix="keep-me"))
+    await _seed_tickets(session, n=4, pid=pid, status="archived", title_prefix="other")
+
+    seen: list[str] = []
+    for offset in (0, 2, 4):
+        r = await client.get(
+            f"/api/v1/tickets?status=archived&q=keep-me&limit=2&offset={offset}")
+        assert r.headers["X-Total-Count"] == "5"  # filtered, not 9
+        seen += [t["id"] for t in r.json()]
+    assert set(seen) == match_ids
+    assert len(seen) == 5

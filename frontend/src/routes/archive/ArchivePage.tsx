@@ -1,10 +1,13 @@
 import { useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import type { ArchiveSearch } from "@/router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Archive, ArchiveRestore, Search, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDownWideNarrow, ArrowUpWideNarrow, Trash2, X } from "lucide-react";
 import { Page } from "@/components/Page";
 import { Button } from "@/ui/Button";
 import { Input } from "@/ui/Input";
+import { Select } from "@/ui/Select";
+import { IconButton } from "@/ui/IconButton";
 import { Dialog } from "@/ui/Dialog";
 import { EmptyState } from "@/ui/EmptyState";
 import { StatusPill } from "@/ui/StatusPill";
@@ -13,16 +16,52 @@ import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
 import { useTicketPages, ticketsApi } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
-import { useProjectMap } from "@/api/projects";
+import { useProjectMap, useProjects } from "@/api/projects";
+import { useLabels } from "@/api/labels";
+import { useProfiles } from "@/api/profiles";
 import { qk } from "@/api";
 import type { RunOut, TicketOut } from "@/api/types";
 import { toast } from "@/ui/Toast";
 import { formatUsd, runStatusKind } from "@/lib/status";
 import { absoluteTime, relativeTime } from "@/lib/time";
+import { useKeybinds } from "@/lib/keymap";
 import { cn } from "@/lib/cn";
+import { FilterBar } from "@/routes/tickets/FilterBar";
+import {
+  ARCHIVE_FILTER_KEYS,
+  filterToQuery,
+  parseFilter,
+  type FilterContext,
+} from "@/routes/tickets/filterModel";
 
 const POLL = 5000;
 const PAGE_SIZE = 50;
+
+/** Sort keys the Archive exposes → the server `sort` value + column label. */
+const SORT_OPTIONS = [
+  { value: "recent", label: "Archived" },
+  { value: "created", label: "Created" },
+  { value: "priority", label: "Priority" },
+  { value: "cost", label: "Cost" },
+] as const;
+type SortKey = (typeof SORT_OPTIONS)[number]["value"];
+type SortDir = "asc" | "desc";
+
+const SORT_STORAGE_KEY = "nightdesk:archive-sort";
+
+function loadSort(): { key: SortKey; dir: SortDir } {
+  const fallback = { key: "recent" as SortKey, dir: "desc" as SortDir };
+  try {
+    const raw = localStorage.getItem(SORT_STORAGE_KEY);
+    if (!raw) return fallback;
+    const [key, dir] = raw.split(":");
+    const validKey = SORT_OPTIONS.some((o) => o.value === key) ? (key as SortKey) : fallback.key;
+    const validDir: SortDir = dir === "asc" ? "asc" : "desc";
+    return { key: validKey, dir: validDir };
+  } catch {
+    return fallback;
+  }
+}
 
 function latestRunMap(runs: RunOut[]): Map<string, RunOut> {
   const m = new Map<string, RunOut>();
@@ -33,46 +72,90 @@ function latestRunMap(runs: RunOut[]): Map<string, RunOut> {
 export function ArchivePage() {
   const qc = useQueryClient();
   const projects = useProjectMap();
+  const projectsQ = useProjects();
+  const labelsQ = useLabels();
+  const profilesQ = useProfiles();
 
-  // Server-side pagination: pull the archive newest-first, 50 at a time, and
-  // reveal more only on demand. This is the fix for the archive loading every
-  // row up front. Search filters the rows loaded so far; older matches surface
-  // as the user loads more pages (see the search hint below).
-  const ticketsQ = useTicketPages({ status: "archived", sort: "recent" }, PAGE_SIZE, {
-    refetchInterval: POLL,
-  });
-  const runsQ = useRuns(undefined, { refetchInterval: POLL });
-  const latest = useMemo(() => latestRunMap(runsQ.data ?? []), [runsQ.data]);
+  // Filter + sort live in the URL (deep-linkable, survives reload/back-forward,
+  // same as the tickets and analytics filters). localStorage stays only as the
+  // default sort applied when the URL carries no sort param.
+  const search = useSearch({ from: "/app/archive" });
+  const navigate = useNavigate();
 
-  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState<TicketOut | null>(null);
+
+  const storedSort = useMemo(() => loadSort(), []);
+  const filter = search.f ?? "";
+  const sort = {
+    key: search.sort ?? storedSort.key,
+    dir: search.dir ?? storedSort.dir,
+  };
+
+  const setSearch = (next: Partial<ArchiveSearch>) =>
+    navigate({ to: "/archive", search: (prev) => ({ ...prev, ...next }), replace: true });
+
+  const setFilter = (v: string) => setSearch({ f: v || undefined });
+
+  const setSort = (next: { key: SortKey; dir: SortDir }) => {
+    setSearch({ sort: next.key, dir: next.dir });
+    try {
+      localStorage.setItem(SORT_STORAGE_KEY, `${next.key}:${next.dir}`);
+    } catch {
+      /* private mode — sort just won't persist */
+    }
+  };
+
+  // "/" focuses the filter, mirroring the Tickets board so muscle memory
+  // carries over. The FilterBar listens for this event.
+  useKeybinds([
+    {
+      combo: "/",
+      label: "Focus filter",
+      group: "Archive",
+      scope: "route",
+      handler: () => window.dispatchEvent(new CustomEvent("nightdesk:focus-filter")),
+    },
+  ]);
+
+  const ctx: FilterContext = {
+    projects: projectsQ.data ?? [],
+    labels: labelsQ.data ?? [],
+    profiles: profilesQ.data ?? [],
+  };
+
+  // Parse the raw filter with the archive vocabulary (no `status:`, adds
+  // `outcome:`) and resolve it to server query params so filtering happens
+  // server-side and composes with limit/offset paging — the count and the page
+  // stay honest instead of filtering only already-loaded rows.
+  const parsed = useMemo(() => parseFilter(filter, ARCHIVE_FILTER_KEYS), [filter]);
+  const serverFilter = useMemo(
+    () => filterToQuery(parsed, ctx),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [parsed, projectsQ.data, labelsQ.data, profilesQ.data],
+  );
+  const filterActive = parsed.tokens.length > 0 || parsed.text.trim().length > 0;
+
+  const ticketsQ = useTicketPages(
+    { status: "archived", sort: sort.key, order: sort.dir, ...serverFilter },
+    PAGE_SIZE,
+    { refetchInterval: POLL },
+  );
+  const runsQ = useRuns(undefined, { refetchInterval: POLL });
+  const latest = useMemo(() => latestRunMap(runsQ.data ?? []), [runsQ.data]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: qk.tickets.all });
     qc.invalidateQueries({ queryKey: qk.runs.all });
   };
 
-  // Rows already arrive newest-first from the server (sort=recent); flatten the
-  // loaded pages in order. No client-side re-sort needed.
-  const loaded = useMemo(
+  // Rows arrive already filtered + sorted from the server; flatten the loaded
+  // pages in order. No client-side filter or re-sort.
+  const rows = useMemo(
     () => (ticketsQ.data?.pages ?? []).flatMap((p) => p.items),
     [ticketsQ.data],
   );
   const total = ticketsQ.data?.pages[0]?.total ?? 0;
-
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return loaded;
-    return loaded.filter((t) => {
-      const proj = t.project_id ? projects.get(t.project_id)?.name ?? "" : "";
-      return (
-        t.title.toLowerCase().includes(q) ||
-        proj.toLowerCase().includes(q) ||
-        t.prompt.toLowerCase().includes(q)
-      );
-    });
-  }, [loaded, query, projects]);
 
   const allSelected = rows.length > 0 && rows.every((t) => selected.has(t.id));
   const toggleAll = () =>
@@ -125,52 +208,45 @@ export function ArchivePage() {
   }
 
   const isLoading = ticketsQ.isLoading;
-  const empty = !isLoading && rows.length === 0;
-  // "More on the server" — the filter may still have unloaded matches.
+  const empty = !isLoading && total === 0;
   const hasMore = ticketsQ.hasNextPage ?? false;
-  const filtering = query.trim().length > 0;
+  const dateLabel = sort.key === "created" ? "Created" : "Archived";
 
   return (
     <Page
       bleed
       title="Archive"
-      subtitle="Completed and declined tickets — searchable and restorable."
-      actions={
-        <div className="relative">
-          <Search
-            size={14}
-            aria-hidden
-            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-moon-600"
-          />
-          <Input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search archive…"
-            className="h-9 w-56 pl-8"
-            aria-label="Search archive"
-            autoComplete="off"
-            spellCheck={false}
+      subtitle="Completed and declined tickets — filter, sort, and restore."
+    >
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="min-w-[16rem] flex-1">
+          <FilterBar
+            value={filter}
+            onChange={setFilter}
+            ctx={ctx}
+            keys={ARCHIVE_FILTER_KEYS}
+            placeholder="Filter — project: label: priority: profile: outcome: or free text"
           />
         </div>
-      }
-    >
+        <SortControl sort={sort} onChange={setSort} />
+      </div>
+
       {isLoading ? (
         <div className="py-20 text-center text-sm text-moon-600">Loading archive…</div>
       ) : empty ? (
         <div className="mx-auto max-w-2xl">
           <EmptyState
             icon={<Archive size={18} />}
-            title={query ? "No archived tickets match" : "Nothing archived"}
+            title={filterActive ? "No archived tickets match" : "Nothing archived"}
             description={
-              query
-                ? "Adjust or clear the search to see the full archive."
+              filterActive
+                ? "No archived ticket matches these filters. Clear them to see the full archive."
                 : "Archived tickets land here — searchable and one click from restore."
             }
             action={
-              query ? (
-                <Button variant="ghost" onClick={() => setQuery("")}>
-                  Clear search
+              filterActive ? (
+                <Button variant="ghost" onClick={() => setFilter("")}>
+                  Clear filters
                 </Button>
               ) : undefined
             }
@@ -193,7 +269,7 @@ export function ArchivePage() {
             <span className="hidden w-10 shrink-0 text-center sm:block">Pri</span>
             <span className="hidden w-24 shrink-0 text-right lg:block">Last run</span>
             <span className="hidden w-16 shrink-0 text-right sm:block">Cost</span>
-            <span className="w-32 shrink-0 text-right">Archived</span>
+            <span className="w-32 shrink-0 text-right">{dateLabel}</span>
             <span className="w-16 shrink-0" />
           </div>
 
@@ -236,16 +312,16 @@ export function ArchivePage() {
                     <span className="text-[11px] text-moon-600">no runs</span>
                   )}
                 </span>
-                <span className="hidden w-16 shrink-0 text-right font-mono text-[11px] text-moon-400 sm:block">
+                <span className="hidden w-16 shrink-0 text-right font-mono text-[11px] tabular-nums text-moon-400 sm:block">
                   {run?.cost_usd != null ? formatUsd(run.cost_usd) : "—"}
                 </span>
-                <Tooltip content={absoluteTime(t.updated_at)}>
+                <Tooltip content={absoluteTime(sort.key === "created" ? t.created_at : t.updated_at)}>
                   <span className="w-32 shrink-0 text-right text-[11px] text-moon-600">
-                    {relativeTime(t.updated_at)}
+                    {relativeTime(sort.key === "created" ? t.created_at : t.updated_at)}
                   </span>
                 </Tooltip>
                 <span
-                  className="flex w-16 shrink-0 items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+                  className="flex w-16 shrink-0 items-center justify-end gap-0.5 opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <Tooltip content="Restore">
@@ -272,19 +348,23 @@ export function ArchivePage() {
           })}
         </div>
 
-        {/* Footer: count + load more */}
+        {/* Footer: count + load more. The count is the server-side filtered
+            total, so it stays honest across pages. */}
         <div className="mt-3 flex items-center justify-between gap-3 px-1 text-[12px] text-moon-600">
           <span>
-            {filtering ? (
+            {filterActive ? (
               <>
-                <span className="font-mono text-moon-400">{rows.length}</span> match
-                {rows.length === 1 ? "" : "es"} in{" "}
-                <span className="font-mono text-moon-400">{loaded.length}</span> loaded
-                {hasMore ? " — load more to search the rest" : ""}
+                <span className="font-mono text-moon-400">{total}</span> match
+                {total === 1 ? "" : "es"}
+                {hasMore ? (
+                  <>
+                    {" "}— showing <span className="font-mono text-moon-400">{rows.length}</span>
+                  </>
+                ) : null}
               </>
             ) : (
               <>
-                Showing <span className="font-mono text-moon-400">{loaded.length}</span> of{" "}
+                Showing <span className="font-mono text-moon-400">{rows.length}</span> of{" "}
                 <span className="font-mono text-moon-400">{total}</span>
               </>
             )}
@@ -311,6 +391,42 @@ export function ArchivePage() {
 
       <DeleteDialog ticket={deleting} onCancel={() => setDeleting(null)} onConfirm={confirmDelete} />
     </Page>
+  );
+}
+
+function SortControl({
+  sort,
+  onChange,
+}: {
+  sort: { key: SortKey; dir: SortDir };
+  onChange: (next: { key: SortKey; dir: SortDir }) => void;
+}) {
+  const nextDir: SortDir = sort.dir === "desc" ? "asc" : "desc";
+  return (
+    <div className="flex shrink-0 items-center gap-1.5">
+      <label className="text-[11px] font-medium uppercase tracking-wide text-moon-600">
+        Sort
+      </label>
+      <Select
+        value={sort.key}
+        onChange={(e) => onChange({ key: e.target.value as SortKey, dir: sort.dir })}
+        className="h-9 w-32"
+        aria-label="Sort archive by"
+      >
+        {SORT_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </Select>
+      <IconButton
+        size="md"
+        label={sort.dir === "desc" ? "Descending — switch to ascending" : "Ascending — switch to descending"}
+        icon={sort.dir === "desc" ? <ArrowDownWideNarrow size={16} /> : <ArrowUpWideNarrow size={16} />}
+        onClick={() => onChange({ key: sort.key, dir: nextDir })}
+        className="border-ink-700 bg-ink-950"
+      />
+    </div>
   );
 }
 

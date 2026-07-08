@@ -24,7 +24,7 @@ const WIDTHS: Record<string, string> = {
 export function Page({ title, subtitle, actions, children, className, width, bleed }: PageProps) {
   const maxWidth = WIDTHS[bleed ? "full" : (width ?? "default")];
   return (
-    <div className={cn("mx-auto w-full px-6 py-6", maxWidth, className)}>
+    <div className={cn("mx-auto w-full px-4 py-5 sm:px-6 sm:py-6", maxWidth, className)}>
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="font-display text-xl font-semibold tracking-tight text-moon-100">

@@ -35,11 +35,15 @@ export function GroupedBoard({
   peekOpen?: boolean;
 }) {
   return (
-    <div className="flex h-full gap-3 overflow-x-auto pb-4">
+    <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto pb-4 md:snap-none">
       {groups.map((g) => (
         <div
           key={g.key}
-          className={cn("flex w-0 min-h-0 flex-1 flex-col", peekOpen ? "min-w-0" : "min-w-[240px]")}
+          className={cn(
+            "flex min-h-0 flex-col",
+            "w-[85vw] shrink-0 snap-start md:w-0 md:shrink md:flex-1",
+            peekOpen ? "md:min-w-0" : "md:min-w-[240px]",
+          )}
         >
           <div className="mb-2 flex items-center gap-2 px-1">
             {g.color && (

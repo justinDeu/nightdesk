@@ -28,7 +28,7 @@ import { useProjects } from "@/api/projects";
 import { useProfiles } from "@/api/profiles";
 import { useLabels } from "@/api/labels";
 import type { RunOut, TicketOut } from "@/api/types";
-import { applyFilter, parseFilter, type FilterContext } from "./filterModel";
+import { applyFilter, commitTrailingToken, parseFilter, type FilterContext } from "./filterModel";
 import { useTicketActions } from "@/lib/ticketActions";
 import { useKeybinds, type Keybind } from "@/lib/keymap";
 import { openComposer } from "@/components/composerBus";
@@ -349,8 +349,10 @@ export function TicketsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Compact single-row control bar — title, saved views, filter, view, new. */}
-      <header className="relative z-40 flex h-12 shrink-0 items-center gap-2.5 border-b border-ink-700 bg-ink-950 px-4">
+      {/* Control bar — title, saved views, filter, view, new. Below md it wraps
+          to two rows: title + controls on top, the full-width filter beneath
+          (order-last), so a narrow phone never overlaps the filter and header. */}
+      <header className="relative z-40 flex shrink-0 flex-wrap items-center gap-2.5 border-b border-ink-700 bg-ink-950 px-4 py-2 md:h-12 md:flex-nowrap md:py-0">
         <span className="shrink-0 font-display text-sm font-semibold tracking-tight text-moon-100">
           Tickets
         </span>
@@ -358,34 +360,37 @@ export function TicketsPage() {
           <SavedViews
             current={currentViewState}
             activeId={activeViewId}
-            onApply={(state, id) => setSearch({ view: state.view, f: state.filter || undefined, viewId: id })}
+            onApply={(state, id) => setSearch({ view: state.view, f: commitTrailingToken(state.filter) || undefined, viewId: id })}
             onClearActive={() => setSearch({ viewId: undefined })}
           />
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="order-last w-full min-w-0 md:order-none md:flex-1">
           <FilterBar value={filter} onChange={setFilter} ctx={ctx} />
         </div>
-        <DisplayOptions
-          open={displayOpen}
-          onOpenChange={setDisplayOpen}
-          groupBy={groupBy}
-          orderBy={orderBy}
-          onGroupBy={setGroupBy}
-          onOrderBy={setOrderBy}
-        />
-        <div className="flex shrink-0 items-center rounded-control border border-ink-700 bg-ink-900 p-0.5">
-          <ViewToggle active={view === "board"} onClick={() => setView("board")} icon={<Columns3 size={15} />} label="Board" />
-          <ViewToggle active={view === "list"} onClick={() => setView("list")} icon={<ListIcon size={15} />} label="List" />
+        <div className="ml-auto flex shrink-0 items-center gap-2.5 md:ml-0">
+          <DisplayOptions
+            open={displayOpen}
+            onOpenChange={setDisplayOpen}
+            groupBy={groupBy}
+            orderBy={orderBy}
+            onGroupBy={setGroupBy}
+            onOrderBy={setOrderBy}
+          />
+          <div className="flex shrink-0 items-center rounded-control border border-ink-700 bg-ink-900 p-0.5">
+            <ViewToggle active={view === "board"} onClick={() => setView("board")} icon={<Columns3 size={15} />} label="Board" />
+            <ViewToggle active={view === "list"} onClick={() => setView("list")} icon={<ListIcon size={15} />} label="List" />
+          </div>
+          <Button
+            size="sm"
+            variant="primary"
+            leadingIcon={<Plus size={14} />}
+            onClick={() => openComposer()}
+            className="shrink-0"
+            aria-label="New ticket"
+          >
+            <span className="hidden sm:inline">New ticket</span>
+          </Button>
         </div>
-        <Button
-          size="sm"
-          variant="primary"
-          leadingIcon={<Plus size={14} />}
-          onClick={() => openComposer()}
-          className="shrink-0"
-        >
-          New ticket
-        </Button>
       </header>
 
       {/* Work surface — fills the viewport; columns/list scroll internally. */}
