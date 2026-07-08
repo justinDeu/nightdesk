@@ -2,8 +2,12 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Cpu, Download, Maximize2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { RunOut } from "@/api/types";
 import { runsApi } from "@/api/runs";
+import { useRunComments } from "@/api/diffComments";
+import { qk } from "@/api/keys";
+import { Badge } from "@/ui/Badge";
 import { StatusPill } from "@/ui/StatusPill";
 import { DiffView } from "@/components/DiffView";
 import { LiveTranscript } from "@/components/LiveTranscript";
@@ -37,6 +41,10 @@ function RunRow({ ticketId, run }: { ticketId: string; run: RunOut }) {
     enabled: open,
     retry: false,
   });
+  const queryClient = useQueryClient();
+  const commentsQ = useRunComments(run.id, { enabled: open });
+  const comments = commentsQ.data ?? [];
+  const unresolvedCount = comments.filter((c) => c.parent_id === null && !c.resolved).length;
 
   const tokens =
     (run.input_tokens ?? 0) + (run.output_tokens ?? 0) + (run.cache_read_tokens ?? 0);
@@ -125,15 +133,28 @@ function RunRow({ ticketId, run }: { ticketId: string; run: RunOut }) {
           </div>
 
           <div>
-            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-moon-600">
+            <div className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-moon-600">
               Changes
+              {unresolvedCount > 0 && (
+                <Badge tone="review">
+                  {unresolvedCount} comment{unresolvedCount === 1 ? "" : "s"}
+                </Badge>
+              )}
             </div>
             {diff.isLoading ? (
               <p className="text-xs text-moon-600">Loading diff…</p>
             ) : diff.isError ? (
               <p className="text-xs text-moon-600">No diff available for this run.</p>
             ) : (
-              <DiffView diff={diff.data} />
+              <DiffView
+                diff={diff.data}
+                runId={run.id}
+                headSha={diff.data?.head_sha}
+                comments={comments}
+                onCommentsChange={() =>
+                  queryClient.invalidateQueries({ queryKey: qk.runs.comments(run.id) })
+                }
+              />
             )}
           </div>
         </div>
