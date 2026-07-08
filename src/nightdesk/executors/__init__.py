@@ -12,6 +12,8 @@ from __future__ import annotations
 from nightdesk.executors.base import (
     Executor,
     ExecutionOutcome,
+    ProvisionContext,
+    ProvisionOutcome,
     ResolvedWorkspace,
     RunContext,
 )
@@ -34,6 +36,8 @@ _register_builtins()
 __all__ = [
     "Executor",
     "ExecutionOutcome",
+    "ProvisionContext",
+    "ProvisionOutcome",
     "ResolvedWorkspace",
     "RunContext",
     "UnknownExecutor",

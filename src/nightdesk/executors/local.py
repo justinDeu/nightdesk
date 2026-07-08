@@ -25,7 +25,13 @@ from sqlalchemy.orm import Session
 
 from nightdesk.backends import LaunchContext
 from nightdesk.db.models import Ticket
-from nightdesk.executors.base import ExecutionOutcome, Executor, RunContext
+from nightdesk.executors.base import (
+    ExecutionOutcome,
+    Executor,
+    ProvisionContext,
+    ProvisionOutcome,
+    RunContext,
+)
 from nightdesk.executors.registry import register
 from nightdesk.transcript import append_event, append_worker_error, next_transcript_seq
 from nightdesk.worker.executor import ExecutionRequest, ExecutionResult
@@ -38,6 +44,7 @@ from nightdesk.worker.sandbox import (
     run_cc_sessions_dir,
     seed_cc_session,
 )
+from nightdesk.worker.workspace import prepare_workspace_bundle
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +90,33 @@ class LocalExecutor(Executor):
     target. Behavior-identical to what ``run_one`` used to do inline."""
 
     code = "local"
+
+    async def provision(self, ctx: ProvisionContext) -> ProvisionOutcome:
+        """Build the on-host worktree bundle — today's ``run_one`` workspace
+        prep, moved verbatim behind the two-phase seam. run_one still records
+        the host workspace resolution (see ``_record_workspace_resolution`` and
+        the fs-snapshot / tool-path steps) off the returned bundle, so the local
+        flow is byte-identical: only the ``prepare_workspace_bundle`` *call*
+        moved here."""
+        bundle = prepare_workspace_bundle(
+            ticket_id=ctx.ticket_id,
+            root=ctx.worktree_root,
+            specs=ctx.specs,
+            reuse_existing_worktrees=ctx.reuse_existing_worktrees,
+            fresh_worktree_paths=ctx.fresh_worktree_paths,
+        )
+        primary = bundle.primary
+        git_dirs: list[str] = []
+        for w in bundle.workspaces:
+            if w.kind == "git_worktree" and w.git_common_dir:
+                d = str(w.git_common_dir)
+                if d not in git_dirs:
+                    git_dirs.append(d)
+        return ProvisionOutcome(
+            workspace_dir=primary.path,
+            bundle=bundle,
+            git_dirs=git_dirs,
+        )
 
     async def execute(self, ctx: RunContext) -> ExecutionOutcome:
         # Per-run scratch, anchored as a sibling of worktree_root — outside

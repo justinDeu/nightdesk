@@ -51,13 +51,12 @@ from nightdesk.domain.tickets import transition_status
 from nightdesk.domain.toolchains import resolve_tool_paths
 from nightdesk.transcript import append_event, append_worker_error
 from nightdesk.backends import Assignment, get_backend
-from nightdesk.executors import RunContext, get_executor
+from nightdesk.executors import ProvisionContext, RunContext, get_executor
 from nightdesk.worker.executor import ExecutionResult, Executor
 from nightdesk.worker.headless_prompt import HEADLESS_POLICY_VERSION
 from nightdesk.worker.sandbox import SANDBOX_HOME
 from nightdesk.worker.workspace import (
     Workspace, WorkspaceBundle, WorkspaceSpec, cleanup_workspace,
-    prepare_workspace_bundle,
 )
 
 
@@ -495,6 +494,39 @@ def _record_workspace_resolution(ticket: Ticket, bundle: WorkspaceBundle) -> Non
 
 
 
+def _record_reported_workspaces(
+    ticket: Ticket, conversation_id: str, run: Run, reported: list,
+) -> None:
+    """Persist a remote executor's reported workspace resolution.
+
+    The host never provisions a k8s run's tree, so ``_record_workspace_resolution``
+    (which reads a host bundle) can't run. Instead the pod reports what it
+    resolved — branch, base/head SHAs — via ``ExecutionOutcome.workspaces``; we
+    write those onto the ticket's workspace rows (primary first) so the Changes
+    view and base_ref stacking see real refs. The run diff itself comes from the
+    pod-uploaded sidecar (``diff_sidecar_path``), so ``resolved_path`` stays
+    unset here. Best-effort: never fails the run.
+    """
+    rows = getattr(ticket, "workspaces", None) or []
+    for row, rw in zip(rows, reported):
+        if rw.kind is not None:
+            row.kind = rw.kind
+        if rw.access is not None:
+            row.access = rw.access
+        if rw.source_path is not None:
+            row.source_path = rw.source_path
+        row.conversation_id = row.conversation_id or conversation_id
+        row.run_id = row.run_id or run.id
+        row.branch = rw.branch or row.branch
+        row.base_ref = rw.base_ref or row.base_ref
+        row.base_sha = rw.base_sha or row.base_sha
+        row.head_sha = rw.head_sha or row.head_sha
+        row.run_start_sha = rw.run_start_sha or row.run_start_sha
+        if rw.retention is not None:
+            row.retention = rw.retention
+        row.state = rw.state or row.state
+
+
 def _capture_fs_snapshots(
     ticket: Ticket, bundle: WorkspaceBundle, run_id: str, transcript_root: Path,
 ) -> None:
@@ -841,20 +873,39 @@ async def run_one(
             log.info("turn %s started (conversation %s) for ticket %s: intent=%s",
                      run.id, conversation.id, ticket.id, run_intent)
 
-            log.debug("preparing workspace bundle for ticket %s", ticket.id)
+            # Select the execution target once (no ``if k8s`` anywhere below).
+            # 'local' is the default and only target until a profile opts into
+            # 'k8s'; the registry raises a clear error for an unconfigured k8s.
+            execution_target = (
+                getattr(ticket.profile, "execution_target", None) or "local"
+            )
+            executor = get_executor(execution_target)
+
+            log.debug("provisioning workspace for ticket %s (target=%s)",
+                      ticket.id, execution_target)
             _setup_phase = "workspace_prep"
-            bundle = prepare_workspace_bundle(
+            prov = await executor.provision(ProvisionContext(
+                run_id=run.id,
                 ticket_id=ticket.id,
-                root=cfg.worktree_root,
+                worktree_root=cfg.worktree_root,
                 specs=workspace_specs,
+                run_intent=run_intent,
                 # resume/retry/continue all reuse the existing worktree (continue
                 # resumes the prior SDK conversation on the same worktree).
                 reuse_existing_worktrees=run_intent in {"resume", "retry", "continue"} or has_existing_worktree,
                 fresh_worktree_paths=run_intent == "restart" and restart_workspace_policy == "fresh_path",
-            )
-            ws = bundle.primary
-            run.worktree_path = str(ws.worktree_path or ws.path)
-            _record_workspace_resolution(ticket, bundle)
+                transcript_path=run.transcript_path,
+            ))
+            # ``bundle`` is present for on-host executors (LocalExecutor) and
+            # None for remote ones (K8sExecutor provisions in-pod). Every
+            # host-side workspace record below is guarded on it so the local
+            # path is byte-identical and the k8s path skips host prep entirely
+            # (the pod reports its resolved workspace back via ExecutionOutcome).
+            bundle = prov.bundle
+            ws = bundle.primary if bundle is not None else None
+            if bundle is not None:
+                run.worktree_path = str(ws.worktree_path or ws.path)
+                _record_workspace_resolution(ticket, bundle)
             # Bind this conversation's workspaces to it (1:N conversation
             # ownership) so continuing an OLD conversation restores the tree it
             # ran against, not one a newer conversation mutated.
@@ -864,7 +915,7 @@ async def run_one(
             # Surface provision-time workspace warnings (e.g. an empty base_ref
             # stack where a prerequisite's work was never committed) on the
             # transcript so the operator can see them.
-            for _pws in bundle.workspaces:
+            for _pws in (bundle.workspaces if bundle is not None else []):
                 for _pw in (_pws.warnings or []):
                     try:
                         append_event(run.transcript_path, {
@@ -876,22 +927,25 @@ async def run_one(
                         log.exception("could not record provision warning for run %s",
                                       run.id)
             _setup_phase = "profile_spec"
-            spec = _apply_workspace_permissions(
-                _profile_to_spec(
-                    ticket,
-                    secret_box=secret_box,
-                    default_claude_binary=default_claude_binary,
-                ),
-                bundle,
+            spec = _profile_to_spec(
+                ticket,
+                secret_box=secret_box,
+                default_claude_binary=default_claude_binary,
             )
             schedule_cfg = session.get(ConfigRow, 1)
-            tool_paths = resolve_tool_paths(
-                ticket=ticket,
-                config=schedule_cfg,
-                base_path=str(ws.path),
-            )
-            spec = replace(spec, tool_paths=tool_paths)
-            run.sandbox_tool_paths = tool_paths
+            if bundle is not None:
+                # Host workspace: fold the bundle's fs mounts into the spec and
+                # resolve toolchain binary paths against the resolved tree. For
+                # a remote (k8s) run these are pod-side concerns — the pod is the
+                # sandbox and resolves its own toolchains — so both are skipped.
+                spec = _apply_workspace_permissions(spec, bundle)
+                tool_paths = resolve_tool_paths(
+                    ticket=ticket,
+                    config=schedule_cfg,
+                    base_path=str(ws.path),
+                )
+                spec = replace(spec, tool_paths=tool_paths)
+                run.sandbox_tool_paths = tool_paths
             session.commit()
 
             # ``run_now`` is set only by an explicit user queue-bypass
@@ -910,8 +964,11 @@ async def run_one(
 
             # Snapshot non-git workspace trees now, before the agent touches
             # anything, so the per-run Changes view can diff filesystem state
-            # for directory workspaces. Keyed to this run + workspace.
-            _capture_fs_snapshots(ticket, bundle, run.id, cfg.transcript_root)
+            # for directory workspaces. Keyed to this run + workspace. Only
+            # host-provisioned runs have a bundle to snapshot; a k8s run uploads
+            # its own diff sidecar from the pod at finish.
+            if bundle is not None:
+                _capture_fs_snapshots(ticket, bundle, run.id, cfg.transcript_root)
 
             # Resolve scheduling knobs from the config table (live values).
             max_duration = getattr(schedule_cfg, "max_run_duration_seconds", 7200) or 7200
@@ -1008,10 +1065,8 @@ async def run_one(
                     pass
 
             _setup_phase = "execute"
-            # Hand the fully-resolved run to its execution target. Profiles have
-            # no ``execution_target`` field yet, so "local" is hardcoded here
-            # (TODO: resolve ``get_executor(profile.execution_target)`` once the
-            # k8s executor lands -- k8s-executor.md Phase 4). run_one keeps ALL
+            # Hand the fully-resolved run to its execution target (selected once
+            # above via get_executor(execution_target)). run_one keeps ALL
             # DB/state orchestration around this call; the executor only owns
             # launch composition + running the agent to completion.
             on_session_id = _make_session_id_persister(
@@ -1028,8 +1083,9 @@ async def run_one(
                 primary=primary,
                 endpoints=endpoints,
                 model_assignments=model_assignments,
-                workspace_dir=ws.path,
+                workspace_dir=prov.workspace_dir,
                 worktree_root=cfg.worktree_root,
+                workspace_specs=workspace_specs,
                 transcript_path=run.transcript_path,
                 base_env=_build_env(
                     spec,
@@ -1039,7 +1095,7 @@ async def run_one(
                     ticket_id=ticket.id,
                     api_url=cfg.api_url,
                 ),
-                git_dirs=_git_metadata_dirs(bundle),
+                git_dirs=prov.git_dirs,
                 conversation_session_id=conversation.session_id,
                 prior_turn=prior_turn,
                 next_run_context=next_run_context,
@@ -1048,9 +1104,16 @@ async def run_one(
                 session_factory=session_factory,
                 override_executor=cfg.executor,
             )
-            outcome = await get_executor("local").execute(ctx)
+            outcome = await executor.execute(ctx)
             result = outcome.result
             launch_ctx = outcome.launch_ctx
+            # A remote executor (k8s) provisions in-pod and reports the resolved
+            # workspace back (branch + base/head SHAs) instead of run_one
+            # recording it host-side. Persist those onto the ticket's workspace
+            # rows so the Changes view and stacking (base_ref) see real refs.
+            if outcome.workspaces:
+                _record_reported_workspaces(ticket, conversation.id, run,
+                                            outcome.workspaces)
 
             finish_run(session, run.id, exit_status=result.exit_status,
                        error_summary=result.error_summary,
