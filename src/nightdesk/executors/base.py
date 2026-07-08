@@ -90,6 +90,17 @@ class RunContext:
     # For the in-executor cancel watcher (polls the ticket for a status change).
     session_factory: Callable[[], "Session"]
 
+    # Live-run mid-run steering (see docs/design/session-suite/mid-run-steering).
+    # ``conversation_id`` anchors the steer queue (the watcher polls
+    # SteerMessages by conversation). ``steer_queue`` is non-None only when the
+    # backend provides STEER_INJECT — the in-executor ``_steer_watcher`` (sibling
+    # to the cancel watcher) claims pending messages and pushes them onto it, and
+    # the backend drains it into the live run. ``on_steer_delivered`` marks a
+    # delivered message's DB row (the backend writes the transcript breadcrumb).
+    conversation_id: Optional[str] = None
+    steer_queue: Optional[asyncio.Queue] = None
+    on_steer_delivered: Optional[Callable[[str, dict], None]] = None
+
     # Test seam: ``RunOneConfig.executor`` injection. When set, the executor
     # dispatches to it in place of ``backend.execute`` exactly as run_one did.
     override_executor: Optional[RunExecutor] = None

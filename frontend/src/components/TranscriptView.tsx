@@ -6,6 +6,7 @@ import {
   Circle,
   ListPlus,
   Loader2,
+  Send,
   Terminal,
   Users,
   Wrench,
@@ -181,6 +182,13 @@ function EventRow({ event: e, result }: { event: TranscriptEvent; result?: Trans
     case "user_message":
     case "user":
       return <UserTurn text={str(e.text || e.message)} />;
+    case "steer_delivered":
+      return (
+        <SteerDivider
+          text={str(e.text)}
+          delivery={e.delivery === "inject" ? "inject" : "at_turn"}
+        />
+      );
     case "meta":
     case "system":
     case "preset":
@@ -502,6 +510,24 @@ function UserTurn({ text }: { text: string }) {
     <div className="rounded-card border border-lamp/25 bg-lamp/[0.05] px-3.5 py-2.5">
       <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-lamp">You</div>
       <p className="whitespace-pre-wrap font-sans text-[13px] text-moon-100">{text}</p>
+    </div>
+  );
+}
+
+/** A mid-run steering breadcrumb: the follow-up the user sent while the run was
+ *  live, delivered into this run (inject) or staged for the next turn (at_turn). */
+function SteerDivider({ text, delivery }: { text: string; delivery: "inject" | "at_turn" }) {
+  return (
+    <div className="my-1 flex items-start gap-2 rounded-card border border-dawn/30 bg-dawn/[0.06] px-3.5 py-2.5">
+      <Send size={13} className="mt-0.5 shrink-0 text-dawn" />
+      <div className="min-w-0 flex-1">
+        <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-dawn">
+          You steered {delivery === "inject" ? "· delivered to the running agent" : "· queued for the next turn"}
+        </div>
+        {text.trim() && (
+          <p className="whitespace-pre-wrap font-sans text-[13px] text-moon-100">{text}</p>
+        )}
+      </div>
     </div>
   );
 }

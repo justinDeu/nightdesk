@@ -705,6 +705,82 @@ def _make_session_id_persister(
     return _persist
 
 
+def _make_steer_delivered_callback(
+    session_factory: Callable[[], Session], run_id: str,
+) -> Callable[[str, dict], None]:
+    """Build the on_steer_delivered callback for an inject-capable executor.
+
+    Marks a delivered SteerMessage's DB row (``delivering -> delivered``) the
+    moment the backend confirms it POSTed the follow-up into the live run —
+    OUT OF BAND on its own session. It does NOT write the transcript event; the
+    executor owns that (seq single-ownership). Best-effort: a failure here only
+    means the row stays ``delivering`` and gets folded into next_run_context by
+    the run-completion drain instead of showing as delivered."""
+    from nightdesk.domain.steering import mark_delivered
+
+    def _mark(message_id: str, _info: dict) -> None:
+        s = session_factory()
+        try:
+            mark_delivered(s, message_id, run_id=run_id)
+        except Exception:
+            log.exception("steer mark_delivered failed for message %s", message_id)
+            try:
+                s.rollback()
+            except Exception:
+                pass
+        finally:
+            s.close()
+
+    return _mark
+
+
+def _steer_drain_and_autocontinue(
+    session: Session, *, ticket_id: str, conversation_id: str, exit_status: str,
+) -> bool:
+    """Run-completion drain for mid-run steering.
+
+    Folds any still-queued (pending/delivering) follow-ups into the ticket's
+    ``next_run_context`` and, when the run finished cleanly on a resumable
+    conversation, auto-issues a ``continue`` so those follow-ups actually drive
+    the next turn — via the tested ``continue_ticket`` path, with the drained
+    text surfaced as the continue's ``continue_message``.
+
+    Returns True when it staged a continue (the caller must then SKIP the normal
+    review transition / webhook / handoff / cleanup, because the ticket is now
+    queued for its next turn rather than done). Returns False when there was
+    nothing queued, the user cancelled, or the conversation is not resumable —
+    in the non-resumable case the drained text still lands as the visible
+    "Guidance staged" chip via ``next_run_context``, and the caller falls
+    through to review as usual. Nothing is ever silently dropped."""
+    from nightdesk.domain.steering import list_steer_messages, drain_pending_to_context
+    from nightdesk.domain.conversations import get_conversation
+    from nightdesk.domain.tickets import continue_ticket
+
+    if list_steer_messages(session, conversation_id) == []:
+        return False
+    drain_pending_to_context(session, ticket_id, conversation_id)
+    # Cancel wins: the user explicitly stopped, so never auto-continue. The
+    # drained text stays on next_run_context for the user to run when ready.
+    if exit_status == "cancelled":
+        return False
+    t = session.get(Ticket, ticket_id)
+    if t is None or t.status != "running":
+        # A concurrent transition (e.g. a cancel that raced completion) already
+        # moved the ticket; don't auto-continue on top of that.
+        return False
+    conv = get_conversation(session, conversation_id)
+    if conv is None or not conv.session_id:
+        # Non-resumable (its first turn never recorded a session): fall through
+        # to review with next_run_context populated — one click runs it.
+        return False
+    transition_status(session, ticket_id, "review")
+    continue_ticket(session, ticket_id, next_run_context=None,
+                    conversation_id=conversation_id)
+    log.info("ticket %s: drained queued steer messages into an auto-continue turn",
+             ticket_id)
+    return True
+
+
 def _handoff_to_dependents(session: Session, ticket_id: str, run: Run) -> None:
     """After a successful run, push a summary into each dependent ticket's
     next_run_context so the downstream stage sees what happened upstream."""
@@ -1074,6 +1150,17 @@ async def run_one(
             on_session_id = _make_session_id_persister(
                 session_factory, run.id, conversation.id,
             )
+            # Mid-run steering: only an inject-capable backend gets a live
+            # queue + host watcher (STEER_INJECT). Queue-only backends leave
+            # these None and deliver queued follow-ups via the run-completion
+            # drain + auto-continue below.
+            steer_queue: Optional[asyncio.Queue] = None
+            on_steer_delivered = None
+            if backend.provides(bc.Capability.STEER_INJECT):
+                steer_queue = asyncio.Queue()
+                on_steer_delivered = _make_steer_delivered_callback(
+                    session_factory, run.id,
+                )
             ctx = RunContext(
                 run_id=run.id,
                 ticket_id=ticket.id,
@@ -1104,6 +1191,9 @@ async def run_one(
                 cancel_event=cancel_event,
                 on_session_id=on_session_id,
                 session_factory=session_factory,
+                conversation_id=conversation.id,
+                steer_queue=steer_queue,
+                on_steer_delivered=on_steer_delivered,
                 override_executor=cfg.executor,
             )
             outcome = await executor.execute(ctx)
@@ -1197,6 +1287,28 @@ async def run_one(
                 log.exception("could not populate run_latency for run %s", run.id)
 
             session.expire_all()
+
+            # Mid-run steering drain: fold any follow-ups the user queued during
+            # this run into next_run_context and (on a clean finish + resumable
+            # conversation) auto-continue so they actually get delivered. When it
+            # stages a continue the ticket is re-queued for its next turn, so we
+            # SKIP the review transition / webhook / handoff / commit / cleanup
+            # below — the next turn's completion owns those.
+            steer_autocontinued = False
+            if run.conversation_id is not None:
+                try:
+                    steer_autocontinued = _steer_drain_and_autocontinue(
+                        session,
+                        ticket_id=ticket.id,
+                        conversation_id=run.conversation_id,
+                        exit_status=result.exit_status,
+                    )
+                except Exception:
+                    log.exception("steer drain/auto-continue failed for ticket %s",
+                                  ticket.id)
+            if steer_autocontinued:
+                return result
+
             cur = session.get(Ticket, ticket.id)
             if cur is not None and cur.status == "running":
                 try:

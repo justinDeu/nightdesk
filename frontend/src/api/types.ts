@@ -183,6 +183,29 @@ export interface TicketClone {
 export interface TicketNextRunContext {
   body: string;
 }
+
+// Mid-run steering: a live-run follow-up queue on the ticket's active conversation.
+export type SteerState = "pending" | "delivering" | "delivered" | "cancelled";
+export type SteerDeliveryMode = "at_turn" | "inject";
+export interface SteerMessageOut {
+  id: string;
+  body: string;
+  position: number;
+  state: SteerState;
+  delivery_mode: SteerDeliveryMode;
+  delivered_run_id: string | null;
+  created_at: string | null;
+  delivered_at: string | null;
+}
+export interface SteerQueueOut {
+  messages: SteerMessageOut[];
+  capability: { inject: boolean };
+}
+export interface SteerMessageCreate {
+  body: string;
+  delivery_mode?: SteerDeliveryMode;
+}
+
 export interface AdditionalDirAdd {
   path: string;
   mode?: "rw" | "ro";

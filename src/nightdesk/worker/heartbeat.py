@@ -151,4 +151,29 @@ def recover_orphaned_runs(session: Session, *, host: str) -> int:
     if runless:
         log.info("orphan recovery pass 2: reset %d runless ticket(s) to queued on host %s",
                  len(runless), host)
+
+    # Pass 3: mid-run steering claim recovery. A ``delivering`` SteerMessage was
+    # claimed by a live-run watcher (``pending -> delivering``) but never
+    # confirmed delivered. If its ticket is no longer ``running``, the run that
+    # claimed it died before delivering; reset it to ``pending`` so it is
+    # visible in the queue again and gets redelivered (or drained) on the next
+    # turn instead of being stuck in the transient claim state forever. A
+    # ``delivering`` row on a still-running ticket is a legitimate in-flight
+    # claim and is left alone.
+    from nightdesk.db.models import SteerMessage
+    stuck_steer = list(session.scalars(
+        select(SteerMessage)
+        .join(Ticket, SteerMessage.ticket_id == Ticket.id)
+        .where(
+            SteerMessage.state == "delivering",
+            SteerMessage.delivered_run_id.is_(None),
+            Ticket.status != "running",
+        )
+    ))
+    for m in stuck_steer:
+        m.state = "pending"
+    session.commit()
+    if stuck_steer:
+        log.info("orphan recovery pass 3: reset %d orphaned steer claim(s) to pending",
+                 len(stuck_steer))
     return count

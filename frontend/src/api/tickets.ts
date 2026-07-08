@@ -31,6 +31,9 @@ import type {
   TicketStatus,
   TicketTransition,
   TicketUpdate,
+  SteerMessageCreate,
+  SteerMessageOut,
+  SteerQueueOut,
 } from "./types";
 
 const BASE = "/api/v1/tickets";
@@ -111,6 +114,17 @@ export const ticketsApi = {
     api.post<TicketOut>(`${BASE}/${id}/merge-next-run-context`),
   addAdditionalDir: (id: string, body: AdditionalDirAdd) =>
     api.post<TicketOut>(`${BASE}/${id}/additional-dirs`, { body }),
+
+  // Mid-run steering (live-run follow-up queue).
+  steerList: (id: string) => api.get<SteerQueueOut>(`${BASE}/${id}/steer`),
+  steerAdd: (id: string, body: SteerMessageCreate) =>
+    api.post<SteerMessageOut>(`${BASE}/${id}/steer`, { body }),
+  steerEdit: (id: string, mid: string, body: string) =>
+    api.patch<SteerMessageOut>(`${BASE}/${id}/steer/${mid}`, { body: { body } }),
+  steerReorder: (id: string, orderedIds: string[]) =>
+    api.post<SteerQueueOut>(`${BASE}/${id}/steer/reorder`, { body: { ordered_ids: orderedIds } }),
+  steerCancel: (id: string, mid: string) =>
+    api.delete<void>(`${BASE}/${id}/steer/${mid}`),
   removeAdditionalDir: (id: string, path: string) =>
     api.delete<TicketOut>(`${BASE}/${id}/additional-dirs`, { query: { path } }),
 
@@ -201,6 +215,22 @@ export function useTicketDependencies(id: string | undefined) {
     queryKey: qk.tickets.dependencies(id ?? ""),
     queryFn: () => ticketsApi.dependencies(id as string),
     enabled: !!id,
+  });
+}
+
+/** The live-run steer queue (pending + delivering) plus the backend's inject
+ *  capability. Only meaningful while the ticket is running; the caller gates on
+ *  `enabled`. Poll while running so a delivered chip clears promptly even if the
+ *  transcript SSE invalidation is missed. */
+export function useSteerQueue(
+  id: string | undefined,
+  options?: { enabled?: boolean; refetchInterval?: number },
+) {
+  return useQuery({
+    queryKey: qk.tickets.steer(id ?? ""),
+    queryFn: () => ticketsApi.steerList(id as string),
+    enabled: !!id && (options?.enabled ?? true),
+    refetchInterval: options?.refetchInterval,
   });
 }
 

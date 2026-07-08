@@ -17,6 +17,8 @@ from nightdesk.api.schemas import (
     TicketProjectUpdate, TicketReorder, TicketRestart, TicketResumeOrRetry,
     TicketStatusUpdate, TicketTransition,
     TicketUpdate,
+    SteerCapability, SteerMessageCreate, SteerMessageEdit, SteerMessageOut,
+    SteerQueueOut, SteerReorder,
 )
 from nightdesk.domain.tickets import (
     add_dependency, archive, bulk_archive, bulk_unarchive,
@@ -578,6 +580,126 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except ValueError as e:
             raise HTTPException(422, str(e))
         return _ticket_to_out(t)
+
+    # --- Mid-run steering: a live-run follow-up queue on the ticket's active
+    # conversation (docs/design/session-suite/mid-run-steering.md) ------------
+
+    def _steer_out(m) -> SteerMessageOut:
+        return SteerMessageOut(
+            id=m.id, body=m.body, position=m.position, state=m.state,
+            delivery_mode=m.delivery_mode, delivered_run_id=m.delivered_run_id,
+            created_at=m.created_at, delivered_at=m.delivered_at,
+        )
+
+    def _active_conversation_or_404(session: Session, tid: str):
+        from nightdesk.domain.conversations import active_conversation
+        t = get_ticket(session, tid)
+        conv = active_conversation(session, t)
+        if conv is None:
+            raise HTTPException(409, "ticket has no active conversation to steer")
+        return t, conv
+
+    def _steer_inject_capable(conv) -> bool:
+        from nightdesk.domain import backend_capabilities as bc
+        cap = bc.get_capability(conv.backend)
+        return bool(cap and cap.provides(bc.Capability.STEER_INJECT))
+
+    @router.post("/{tid}/steer", response_model=SteerMessageOut,
+                 status_code=status.HTTP_201_CREATED)
+    async def steer_add(
+        tid: str, payload: SteerMessageCreate,
+        session: Session = Depends(get_session),
+    ):
+        """Queue a follow-up for the live run. 409 unless the ticket is running."""
+        from nightdesk.domain.steering import add_steer_message
+        try:
+            t, conv = _active_conversation_or_404(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        if t.status != "running":
+            raise HTTPException(409, "ticket is not running")
+        # Requesting inject on a queue-only backend downgrades to at_turn — the
+        # worker only injects on inject-capable backends, so store the honest mode.
+        mode = payload.delivery_mode
+        if mode == "inject" and not _steer_inject_capable(conv):
+            mode = "at_turn"
+        try:
+            m = add_steer_message(
+                session, conversation_id=conv.id, ticket_id=t.id,
+                body=payload.body, delivery_mode=mode,
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return _steer_out(m)
+
+    @router.get("/{tid}/steer", response_model=SteerQueueOut)
+    async def steer_list(tid: str, session: Session = Depends(get_session)):
+        from nightdesk.domain.steering import list_steer_messages
+        try:
+            _t, conv = _active_conversation_or_404(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        messages = list_steer_messages(session, conv.id)
+        return SteerQueueOut(
+            messages=[_steer_out(m) for m in messages],
+            capability=SteerCapability(inject=_steer_inject_capable(conv)),
+        )
+
+    @router.patch("/{tid}/steer/{mid}", response_model=SteerMessageOut)
+    async def steer_edit(
+        tid: str, mid: str, payload: SteerMessageEdit,
+        session: Session = Depends(get_session),
+    ):
+        from nightdesk.domain.steering import (
+            edit_steer_message, InvalidSteerState, SteerMessageNotFound,
+        )
+        try:
+            m = edit_steer_message(session, mid, body=payload.body)
+        except SteerMessageNotFound:
+            raise HTTPException(404, "steer message not found")
+        except InvalidSteerState as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return _steer_out(m)
+
+    @router.post("/{tid}/steer/reorder", response_model=SteerQueueOut)
+    async def steer_reorder(
+        tid: str, payload: SteerReorder,
+        session: Session = Depends(get_session),
+    ):
+        from nightdesk.domain.steering import (
+            reorder_steer_messages, InvalidSteerState, SteerMessageNotFound,
+        )
+        try:
+            _t, conv = _active_conversation_or_404(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        try:
+            messages = reorder_steer_messages(session, conv.id, payload.ordered_ids)
+        except SteerMessageNotFound:
+            raise HTTPException(404, "steer message not found")
+        except InvalidSteerState as e:
+            raise HTTPException(409, str(e))
+        return SteerQueueOut(
+            messages=[_steer_out(m) for m in messages],
+            capability=SteerCapability(inject=_steer_inject_capable(conv)),
+        )
+
+    @router.delete("/{tid}/steer/{mid}", status_code=status.HTTP_204_NO_CONTENT)
+    async def steer_cancel(
+        tid: str, mid: str, session: Session = Depends(get_session),
+    ):
+        from nightdesk.domain.steering import (
+            cancel_steer_message, InvalidSteerState, SteerMessageNotFound,
+        )
+        try:
+            cancel_steer_message(session, mid)
+        except SteerMessageNotFound:
+            raise HTTPException(404, "steer message not found")
+        except InvalidSteerState as e:
+            raise HTTPException(409, str(e))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/{tid}/additional-dirs", response_model=TicketOut)
     async def add_additional_dir_route(

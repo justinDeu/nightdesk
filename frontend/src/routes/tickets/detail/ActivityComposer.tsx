@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronDown, GitMerge, Pencil, Send, Sparkles, X } from "lucide-react";
 import type { ProfileOut, TicketOut } from "@/api/types";
-import { ticketsApi } from "@/api/tickets";
+import { ticketsApi, useSteerQueue } from "@/api/tickets";
 import { Button } from "@/ui/Button";
 import { Textarea } from "@/ui/Input";
 import { Tooltip } from "@/ui/Tooltip";
@@ -18,11 +18,15 @@ import { toast } from "@/ui/Toast";
 import { relativeTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import { NewConversationDialog, RestartDialog, CloneDialog } from "./ConversationDialogs";
+import { SteerQueue } from "./SteerQueue";
 
-type Intent = "continue" | "guidance";
+type Intent = "continue" | "guidance" | "steer";
 
 /**
  * The single activity composer. One input, one explicit intent switch:
+ *   • Steer this run → POST /steer: queues a follow-up for the LIVE run (only
+ *     while running). Inject-capable backends deliver it into the same run at
+ *     the next step; queue-only backends send it as the next turn.
  *   • Continue now  → POST /continue: sends immediately as the next turn on the
  *     resumed conversation (only when the ticket is reviewable).
  *   • Guidance for next run → stages next_run_context: queued, surfaced as a
@@ -42,17 +46,29 @@ export function ActivityComposer({
 }) {
   const navigate = useNavigate();
   const continueAvailable = ticket.status === "review" || ticket.status === "archived";
-  const [intent, setIntent] = useState<Intent>(continueAvailable ? "continue" : "guidance");
+  const [intent, setIntent] = useState<Intent>(
+    running ? "steer" : continueAvailable ? "continue" : "guidance",
+  );
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [newConvo, setNewConvo] = useState(false);
   const [restart, setRestart] = useState(false);
   const [clone, setClone] = useState(false);
 
-  // If the ticket becomes non-resumable, fall back to guidance.
+  const steerQ = useSteerQueue(ticket.id, {
+    enabled: running,
+    refetchInterval: running ? 3000 : undefined,
+  });
+  const canInject = steerQ.data?.capability.inject ?? false;
+  const steerMessages = steerQ.data?.messages ?? [];
+
+  // Keep the mode valid as the ticket's life stage changes: steer only while
+  // running, continue only while reviewable.
   useEffect(() => {
+    if (!running && intent === "steer") setIntent(continueAvailable ? "continue" : "guidance");
+    if (running && intent === "continue") setIntent("steer");
     if (!continueAvailable && intent === "continue") setIntent("guidance");
-  }, [continueAvailable, intent]);
+  }, [running, continueAvailable, intent]);
 
   const pending = (ticket.next_run_context ?? "").trim();
 
@@ -72,7 +88,19 @@ export function ActivityComposer({
 
   const submit = () => {
     if (!message.trim()) return;
-    if (intent === "continue") {
+    if (intent === "steer") {
+      act(
+        "Queued for the run",
+        () =>
+          ticketsApi
+            .steerAdd(ticket.id, {
+              body: message,
+              delivery_mode: canInject ? "inject" : "at_turn",
+            })
+            .then(() => steerQ.refetch()),
+        true,
+      );
+    } else if (intent === "continue") {
       act("Continue queued", () => ticketsApi.continue(ticket.id, { message }), true);
     } else {
       act("Guidance saved", () => ticketsApi.setNextRunContext(ticket.id, { body: message }), true);
@@ -80,11 +108,15 @@ export function ActivityComposer({
   };
 
   const helper =
-    intent === "continue"
-      ? "Sends now as the next turn on the resumed conversation."
-      : running
-        ? "Saved for the next run after this one finishes — doesn't interrupt the current run."
-        : "Saved as a note the agent sees on its next run — doesn't run anything now.";
+    intent === "steer"
+      ? canInject
+        ? "Sends to the running agent at its next step."
+        : "Queued — sent as the next turn when this run finishes."
+      : intent === "continue"
+        ? "Sends now as the next turn on the resumed conversation."
+        : running
+          ? "Saved for the next run after this one finishes — doesn't interrupt the current run."
+          : "Saved as a note the agent sees on its next run — doesn't run anything now.";
 
   return (
     <div className="shrink-0 border-t border-ink-700 bg-ink-900/60 p-3">
@@ -105,8 +137,28 @@ export function ActivityComposer({
         />
       )}
 
+      {running && (
+        <SteerQueue
+          ticketId={ticket.id}
+          messages={steerMessages}
+          inject={canInject}
+          onChange={() => steerQ.refetch()}
+        />
+      )}
+
       <div className="mb-2 flex items-center gap-2">
         <div className="flex rounded-control border border-ink-700 bg-ink-950 p-0.5 text-xs">
+          {running && (
+            <button
+              onClick={() => setIntent("steer")}
+              className={cn(
+                "rounded-[6px] px-2.5 py-1 font-medium transition-colors",
+                intent === "steer" ? "bg-ink-800 text-moon-100" : "text-moon-400 hover:text-moon-100",
+              )}
+            >
+              Steer this run
+            </button>
+          )}
           <Tooltip content={continueAvailable ? "" : "Available once a run has finished (review/archived)"}>
             <button
               onClick={() => continueAvailable && setIntent("continue")}
@@ -151,9 +203,11 @@ export function ActivityComposer({
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
         }}
         placeholder={
-          intent === "continue"
-            ? "Reply to the agent — sent as the next turn…"
-            : "Guidance the agent should follow on its next run…"
+          intent === "steer"
+            ? "Steer the running agent — sent while it works…"
+            : intent === "continue"
+              ? "Reply to the agent — sent as the next turn…"
+              : "Guidance the agent should follow on its next run…"
         }
         className="min-h-[72px]"
       />
@@ -163,11 +217,11 @@ export function ActivityComposer({
           size="sm"
           variant="primary"
           className="ml-auto"
-          leadingIcon={intent === "continue" ? <Send size={13} /> : <Sparkles size={13} />}
+          leadingIcon={intent === "guidance" ? <Sparkles size={13} /> : <Send size={13} />}
           disabled={busy || !message.trim()}
           onClick={submit}
         >
-          {intent === "continue" ? "Send" : "Save guidance"}
+          {intent === "steer" ? "Queue for run" : intent === "continue" ? "Send" : "Save guidance"}
         </Button>
       </div>
 

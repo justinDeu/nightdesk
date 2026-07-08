@@ -51,6 +51,19 @@ class ExecutionRequest:
     # Opaque per-run data a backend's prepare_launch stashes for its execute
     # step (e.g. opencode's session dir + server password). Worker-opaque.
     launch_meta: dict = field(default_factory=dict)
+    # Mid-run steering (STEER_INJECT backends only). The host watcher claims
+    # pending SteerMessages and pushes ``{"id","body"}`` dicts onto this queue;
+    # an inject-capable backend races ``steer_queue.get()`` alongside its event
+    # stream and POSTs each follow-up into the SAME live session at the next
+    # step boundary. None for queue-only backends (claude_sdk), whose follow-ups
+    # are delivered by the run-completion drain + auto-continue instead.
+    steer_queue: Optional["asyncio.Queue"] = None
+    # Invoked by the backend once a queued follow-up has actually been posted
+    # into the live run, with ``(message_id, {"body","delivery"})``. It only
+    # touches the DB row (marks it delivered); the backend itself writes the
+    # ``steer_delivered`` transcript event through its OWN emitter so the seq
+    # counter stays single-owner. None when no callback is wired (tests).
+    on_steer_delivered: Optional[Callable[[str, dict], None]] = None
 
 
 @dataclass

@@ -85,6 +85,41 @@ async def _cancel_watcher(
         return
 
 
+async def _steer_watcher(
+    session_factory: Callable[[], Session],
+    conversation_id: str,
+    steer_queue: asyncio.Queue,
+    cancel_event: asyncio.Event,
+) -> None:
+    """Poll for pending SteerMessages and hand them to the inject-capable
+    backend. Sibling to :func:`_cancel_watcher` — same ~0.5s host-side DB poll,
+    same lifecycle (spawned only for STEER_INJECT runs, cancelled in the
+    executor's finally). Each tick claims the next pending message atomically
+    (``pending -> delivering``) and pushes ``{"id","body"}`` onto ``steer_queue``
+    for the backend to POST into the live session. A claimed row the backend
+    never gets to deliver (run ends first) stays ``delivering`` and is folded
+    into next_run_context by the run-completion drain."""
+    from nightdesk.domain.steering import claim_next_steer_message
+
+    try:
+        while not cancel_event.is_set():
+            session = session_factory()
+            try:
+                claimed = claim_next_steer_message(session, conversation_id)
+                if claimed is not None:
+                    await steer_queue.put({"id": claimed.id, "body": claimed.body})
+                    # Loop straight back to drain a burst without the poll delay.
+                    continue
+            finally:
+                session.close()
+            try:
+                await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                return
+    except asyncio.CancelledError:
+        return
+
+
 class LocalExecutor(Executor):
     """Run the agent in an on-host bwrap sandbox — the default execution
     target. Behavior-identical to what ``run_one`` used to do inline."""
@@ -278,11 +313,24 @@ class LocalExecutor(Executor):
             on_session_id=ctx.on_session_id,
             http_port=launch_ctx.http_port,
             launch_meta=launch_ctx.backend_state,
+            steer_queue=ctx.steer_queue,
+            on_steer_delivered=ctx.on_steer_delivered,
         )
 
         watcher = asyncio.create_task(
             _cancel_watcher(ctx.session_factory, ctx.ticket_id, ctx.cancel_event)
         )
+        # Mid-run steering: only inject-capable runs get a live watcher (run_one
+        # hands a queue only when the backend provides STEER_INJECT). Queue-only
+        # backends leave ctx.steer_queue None and deliver via the completion drain.
+        steer_watcher: Optional[asyncio.Task] = None
+        if ctx.steer_queue is not None and ctx.conversation_id:
+            steer_watcher = asyncio.create_task(
+                _steer_watcher(
+                    ctx.session_factory, ctx.conversation_id,
+                    ctx.steer_queue, ctx.cancel_event,
+                )
+            )
         executor_error_kind: Optional[str] = None
         executor_error_tb: Optional[str] = None
         try:
@@ -300,12 +348,13 @@ class LocalExecutor(Executor):
                 error_summary=f"executor error: {exc}",
             )
         finally:
-            if watcher is not None and not watcher.done():
-                watcher.cancel()
-                try:
-                    await watcher
-                except asyncio.CancelledError:
-                    pass
+            for w in (watcher, steer_watcher):
+                if w is not None and not w.done():
+                    w.cancel()
+                    try:
+                        await w
+                    except asyncio.CancelledError:
+                        pass
 
         # Worker-level error surfacing: any failed run gets a final
         # ``worker_error`` event tacked onto its transcript so the user

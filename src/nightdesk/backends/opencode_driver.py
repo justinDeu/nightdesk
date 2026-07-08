@@ -174,12 +174,16 @@ async def _create_session(client: httpx.AsyncClient, workdir: str) -> str:
     return r.json()["id"]
 
 
-async def _post_prompt(
-    client: httpx.AsyncClient, session_id: str, workdir: str, req: ExecutionRequest,
+async def _post_text(
+    client: httpx.AsyncClient, session_id: str, workdir: str,
+    req: ExecutionRequest, text: str,
 ) -> None:
+    """POST one user turn (the initial prompt or a mid-run follow-up) to the
+    live session. Posting a follow-up before ``session.idle`` keeps the same
+    session/run alive, so the agent picks it up at its next step boundary."""
     body: dict = {
         "agent": "build",
-        "parts": [{"type": "text", "text": req.prompt}],
+        "parts": [{"type": "text", "text": text}],
     }
     system = getattr(req.permission_spec, "system_prompt", None)
     if system:
@@ -193,6 +197,34 @@ async def _post_prompt(
         params={"directory": workdir}, json=body, timeout=30.0,
     )
     r.raise_for_status()
+
+
+async def _post_prompt(
+    client: httpx.AsyncClient, session_id: str, workdir: str, req: ExecutionRequest,
+) -> None:
+    await _post_text(client, session_id, workdir, req, req.prompt)
+
+
+async def _deliver_steer(
+    client: httpx.AsyncClient, session_id: str, req: ExecutionRequest,
+    item: dict, emit,
+) -> None:
+    """Inject one queued follow-up into the live session: POST it, mark the DB
+    row delivered (via the worker callback), and write the ``steer_delivered``
+    breadcrumb through THIS driver's ``emit`` so the transcript seq stays
+    single-owner (never via out-of-band ``append_event``)."""
+    mid = item.get("id")
+    body = item.get("body") or ""
+    await _post_text(client, session_id, str(req.working_dir), req, body)
+    if req.on_steer_delivered is not None:
+        try:
+            req.on_steer_delivered(mid, {"body": body, "delivery": "inject"})
+        except Exception:
+            log.exception("on_steer_delivered failed for steer message %s", mid)
+    emit([{
+        "type": "steer_delivered", "message_id": mid, "text": body,
+        "delivery": "inject",
+    }])
 
 
 async def _consume_events(
@@ -213,14 +245,48 @@ async def _consume_events(
     cancel_task = asyncio.create_task(req.cancel_event.wait())
     line_iter = resp.aiter_lines()
     saw_idle = False
+    # Mid-run steering. ``steer_task`` awaits the next queued follow-up (the host
+    # watcher feeds the queue); it is raced against the event stream so a
+    # follow-up is injected promptly, not only when a new SSE line happens to
+    # arrive. ``delivered_since_idle`` keeps us from finishing on the idle that
+    # closes a turn during which we injected a follow-up: opencode emits
+    # session.idle per completed prompt, so after any injection we consume until
+    # a CLEAN idle (queue empty, nothing injected since the previous idle) —
+    # otherwise the just-injected follow-up would be torn down mid-work.
+    steer_enabled = req.steer_queue is not None
+    steer_task = (
+        asyncio.create_task(req.steer_queue.get()) if steer_enabled else None
+    )
+    delivered_since_idle = False
     try:
         while True:
             next_task = asyncio.create_task(line_iter.__anext__())
+            wait_set = {next_task, cancel_task}
+            if steer_task is not None:
+                wait_set.add(steer_task)
             done, _pending = await asyncio.wait(
-                {next_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED,
+                wait_set, return_when=asyncio.FIRST_COMPLETED,
             )
+
+            # A queued follow-up won the race: inject it (unless the user is
+            # cancelling), re-arm the queue wait, and process any line that also
+            # arrived this tick before looping back.
+            if steer_task is not None and steer_task in done:
+                item = steer_task.result()
+                steer_task = asyncio.create_task(req.steer_queue.get())
+                if not cancel_task.done():
+                    await _deliver_steer(client, session_id, req, item, emit)
+                    delivered_since_idle = True
+                if next_task not in done:
+                    next_task.cancel()
+                    try:
+                        await next_task
+                    except (asyncio.CancelledError, StopAsyncIteration, Exception):
+                        pass
+                    continue
+
             if next_task not in done:
-                # Cancelled before the next line arrived.
+                # Cancelled before the next line arrived (no steer item either).
                 next_task.cancel()
                 try:
                     await next_task
@@ -249,11 +315,30 @@ async def _consume_events(
                 continue
             emit(translate_event(evt, state))
             if evt.get("type") == "session.idle" and props.get("sessionID") == session_id:
+                # Close the idle window on a just-arrived follow-up: drain any
+                # already-queued messages now (get_nowait), and keep looping if
+                # we injected anything during this turn. Only a clean idle
+                # (queue empty, nothing injected since the last idle) finishes
+                # the run. Residue the watcher hasn't queued yet lands on the
+                # run-completion drain — one turn boundary lost, never a message.
+                if steer_enabled:
+                    while True:
+                        try:
+                            item = req.steer_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        if not cancel_task.done():
+                            await _deliver_steer(client, session_id, req, item, emit)
+                            delivered_since_idle = True
+                if delivered_since_idle:
+                    delivered_since_idle = False
+                    continue
                 saw_idle = True
                 break
     finally:
-        if not cancel_task.done():
-            cancel_task.cancel()
+        for _tk in (cancel_task, steer_task):
+            if _tk is not None and not _tk.done():
+                _tk.cancel()
     if state.get("error"):
         return "failed", state["error"]
     if not saw_idle:
