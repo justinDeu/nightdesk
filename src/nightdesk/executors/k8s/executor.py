@@ -117,17 +117,27 @@ class K8sExecutor(Executor):
 
     # -- config ---------------------------------------------------------------
 
+    def _config_from_session(self, session, api_url: str) -> K8sConfig:
+        """Read + validate k8s config from a session the CALLER owns.
+
+        Must not close ``session`` — ``reconcile_orphans`` hands us the worker
+        tick's shared session and keeps using it after this returns; closing it
+        would detach the tick's in-flight objects.
+        """
+        row = session.get(ConfigRow, 1)
+        cfg = K8sConfig.from_config_row(row, api_url=api_url)
+        cfg.validate()
+        return cfg
+
     def _load_config(self, session_factory, api_url: str) -> K8sConfig:
+        """Read + validate k8s config from a fresh, executor-owned session."""
         if session_factory is None:
             raise K8sConfigError("k8s executor needs a session factory to read config")
         session = session_factory()
         try:
-            row = session.get(ConfigRow, 1)
-            cfg = K8sConfig.from_config_row(row, api_url=api_url)
+            return self._config_from_session(session, api_url)
         finally:
             session.close()
-        cfg.validate()
-        return cfg
 
     # -- provision ------------------------------------------------------------
 
@@ -339,7 +349,7 @@ class K8sExecutor(Executor):
         k8s runs; this reconciler is the authority.
         """
         try:
-            cfg = self._load_config(lambda: session, "http://reconcile.invalid")
+            cfg = self._config_from_session(session, "http://reconcile.invalid")
         except K8sConfigError:
             return
         client = self._client_factory(cfg)
