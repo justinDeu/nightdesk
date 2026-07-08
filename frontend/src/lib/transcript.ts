@@ -43,6 +43,7 @@ const KNOWN_EVENT_TYPES = [
   "assistant",
   "cancelled",
   "preset",
+  "steer_delivered",
 ] as const;
 
 const MAX_EVENTS = 4000;

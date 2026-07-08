@@ -6,6 +6,7 @@ export const qk = {
     list: (params?: Record<string, unknown>) => ["tickets", "list", params ?? {}] as const,
     detail: (id: string) => ["tickets", "detail", id] as const,
     dependencies: (id: string) => ["tickets", id, "dependencies"] as const,
+    steer: (id: string) => ["tickets", id, "steer"] as const,
   },
   runs: {
     all: ["runs"] as const,

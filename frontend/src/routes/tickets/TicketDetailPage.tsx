@@ -56,6 +56,16 @@ export function TicketDetailPage() {
   const todos = useMemo(() => buildTodoList(tx.events), [tx.events]);
   const subagents = useMemo(() => buildSubagentList(tx.events), [tx.events]);
 
+  // A steer_delivered breadcrumb means a queued follow-up just left the queue;
+  // refresh the steer query so the chip clears (its state moved to delivered).
+  const steerDeliveredCount = useMemo(
+    () => tx.events.filter((e) => e.type === "steer_delivered").length,
+    [tx.events],
+  );
+  useEffect(() => {
+    if (steerDeliveredCount > 0) qc.invalidateQueries({ queryKey: qk.tickets.steer(id) });
+  }, [steerDeliveredCount, id, qc]);
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: qk.tickets.detail(id) });
     qc.invalidateQueries({ queryKey: qk.tickets.all });
