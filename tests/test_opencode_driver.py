@@ -280,3 +280,73 @@ async def test_consume_events_cancels_promptly_on_silent_stream(tmp_path):
     assert exit_status == "cancelled"
     assert error is None
     assert client.aborted
+
+async def test_steer_message_injected_into_live_run(tmp_path, monkeypatch):
+    """A queued follow-up on ``req.steer_queue`` is POSTed into the SAME live
+    session (a second prompt_async), the on_steer_delivered callback fires, and a
+    ``steer_delivered`` event lands in the transcript with a non-colliding seq.
+    The run does not finish on the first idle while a steer was delivered."""
+    _patch_process_spawn(monkeypatch)
+
+    async def _two_idles():
+        # First idle closes the original prompt; the driver must inject the
+        # queued follow-up and keep consuming until the SECOND idle.
+        yield 'data: {"type": "session.idle", "properties": {"sessionID": "sess-1"}}'
+        yield 'data: {"type": "session.idle", "properties": {"sessionID": "sess-1"}}'
+
+    fake_client = _FakeClient(_two_idles)
+    monkeypatch.setattr(opencode_driver.httpx, "AsyncClient", lambda **kw: fake_client)
+
+    posted_bodies: list[dict] = []
+    orig_post = fake_client.post
+
+    async def _capturing_post(path, **kw):
+        if path.endswith("/prompt_async"):
+            posted_bodies.append(kw.get("json") or {})
+        return await orig_post(path, **kw)
+
+    fake_client.post = _capturing_post
+
+    delivered: list[tuple] = []
+    req = _make_request(tmp_path)
+    req.steer_queue = asyncio.Queue()
+    req.steer_queue.put_nowait({"id": "m1", "body": "actually, focus on tests"})
+    req.on_steer_delivered = lambda mid, info: delivered.append((mid, info))
+
+    result = await opencode_driver.drive_opencode(req)
+
+    assert result.exit_status == "success"
+    # Two prompt_async posts: the initial prompt + the injected follow-up.
+    texts = [b["parts"][0]["text"] for b in posted_bodies]
+    assert "do the thing" in texts
+    assert "actually, focus on tests" in texts
+    # The DB callback fired for the delivered message.
+    assert delivered == [("m1", {"body": "actually, focus on tests", "delivery": "inject"})]
+    # The transcript carries a steer_delivered event with a unique integer seq.
+    import json
+    events = [json.loads(ln) for ln in req.transcript_path.read_text().splitlines() if ln.strip()]
+    steer_events = [e for e in events if e.get("type") == "steer_delivered"]
+    assert len(steer_events) == 1
+    assert steer_events[0]["message_id"] == "m1"
+    assert steer_events[0]["delivery"] == "inject"
+    seqs = [e["seq"] for e in events if isinstance(e.get("seq"), int)]
+    assert len(seqs) == len(set(seqs)), "transcript seqs must not collide"
+
+
+async def test_no_steer_queue_is_a_normal_run(tmp_path, monkeypatch):
+    """With ``steer_queue=None`` (queue-only backend path) the driver behaves
+    exactly as before: one prompt, finish on first idle."""
+    _patch_process_spawn(monkeypatch)
+
+    async def _idle():
+        yield 'data: {"type": "session.idle", "properties": {"sessionID": "sess-1"}}'
+
+    fake_client = _FakeClient(_idle)
+    monkeypatch.setattr(opencode_driver.httpx, "AsyncClient", lambda **kw: fake_client)
+
+    req = _make_request(tmp_path)
+    assert req.steer_queue is None
+    result = await opencode_driver.drive_opencode(req)
+    assert result.exit_status == "success"
+    posts = [c for c in fake_client.calls if c.endswith("/prompt_async")]
+    assert len(posts) == 1

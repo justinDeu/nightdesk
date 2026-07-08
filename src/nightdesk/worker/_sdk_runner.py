@@ -14,6 +14,16 @@ The SDK yields typed dataclass instances (`SystemMessage`, `AssistantMessage`,
 ``nightdesk.worker.claude_translator.translate`` expects before serializing
 so the executor's downstream pipeline keeps seeing dicts, not repr strings.
 Test stubs that yield plain dicts still pass through untouched.
+
+Mid-run steering (STEER_INJECT): NOT supported here. This runner uses the
+SDK's one-shot ``query()`` and closes stdin right after writing the runner
+spec, so there is no live input channel into a running turn — a follow-up
+cannot be injected into the same run. claude_sdk therefore declares
+STEER_QUEUE but not STEER_INJECT (see ``domain/backend_capabilities.py``);
+queued follow-ups are delivered as the NEXT turn via the worker's
+run-completion drain + auto-continue. True same-run injection would require
+reworking this runner to ``ClaudeSDKClient`` streaming-input mode plus a stdin
+control channel — a substantial, separate change (deferred follow-up).
 """
 from __future__ import annotations
 

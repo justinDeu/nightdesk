@@ -143,3 +143,28 @@ def test_upgrade_from_stamp_reconciled_db_with_orphan_columns(tmp_path):
 
     config_columns = {col["name"] for col in inspector.get_columns("config")}
     assert "opencode_binary_path" in config_columns
+
+
+def test_0023_steer_messages_upgrade_downgrade_and_guard(tmp_path):
+    """0023 creates steer_messages on a clean DB, downgrade drops it, and the
+    guard makes a re-upgrade over an existing table a no-op (no crash)."""
+    db_path = tmp_path / "nd.db"
+    cfg = _alembic_config(db_path)
+
+    command.upgrade(cfg, "0023_steer_messages")
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    insp = inspect(engine)
+    assert insp.has_table("steer_messages")
+    cols = {c["name"] for c in insp.get_columns("steer_messages")}
+    assert {"conversation_id", "ticket_id", "body", "state", "delivery_mode",
+            "delivered_run_id", "position"} <= cols
+    ix = {i["name"] for i in insp.get_indexes("steer_messages")}
+    assert "ix_steer_messages_conversation_id" in ix
+    assert "ix_steer_messages_state" in ix
+
+    command.downgrade(cfg, "0022_providers_and_endpoints")
+    assert not inspect(engine).has_table("steer_messages")
+
+    # Re-upgrade is idempotent under the inspector guard.
+    command.upgrade(cfg, "0023_steer_messages")
+    assert inspect(engine).has_table("steer_messages")

@@ -85,3 +85,29 @@ def test_recover_orphaned_runs_scoped_to_host(session, sample_profile, force_dea
     assert r2.exit_status is None
     assert r2.finished_at is None
     assert t2.status == "running"
+
+
+def test_recover_resets_orphaned_steer_claims(session, sample_profile, force_dead_pids):
+    """A `delivering` steer claim on a ticket that crashed out of `running` is
+    reset to `pending` so it is not stuck in the transient claim state."""
+    from nightdesk.domain.conversations import create_conversation
+    from nightdesk.domain.steering import add_steer_message, claim_next_steer_message
+    from nightdesk.db.models import SteerMessage
+
+    t = create_ticket(session, title="t", prompt="", priority=0,
+                       profile_id=sample_profile.id, source_path="/tmp", run_now=False)
+    t.status = "running"
+    session.commit()
+    r = start_run(session, ticket_id=t.id, worktree_path="/w",
+                  transcript_path="/w/log", pid=999, host="h")
+    conv = create_conversation(session, ticket_id=t.id, profile_id=sample_profile.id,
+                               backend="opencode", transcript_path="/w/log")
+    m = add_steer_message(session, conversation_id=conv.id, ticket_id=t.id, body="steer")
+    claim_next_steer_message(session, conv.id)  # pending -> delivering
+    assert session.get(SteerMessage, m.id).state == "delivering"
+
+    # Recovery moves the ticket out of running (worker_crash) AND resets the claim.
+    recover_orphaned_runs(session, host="h")
+    session.refresh(t)
+    assert t.status == "review"
+    assert session.get(SteerMessage, m.id).state == "pending"
