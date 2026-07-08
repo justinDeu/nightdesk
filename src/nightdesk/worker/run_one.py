@@ -895,6 +895,8 @@ async def run_one(
                 reuse_existing_worktrees=run_intent in {"resume", "retry", "continue"} or has_existing_worktree,
                 fresh_worktree_paths=run_intent == "restart" and restart_workspace_policy == "fresh_path",
                 transcript_path=run.transcript_path,
+                api_url=cfg.api_url,
+                session_factory=session_factory,
             ))
             # ``bundle`` is present for on-host executors (LocalExecutor) and
             # None for remote ones (K8sExecutor provisions in-pod). Every
@@ -1125,6 +1127,10 @@ async def run_one(
                 fresh_backend_run.backend = spec.backend
                 fresh_backend_run.endpoint_id = getattr(ticket.profile, "endpoint_id", None)
                 fresh_backend_run.session_ref = getattr(result, "session_ref", None)
+                # Remote executors (k8s) tag why a run failed per the failure
+                # matrix; the local path leaves this None (unchanged behavior).
+                if getattr(result, "failure_kind", None):
+                    fresh_backend_run.failure_kind = result.failure_kind
                 session.commit()
 
             # Backend post-run hook (e.g. claude publishes its session so

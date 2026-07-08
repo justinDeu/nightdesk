@@ -118,6 +118,11 @@ class ProvisionContext:
     reuse_existing_worktrees: bool
     fresh_worktree_paths: bool
     transcript_path: str
+    # Cluster-routable API address and a session factory — used by remote
+    # executors (k8s) to load + validate their config at preflight. The local
+    # executor ignores both.
+    api_url: str = ""
+    session_factory: Optional[Callable[[], "Session"]] = None
 
 
 @dataclass
@@ -158,6 +163,7 @@ class ResolvedWorkspace:
     branch: Optional[str] = None
     base_ref: Optional[str] = None
     base_sha: Optional[str] = None
+    head_sha: Optional[str] = None
     run_start_sha: Optional[str] = None
     retention: Optional[str] = None
     state: str = "active"

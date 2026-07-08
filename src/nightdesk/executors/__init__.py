@@ -29,6 +29,14 @@ def _register_builtins() -> None:
     # Importing the module runs its module-level ``register(...)`` call.
     from nightdesk.executors import local  # noqa: F401
 
+    # K8sExecutor is always registered so run_one can select it by target; it
+    # validates its config (runner image, cluster-routable API) at provision
+    # time and fails fast when unconfigured. Its client imports ``kubernetes``
+    # lazily, so registration never requires the optional [k8s] extra.
+    from nightdesk.executors.k8s import K8sExecutor
+
+    register(K8sExecutor.code, K8sExecutor())
+
 
 _register_builtins()
 
