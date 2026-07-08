@@ -1102,6 +1102,45 @@ class TicketNextRunContext(BaseModel):
     body: str = ""
 
 
+class SteerMessageCreate(BaseModel):
+    """A follow-up queued while a run is live (mid-run steering)."""
+
+    body: str
+    delivery_mode: Literal["at_turn", "inject"] = "at_turn"
+
+
+class SteerMessageEdit(BaseModel):
+    body: str
+
+
+class SteerReorder(BaseModel):
+    ordered_ids: list[str]
+
+
+class SteerMessageOut(BaseModel):
+    id: str
+    body: str
+    position: int
+    state: str
+    delivery_mode: str
+    delivered_run_id: Optional[str] = None
+    created_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+
+
+class SteerCapability(BaseModel):
+    """Whether the ticket's active conversation's backend can inject a queued
+    follow-up into the SAME live run (opencode) or only deliver it as the next
+    turn (claude_sdk). Drives the composer's helper text."""
+
+    inject: bool
+
+
+class SteerQueueOut(BaseModel):
+    messages: list[SteerMessageOut]
+    capability: SteerCapability
+
+
 class TicketRestart(BaseModel):
     message: Optional[str] = None
     workspace_policy: Literal["recreate_in_place", "fresh_path"]
