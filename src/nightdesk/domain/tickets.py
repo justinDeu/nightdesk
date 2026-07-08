@@ -772,6 +772,23 @@ def set_next_run_context(session: Session, ticket_id: str, body: Optional[str]) 
     return t
 
 
+def append_next_run_context(session: Session, ticket_id: str, text: str) -> Ticket:
+    """Append ``text`` to the ticket's staged next-run-context (don't overwrite).
+
+    Keeps ``next_run_context`` the single steering channel: review comments and
+    hand-typed guidance stack in the same field rather than forking a parallel
+    one. A blank ``text`` is a no-op. Reuses ``set_next_run_context`` so the
+    updated-at stamp and empty-normalization stay in one place.
+    """
+    addition = (text or "").strip()
+    if not addition:
+        return get_ticket(session, ticket_id)
+    t = get_ticket(session, ticket_id)
+    existing = (t.next_run_context or "").rstrip()
+    merged = f"{existing}\n\n{addition}" if existing else addition
+    return set_next_run_context(session, ticket_id, merged)
+
+
 def merge_next_run_context_into_prompt(session: Session, ticket_id: str) -> Ticket:
     t = get_ticket(session, ticket_id)
     if not t.next_run_context:

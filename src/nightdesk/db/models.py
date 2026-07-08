@@ -429,6 +429,70 @@ class RunLatency(Base):
     run: Mapped["Run"] = relationship(foreign_keys=[run_id])
 
 
+class DiffComment(Base):
+    """A review comment anchored to a line of a run's diff, or a reply to one.
+
+    One table, one-level threading via a nullable self-FK ``parent_id``. A
+    *root* (``parent_id IS NULL``) carries the anchor (``file_path``/``side``/
+    ``line``/``anchor_head_sha``/``anchor_text``) plus resolution and delivery
+    state; a *reply* carries only ``body`` + author and points at its root.
+
+    Anchors are NOT a pinned snapshot. The run-diff endpoint recomputes from
+    git live (``run_start_sha..HEAD``) on every request, so a later run on the
+    same worktree shifts line numbers. Each root stores ``anchor_head_sha`` (the
+    diff's ``head_sha`` when the comment was filed) and ``anchor_text`` (the
+    line's text); a root is *outdated* when the live diff's head differs — it
+    renders against ``anchor_text`` instead of being silently mis-placed.
+    """
+
+    __tablename__ = "diff_comments"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    # Denormalized for cheap ticket-rail listing + next_run_context targeting,
+    # mirroring runs/workspaces carrying ticket_id/conversation_id.
+    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), index=True)
+    conversation_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("conversations.id"), nullable=True, index=True,
+    )
+    # Threading: NULL = root (carries the anchor); else points at the root.
+    parent_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("diff_comments.id", ondelete="CASCADE"), nullable=True, index=True,
+    )
+    # Anchor (root only; NULL on replies).
+    file_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    side: Mapped[Optional[str]] = mapped_column(String, nullable=True)   # 'old' | 'new'
+    line: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1-based, on `side`
+    anchor_head_sha: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    anchor_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Content.
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    # Acting principal (an agent may file via API). 'admin' | 'agent'.
+    author_kind: Mapped[str] = mapped_column(String, default="admin", nullable=False)
+    author_run_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("runs.id"), nullable=True,
+    )  # the run token's run, when agent-authored
+    # Resolution + delivery (root only).
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, nullable=True,
+    )
+
+    run: Mapped["Run"] = relationship(foreign_keys=[run_id])
+    replies: Mapped[list["DiffComment"]] = relationship(
+        back_populates="parent",
+        cascade="all, delete-orphan",
+        foreign_keys=[parent_id],
+        order_by="DiffComment.created_at",
+    )
+    parent: Mapped[Optional["DiffComment"]] = relationship(
+        back_populates="replies", remote_side=[id], foreign_keys=[parent_id],
+    )
+
+
 class TicketWorkspace(Base):
     __tablename__ = "ticket_workspaces"
 
