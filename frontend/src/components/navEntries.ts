@@ -1,11 +1,11 @@
 import {
   Archive,
   BarChart3,
+  Bot,
   CalendarClock,
   Inbox,
   LayoutDashboard,
   ListTodo,
-  MessagesSquare,
   Settings,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -17,6 +17,9 @@ export interface NavEntry {
   icon: LucideIcon;
   /** exact match only (the Desk root) */
   exact?: boolean;
+  /** Optional live count rendered as a badge (e.g. agents awaiting input). The
+   *  value is supplied by the shell, not baked into the static list. */
+  badgeKey?: "agents-pending";
 }
 
 /** Primary navigation, shared by the desktop rail (SideNav) and the mobile
@@ -24,7 +27,7 @@ export interface NavEntry {
 export const ENTRIES: NavEntry[] = [
   { to: "/", label: "Desk", icon: LayoutDashboard, exact: true },
   { to: "/tickets", label: "Tickets", icon: ListTodo },
-  { to: "/sessions", label: "Sessions", icon: MessagesSquare },
+  { to: "/agents", label: "Agents", icon: Bot, badgeKey: "agents-pending" },
   { to: "/inbox", label: "Inbox", icon: Inbox },
   { to: "/scheduled", label: "Scheduled", icon: CalendarClock },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
