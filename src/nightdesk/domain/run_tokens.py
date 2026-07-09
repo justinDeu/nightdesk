@@ -35,6 +35,14 @@ SELF_SCOPES: tuple[str, ...] = (
 # Scopes a profile may grant on top of the self-scopes.
 GRANTABLE_SCOPES: tuple[str, ...] = (
     "ticket.create",
+    # Integrations (GitLab v1). ``integrations.read`` is instance-wide read on
+    # repo-link issue/MR endpoints and on any ticket's external links (§5);
+    # ``integrations.link.self`` allows POST/DELETE of external links on the
+    # run's OWN ticket only (enforced by the ``*.self`` ticket-match check). The
+    # broader token-perms vocabulary lands on a sibling branch; the merge
+    # reconciles — these two entries are the surface this integration needs.
+    "integrations.read",
+    "integrations.link.self",
 )
 
 ALL_SCOPES: tuple[str, ...] = SELF_SCOPES + GRANTABLE_SCOPES

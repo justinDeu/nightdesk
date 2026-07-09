@@ -58,6 +58,15 @@ AGENTS_ADMIN = "agents.admin"
 
 ANALYTICS_READ = "analytics.read"
 
+# External integrations (GitLab v1). ``read`` covers issue/MR browse + a ticket's
+# external-links; ``link`` covers linking/unlinking + import-as-draft (run tokens
+# carry the ``.self`` variant, enforced by ``enforce_self_ticket``); ``write`` is
+# connection/repo-link CRUD — human-only, mirroring providers.write, since a
+# connection holds a forge credential and an endpoint URL.
+INTEGRATIONS_READ = "integrations.read"
+INTEGRATIONS_LINK = "integrations.link"
+INTEGRATIONS_WRITE = "integrations.write"
+
 FS_READ = "fs.read"
 
 # Never mintable; the mint/revoke/list routes gate on the root bearer directly,
@@ -94,6 +103,9 @@ ALL_SCOPES: tuple[str, ...] = (
     AGENTS_MESSAGE,
     AGENTS_ADMIN,
     ANALYTICS_READ,
+    INTEGRATIONS_READ,
+    INTEGRATIONS_LINK,
+    INTEGRATIONS_WRITE,
     FS_READ,
     TOKENS_ADMIN,
 )
@@ -114,6 +126,7 @@ HUMAN_ONLY_SCOPES: frozenset[str] = frozenset({
     AGENTS_MESSAGE,     # prompt injection into a full-power resident agent
     AGENTS_ADMIN,       # editing a resident agent's env / restarting its runtime
     TICKETS_DELETE,     # destructive; archive covers every agent workflow
+    INTEGRATIONS_WRITE, # a connection holds a forge credential + endpoint URL
     TOKENS_ADMIN,       # a token that mints tokens is admin
 })
 
@@ -142,6 +155,10 @@ _RUN_SCOPE_ALIASES: dict[str, str] = {
     "ticket.update.next_run_context": TICKETS_NEXT_RUN_CONTEXT_SELF,
     "run.append_transcript.self": RUNS_WRITE_SELF,
     "run.mark_done.self": RUNS_WRITE_SELF,
+    # GitLab v1 run-token grants. ``integrations.read`` is already canonical;
+    # the self-constrained link grant aliases onto the durable ``integrations.link``
+    # name so a future ``scoped("integrations.link")`` route would resolve it too.
+    "integrations.link.self": INTEGRATIONS_LINK,
 }
 
 

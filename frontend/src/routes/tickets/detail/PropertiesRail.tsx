@@ -16,6 +16,7 @@ import { Input } from "@/ui/Input";
 import { StatusPill } from "@/ui/StatusPill";
 import { toast } from "@/ui/Toast";
 import { WorkspaceList } from "@/components/WorkspaceList";
+import { LinkedItems } from "./LinkedItems";
 import {
   PriorityPicker,
   ProjectPicker,
@@ -106,6 +107,9 @@ export function PropertiesRail({ ticket, className }: { ticket: TicketOut; class
       </Section>
       <Section title="Dependencies">
         <Dependencies ticket={ticket} deps={deps.data ?? []} onChange={() => deps.refetch()} />
+      </Section>
+      <Section title="Linked items">
+        <LinkedItems ticketId={ticket.id} />
       </Section>
 
       <div className="border-t border-ink-700/60 pt-3 text-[11px] text-moon-600">

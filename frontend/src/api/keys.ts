@@ -54,4 +54,21 @@ export const qk = {
     all: ["tokens"] as const,
     catalog: ["tokens", "catalog"] as const,
   },
+  integrations: {
+    connections: ["integrations", "connections"] as const,
+    repoLinks: (connectionId?: string | null) =>
+      ["integrations", "repo-links", connectionId ?? null] as const,
+    projectRepoLinks: (projectId: string) =>
+      ["integrations", "project-repo-links", projectId] as const,
+    repoSuggest: (projectId: string) => ["integrations", "repo-suggest", projectId] as const,
+    providerProjects: (connectionId: string, search: string) =>
+      ["integrations", "provider-projects", connectionId, search] as const,
+    issues: (repoLinkId: string, params?: Record<string, unknown>) =>
+      ["integrations", "issues", repoLinkId, params ?? {}] as const,
+    mrs: (repoLinkId: string, params?: Record<string, unknown>) =>
+      ["integrations", "mrs", repoLinkId, params ?? {}] as const,
+    item: (repoLinkId: string, kind: string, iid: string) =>
+      ["integrations", "item", repoLinkId, kind, iid] as const,
+    ticketLinks: (ticketId: string) => ["integrations", "ticket-links", ticketId] as const,
+  },
 } as const;

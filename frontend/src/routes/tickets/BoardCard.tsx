@@ -1,6 +1,7 @@
 import { forwardRef } from "react";
 import { Ban, Bot, Check, MoreHorizontal, Zap } from "lucide-react";
-import type { ProjectOut, RunOut, TicketOut } from "@/api/types";
+import type { ExternalLinkOut, ProjectOut, RunOut, TicketOut } from "@/api/types";
+import { MrChip } from "@/components/ExternalItemChips";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
 import {
@@ -44,10 +45,14 @@ export interface BoardCardProps {
   selected?: boolean;
   /** Suppress the project tag when the board is already grouped by project. */
   hideProject?: boolean;
+  /** Highest-signal external link for this ticket (a produced MR), rendered as a
+   *  compact chip on the meta row. Populated once a batched external-link feed
+   *  exists (v2, see docs/design/gitlab-jira-integrations.md §8); undefined in v1. */
+  mrLink?: ExternalLinkOut;
 }
 
 export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function BoardCard(
-  { ticket, project, latestRun, onSelect, onOpen, onRangeSelect, onToggleSelect, dragging, focused, peeked, selected, hideProject },
+  { ticket, project, latestRun, onSelect, onOpen, onRangeSelect, onToggleSelect, dragging, focused, peeked, selected, hideProject, mrLink },
   ref,
 ) {
   const running = ticket.status === "running";
@@ -186,6 +191,7 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           <PriorityChip value={ticket.priority} hideNone className="shrink-0" />
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {mrLink && <MrChip link={mrLink} />}
           {outcome === "failed" && (
             <span className="inline-flex items-center gap-1 rounded-full border border-failed/30 bg-failed/10 px-1.5 py-0.5 text-[10px] font-medium text-failed">
               <span className="h-1.5 w-1.5 rounded-full bg-failed" /> Failed

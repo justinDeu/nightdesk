@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   Cloud,
   FolderGit2,
+  GitMerge,
   Hexagon,
   KeyRound,
   Layers,
@@ -27,6 +28,7 @@ import { LabelsSection } from "@/routes/settings/LabelsSection";
 import { ProjectsSection } from "@/routes/settings/ProjectsSection";
 import { ProfilesSection } from "@/routes/settings/ProfilesSection";
 import { ProvidersSection } from "@/routes/settings/ProvidersSection";
+import { ConnectionsSection } from "@/routes/settings/ConnectionsSection";
 import { CloudSandboxSection } from "@/routes/settings/CloudSandboxSection";
 import { ToolsetsSection } from "@/routes/settings/ToolsetsSection";
 import { AccessTokensSection } from "@/routes/settings/AccessTokensSection";
@@ -46,6 +48,7 @@ const SECTIONS: SectionMeta[] = [
   { slug: "claude", label: "Harnesses", icon: Terminal, component: ClaudeSection },
   { slug: "agents", label: "Agents", icon: Bot, component: AgentsSection },
   { slug: "providers", label: "Providers", icon: Cable, component: ProvidersSection },
+  { slug: "connections", label: "Connections", icon: GitMerge, component: ConnectionsSection },
   { slug: "cloud-sandbox", label: "Cloud sandbox", icon: Cloud, component: CloudSandboxSection },
   { slug: "worktrees", label: "Worktrees", icon: FolderGit2, component: WorktreesSection },
   { slug: "notifications", label: "Notifications", icon: Bell, component: NotificationsSection },
