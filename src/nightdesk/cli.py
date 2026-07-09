@@ -1109,6 +1109,7 @@ def run_worker() -> None:
         transcript_root=cfg.transcript_root,
         secrets=cfg.secrets,
         host=default_host(),
+        bearer_token=cfg.bearer_token,
         # executor=None -> worker resolves per ticket via profile.backend.
     )
     loop = WorkerLoop(session_factory=lambda: SessionLocal(), settings=settings)

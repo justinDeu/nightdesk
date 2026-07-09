@@ -1478,3 +1478,120 @@ class DiffCommentOut(BaseModel):
     outdated: bool = False
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Integrations (GitLab v1): Connection / RepoLink / ExternalLink
+# ---------------------------------------------------------------------------
+
+
+class ConnectionCreate(BaseModel):
+    name: str
+    provider: str = "gitlab"
+    base_url: str = "https://gitlab.com"
+    auth_kind: str = "pat"
+    # Write-only PAT (or, for jira_cloud later, {"email","token"}). Never echoed.
+    credential_value: Optional[str] = None
+
+
+class ConnectionUpdate(BaseModel):
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    auth_kind: Optional[str] = None
+    # When present, rotates the stored credential. Null leaves it unchanged.
+    credential_value: Optional[str] = None
+
+
+class ConnectionOut(BaseModel):
+    id: str
+    name: str
+    provider: str
+    base_url: str
+    auth_kind: str
+    credential_set: bool = False
+    status: str
+    status_detail: Optional[str] = None
+    last_checked_at: Optional[datetime] = None
+    repo_link_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConnectionTestResult(BaseModel):
+    status: str
+    status_detail: Optional[str] = None
+    last_checked_at: Optional[datetime] = None
+
+
+class ProviderProjectOut(BaseModel):
+    """One row of a connection's provider-project typeahead (GitLab project)."""
+    external_id: str
+    external_path: str
+    display_name: str
+    web_url: str
+    git_remote_url: Optional[str] = None
+
+
+class RepoLinkCreate(BaseModel):
+    connection_id: str
+    external_kind: str = "gitlab_project"
+    external_id: str
+    external_path: str = ""
+    display_name: str = ""
+    git_remote_url: Optional[str] = None
+    web_url: str = ""
+
+
+class RepoLinkOut(BaseModel):
+    id: str
+    connection_id: str
+    external_kind: str
+    external_id: str
+    external_path: str
+    display_name: str
+    git_remote_url: Optional[str] = None
+    web_url: str
+    project_ids: list[str] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectRepoLinksReplace(BaseModel):
+    repo_link_ids: list[str] = []
+
+
+class RepoSuggestOut(BaseModel):
+    """Result of reading ``git remote get-url`` under a project's source_path."""
+    git_remote_url: Optional[str] = None
+    matched_repo_link_id: Optional[str] = None
+
+
+class ExternalLinkCreate(BaseModel):
+    repo_link_id: str
+    kind: str
+    external_iid: str
+    role: str = "references"
+
+
+class ExternalLinkOut(BaseModel):
+    id: str
+    ticket_id: str
+    repo_link_id: str
+    kind: str
+    external_iid: str
+    role: str
+    url: str
+    title: str
+    state: Optional[str] = None
+    state_detail: Optional[dict] = None
+    author_kind: str
+    synced_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ImportTicketRequest(BaseModel):
+    kind: str = "issue"
+    external_iid: str
+    project_id: Optional[str] = None
+    profile_id: Optional[str] = None

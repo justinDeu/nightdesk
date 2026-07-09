@@ -58,6 +58,10 @@ class WorkerSettings:
     # ``nightdesk-run-ticket`` subprocess that the daemon supervises.
     executor: Optional[Executor] = None
     tick_seconds: float = 5.0
+    # Admin bearer, used only to derive the ProfileSecretBox that decrypts
+    # integration (GitLab) connection credentials for the linked-item refresh
+    # pass. Empty disables that pass (no key to decrypt with).
+    bearer_token: str = ""
 
 
 def _find_run_ticket_bin() -> list[str]:
@@ -84,6 +88,8 @@ class WorkerLoop:
         self._subprocs: dict[str, asyncio.subprocess.Process] = {}
         # Rate-limit the "cc check not ok" log to once per minute.
         self._cc_warn_at: float = 0.0
+        # Monotonic deadline for the next linked-item (external_links) refresh.
+        self._next_link_refresh_at: float = 0.0
 
     # ------------------------------------------------------------------
     # In-process path (only used when settings.executor is provided —
@@ -174,6 +180,32 @@ class WorkerLoop:
             session.close()
 
     # ------------------------------------------------------------------
+    # Linked-item (external_links) refresh — GitLab integration.
+    # ------------------------------------------------------------------
+    def _maybe_refresh_links(self, session: Session) -> None:
+        """Every ~5 min, refresh cached state on external links of non-archived
+        tickets. Best-effort: any failure logs and never wedges the tick."""
+        if not self.settings.bearer_token:
+            return
+        now = _time.monotonic()
+        if now < self._next_link_refresh_at:
+            return
+        from nightdesk.domain import integrations as ints
+        from nightdesk.domain.profile_secrets import ProfileSecretBox
+
+        self._next_link_refresh_at = now + ints.LINKED_REFRESH_INTERVAL_SECONDS
+        try:
+            box = ProfileSecretBox(self.settings.bearer_token)
+            summary = ints.refresh_all_links(session, box)
+            if summary.checked:
+                log.info(
+                    "integration refresh: checked=%d updated=%d errors=%d changed=%d",
+                    summary.checked, summary.updated, summary.errors, len(summary.changes),
+                )
+        except Exception:
+            log.exception("integration link refresh failed (continuing)")
+
+    # ------------------------------------------------------------------
     # Scheduler tick.
     # ------------------------------------------------------------------
     async def tick_once(self) -> None:
@@ -191,6 +223,11 @@ class WorkerLoop:
                 materialize_due_cron_jobs(session, datetime.now(timezone.utc))
             except Exception:
                 log.exception("cron materialization failed (continuing)")
+
+            # Refresh linked GitLab issues/MRs (external_links) on a slow cadence,
+            # independent of the CC readiness gate below — integration freshness
+            # doesn't need a working agent backend. Self-throttled and guarded.
+            self._maybe_refresh_links(session)
 
             # Gate: refuse new picks when the CC binary check has not passed.
             ds = session.get(DaemonStatus, 1)
