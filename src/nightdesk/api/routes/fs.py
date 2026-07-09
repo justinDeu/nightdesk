@@ -17,14 +17,20 @@ from nightdesk.api.auth import require_token_cookie_or_bearer
 _MAX_SUGGESTIONS = 25
 
 
-def _suggest_dirs(prefix: str, limit: int = _MAX_SUGGESTIONS) -> list[str]:
-    """Return up to ``limit`` directory paths matching ``prefix``.
+def _suggest_dirs(
+    prefix: str, limit: int = _MAX_SUGGESTIONS, *, include_files: bool = False,
+) -> list[str]:
+    """Return up to ``limit`` paths matching ``prefix``.
 
     Prefix semantics:
     - If ``prefix`` ends with '/', list children of that directory.
     - Otherwise, list children of the parent directory whose name starts
       with the basename of ``prefix``.
     - Empty prefix is treated as '/'.
+
+    ``include_files`` (default False, preserving the directory-only ticket
+    workspace editor) also returns regular files (no trailing slash) — the
+    agent composer's ``@``-file mentions need them.
 
     Display is preserved: if the user typed a path starting with ``~`` or
     ``~user``, the returned suggestions are rewritten to use the same
@@ -68,11 +74,12 @@ def _suggest_dirs(prefix: str, limit: int = _MAX_SUGGESTIONS) -> list[str]:
                 if name_prefix and not entry.name.startswith(name_prefix):
                     continue
                 try:
-                    if not entry.is_dir(follow_symlinks=False):
-                        continue
+                    is_dir = entry.is_dir(follow_symlinks=False)
                 except OSError:
                     continue
-                full = os.path.join(base, entry.name) + "/"
+                if not is_dir and not include_files:
+                    continue
+                full = os.path.join(base, entry.name) + ("/" if is_dir else "")
                 if display_home is not None:
                     home_dir, token = display_home
                     if full == home_dir + "/":
@@ -94,7 +101,9 @@ def build_router(bearer_token: str) -> APIRouter:
 
     @router.get("/api/v1/fs/suggest", dependencies=[auth])
     async def suggest_api(prefix: str = Query(default=""),
-                          limit: int = Query(default=_MAX_SUGGESTIONS, ge=1, le=100)):
-        return {"prefix": prefix, "matches": _suggest_dirs(prefix, limit)}
+                          limit: int = Query(default=_MAX_SUGGESTIONS, ge=1, le=100),
+                          include_files: bool = Query(default=False)):
+        return {"prefix": prefix,
+                "matches": _suggest_dirs(prefix, limit, include_files=include_files)}
 
     return router
