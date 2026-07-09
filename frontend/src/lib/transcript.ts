@@ -44,6 +44,19 @@ const KNOWN_EVENT_TYPES = [
   "cancelled",
   "preset",
   "steer_delivered",
+  // Resident-agents events. Breadcrumb events (persisted, rendered by the
+  // transcript view): needs_input, runtime_restarted, session_booting,
+  // session_crashed. Control events (streamed, NOT persisted; the renderer
+  // ignores them and the agent screen consumes them): pending_input,
+  // pending_resolved, turn_complete, server_info.
+  "needs_input",
+  "runtime_restarted",
+  "session_booting",
+  "session_crashed",
+  "pending_input",
+  "pending_resolved",
+  "turn_complete",
+  "server_info",
 ] as const;
 
 const MAX_EVENTS = 4000;

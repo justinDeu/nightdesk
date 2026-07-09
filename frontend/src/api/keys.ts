@@ -14,10 +14,11 @@ export const qk = {
     detail: (id: string) => ["runs", "detail", id] as const,
     comments: (id: string) => ["runs", "detail", id, "comments"] as const,
   },
-  sessions: {
-    all: ["sessions"] as const,
-    list: ["sessions", "list"] as const,
-    detail: (id: string) => ["sessions", "detail", id] as const,
+  agents: {
+    all: ["agents"] as const,
+    list: ["agents", "list"] as const,
+    detail: (id: string) => ["agents", "detail", id] as const,
+    pending: ["agents", "pending"] as const,
   },
   projects: {
     all: ["projects"] as const,
