@@ -107,3 +107,12 @@ parallel surface later. This is exactly Omnigent's dual-surface model for SDK se
   path) is strictly higher fidelity — native AskUserQuestion/canUseTool/hooks/subagents/cost as
   typed callbacks, no lossy hop. ACP pays off only if one-protocol-to-many-harnesses is itself the
   goal; keep on the WATCH LIST (esp. elicitation stabilization), do not build a backend on it yet.
+
+## v2 amendment inputs (user rulings, 2026-07-09)
+- Drop xterm/tmux tier if complexity is high — ACCEPTED direction: no in-browser terminal.
+- Escape hatch instead: trusted sessions on the real ~/.claude; "open in terminal" hands the user
+  `claude --resume <id>` (idle/reap the resident client first).
+- Journal tailer (claude-only forwarder-lite) is WANTED, not optional: user drops to a real terminal
+  mid-session (env vars etc.), turns made there must merge back into the canonical transcript and
+  the resume handle must be updated. Watch ~/.claude/projects/<cwd-slug>/ for forked session files.
+- Composer must support skills/slash-commands/hooks — SDK mechanics verification in flight.
