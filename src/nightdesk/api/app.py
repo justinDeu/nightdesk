@@ -23,7 +23,8 @@ from nightdesk.api.routes import providers as providers_routes
 from nightdesk.api.routes import review_comments as review_comments_routes
 from nightdesk.api.routes import runs as runs_routes
 from nightdesk.api.routes import search as search_routes
-from nightdesk.api.routes import sessions as sessions_routes
+from nightdesk.api.routes import agents as agents_routes
+from nightdesk.api.routes import agent_transcript as agent_transcript_routes
 from nightdesk.api.routes import tickets as tickets_routes
 from nightdesk.api.routes import transcript as transcript_routes
 from nightdesk.api.routes import saved_views as saved_views_routes
@@ -72,9 +73,10 @@ def create_app(
     app.include_router(backends_routes.build_router(get_session, bearer_token))
     app.include_router(projects_routes.build_router(get_session, bearer_token))
     app.include_router(tickets_routes.build_router(get_session, bearer_token))
-    app.include_router(sessions_routes.build_router(
+    app.include_router(agents_routes.build_router(
         get_session, bearer_token, worktree_root=worktree_root,
     ))
+    app.include_router(agent_transcript_routes.build_router(get_session, bearer_token))
     app.include_router(runs_routes.build_router(get_session, bearer_token, engine=engine))
     app.include_router(review_comments_routes.build_router(get_session, bearer_token))
     app.include_router(config_routes.build_router(

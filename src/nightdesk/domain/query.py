@@ -579,10 +579,6 @@ def search_tickets(
     ctx = _Ctx(session=session, resource="ticket", latest_run=lr)
     where = _compile(ast, ctx)
     stmt = select(Ticket).outerjoin(lr, lr.id == Ticket.current_run_id)
-    # Interactive sessions (kind='session') never surface in global search,
-    # saved views, or board search — the same exclusion the ticket-list
-    # surfaces apply.
-    stmt = stmt.where(Ticket.kind == "ticket")
     if where is not None:
         stmt = stmt.where(where)
     if status is not None:
@@ -605,7 +601,6 @@ def search_runs(session: Session, ast: Node, *, limit: int = 200) -> list[Run]:
     stmt = (
         select(Run)
         .join(Ticket, Run.ticket_id == Ticket.id)
-        .where(Ticket.kind == "ticket")
     )
     if where is not None:
         stmt = stmt.where(where)

@@ -501,6 +501,11 @@ export interface ConfigOut {
   schedule_timezone: string;
   windows: ScheduleWindowOut[];
   toolchain_presets: Record<string, string[]>;
+  // Resident interactive agents (global, live-evaluated).
+  session_idle_timeout_s: number;
+  max_live_sessions: number;
+  max_queued_turns: number;
+  max_turn_seconds: number;
   claude_binary_path: string | null;
   opencode_binary_path: string | null;
   k8s_kubeconfig_path: string | null;
@@ -524,6 +529,12 @@ export interface ConfigUpdate {
   notify_webhook_url?: string | null;
   schedule_timezone?: string | null;
   toolchain_presets?: Record<string, string[]> | null;
+  // Resident interactive agents (global, live-evaluated). Applied to every
+  // inheriting agent on the next reaper pass; no restart.
+  session_idle_timeout_s?: number | null;
+  max_live_sessions?: number | null;
+  max_queued_turns?: number | null;
+  max_turn_seconds?: number | null;
   claude_binary_path?: string | null;
   opencode_binary_path?: string | null;
   k8s_kubeconfig_path?: string | null;
@@ -802,38 +813,137 @@ export interface LabelCreate {
 }
 export type LabelUpdate = Partial<LabelCreate>;
 
-// --- Interactive sessions ------------------------------------------------------
+// --- Resident interactive agents (UI label: "Agents") --------------------------
+// The backend entity is still `Session` (tables sessions / session_turns /
+// pending_inputs); the API and UI speak "agent". See
+// docs/design/session-suite/resident-agents-v3.md.
 
-export interface SessionConversationOut {
+/** Derived five-state model (domain: describe_liveness). `crashed` is a cold
+ *  variant carrying a crash breadcrumb. */
+export type AgentLiveness = "alive" | "needs-input" | "warm" | "cold" | "ended" | "crashed";
+
+/** Kind of an open human-input request the agent is blocked on. */
+export type PendingKind = "permission" | "ask_question" | "plan_approval";
+
+export interface AgentOut {
   id: string;
+  title: string;
+  profile_id: string | null;
+  project_id: string | null;
   backend: string;
+  model: string | null;
+  /** Coarse persisted status: active | idle | ended | crashed. */
   status: string;
-  session_id: string | null;
+  liveness: AgentLiveness;
+  has_pending: boolean;
+  source_path: string;
+  idle_timeout_s: number | null;
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  created_at: string;
+  updated_at: string;
+  ended_at: string | null;
+}
+
+/** One inbox item AND turn record. `kind`: user | interrupt | answer. */
+export interface AgentTurnOut {
+  id: string;
   position: number;
-  started_at: string;
+  kind: string;
+  body: string;
+  ref_request_id: string | null;
+  /** queued | delivering | streaming | done | cancelled | interrupted | failed */
+  status: string;
+  model_used: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number;
+  includes_resume: boolean;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
   finished_at: string | null;
-  cost_usd: number | null;
-  input_tokens: number | null;
-  output_tokens: number | null;
 }
 
-export interface SessionOut extends TicketOut {
-  conversations: SessionConversationOut[];
+export interface AgentPendingOut {
+  id: string;
+  session_id: string;
+  request_id: string;
+  kind: PendingKind;
+  tool: string | null;
+  payload: Record<string, unknown>;
+  status: string;
+  created_at: string;
 }
 
-export interface SessionCreate {
+/** A pending row plus its agent title, for the cross-agent badge / Desk band. */
+export interface AgentPendingItem extends AgentPendingOut {
+  session_title: string;
+}
+
+/** API-safe env view: a secret value is never returned (only `set`). */
+export interface AgentEnvEntryOut {
+  key: string;
+  secret: boolean;
+  set: boolean;
+  value: string | null;
+}
+
+export interface AgentDetailOut extends AgentOut {
+  turns: AgentTurnOut[];
+  pending_input: AgentPendingOut | null;
+  env: AgentEnvEntryOut[];
+  /** Local claude session id (from resume_handle) for the `claude --resume <id>`
+   *  terminal handoff. Null until the agent has run. Not a secret. */
+  claude_session_id: string | null;
+}
+
+export interface AgentTurnEdit {
+  body: string;
+}
+
+export interface AgentTurnReorder {
+  ordered_ids: string[];
+}
+
+/** One env entry on the wire for PUT: a secret with `value: null` keeps the
+ *  stored cipher (write-only secret contract). */
+export interface AgentEnvEntryIn {
+  value: string | null;
+  secret: boolean;
+}
+
+export interface AgentCreate {
   title?: string | null;
   profile_id: string;
   project_id?: string | null;
   source_path?: string | null;
+  model?: string | null;
+  idle_timeout_s?: number | null;
+  env?: Record<string, AgentEnvEntryIn>;
 }
 
-export interface SessionMessage {
+export interface AgentMessage {
   message: string;
 }
 
-export interface SessionPromote {
-  title: string;
-  prompt?: string | null;
-  target_status?: "review" | "draft";
+/** Answer to an open PendingInput. `decision` is allow/deny (permission,
+ *  ask_question) or approve/deny (plan_approval). */
+export interface AgentAnswer {
+  decision: "allow" | "deny" | "approve";
+  answer?: string | null;
+  updated_input?: Record<string, unknown> | null;
+}
+
+export interface AgentEnvPut {
+  env: Record<string, AgentEnvEntryIn>;
+}
+
+export interface AgentRestart {
+  force?: boolean;
 }

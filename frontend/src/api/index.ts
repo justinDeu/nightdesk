@@ -3,6 +3,7 @@ export { api, ApiError, UNAUTHORIZED_EVENT } from "./client";
 export { qk } from "./keys";
 
 export * from "./tickets";
+export * from "./agents";
 export * from "./runs";
 export * from "./projects";
 export * from "./profiles";

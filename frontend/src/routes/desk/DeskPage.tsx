@@ -4,7 +4,9 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import {
   Archive,
   ArrowRight,
+  Bot,
   CheckCircle2,
+  HelpCircle,
   Inbox as InboxIcon,
   Moon,
   Plus,
@@ -23,6 +25,7 @@ import { ProjectTag } from "@/components/ProjectDot";
 import { RunningCard } from "./RunningCard";
 import { useTickets } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
+import { usePendingAgents } from "@/api/agents";
 import { useInbox } from "@/api/inbox";
 import { useProjectMap } from "@/api/projects";
 import type { ProjectOut, RunOut, TicketOut } from "@/api/types";
@@ -91,6 +94,13 @@ function DeskEmptyStrip({
   );
 }
 
+/** One-line description of what a blocked agent is waiting for. */
+function pendingLabel(kind: string, tool: string | null): string {
+  if (kind === "plan_approval") return "Waiting for plan approval";
+  if (kind === "ask_question") return "Asked you a question";
+  return tool ? `Needs permission to use ${tool}` : "Needs your input";
+}
+
 /** Latest run per ticket id, from a newest-first runs list. */
 function latestRunMap(runs: RunOut[]): Map<string, RunOut> {
   const m = new Map<string, RunOut>();
@@ -113,6 +123,7 @@ export function DeskPage() {
   const running = useTickets({ status: "running" }, { refetchInterval: POLL });
   const runs = useRuns(undefined, { refetchInterval: POLL });
   const inbox = useInbox(null, { refetchInterval: POLL });
+  const pendingAgents = usePendingAgents();
 
   // Capture the visit watermark once at mount; refresh it on unmount so the
   // "while you were away" feed reflects the gap since the previous session.
@@ -257,6 +268,37 @@ export function DeskPage() {
           </div>
         )}
       </DeskBand>
+
+      {(pendingAgents.data?.length ?? 0) > 0 && (
+        <DeskBand
+          icon={<HelpCircle size={15} />}
+          title="Agents waiting on you"
+          accent
+          count={pendingAgents.data!.length}
+        >
+          <div className="space-y-1.5">
+            {pendingAgents.data!.map((p) => (
+              <Link
+                key={p.id}
+                to="/agents/$id"
+                params={{ id: p.session_id }}
+                className="group flex items-center gap-3 rounded-control border border-lamp/30 bg-lamp/[0.05] px-3 py-2.5 transition-colors hover:bg-lamp/[0.09]"
+              >
+                <Bot size={15} className="shrink-0 text-lamp" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
+                    {p.session_title}
+                  </span>
+                  <span className="text-xs text-moon-500">{pendingLabel(p.kind, p.tool)}</span>
+                </span>
+                <span className="rounded-full bg-lamp/15 px-2 py-0.5 text-[11px] font-medium text-lamp">
+                  Answer
+                </span>
+              </Link>
+            ))}
+          </div>
+        </DeskBand>
+      )}
 
       <DeskBand icon={<Zap size={15} />} title="Running now" accent count={running.data?.length}>
         {running.data && running.data.length > 0 ? (

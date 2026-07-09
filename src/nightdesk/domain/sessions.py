@@ -1,200 +1,746 @@
-"""Interactive (ticketless) sessions — a thin façade over ``domain.tickets``.
+"""Resident interactive agents (UI label: "Agent") — owned-table domain.
 
-A *session* is a ``Ticket`` with ``kind='session'``: an ad-hoc, chat-first
-agent conversation against a profile and an optional workspace, with no ticket
-authoring. It reuses the entire run pipeline unchanged (conversations, run
-tokens, workspaces, transcript streaming, run-now dispatch, continue/resume) —
-this module only maps the chat verbs onto the existing lifecycle:
+Rewritten from the v1 ticket-façade into a real domain over the ``sessions`` /
+``session_turns`` / ``pending_inputs`` tables. See
+``docs/design/session-suite/resident-agents-v3.md``.
 
-    First message  set prompt + request_run_now   draft  -> queued -> running -> review
-    Reply          continue_ticket (resume+append) review -> queued -> running -> review
-    Resting        (idle)                          review
-    Thinking       (transcript streaming)          running
+Responsibilities:
+- Lifecycle CRUD (create / list / get / delete / end).
+- The inbox transport: enqueue user/interrupt/answer/restart turns; the host
+  claims and drains them. Routing every control message through a durable
+  ``SessionTurn`` means a cold host still receives it (it re-spawns and drains).
+- Human-input (needs-input) answering against the ``PendingInput`` table.
+- Per-agent env: encrypt secret values with ``ProfileSecretBox``, merge over the
+  host env at spawn, mask secrets for the API.
+- Derived liveness (``describe_liveness``) and the effective idle timeout, both
+  live-evaluated (never frozen at spawn).
 
-Sessions are hidden from the board, inbox, analytics, search, and saved views
-via ``kind='ticket'`` filters at the ticket-list surfaces; see the exclusion
-sites in ``domain/tickets.py``, ``domain/query.py``, and ``domain/analytics.py``.
+The API layer is a thin pass-through; the host/reaper import the claim, usage,
+and reap helpers here so all state transitions live in one module.
 """
 from __future__ import annotations
 
+import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session as OrmSession
 
-from nightdesk.db.models import Ticket
-from nightdesk.domain.conversations import active_conversation
-from nightdesk.domain.tickets import (
-    InvalidTransition,
-    TicketNotFound,
-    _next_position,
-    _stage_next_run,
-    archive,
-    continue_ticket,
-    create_ticket,
-    get_ticket,
-    request_run_now,
-)
+from nightdesk.db.models import ConfigRow, PendingInput, Session, SessionTurn
+from nightdesk.domain.profile_secrets import ProfileSecretBox
 
 
-class SessionBusy(InvalidTransition):
-    """Raised when a turn is posted to a session whose current turn is still
-    queued or running. v1 rejects concurrent turns (the composer is disabled
-    client-side); route handlers map this to HTTP 409."""
+# Turn kinds carried on the SessionTurn inbox.
+TURN_KINDS = ("user", "interrupt", "answer", "restart", "reap")
+# Coarse persisted Session.status values.
+SESSION_STATUSES = ("active", "idle", "ended", "crashed")
 
 
-_PROMOTE_TARGETS = {"draft", "review"}
+class SessionNotFound(Exception):
+    """Raised when a session id does not resolve."""
 
 
-def _scratch_root(scratch_root: Optional[Path]) -> Path:
-    """Resolve the parent dir under which per-session scratch workspaces live.
+class SessionBusy(Exception):
+    """Raised when an operation is illegal in the session's current state
+    (e.g. deleting a live agent, restarting mid-stream without force). Route
+    handlers map this to HTTP 409."""
 
-    Callers (the API route) pass the app's configured location; the fallback
-    resolves it from config so the domain function is usable standalone. The
-    directory is a sibling of ``worktree_root`` (e.g.
-    ``~/.local/share/nightdesk-sessions``) so ``sandbox.py`` can bind-mount it
-    — anything under ``~/.local/share/nightdesk`` is refused by the sandbox.
+
+class QueueFull(Exception):
+    """Raised when the queued-turn cap is exceeded. Maps to HTTP 429."""
+
+
+class PendingNotOpen(Exception):
+    """Raised when answering a PendingInput that is already answered/cancelled.
+    Maps to HTTP 409."""
+
+
+class TurnNotFound(Exception):
+    """Raised when a turn id does not resolve for the given agent. HTTP 404."""
+
+
+# ---------------------------------------------------------------------------
+# Liveness + timeout (both live-evaluated, never frozen at spawn)
+# ---------------------------------------------------------------------------
+def _pid_alive(pid: Optional[int]) -> bool:
+    """True if ``pid`` names a live process. ``os.kill(pid, 0)`` raises
+    ``ProcessLookupError`` for a dead pid and ``PermissionError`` for a live one
+    we do not own (treated as alive)."""
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def has_open_pending(session: OrmSession, session_id: str) -> bool:
+    return (session.scalar(
+        select(func.count(PendingInput.id)).where(
+            PendingInput.session_id == session_id,
+            PendingInput.status == "pending",
+        )
+    ) or 0) > 0
+
+
+def _has_streaming_turn(session: OrmSession, session_id: str) -> bool:
+    return bool(session.scalar(
+        select(func.count(SessionTurn.id)).where(
+            SessionTurn.session_id == session_id,
+            SessionTurn.status == "streaming",
+        )
+    ))
+
+
+def describe_liveness(
+    row: Session,
+    *,
+    open_pending: Optional[bool] = None,
+    streaming: Optional[bool] = None,
+    session: Optional[OrmSession] = None,
+) -> str:
+    """Derive the five(+1) UI states from the coarse persisted state + reality.
+
+    ``alive`` / ``needs-input`` / ``warm`` / ``cold`` / ``ended`` / ``crashed``.
+    Pass precomputed ``open_pending`` / ``streaming`` flags (list endpoints batch
+    them) or a ``session`` to compute them. Order matters: ``ended`` is terminal
+    and wins; then a human-input request (the human must act) before liveness.
     """
+    if row.status == "ended":
+        return "ended"
+    if open_pending is None:
+        open_pending = has_open_pending(session, row.id) if session is not None else False
+    if streaming is None:
+        streaming = _has_streaming_turn(session, row.id) if session is not None else False
+    if open_pending:
+        return "needs-input"
+    alive = _pid_alive(row.host_pid)
+    if alive and streaming:
+        return "alive"
+    if alive:
+        return "warm"
+    if row.status == "crashed":
+        return "crashed"
+    return "cold"
+
+
+def effective_timeout(row: Session, cfg: Optional[ConfigRow]) -> int:
+    """Effective idle-reap timeout in seconds: the per-agent override if set,
+    else the *current* global (read live at each reap pass, never frozen)."""
+    if row.idle_timeout_s is not None:
+        return int(row.idle_timeout_s)
+    if cfg is not None and cfg.session_idle_timeout_s is not None:
+        return int(cfg.session_idle_timeout_s)
+    return 300
+
+
+# ---------------------------------------------------------------------------
+# Env: encrypt / merge / mask
+# ---------------------------------------------------------------------------
+def merge_env_map(existing: Optional[dict], incoming: dict, box: ProfileSecretBox) -> dict:
+    """Produce the stored env map from an incoming edit.
+
+    Stored shape: ``{KEY: {"value": <plain|cipher>, "secret": bool}}``. Secret
+    values are encrypted at rest. A secret entry with ``value is None`` means
+    "keep the stored cipher" (write-only editor contract) — preserved from
+    ``existing``; if there is nothing stored it is dropped. Non-secret values are
+    stored in the clear. Keys absent from ``incoming`` are removed (replace map).
+    """
+    existing = existing or {}
+    out: dict[str, dict] = {}
+    for key, spec in (incoming or {}).items():
+        if not isinstance(spec, dict):
+            spec = {"value": spec, "secret": False}
+        secret = bool(spec.get("secret"))
+        value = spec.get("value")
+        if secret:
+            if value is None:
+                prev = existing.get(key)
+                if isinstance(prev, dict) and prev.get("secret") and prev.get("value"):
+                    out[key] = {"value": prev["value"], "secret": True}
+                # else: no stored cipher and no new value -> drop the entry.
+            else:
+                out[key] = {"value": box.encrypt(value), "secret": True}
+        else:
+            out[key] = {"value": "" if value is None else str(value), "secret": False}
+    return out
+
+
+def decrypt_env_for_spawn(row: Session, box: ProfileSecretBox) -> dict[str, str]:
+    """Decrypt the stored env map into a plain ``{KEY: value}`` for the spawn.
+
+    Raises ``ValueError`` (from the box) if a secret cipher is unreadable — the
+    host surfaces this as a clean "re-enter env secrets" spawn failure.
+    """
+    out: dict[str, str] = {}
+    for key, spec in (row.env or {}).items():
+        if not isinstance(spec, dict):
+            out[key] = str(spec)
+            continue
+        if spec.get("secret"):
+            val = box.decrypt(spec.get("value"))
+            out[key] = "" if val is None else str(val)
+        else:
+            out[key] = str(spec.get("value") or "")
+    return out
+
+
+def masked_env(row: Session) -> list[dict]:
+    """API-safe env view: never returns a secret value.
+
+    ``[{"key", "secret", "set", "value"?}]`` — ``value`` is present only for
+    non-secret keys; secret keys report ``set: true`` and no value.
+    """
+    out: list[dict] = []
+    for key, spec in (row.env or {}).items():
+        if not isinstance(spec, dict):
+            out.append({"key": key, "secret": False, "set": True, "value": str(spec)})
+            continue
+        if spec.get("secret"):
+            out.append({"key": key, "secret": True, "set": bool(spec.get("value"))})
+        else:
+            out.append({"key": key, "secret": False, "set": True,
+                        "value": str(spec.get("value") or "")})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# CRUD
+# ---------------------------------------------------------------------------
+def _scratch_root(scratch_root: Optional[Path]) -> Path:
     if scratch_root is not None:
         return Path(scratch_root)
     from nightdesk.config import load_config
+    return load_config().session_scratch_root
 
-    cfg = load_config()
-    return cfg.worktree_root.parent / "nightdesk-sessions"
+
+def get_session_row(session: OrmSession, session_id: str) -> Session:
+    row = session.get(Session, session_id)
+    if row is None:
+        raise SessionNotFound(session_id)
+    return row
 
 
 def create_session(
-    session: Session,
+    session: OrmSession,
     *,
-    title: str,
+    title: Optional[str] = None,
     profile_id: str,
-    workspace: Optional[str] = None,
+    source_path: Optional[str] = None,
     project_id: Optional[str] = None,
+    env: Optional[dict] = None,
+    idle_timeout_s: Optional[int] = None,
+    model: Optional[str] = None,
     scratch_root: Optional[Path] = None,
-) -> Ticket:
-    """Create a ``kind='session'`` ticket in ``draft``.
+    transcript_root: Optional[Path] = None,
+    box: Optional[ProfileSecretBox] = None,
+) -> Session:
+    """Create an idle, cold agent. ``source_path`` None -> a fresh per-agent
+    scratch directory. Env secrets are encrypted if ``box`` is provided."""
+    from nightdesk.db.models import _uuid
 
-    ``workspace`` None -> a per-session scratch directory becomes the primary
-    (read_write, ``directory``) workspace; a path -> that path is the primary
-    directory workspace (the agent works in-place on the live tree).
-    """
-    if workspace:
-        source_path = str(workspace)
+    sid = _uuid()
+    if source_path:
+        path = str(source_path)
     else:
-        root = _scratch_root(scratch_root)
-        # Provision an empty scratch dir up front. Named later once the ticket
-        # id exists would require a second write; instead create under the
-        # ticket id we let the DB assign, so mint a placeholder dir keyed by a
-        # fresh uuid and reuse it as source_path.
-        from nightdesk.db.models import _uuid
-
-        scratch = root / _uuid()
+        scratch = _scratch_root(scratch_root) / sid
         os.makedirs(scratch, exist_ok=True)
-        source_path = str(scratch)
+        path = str(scratch)
 
-    return create_ticket(
-        session,
-        kind="session",
-        title=title,
+    if transcript_root is None:
+        from nightdesk.config import load_config
+        transcript_root = load_config().transcript_root
+    transcript_path = str(Path(transcript_root) / "sessions" / f"{sid}.ndjson")
+
+    stored_env = None
+    if env:
+        if box is None:
+            raise ValueError("a ProfileSecretBox is required to store env")
+        stored_env = merge_env_map(None, env, box)
+
+    row = Session(
+        id=sid,
+        title=title or "Agent",
         profile_id=profile_id,
         project_id=project_id,
-        status="draft",
-        workspaces=[{
-            "role": "primary",
-            "label": "primary",
-            "kind": "directory",
-            "access": "read_write",
-            "source_path": source_path,
-            "retention": "preserve",
-        }],
+        backend="claude",
+        model=model,
+        status="idle",
+        source_path=path,
+        posture="trusted",
+        last_activity_at=datetime.now(timezone.utc),
+        idle_timeout_s=idle_timeout_s,
+        env=stored_env,
+        transcript_path=transcript_path,
     )
-
-
-def _get_session_ticket(session: Session, session_id: str) -> Ticket:
-    t = get_ticket(session, session_id)
-    if t.kind != "session":
-        raise TicketNotFound(session_id)
-    return t
-
-
-def post_session_turn(session: Session, session_id: str, message: str) -> Ticket:
-    """Dispatch one chat turn.
-
-    - No active conversation -> first turn: set ``prompt`` and ``request_run_now``.
-    - Active, resumable conversation -> ``continue_ticket`` (resume + append).
-    - Active but non-resumable conversation (first turn crashed before a
-      session id was recorded) -> retry as a fresh first-run-style turn on a
-      NEW conversation instead of 409-ing.
-    - Turn already queued/running -> ``SessionBusy`` (409).
-    """
-    t = _get_session_ticket(session, session_id)
-    if t.status in ("queued", "running"):
-        raise SessionBusy("a turn is already in flight for this session")
-
-    conv = active_conversation(session, t)
-    if conv is not None and conv.session_id:
-        # Resumable: append the message on the resumed conversation.
-        return continue_ticket(session, session_id, next_run_context=message)
-
-    # First turn (no conversation) or non-resumable conversation: run the
-    # message as a fresh prompt. A non-resumable existing conversation forces a
-    # brand-new conversation rather than reusing the dead one.
-    t.prompt = message
-    if conv is not None:
-        _stage_next_run(t, intent="retry", new_conversation=True)
+    session.add(row)
     session.commit()
-    session.refresh(t)
-    return request_run_now(session, session_id)
+    session.refresh(row)
+    return row
 
 
-def promote_session(
-    session: Session,
-    session_id: str,
-    *,
-    title: str,
-    prompt: Optional[str] = None,
-    target_status: str = "review",
-) -> Ticket:
-    """Promote a session into a real board ticket, keeping its conversations,
-    runs, and workspaces.
-
-    Flips ``kind`` to ``'ticket'`` and lands it in ``review`` (so the run
-    history stays visible) or ``draft``. Blocked mid-turn (must be review/draft)
-    — a running/queued session cannot be promoted.
-    """
-    if target_status not in _PROMOTE_TARGETS:
-        raise InvalidTransition(f"cannot promote session to {target_status!r}")
-    t = _get_session_ticket(session, session_id)
-    if t.status not in ("review", "draft"):
-        raise InvalidTransition(f"cannot promote session from {t.status}")
-    t.kind = "ticket"
-    t.title = title
-    if prompt is not None:
-        t.prompt = prompt
-    # A kind flip is administrative, not a lifecycle transition: land the row
-    # directly in the target board column (and give it a sane board position).
-    if t.status != target_status:
-        t.status = target_status
-        t.position = _next_position(session, target_status)
-    session.commit()
-    session.refresh(t)
-    return t
-
-
-def list_sessions(session: Session, *, limit: int = 100) -> list[Ticket]:
-    """Sessions, most-recently-touched first."""
+def list_sessions(session: OrmSession, *, limit: int = 200) -> list[Session]:
     stmt = (
-        select(Ticket)
-        .where(Ticket.kind == "session")
-        .order_by(Ticket.updated_at.desc(), Ticket.id.desc())
+        select(Session)
+        .order_by(Session.updated_at.desc(), Session.id.desc())
         .limit(limit)
     )
     return list(session.scalars(stmt))
 
 
-def archive_session(session: Session, session_id: str) -> Ticket:
-    """Archive a session (review/draft -> archived)."""
-    _get_session_ticket(session, session_id)
-    return archive(session, session_id)
+def delete_session(session: OrmSession, session_id: str) -> None:
+    """Delete an agent. 409 while a host is live (end it first)."""
+    row = get_session_row(session, session_id)
+    if _pid_alive(row.host_pid):
+        raise SessionBusy("agent is live; end it before deleting")
+    session.delete(row)
+    session.commit()
+
+
+def end_session(session: OrmSession, session_id: str) -> Session:
+    """Request teardown. Enqueues a shutdown-equivalent control turn if live,
+    and marks the row ended. The host, on seeing status='ended', tears down and
+    stops; a cold agent just becomes terminal."""
+    row = get_session_row(session, session_id)
+    if row.status == "ended":
+        return row
+    if _pid_alive(row.host_pid):
+        # Cancel any queued turns and any open pending; the host observes
+        # status='ended' at the next boundary and shuts the inner down.
+        _cancel_queued_turns(session, session_id)
+        cancel_open_pending(session, session_id)
+    row.status = "ended"
+    row.ended_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+# ---------------------------------------------------------------------------
+# Inbox: enqueue / claim / drain
+# ---------------------------------------------------------------------------
+def _next_turn_position(session: OrmSession, session_id: str) -> int:
+    hi = session.scalar(
+        select(func.max(SessionTurn.position)).where(
+            SessionTurn.session_id == session_id
+        )
+    )
+    return (hi or 0) + 1
+
+
+def _queued_count(session: OrmSession, session_id: str) -> int:
+    return session.scalar(
+        select(func.count(SessionTurn.id)).where(
+            SessionTurn.session_id == session_id,
+            SessionTurn.status == "queued",
+        )
+    ) or 0
+
+
+def enqueue_turn(
+    session: OrmSession,
+    session_id: str,
+    *,
+    kind: str,
+    body: str = "",
+    ref_request_id: Optional[str] = None,
+    enforce_cap: bool = True,
+) -> SessionTurn:
+    """Append a control/user turn to the inbox and bump last_activity_at.
+
+    ``kind`` in :data:`TURN_KINDS`. User turns are subject to the queued-turn
+    cap; control turns (interrupt/answer/restart) bypass it — they must always
+    land. Bumps ``last_activity_at`` so a just-messaged cold agent is not
+    immediately reaped as it wakes.
+    """
+    if kind not in TURN_KINDS:
+        raise ValueError(f"unknown turn kind {kind!r}")
+    row = get_session_row(session, session_id)
+    if row.status == "ended":
+        raise SessionBusy("agent has ended")
+    if enforce_cap and kind == "user":
+        cfg = session.get(ConfigRow, 1)
+        cap = int(cfg.max_queued_turns) if cfg and cfg.max_queued_turns else 20
+        if _queued_count(session, session_id) >= cap:
+            raise QueueFull(f"queued-turn cap ({cap}) reached")
+    turn = SessionTurn(
+        session_id=session_id,
+        position=_next_turn_position(session, session_id),
+        kind=kind,
+        body=body,
+        ref_request_id=ref_request_id,
+        status="queued",
+    )
+    session.add(turn)
+    row.last_activity_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(turn)
+    return turn
+
+
+def post_message(session: OrmSession, session_id: str, message: str) -> SessionTurn:
+    """Enqueue a user turn (the common send path)."""
+    return enqueue_turn(session, session_id, kind="user", body=message)
+
+
+def request_interrupt(session: OrmSession, session_id: str) -> SessionTurn:
+    """Enqueue an interrupt control turn. 409 if nothing is in flight.
+
+    In-flight = a streaming turn OR an open pending input (a parked needs-input
+    turn counts — interrupt resolves it with a synthetic deny host-side).
+    """
+    row = get_session_row(session, session_id)
+    if not _has_streaming_turn(session, session_id) and not has_open_pending(session, session_id):
+        raise SessionBusy("nothing in flight to interrupt")
+    return enqueue_turn(session, session_id, kind="interrupt", enforce_cap=False)
+
+
+def request_restart(session: OrmSession, session_id: str, *, force: bool = False) -> SessionTurn:
+    """Enqueue a runtime-restart control turn. 409 if streaming and not forced."""
+    row = get_session_row(session, session_id)
+    if _has_streaming_turn(session, session_id) and not force:
+        raise SessionBusy("a turn is streaming; pass force to interrupt and restart")
+    return enqueue_turn(
+        session, session_id, kind="restart",
+        body=json.dumps({"force": bool(force)}), enforce_cap=False,
+    )
+
+
+def wake_session(session: OrmSession, session_id: str) -> Session:
+    """Nudge a cold agent awake without a message: bump last_activity_at so the
+    supervisor's next pass spawns a host (it spawns any session with a queued
+    turn OR a recent wake with no live host). A wake with an empty inbox becomes
+    a no-op boot that idles; harmless."""
+    row = get_session_row(session, session_id)
+    if row.status == "ended":
+        raise SessionBusy("agent has ended")
+    row.last_activity_at = datetime.now(timezone.utc)
+    if row.status == "crashed":
+        row.status = "idle"
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def _cancel_queued_turns(session: OrmSession, session_id: str) -> int:
+    result = session.execute(
+        update(SessionTurn)
+        .where(SessionTurn.session_id == session_id, SessionTurn.status == "queued")
+        .values(status="cancelled", finished_at=datetime.now(timezone.utc))
+    )
+    session.commit()
+    return result.rowcount or 0
+
+
+def next_queued_turn(session: OrmSession, session_id: str) -> Optional[SessionTurn]:
+    """The oldest queued turn for a session (host inbox poll)."""
+    return session.scalar(
+        select(SessionTurn)
+        .where(SessionTurn.session_id == session_id, SessionTurn.status == "queued")
+        .order_by(SessionTurn.position.asc())
+        .limit(1)
+    )
+
+
+def claim_turn(session: OrmSession, turn_id: str) -> Optional[SessionTurn]:
+    """Atomically move a queued turn to 'delivering'. Returns the row on success,
+    None if another claimant won (status was not 'queued')."""
+    result = session.execute(
+        update(SessionTurn)
+        .where(SessionTurn.id == turn_id, SessionTurn.status == "queued")
+        .values(status="delivering", started_at=datetime.now(timezone.utc))
+    )
+    session.commit()
+    if (result.rowcount or 0) == 0:
+        return None
+    return session.get(SessionTurn, turn_id)
+
+
+# ---------------------------------------------------------------------------
+# Queue-strip operations (edit / reorder / cancel undelivered turns)
+# ---------------------------------------------------------------------------
+def list_queue_turns(session: OrmSession, session_id: str) -> list[SessionTurn]:
+    """The live queue strip: turns not yet fully delivered (queued + delivering),
+    oldest first. Mirrors the ticket steer queue's pre-delivery view."""
+    get_session_row(session, session_id)
+    return list(session.scalars(
+        select(SessionTurn)
+        .where(SessionTurn.session_id == session_id,
+               SessionTurn.status.in_(("queued", "delivering")))
+        .order_by(SessionTurn.position.asc())
+    ))
+
+
+def _get_turn(session: OrmSession, session_id: str, turn_id: str) -> SessionTurn:
+    turn = session.get(SessionTurn, turn_id)
+    if turn is None or turn.session_id != session_id:
+        raise TurnNotFound(turn_id)
+    return turn
+
+
+def edit_turn_body(session: OrmSession, session_id: str, turn_id: str, body: str) -> SessionTurn:
+    """Edit a queued turn's body. Queued-only (409 once it is delivering/done)."""
+    turn = _get_turn(session, session_id, turn_id)
+    if turn.status != "queued":
+        raise SessionBusy("turn is no longer queued")
+    turn.body = body
+    session.commit()
+    session.refresh(turn)
+    return turn
+
+
+def cancel_turn(session: OrmSession, session_id: str, turn_id: str) -> SessionTurn:
+    """Cancel a queued turn (queued -> cancelled). 409 once it has left the queue."""
+    turn = _get_turn(session, session_id, turn_id)
+    if turn.status != "queued":
+        raise SessionBusy("turn is no longer queued")
+    turn.status = "cancelled"
+    turn.finished_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(turn)
+    return turn
+
+
+def reorder_turns(session: OrmSession, session_id: str, ordered_ids: list[str]) -> list[SessionTurn]:
+    """Reorder queued turns among themselves. Every id must be a queued turn of
+    this agent (404 otherwise); positions are reassigned in the given order,
+    reusing the turns' own existing position slots so already-delivering turns
+    are untouched."""
+    get_session_row(session, session_id)
+    queued = {
+        t.id: t
+        for t in session.scalars(
+            select(SessionTurn).where(
+                SessionTurn.session_id == session_id,
+                SessionTurn.status == "queued",
+            )
+        )
+    }
+    for tid in ordered_ids:
+        if tid not in queued:
+            raise TurnNotFound(tid)
+    slots = sorted(t.position for t in queued.values())
+    for slot, tid in zip(slots, ordered_ids):
+        queued[tid].position = slot
+    session.commit()
+    return list_queue_turns(session, session_id)
+
+
+def request_reap(session: OrmSession, session_id: str) -> Optional[SessionTurn]:
+    """Graceful explicit reap: 409 if a turn is streaming or a pending input is
+    open; otherwise ask a live host to run its normal idle-reap now (disconnect,
+    publish resume_handle, status=idle) via a durable control turn. A cold agent
+    is already reaped — returns None (no-op)."""
+    row = get_session_row(session, session_id)
+    if _has_streaming_turn(session, session_id):
+        raise SessionBusy("a turn is streaming; cannot reap")
+    if has_open_pending(session, session_id):
+        raise SessionBusy("a human-input request is open; cannot reap")
+    if not _pid_alive(row.host_pid):
+        return None
+    return enqueue_turn(session, session_id, kind="reap", enforce_cap=False)
+
+
+# ---------------------------------------------------------------------------
+# Host row claim / release
+# ---------------------------------------------------------------------------
+def claim_host(session: OrmSession, session_id: str, *, host: str, pid: int) -> bool:
+    """Conditional claim of the Session row for a host (``WHERE host_pid IS
+    NULL``). Returns True if this host won, False if another already holds it.
+    Guards against double-spawn."""
+    result = session.execute(
+        update(Session)
+        .where(Session.id == session_id, Session.host_pid.is_(None))
+        .values(host=host, host_pid=pid, status="active",
+                last_activity_at=datetime.now(timezone.utc))
+    )
+    session.commit()
+    return (result.rowcount or 0) > 0
+
+
+def release_host(
+    session: OrmSession,
+    session_id: str,
+    *,
+    status: str = "idle",
+    resume_handle: Optional[dict] = None,
+) -> None:
+    """Clear host ownership on a clean reap/shutdown. Persists the resume handle
+    so the next cold-start resumes the same claude session id."""
+    row = session.get(Session, session_id)
+    if row is None:
+        return
+    row.host = None
+    row.host_pid = None
+    if row.status != "ended":
+        row.status = status
+    if resume_handle is not None:
+        row.resume_handle = resume_handle
+    session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Pending inputs (needs-input)
+# ---------------------------------------------------------------------------
+def open_pending(session: OrmSession, session_id: str) -> Optional[PendingInput]:
+    return session.scalar(
+        select(PendingInput)
+        .where(PendingInput.session_id == session_id, PendingInput.status == "pending")
+        .order_by(PendingInput.created_at.desc())
+        .limit(1)
+    )
+
+
+def create_pending(
+    session: OrmSession,
+    session_id: str,
+    *,
+    request_id: str,
+    kind: str,
+    tool: Optional[str],
+    payload: dict,
+) -> Optional[PendingInput]:
+    """Insert a PendingInput row (host-side, on a `pending_input` control event).
+
+    The partial unique index guarantees at most one open row per agent; a
+    double-emit hits an IntegrityError, which we swallow and treat as "the first
+    one stands" (returns None). Also bumps last_activity_at."""
+    from sqlalchemy.exc import IntegrityError
+
+    row = PendingInput(
+        session_id=session_id,
+        request_id=request_id,
+        kind=kind,
+        tool=tool,
+        payload=payload or {},
+        status="pending",
+    )
+    session.add(row)
+    try:
+        session.flush()
+    except IntegrityError:
+        session.rollback()
+        return None
+    srow = session.get(Session, session_id)
+    if srow is not None:
+        srow.last_activity_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def answer_pending(
+    session: OrmSession,
+    session_id: str,
+    request_id: str,
+    *,
+    decision: str,
+    answer: Optional[str] = None,
+    updated_input: Optional[dict] = None,
+) -> SessionTurn:
+    """Record a human answer and enqueue the durable answer turn for the host.
+
+    Validates the row is still ``pending`` (409 otherwise) and stores the chosen
+    decision for audit. The host claims the answer turn and writes it into the
+    inner's stdin, resolving the parked ``can_use_tool`` future. Marking the row
+    ``answered`` happens host-side once the inner confirms (``pending_resolved``).
+    """
+    row = session.scalar(
+        select(PendingInput).where(
+            PendingInput.session_id == session_id,
+            PendingInput.request_id == request_id,
+        )
+    )
+    if row is None:
+        raise PendingNotOpen(f"no such pending input {request_id!r}")
+    if row.status != "pending":
+        raise PendingNotOpen("pending input already resolved")
+    payload = {"decision": decision}
+    if answer is not None:
+        payload["answer"] = answer
+    if updated_input is not None:
+        payload["updated_input"] = updated_input
+    row.answer = payload
+    session.commit()
+    return enqueue_turn(
+        session, session_id, kind="answer",
+        body=json.dumps(payload), ref_request_id=request_id, enforce_cap=False,
+    )
+
+
+def resolve_pending(
+    session: OrmSession,
+    session_id: str,
+    request_id: str,
+    *,
+    status: str = "answered",
+) -> None:
+    """Host-side: mark a pending row answered/cancelled once the inner resolves."""
+    row = session.scalar(
+        select(PendingInput).where(
+            PendingInput.session_id == session_id,
+            PendingInput.request_id == request_id,
+        )
+    )
+    if row is None or row.status != "pending":
+        return
+    row.status = status
+    row.answered_at = datetime.now(timezone.utc)
+    session.commit()
+
+
+def cancel_open_pending(session: OrmSession, session_id: str) -> int:
+    """Cancel every open pending row for a session (interrupt / crash sweep)."""
+    result = session.execute(
+        update(PendingInput)
+        .where(PendingInput.session_id == session_id, PendingInput.status == "pending")
+        .values(status="cancelled", answered_at=datetime.now(timezone.utc))
+    )
+    session.commit()
+    return result.rowcount or 0
+
+
+def list_open_pending(session: OrmSession) -> list[PendingInput]:
+    """Every open pending input across all agents (sidebar badge + Desk band)."""
+    return list(session.scalars(
+        select(PendingInput)
+        .where(PendingInput.status == "pending")
+        .order_by(PendingInput.created_at.asc())
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Env replace (API)
+# ---------------------------------------------------------------------------
+def nudge_worker(session: OrmSession) -> bool:
+    """Best-effort SIGUSR1 to the live worker so it breaks its tick sleep and
+    spawns a host now (cold-start latency optimization; never load-bearing —
+    the next plain tick spawns it anyway). Returns True if a signal was sent.
+    """
+    import signal as _signal
+    from nightdesk.db.models import WorkerHeartbeat
+
+    hb = session.get(WorkerHeartbeat, 1)
+    if hb is None or not hb.pid:
+        return False
+    try:
+        os.kill(hb.pid, _signal.SIGUSR1)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+
+def put_env(session: OrmSession, session_id: str, env: dict, box: ProfileSecretBox) -> Session:
+    """Replace the agent's env map (no restart). Encrypts secret values,
+    preserves untouched ciphers (write-only secret contract)."""
+    row = get_session_row(session, session_id)
+    row.env = merge_env_map(row.env, env or {}, box)
+    session.commit()
+    session.refresh(row)
+    return row

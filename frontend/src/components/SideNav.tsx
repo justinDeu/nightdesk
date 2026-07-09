@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { LogOut, PanelLeftClose, PanelLeft } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Tooltip } from "@/ui/Tooltip";
+import { usePendingAgents } from "@/api/agents";
 import { ENTRIES, signOut } from "./navEntries";
 
 const COLLAPSE_KEY = "nightdesk:nav-collapsed";
@@ -11,6 +12,8 @@ export function SideNav() {
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(COLLAPSE_KEY) === "1",
   );
+  const pending = usePendingAgents();
+  const pendingCount = pending.data?.length ?? 0;
 
   const toggle = () => {
     setCollapsed((c) => {
@@ -54,13 +57,14 @@ export function SideNav() {
       <div className="flex-1 space-y-0.5 px-2.5 py-2">
         {ENTRIES.map((entry) => {
           const Icon = entry.icon;
+          const badge = entry.badgeKey === "agents-pending" ? pendingCount : 0;
           const link = (
             <Link
               key={entry.to}
               to={entry.to}
               activeOptions={{ exact: entry.exact }}
               className={cn(
-                "group flex items-center gap-3 rounded-control px-2.5 py-2 text-sm font-medium",
+                "group relative flex items-center gap-3 rounded-control px-2.5 py-2 text-sm font-medium",
                 "text-moon-400 transition-colors duration-100",
                 "hover:bg-ink-800 hover:text-moon-100",
                 collapsed && "justify-center px-0",
@@ -70,12 +74,22 @@ export function SideNav() {
                   "!text-moon-100 bg-ink-800 shadow-[inset_2px_0_0_var(--color-lamp)]",
               }}
             >
-              <Icon size={17} className="shrink-0" />
+              <span className="relative shrink-0">
+                <Icon size={17} />
+                {badge > 0 && collapsed && (
+                  <span className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-lamp ring-2 ring-ink-900" />
+                )}
+              </span>
               {!collapsed && <span>{entry.label}</span>}
+              {!collapsed && badge > 0 && (
+                <span className="ml-auto rounded-full bg-lamp/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-lamp">
+                  {badge}
+                </span>
+              )}
             </Link>
           );
           return collapsed ? (
-            <Tooltip key={entry.to} content={entry.label} side="right">
+            <Tooltip key={entry.to} content={badge > 0 ? `${entry.label} · ${badge} waiting` : entry.label} side="right">
               {link}
             </Tooltip>
           ) : (

@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import {
   Bell,
+  Bot,
   Cable,
   CalendarClock,
   ChevronLeft,
@@ -18,6 +19,7 @@ import {
 import { cn } from "@/lib/cn";
 import { SchedulingSection } from "@/routes/settings/SchedulingSection";
 import { ClaudeSection } from "@/routes/settings/ClaudeSection";
+import { AgentsSection } from "@/routes/settings/AgentsSection";
 import { WorktreesSection } from "@/routes/settings/WorktreesSection";
 import { NotificationsSection } from "@/routes/settings/NotificationsSection";
 import { LabelsSection } from "@/routes/settings/LabelsSection";
@@ -40,6 +42,7 @@ const SECTIONS: SectionMeta[] = [
   // Slug stays "claude" for URL stability even though the section now covers
   // every harness (Claude Code + opencode) — see ClaudeSection.tsx.
   { slug: "claude", label: "Harnesses", icon: Terminal, component: ClaudeSection },
+  { slug: "agents", label: "Agents", icon: Bot, component: AgentsSection },
   { slug: "providers", label: "Providers", icon: Cable, component: ProvidersSection },
   { slug: "cloud-sandbox", label: "Cloud sandbox", icon: Cloud, component: CloudSandboxSection },
   { slug: "worktrees", label: "Worktrees", icon: FolderGit2, component: WorktreesSection },
