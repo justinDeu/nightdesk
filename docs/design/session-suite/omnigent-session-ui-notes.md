@@ -133,3 +133,16 @@ parallel surface later. This is exactly Omnigent's dual-surface model for SDK se
   proven). MCP elicitation = onElicitation. @-mention completion is client-side (we build it).
 - Verdict for the v2 composer: custom commands verified-yes; autocomplete yes (init + commands_changed);
   skills yes (setting_sources caveat); hooks verified-yes; dialogs yes (can_use_tool renders all).
+
+## CORRECTION (2026-07-09, empirical): --resume does NOT fork
+Earlier notes claimed CC mints a new session id per resume. WRONG. Tested live (CLI 2.1.203):
+`claude -p --resume <id>` three processes in a row → identical session_id, ONE jsonl file,
+full history retained. Forking is opt-in via --fork-session. Consequences for resident sessions v2:
+- The resume handle stays valid across terminal round-trips. No fork/descendant detection needed.
+- The "journal tailer" collapses to a trivial delta-import: on wake, read OUR OWN session file
+  (known id, known path) past the last entry we wrote, translate the new turns into the canonical
+  transcript. No directory watching, no UUID-chain matching, no session-id adoption.
+- Two-writer hazard unchanged: idle/reap the resident client before terminal use; on wake, the
+  delta-import runs first, then the resident resumes the same id.
+- (Omnigent clears external_session_id on harness SWITCH for a different reason — cross-vendor
+  re-materialization — not because resume forks.)
