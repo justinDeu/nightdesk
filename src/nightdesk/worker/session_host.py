@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import signal
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -62,6 +63,7 @@ class SessionHost:
         config: Optional[NightdeskConfig] = None,
         host: str = "localhost",
         poll_interval: float = 0.2,
+        watchdog_grace: float = 8.0,
     ) -> None:
         self._sf = session_factory
         self._sid = session_id
@@ -70,6 +72,9 @@ class SessionHost:
         self._box = box or ProfileSecretBox(self._config.bearer_token)
         self._host = host
         self._poll = poll_interval
+        # Grace after a watchdog interrupt() before declaring the inner
+        # unresponsive and tearing down (crashed -> idle, turn failed).
+        self._watchdog_grace = watchdog_grace
 
         self._handle: Any = None
         self._transcript_path: Optional[Path] = None
@@ -302,8 +307,30 @@ class SessionHost:
         await self._handle.send({"type": "user_turn", "turn_id": turn.id, "text": turn.body})
 
         # Wait for turn_complete (the reader signals it). Control turns delivered
-        # meanwhile keep the loop responsive via a nested poll.
+        # meanwhile keep the loop responsive via a nested poll. A max_turn_seconds
+        # watchdog (live-read, 0 disables) interrupts a runaway turn; if the
+        # inner stays unresponsive past the grace window, we tear down
+        # (crashed -> idle, turn failed) so the agent stays recoverable.
+        t0 = time.monotonic()
+        interrupted_at: Optional[float] = None
+        watchdog_failed = False
         while turn.id not in self._turn_complete and not self._shutdown:
+            max_s = self._max_turn_seconds()
+            if max_s > 0:
+                elapsed = time.monotonic() - t0
+                if interrupted_at is None and elapsed > max_s:
+                    log.warning("turn %s exceeded max_turn_seconds=%s; interrupting",
+                                turn.id, max_s)
+                    await self._handle.send({"type": "interrupt"})
+                    interrupted_at = time.monotonic()
+                elif interrupted_at is not None and \
+                        (time.monotonic() - interrupted_at) > self._watchdog_grace:
+                    log.warning("turn %s unresponsive after watchdog interrupt; "
+                                "tearing down", turn.id)
+                    watchdog_failed = True
+                    self._shutdown = True
+                    self._shutdown_status = "idle"  # recoverable; resume armed
+                    break
             control = self._claim_next_turn()
             if control is not None and control.kind != "user":
                 await self._deliver(control)
@@ -318,6 +345,17 @@ class SessionHost:
         self._streaming_turn_id = None
         if tc is not None:
             self._slice_usage(turn.id, tc)
+        elif watchdog_failed:
+            # Inner never answered the watchdog interrupt: fail the turn and drop
+            # a crash breadcrumb; teardown releases the host to idle.
+            with self._sf() as db:
+                row = db.get(SessionTurn, turn.id)
+                if row is not None and row.status in ("streaming", "delivering"):
+                    row.status = "failed"
+                    row.error = "turn exceeded max_turn_seconds and did not respond to interrupt"
+                    row.finished_at = _now()
+                    db.commit()
+            self._write_transcript({"type": "session_crashed"})
         else:
             # Shutdown before completion: mark interrupted.
             with self._sf() as db:
@@ -407,6 +445,12 @@ class SessionHost:
     # ------------------------------------------------------------------
     # Reap / teardown
     # ------------------------------------------------------------------
+    def _max_turn_seconds(self) -> int:
+        """Live-read the per-turn watchdog cap (0 disables). Never frozen."""
+        with self._sf() as db:
+            cfg = db.get(ConfigRow, 1)
+            return int(cfg.max_turn_seconds) if cfg and cfg.max_turn_seconds else 0
+
     def _should_reap(self) -> bool:
         with self._sf() as db:
             row = db.get(Session, self._sid)

@@ -253,6 +253,42 @@ async def test_restart_reuses_session_id_and_folds_replay_cost(engine, tmp_path)
         await _end(factory, sid, task)
 
 
+async def test_max_turn_seconds_watchdog_fails_unresponsive_turn(engine, tmp_path):
+    """A turn that never completes: the watchdog interrupts it, and when the
+    inner stays silent past the grace window the host tears down (crashed ->
+    idle) with the turn failed — the agent stays recoverable."""
+    from nightdesk.db.models import ConfigRow
+    factory, sid, tpath = _make(engine, tmp_path, idle_timeout_s=3600)
+    with factory() as db:
+        db.add(ConfigRow(id=1, worktree_root="/w", transcript_root="/t",
+                         max_turn_seconds=1))
+        sess.post_message(db, sid, "runaway")
+    backend = FakeBackend()
+    # Tight grace so the test doesn't wait the production default.
+    host = SessionHost(session_factory=factory, session_id=sid, backend=backend,
+                       box=BOX, host="test", poll_interval=0.01, watchdog_grace=0.1)
+    task = asyncio.create_task(host.run())
+    try:
+        # The inner receives the turn but never pushes turn_complete.
+        assert await _await(lambda: backend.handles
+                            and any(m.get("type") == "user_turn"
+                                    for m in backend.handles[0].sent))
+        # Watchdog fires interrupt (>1s), then tears down after the grace.
+        assert await asyncio.wait_for(task, timeout=8.0) == 0
+        h = backend.handles[0]
+        assert any(m.get("type") == "interrupt" for m in h.sent)
+        assert h.closed
+        with factory() as db:
+            row = db.get(SessionModel, sid)
+            assert row.status == "idle" and row.host_pid is None  # recoverable
+            turn = db.query(SessionTurn).filter_by(session_id=sid).first()
+            assert turn.status == "failed"
+        assert "session_crashed" in [e["type"] for e in read_events(tpath)]
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 # ---- helpers --------------------------------------------------------------
 def _first_turn_id(factory, sid):
     with factory() as db:
