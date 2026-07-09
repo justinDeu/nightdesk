@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Columns3, List as ListIcon, Plus } from "lucide-react";
+import { CircleDot, Columns3, GitMerge, List as ListIcon, Plus } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { EmptyState } from "@/ui/EmptyState";
 import { toast } from "@/ui/Toast";
@@ -14,6 +14,8 @@ import { GroupedBoard } from "./GroupedBoard";
 import { List } from "./List";
 import { TicketPeek } from "./TicketPeek";
 import { DisplayOptions } from "./DisplayOptions";
+import { IntegrationLensPanel, type Lens } from "./IntegrationLens";
+import { useProjectRepoLinks } from "@/api/integrations";
 import {
   groupTickets,
   type DisplayContext,
@@ -99,6 +101,24 @@ export function TicketsPage() {
     () => new Map((projectsQ.data ?? []).map((p) => [p.id, p])),
     [projectsQ.data],
   );
+
+  // Project-lens integration (Issues / MRs). Available only when the filter
+  // names exactly one project that has repo links attached (§7).
+  const lensProject = useMemo(() => {
+    const tok = parseFilter(filter).tokens.find((t) => t.key === "project");
+    if (!tok) return undefined;
+    const v = tok.value.toLowerCase();
+    return (projectsQ.data ?? []).find(
+      (p) => p.slug.toLowerCase() === v || p.id === tok.value || p.name.toLowerCase() === v,
+    );
+  }, [filter, projectsQ.data]);
+  const lensRepos = useProjectRepoLinks(lensProject?.id ?? "");
+  const lensAvailable = !!lensProject && (lensRepos.data?.length ?? 0) > 0;
+  const [lens, setLens] = useState<"tickets" | Lens>("tickets");
+  useEffect(() => {
+    if (!lensAvailable && lens !== "tickets") setLens("tickets");
+  }, [lensAvailable, lens]);
+  const lensActive = lens !== "tickets" && !!lensProject;
   const latestRun = useMemo(() => latestRunMap(runsQ.data ?? []), [runsQ.data]);
 
   // Non-archived tickets, filtered.
@@ -376,6 +396,13 @@ export function TicketsPage() {
             onGroupBy={setGroupBy}
             onOrderBy={setOrderBy}
           />
+          {lensAvailable && (
+            <div className="flex shrink-0 items-center rounded-control border border-ink-700 bg-ink-900 p-0.5">
+              <ViewToggle active={lens === "tickets"} onClick={() => setLens("tickets")} icon={<ListIcon size={15} />} label="Tickets" />
+              <ViewToggle active={lens === "issues"} onClick={() => setLens("issues")} icon={<CircleDot size={15} />} label="Issues" />
+              <ViewToggle active={lens === "mrs"} onClick={() => setLens("mrs")} icon={<GitMerge size={15} />} label="MRs" />
+            </div>
+          )}
           <div className="flex shrink-0 items-center rounded-control border border-ink-700 bg-ink-900 p-0.5">
             <ViewToggle active={view === "board"} onClick={() => setView("board")} icon={<Columns3 size={15} />} label="Board" />
             <ViewToggle active={view === "list"} onClick={() => setView("list")} icon={<ListIcon size={15} />} label="List" />
@@ -400,7 +427,9 @@ export function TicketsPage() {
           peekTicket && "lg:pr-[420px]",
         )}
       >
-        {ticketsQ.isLoading ? (
+        {lensActive && lensProject ? (
+          <IntegrationLensPanel projectId={lensProject.id} lens={lens as Lens} />
+        ) : ticketsQ.isLoading ? (
           <div className="grid h-full place-items-center text-sm text-moon-600">Loading tickets…</div>
         ) : visible.length === 0 ? (
           <div className="grid h-full place-items-center px-4">
