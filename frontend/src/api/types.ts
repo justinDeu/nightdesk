@@ -122,6 +122,47 @@ export interface TicketOut {
   dependencies: DependencyOut[];
   created_at: string;
   updated_at: string;
+  /** Post-review acknowledgement. NULL == unacknowledged (in the digest). */
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+  /** Real archived timestamp from the event log (not updated_at). */
+  archived_at: string | null;
+  /** A run/agent, not a human, moved this ticket into review. */
+  agent_reviewed: boolean;
+}
+
+/** One ticket row in the acknowledgement digest. */
+export interface AckDigestTicket {
+  ticket_id: string;
+  title: string;
+  status: string;
+  project_id: string | null;
+  entered_at: string | null;
+  actor_kind: string | null;
+  outcome: "succeeded" | "failed" | null;
+  cost_usd: number | null;
+  run_id: string | null;
+}
+
+export interface AckDigestGroup {
+  project_id: string | null;
+  day: string;
+  count: number;
+  succeeded: number;
+  failed: number;
+  cost_usd: number;
+  tickets: AckDigestTicket[];
+}
+
+export interface AckDigest {
+  total: number;
+  generated_at: string;
+  groups: AckDigestGroup[];
+}
+
+export interface BulkAckResult {
+  acknowledged: string[];
+  count: number;
 }
 
 export interface TicketCreate {

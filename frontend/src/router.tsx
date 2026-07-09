@@ -15,6 +15,7 @@ import { RunTheater } from "@/routes/tickets/RunTheater";
 import { SessionsPage } from "@/routes/sessions/SessionsPage";
 import { SessionChatPage } from "@/routes/sessions/SessionChatPage";
 import { InboxPage } from "@/routes/InboxPage";
+import { AcknowledgePage } from "@/routes/acknowledge/AcknowledgePage";
 import { ArchivePage } from "@/routes/ArchivePage";
 import { ScheduledPage } from "@/routes/ScheduledPage";
 import { AnalyticsPage } from "@/routes/AnalyticsPage";
@@ -86,6 +87,12 @@ const inboxRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/inbox",
   component: InboxPage,
+});
+
+const acknowledgeRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/acknowledge",
+  component: AcknowledgePage,
 });
 
 export type ArchiveSortKey = "recent" | "created" | "priority" | "cost";
@@ -186,6 +193,7 @@ const routeTree = rootRoute.addChildren([
     sessionsRoute,
     sessionChatRoute,
     inboxRoute,
+    acknowledgeRoute,
     archiveRoute,
     scheduledRoute,
     analyticsRoute,

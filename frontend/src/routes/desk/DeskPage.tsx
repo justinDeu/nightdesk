@@ -24,6 +24,8 @@ import { RunningCard } from "./RunningCard";
 import { useTickets } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
 import { useInbox } from "@/api/inbox";
+import { useAckDigest, useBulkAck } from "@/api/ack";
+import type { AckDigestGroup } from "@/api/types";
 import { useProjectMap } from "@/api/projects";
 import type { ProjectOut, RunOut, TicketOut } from "@/api/types";
 import { useTicketActions } from "@/lib/ticketActions";
@@ -258,6 +260,8 @@ export function DeskPage() {
         )}
       </DeskBand>
 
+      <ToAcknowledgeBand projects={projects} />
+
       <DeskBand icon={<Zap size={15} />} title="Running now" accent count={running.data?.length}>
         {running.data && running.data.length > 0 ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
@@ -379,6 +383,78 @@ const NeedsRow = forwardRef<
     </div>
   );
 });
+
+// --- To acknowledge ------------------------------------------------------------
+
+/** Durable acknowledgement debt: agent-archived / agent-reviewed work the human
+ *  never saw, grouped by project-day. Collapsed to group rows here; the full
+ *  per-ticket digest with keyboard batch-ack lives at /acknowledge. Unlike
+ *  "While you were away" (an ephemeral since-last-visit diff), this is
+ *  server-backed and only clears when explicitly acknowledged. */
+function ackDayLabel(day: string): string {
+  const d = new Date(`${day}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today.getTime() - d.getTime()) / 86_400_000);
+  if (diff === 0) return "today";
+  if (diff === 1) return "yesterday";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function ToAcknowledgeBand({ projects }: { projects: Map<string, ProjectOut> }) {
+  const digest = useAckDigest(null, { refetchInterval: POLL });
+  const bulkAck = useBulkAck();
+  const total = digest.data?.total ?? 0;
+  const groups = digest.data?.groups ?? [];
+  const before = digest.data?.generated_at;
+
+  if (total === 0) return null;
+
+  const projName = (id: string | null) => (id ? projects.get(id)?.name ?? "No project" : "No project");
+  const ackGroup = (group: AckDigestGroup) => {
+    if (group.project_id != null) {
+      bulkAck.mutate({ project_scope: true, project_id: group.project_id, before });
+    } else {
+      bulkAck.mutate({ ticket_ids: group.tickets.map((t) => t.ticket_id) });
+    }
+  };
+  const ackAll = () => {
+    for (const group of groups) ackGroup(group);
+  };
+
+  return (
+    <DeskBand icon={<CheckCircle2 size={15} />} title="To acknowledge" count={total}>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="subtle" onClick={ackAll}>
+          Ack all ({total})
+        </Button>
+        <Button asChild size="sm" variant="ghost">
+          <Link to="/acknowledge">Open digest</Link>
+        </Button>
+      </div>
+      <div className="space-y-1.5">
+        {groups.slice(0, 8).map((group) => (
+          <div
+            key={`${group.project_id ?? "none"}-${group.day}`}
+            className="flex items-center gap-3 rounded-control border border-ink-700 bg-ink-900 px-3 py-2.5"
+          >
+            <span className="min-w-0 flex-1 truncate text-sm text-moon-100">
+              {projName(group.project_id)}, {ackDayLabel(group.day)}
+            </span>
+            <span className="shrink-0 text-xs text-moon-600">
+              {group.count} ticket{group.count === 1 ? "" : "s"} · {group.succeeded} ok
+              {group.failed > 0 && <span className="text-failed"> · {group.failed} failed</span>}
+              {group.cost_usd > 0 && <span> · {formatUsd(group.cost_usd)}</span>}
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => ackGroup(group)} className="shrink-0">
+              Ack
+            </Button>
+          </div>
+        ))}
+      </div>
+    </DeskBand>
+  );
+}
 
 // --- While you were away -------------------------------------------------------
 
