@@ -14,7 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import BackendOut
 from nightdesk.db.models import ConfigRow
 from nightdesk.domain.backend_capabilities import all_capabilities
@@ -53,11 +53,11 @@ def _backend_out(cap, runtime: BackendRuntimeStatus | None) -> dict:
     }
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/backends",
         tags=["backends"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.TICKETS_READ))],
     )
 
     @router.get("", response_model=list[BackendOut])

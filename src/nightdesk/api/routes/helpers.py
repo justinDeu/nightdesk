@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
     CronPreviewOut, CronPreviewRequest, DiagnosticsOut, ProjectActivityRow,
     WebhookTestRequest, WorktreeNamePreviewOut, WorktreeNamePreviewRequest,
@@ -46,9 +46,11 @@ def _bwrap_version() -> Optional[str]:
         return None
 
 
-def build_router(get_session, bearer_token: str, *, worktree_root: Path) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped, *, worktree_root: Path) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["helpers"])
-    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+    auth = Depends(scoped(sc.TICKETS_READ))
+    config_write = Depends(scoped(sc.CONFIG_WRITE))
+    config_read = Depends(scoped(sc.CONFIG_READ))
 
     @router.post(
         "/preview/worktree-name", response_model=WorktreeNamePreviewOut,
@@ -97,7 +99,7 @@ def build_router(get_session, bearer_token: str, *, worktree_root: Path) -> APIR
             fires.append(it.get_next(datetime).astimezone(timezone.utc))
         return CronPreviewOut(next_fire_times=fires)
 
-    @router.post("/notifications/test", status_code=204, dependencies=[auth])
+    @router.post("/notifications/test", status_code=204, dependencies=[config_write])
     async def notifications_test(payload: WebhookTestRequest, request: Request):
         """Fire a synthetic run-completion payload at the given webhook URL."""
         target = payload.url.strip()
@@ -150,7 +152,7 @@ def build_router(get_session, bearer_token: str, *, worktree_root: Path) -> APIR
             ))
         return rows
 
-    @router.get("/diagnostics", response_model=DiagnosticsOut, dependencies=[auth])
+    @router.get("/diagnostics", response_model=DiagnosticsOut, dependencies=[config_read])
     async def diagnostics_json(session: Session = Depends(get_session)):
         """JSON twin of the HTML ``/diagnostics`` page (no log tails)."""
         ds = session.get(DaemonStatus, 1)

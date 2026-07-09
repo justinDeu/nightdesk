@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.domain.labels import (
     LabelNameTaken,
     LabelNotFound,
@@ -73,16 +73,18 @@ def _label_to_dict(label) -> dict:
 # Router
 # ---------------------------------------------------------------------------
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(prefix="/api/v1/labels", tags=["labels"])
-    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+    # Reading labels rides tickets.read; label entity CRUD needs labels.write.
+    auth = Depends(scoped(sc.TICKETS_READ))
+    write = Depends(scoped(sc.LABELS_WRITE))
 
     @router.get("", dependencies=[auth])
     async def list_all(session: Session = Depends(get_session)):
         labels = list_labels(session)
         return [_label_to_dict(l) for l in labels]
 
-    @router.post("", dependencies=[auth], status_code=201)
+    @router.post("", dependencies=[write], status_code=201)
     async def create(body: LabelCreate, session: Session = Depends(get_session)):
         try:
             label = create_label(session, name=body.name, color=body.color)
@@ -98,7 +100,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "label not found")
         return _label_to_dict(label)
 
-    @router.patch("/{label_id}", dependencies=[auth])
+    @router.patch("/{label_id}", dependencies=[write])
     async def update(
         label_id: str,
         body: LabelUpdate,
@@ -115,7 +117,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, f"label name already taken: {e}")
         return _label_to_dict(label)
 
-    @router.delete("/{label_id}", dependencies=[auth], status_code=204)
+    @router.delete("/{label_id}", dependencies=[write], status_code=204)
     async def delete(label_id: str, session: Session = Depends(get_session)):
         try:
             delete_label(session, label_id)
@@ -127,7 +129,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     @router.put(
         "/tickets/{ticket_id}",
-        dependencies=[auth],
+        dependencies=[write],
     )
     async def set_labels(
         ticket_id: str,

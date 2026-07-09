@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import SavedViewCreate, SavedViewOut, SavedViewReorder, SavedViewUpdate
 from nightdesk.domain.saved_views import (
     SavedViewNameTaken,
@@ -31,17 +31,18 @@ def _view_out(v) -> SavedViewOut:
     )
 
 
-def build_api_router(get_session, bearer_token: str) -> APIRouter:
+def build_api_router(get_session, bearer_token: str, scoped) -> APIRouter:
     """JSON /api/v1/views — CRUD + reorder over saved views."""
     router = APIRouter(prefix="/api/v1", tags=["saved_views_api"])
-    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+    auth = Depends(scoped(sc.TICKETS_READ))
+    write = Depends(scoped(sc.TICKETS_UPDATE))
 
     @router.get("/views", response_model=list[SavedViewOut], dependencies=[auth])
     async def list_views(session: Session = Depends(get_session)):
         return [_view_out(v) for v in list_saved_views(session)]
 
     @router.post(
-        "/views", response_model=SavedViewOut, status_code=201, dependencies=[auth],
+        "/views", response_model=SavedViewOut, status_code=201, dependencies=[write],
     )
     async def create_view(
         payload: SavedViewCreate, session: Session = Depends(get_session),
@@ -58,7 +59,7 @@ def build_api_router(get_session, bearer_token: str) -> APIRouter:
         return _view_out(view)
 
     @router.patch(
-        "/views/{view_id}", response_model=SavedViewOut, dependencies=[auth],
+        "/views/{view_id}", response_model=SavedViewOut, dependencies=[write],
     )
     async def update_view(
         view_id: str, payload: SavedViewUpdate,
@@ -74,7 +75,7 @@ def build_api_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(422, str(e))
         return _view_out(view)
 
-    @router.delete("/views/{view_id}", status_code=204, dependencies=[auth])
+    @router.delete("/views/{view_id}", status_code=204, dependencies=[write])
     async def delete_view_api(view_id: str, session: Session = Depends(get_session)):
         try:
             delete_saved_view(session, view_id)
@@ -83,7 +84,7 @@ def build_api_router(get_session, bearer_token: str) -> APIRouter:
         return None
 
     @router.post(
-        "/views/reorder", response_model=list[SavedViewOut], dependencies=[auth],
+        "/views/reorder", response_model=list[SavedViewOut], dependencies=[write],
     )
     async def reorder_views(
         payload: SavedViewReorder, session: Session = Depends(get_session),

@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
     SessionConversationOut,
     SessionCreate,
@@ -62,18 +62,20 @@ def _session_to_out(session: Session, t) -> SessionOut:
 
 
 def build_router(
-    get_session, bearer_token: str, *, worktree_root: Optional[Path] = None,
+    get_session, bearer_token: str, scoped, *, worktree_root: Optional[Path] = None,
 ) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/sessions",
         tags=["sessions"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.AGENTS_READ))],
     )
+    admin = Depends(scoped(sc.AGENTS_ADMIN))
+    message = Depends(scoped(sc.AGENTS_MESSAGE))
     # Scratch workspaces live as a sibling of worktree_root so the sandbox can
     # bind-mount them (anything under ~/.local/share/nightdesk is refused).
     scratch_root = worktree_root.parent / "nightdesk-sessions" if worktree_root else None
 
-    @router.post("", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
+    @router.post("", response_model=SessionOut, status_code=status.HTTP_201_CREATED, dependencies=[admin])
     async def create(payload: SessionCreate, session: Session = Depends(get_session)):
         try:
             t = create_session(
@@ -102,7 +104,7 @@ def build_router(
             raise HTTPException(404, "not found")
         return _session_to_out(session, t)
 
-    @router.post("/{sid}/messages", response_model=SessionOut)
+    @router.post("/{sid}/messages", response_model=SessionOut, dependencies=[message])
     async def post_message(
         sid: str, payload: SessionMessage, session: Session = Depends(get_session),
     ):
@@ -116,7 +118,7 @@ def build_router(
             raise HTTPException(409, str(e))
         return _session_to_out(session, t)
 
-    @router.post("/{sid}/promote", response_model=TicketOut)
+    @router.post("/{sid}/promote", response_model=TicketOut, dependencies=[admin])
     async def promote(
         sid: str, payload: SessionPromote, session: Session = Depends(get_session),
     ):
@@ -135,7 +137,7 @@ def build_router(
             raise HTTPException(409, str(e))
         return _ticket_to_out(t)
 
-    @router.post("/{sid}/archive", response_model=SessionOut)
+    @router.post("/{sid}/archive", response_model=SessionOut, dependencies=[admin])
     async def archive_one(sid: str, session: Session = Depends(get_session)):
         try:
             t = archive_session(session, sid)
@@ -145,7 +147,7 @@ def build_router(
             raise HTTPException(409, str(e))
         return _session_to_out(session, t)
 
-    @router.delete("/{sid}", status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete("/{sid}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[admin])
     async def remove(sid: str, session: Session = Depends(get_session)):
         try:
             from nightdesk.domain.sessions import _get_session_ticket

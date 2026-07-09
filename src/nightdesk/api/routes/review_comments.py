@@ -17,7 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.routes.runs import _run_workspaces
 from nightdesk.api.schemas import DiffCommentCreate, DiffCommentEdit, DiffCommentOut
 from nightdesk.db.models import DiffComment
@@ -61,12 +61,13 @@ def _to_out(c: DiffComment, live_head_sha: str | None) -> DiffCommentOut:
     return out
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1",
         tags=["review-comments"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.COMMENTS_READ))],
     )
+    write = Depends(scoped(sc.COMMENTS_WRITE))
 
     @router.get("/runs/{rid}/comments", response_model=list[DiffCommentOut])
     async def list_comments(rid: str, session: Session = Depends(get_session)):
@@ -77,7 +78,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         live = _live_head_sha(session, run)
         return [_to_out(c, live) for c in list_run_comments(session, rid)]
 
-    @router.post("/runs/{rid}/comments", response_model=DiffCommentOut, status_code=201)
+    @router.post("/runs/{rid}/comments", response_model=DiffCommentOut, status_code=201, dependencies=[write])
     async def create(rid: str, payload: DiffCommentCreate,
                      session: Session = Depends(get_session)):
         author = Author(kind="admin", run_id=None)
@@ -105,7 +106,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         live = _live_head_sha(session, get_run(session, rid))
         return _to_out(c, live)
 
-    @router.patch("/diff-comments/{cid}", response_model=DiffCommentOut)
+    @router.patch("/diff-comments/{cid}", response_model=DiffCommentOut, dependencies=[write])
     async def edit(cid: str, payload: DiffCommentEdit,
                    session: Session = Depends(get_session)):
         try:
@@ -116,11 +117,11 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(422, str(e))
         return _to_out(c, _live_head_sha(session, get_run(session, c.run_id)))
 
-    @router.post("/diff-comments/{cid}/resolve", response_model=DiffCommentOut)
+    @router.post("/diff-comments/{cid}/resolve", response_model=DiffCommentOut, dependencies=[write])
     async def resolve(cid: str, session: Session = Depends(get_session)):
         return _set_resolved(session, cid, True)
 
-    @router.post("/diff-comments/{cid}/unresolve", response_model=DiffCommentOut)
+    @router.post("/diff-comments/{cid}/unresolve", response_model=DiffCommentOut, dependencies=[write])
     async def unresolve(cid: str, session: Session = Depends(get_session)):
         return _set_resolved(session, cid, False)
 
@@ -133,14 +134,14 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(422, str(e))
         return _to_out(c, _live_head_sha(session, get_run(session, c.run_id)))
 
-    @router.delete("/diff-comments/{cid}", status_code=204)
+    @router.delete("/diff-comments/{cid}", status_code=204, dependencies=[write])
     async def remove(cid: str, session: Session = Depends(get_session)):
         try:
             delete_comment(session, cid)
         except DiffCommentNotFound:
             raise HTTPException(404, "not found")
 
-    @router.post("/runs/{rid}/comments/request-changes")
+    @router.post("/runs/{rid}/comments/request-changes", dependencies=[write])
     async def request_changes_route(rid: str, session: Session = Depends(get_session)):
         try:
             get_run(session, rid)

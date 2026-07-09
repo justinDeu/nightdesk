@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 
 
 _MAX_SUGGESTIONS = 25
@@ -88,9 +88,9 @@ def _suggest_dirs(prefix: str, limit: int = _MAX_SUGGESTIONS) -> list[str]:
     return out
 
 
-def build_router(bearer_token: str) -> APIRouter:
+def build_router(bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(tags=["fs"])
-    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+    auth = Depends(scoped(sc.FS_READ))
 
     @router.get("/api/v1/fs/suggest", dependencies=[auth])
     async def suggest_api(prefix: str = Query(default=""),

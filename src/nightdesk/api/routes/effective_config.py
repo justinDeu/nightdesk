@@ -14,7 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.domain.effective_config import (
     resolve_for_draft,
     resolve_for_ticket,
@@ -23,9 +23,9 @@ from nightdesk.domain.profile_secrets import ProfileSecretBox
 from nightdesk.domain.tickets import get_ticket, TicketNotFound
 
 
-def build_api_router(get_session, bearer_token: str) -> APIRouter:
+def build_api_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["effective-config"])
-    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+    auth = Depends(scoped(sc.TICKETS_READ))
     # Needed by the "Launch plan" group to resolve endpoint credentials for
     # the dry-run render (masked before they reach the response either way —
     # see domain.effective_config._launch_plan_group).

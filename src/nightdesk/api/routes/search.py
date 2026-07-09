@@ -3,18 +3,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import SearchHit as SearchHitSchema
 from nightdesk.db.models import Project
 from nightdesk.domain.query import parse_query, search_tickets
 from nightdesk.domain.search import hit_from_ticket
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1",
         tags=["search"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.TICKETS_READ))],
     )
 
     @router.get("/search", response_model=list[SearchHitSchema])

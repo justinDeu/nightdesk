@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
     AnalyticsLatencyOut, AnalyticsSpendOut, AnalyticsSummaryOut, AnalyticsTokensOut,
 )
@@ -69,9 +69,9 @@ def _tail(rows: list, n: int) -> list:
     return rows[-n:] if n < len(rows) else rows
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
-    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+    auth = Depends(scoped(sc.ANALYTICS_READ))
 
     @router.get("/summary", response_model=AnalyticsSummaryOut, dependencies=[auth])
     async def summary(

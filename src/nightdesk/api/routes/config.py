@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
     ConfigOut,
     ConfigUpdate,
@@ -72,20 +72,21 @@ def _config_out(session: Session, row: ConfigRow) -> ConfigOut:
     )
 
 
-def build_router(get_session, bearer_token: str, *, worktree_root: str,
+def build_router(get_session, bearer_token: str, scoped, *, worktree_root: str,
                   transcript_root: str) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1",
         tags=["config"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.CONFIG_READ))],
     )
+    write = Depends(scoped(sc.CONFIG_WRITE))
 
     @router.get("/config", response_model=ConfigOut)
     async def show(session: Session = Depends(get_session)):
         row = _ensure_config(session, worktree_root=worktree_root, transcript_root=transcript_root)
         return _config_out(session, row)
 
-    @router.patch("/config", response_model=ConfigOut)
+    @router.patch("/config", response_model=ConfigOut, dependencies=[write])
     async def update(payload: ConfigUpdate, session: Session = Depends(get_session)):
         row = _ensure_config(session, worktree_root=worktree_root, transcript_root=transcript_root)
         for k, v in payload.model_dump().items():
@@ -118,7 +119,7 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
     async def list_windows(session: Session = Depends(get_session)):
         return _list_windows(session)
 
-    @router.post("/config/windows", response_model=ScheduleWindowOut, status_code=201)
+    @router.post("/config/windows", response_model=ScheduleWindowOut, status_code=201, dependencies=[write])
     async def create_window(payload: ScheduleWindowCreate,
                             session: Session = Depends(get_session)):
         window = ScheduleWindow(**payload.model_dump())
@@ -127,7 +128,7 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
         session.refresh(window)
         return window
 
-    @router.patch("/config/windows/{window_id}", response_model=ScheduleWindowOut)
+    @router.patch("/config/windows/{window_id}", response_model=ScheduleWindowOut, dependencies=[write])
     async def update_window(window_id: int, payload: ScheduleWindowUpdate,
                             session: Session = Depends(get_session)):
         window = session.get(ScheduleWindow, window_id)
@@ -139,7 +140,7 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
         session.refresh(window)
         return window
 
-    @router.delete("/config/windows/{window_id}", status_code=204)
+    @router.delete("/config/windows/{window_id}", status_code=204, dependencies=[write])
     async def delete_window(window_id: int, session: Session = Depends(get_session)):
         window = session.get(ScheduleWindow, window_id)
         if window is None:
@@ -148,7 +149,7 @@ def build_router(get_session, bearer_token: str, *, worktree_root: str,
         session.commit()
         return None
 
-    @router.put("/config/windows", response_model=list[ScheduleWindowOut])
+    @router.put("/config/windows", response_model=list[ScheduleWindowOut], dependencies=[write])
     async def replace_windows(payload: ScheduleWindowsReplace,
                               session: Session = Depends(get_session)):
         cfg = _ensure_config(session, worktree_root=worktree_root,

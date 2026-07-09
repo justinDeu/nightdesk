@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import ProjectCreate, ProjectOut, ProjectUpdate
 from nightdesk.domain.projects import (
     ProjectNameTaken,
@@ -22,14 +22,15 @@ def _coerce_workspaces(workspaces):
     return [w.model_dump() if hasattr(w, "model_dump") else dict(w) for w in workspaces]
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/projects",
         tags=["projects"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.PROJECTS_READ))],
     )
+    write = Depends(scoped(sc.PROJECTS_WRITE))
 
-    @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
+    @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED, dependencies=[write])
     async def create(payload: ProjectCreate, session: Session = Depends(get_session)):
         fields = payload.model_dump()
         fields["default_linked_workspaces"] = _coerce_workspaces(
@@ -56,7 +57,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except ProjectNotFound:
             raise HTTPException(404, "not found")
 
-    @router.patch("/{project_id}", response_model=ProjectOut)
+    @router.patch("/{project_id}", response_model=ProjectOut, dependencies=[write])
     async def update(
         project_id: str,
         payload: ProjectUpdate,
@@ -76,7 +77,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
-    @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[write])
     async def delete(project_id: str, session: Session = Depends(get_session)):
         try:
             archive_project(session, project_id)
