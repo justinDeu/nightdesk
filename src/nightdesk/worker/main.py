@@ -82,6 +82,8 @@ class WorkerLoop:
         # Subprocess mode (production): subprocess.Popen handle per ticket id.
         self._inproc: dict[str, asyncio.Task] = {}
         self._subprocs: dict[str, asyncio.subprocess.Process] = {}
+        # Detached per-agent session-host subprocesses, keyed by session id.
+        self._session_procs: dict[str, asyncio.subprocess.Process] = {}
         # Rate-limit the "cc check not ok" log to once per minute.
         self._cc_warn_at: float = 0.0
 
@@ -174,6 +176,68 @@ class WorkerLoop:
             session.close()
 
     # ------------------------------------------------------------------
+    # Resident interactive agents: per-agent host supervision.
+    # ------------------------------------------------------------------
+    def _find_session_bin(self) -> list[str]:
+        found = shutil.which("nightdesk-session")
+        if found:
+            return [found]
+        return [sys.executable, "-m", "nightdesk.worker.session_host"]
+
+    async def _spawn_session_host(self, session_id: str) -> None:
+        argv = self._find_session_bin() + [session_id]
+        log.info("spawning session host: %s", " ".join(argv))
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                stdin=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            log.exception("failed to spawn session host for %s", session_id)
+            return
+        self._session_procs[session_id] = proc
+        try:
+            await proc.wait()
+        finally:
+            self._session_procs.pop(session_id, None)
+
+    def _session_supervisor_pass(self) -> None:
+        """One supervision pass over resident agents: sweep crashes, spawn hosts
+        for cold agents with queued work (under the live cap), evict LRU over cap."""
+        from nightdesk.worker import session_reaper as reaper
+
+        session = self._session_factory()
+        to_spawn: list[str] = []
+        to_evict = []
+        try:
+            try:
+                reaper.orphan_sweep(session, host=self.settings.host)
+            except Exception:
+                log.exception("agent orphan sweep failed (continuing)")
+
+            from nightdesk.db.models import ConfigRow
+            cfg = session.get(ConfigRow, 1)
+            cap = int(cfg.max_live_sessions) if cfg and cfg.max_live_sessions else 4
+            live = reaper.live_sessions(session)
+            free = max(0, cap - len(live))
+            needing = reaper.sessions_needing_host(session)
+            # Don't double-spawn one we already have a tracked proc for.
+            needing = [r for r in needing if r.id not in self._session_procs]
+            for row in needing[:free]:
+                to_spawn.append(row.id)
+            to_evict = reaper.over_cap_evictions(session)
+        finally:
+            session.close()
+
+        for sid in to_spawn:
+            asyncio.create_task(self._spawn_session_host(sid))
+        for row in to_evict:
+            reaper.evict(row)
+
+    # ------------------------------------------------------------------
     # Scheduler tick.
     # ------------------------------------------------------------------
     async def tick_once(self) -> None:
@@ -255,6 +319,16 @@ class WorkerLoop:
         if self._subprocs:
             await self._supervise_cancellations()
 
+        # Resident-agent supervision: spawn/evict/sweep per-agent hosts. Runs
+        # every tick, independent of ticket picks (and of the CC gate above,
+        # which returns early — but agents run on the trusted posture with their
+        # own hosts, so they are supervised here whenever the tick reaches this
+        # point).
+        try:
+            self._session_supervisor_pass()
+        except Exception:
+            log.exception("agent supervisor pass failed (continuing)")
+
     async def run_forever(self) -> None:
         s = self.settings
         log.info(
@@ -291,6 +365,12 @@ class WorkerLoop:
         # forever; the only escape was kill -9.
         loop = asyncio.get_running_loop()
         shutdown_event = asyncio.Event()
+        # SIGUSR1 wake nudge: the API raises it after enqueuing on a cold agent
+        # (or ticket run_now) so the loop breaks its tick sleep and spawns a host
+        # immediately instead of waiting up to tick_seconds. A latency
+        # optimization, never a correctness dependency — the next plain tick
+        # would spawn it anyway.
+        wake_event = asyncio.Event()
 
         def _shutdown(*_):
             shutdown_event.set()
@@ -301,20 +381,34 @@ class WorkerLoop:
                     except ProcessLookupError:
                         pass
 
+        def _wake(*_):
+            wake_event.set()
+
         for sig in (signal.SIGTERM, signal.SIGINT):
             try:
                 loop.add_signal_handler(sig, _shutdown)
             except (NotImplementedError, ValueError):
                 pass
+        try:
+            loop.add_signal_handler(signal.SIGUSR1, _wake)
+        except (NotImplementedError, ValueError, AttributeError):
+            pass
 
         log.info("nightdesk worker ready; entering tick loop")
         while not shutdown_event.is_set():
             await self.tick_once()
+            wake_event.clear()
+            waiters = [asyncio.create_task(shutdown_event.wait()),
+                       asyncio.create_task(wake_event.wait())]
             try:
-                await asyncio.wait_for(shutdown_event.wait(),
-                                         timeout=self.settings.tick_seconds)
-            except asyncio.TimeoutError:
-                pass
+                done, pending = await asyncio.wait(
+                    waiters, timeout=self.settings.tick_seconds,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for w in waiters:
+                    if not w.done():
+                        w.cancel()
 
         # Wait briefly for children we just SIGTERMed so the daemon doesn't
         # return while subprocesses are still mid-shutdown. Bounded so a
