@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   Cloud,
   FolderGit2,
+  GitMerge,
   Hexagon,
   Layers,
   Settings2,
@@ -24,6 +25,7 @@ import { LabelsSection } from "@/routes/settings/LabelsSection";
 import { ProjectsSection } from "@/routes/settings/ProjectsSection";
 import { ProfilesSection } from "@/routes/settings/ProfilesSection";
 import { ProvidersSection } from "@/routes/settings/ProvidersSection";
+import { ConnectionsSection } from "@/routes/settings/ConnectionsSection";
 import { CloudSandboxSection } from "@/routes/settings/CloudSandboxSection";
 import { ToolsetsSection } from "@/routes/settings/ToolsetsSection";
 import { DiagnosticsSection } from "@/routes/settings/DiagnosticsSection";
@@ -41,6 +43,7 @@ const SECTIONS: SectionMeta[] = [
   // every harness (Claude Code + opencode) — see ClaudeSection.tsx.
   { slug: "claude", label: "Harnesses", icon: Terminal, component: ClaudeSection },
   { slug: "providers", label: "Providers", icon: Cable, component: ProvidersSection },
+  { slug: "connections", label: "Connections", icon: GitMerge, component: ConnectionsSection },
   { slug: "cloud-sandbox", label: "Cloud sandbox", icon: Cloud, component: CloudSandboxSection },
   { slug: "worktrees", label: "Worktrees", icon: FolderGit2, component: WorktreesSection },
   { slug: "notifications", label: "Notifications", icon: Bell, component: NotificationsSection },

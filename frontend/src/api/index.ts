@@ -14,4 +14,5 @@ export * from "./inbox";
 export * from "./cron";
 export * from "./fs";
 export * from "./effectiveConfig";
+export * from "./integrations";
 export * as authApi from "./auth";

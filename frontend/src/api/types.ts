@@ -837,3 +837,139 @@ export interface SessionPromote {
   prompt?: string | null;
   target_status?: "review" | "draft";
 }
+
+// ---------------------------------------------------------------------------
+// Integrations (GitLab v1): Connection / RepoLink / ExternalLink
+// ---------------------------------------------------------------------------
+
+export type ConnectionStatus = "ok" | "auth_failed" | "unreachable" | "unchecked";
+
+export interface ConnectionOut {
+  id: string;
+  name: string;
+  provider: string;
+  base_url: string;
+  auth_kind: string;
+  credential_set: boolean;
+  status: ConnectionStatus;
+  status_detail: string | null;
+  last_checked_at: string | null;
+  repo_link_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConnectionCreate {
+  name: string;
+  provider?: string;
+  base_url?: string;
+  auth_kind?: string;
+  credential_value?: string | null;
+}
+
+export interface ConnectionUpdate {
+  name?: string | null;
+  base_url?: string | null;
+  auth_kind?: string | null;
+  credential_value?: string | null;
+}
+
+export interface ConnectionTestResult {
+  status: ConnectionStatus;
+  status_detail: string | null;
+  last_checked_at: string | null;
+}
+
+export interface ProviderProjectOut {
+  external_id: string;
+  external_path: string;
+  display_name: string;
+  web_url: string;
+  git_remote_url: string | null;
+}
+
+export interface RepoLinkOut {
+  id: string;
+  connection_id: string;
+  external_kind: string;
+  external_id: string;
+  external_path: string;
+  display_name: string;
+  git_remote_url: string | null;
+  web_url: string;
+  project_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RepoLinkCreate {
+  connection_id: string;
+  external_kind?: string;
+  external_id: string;
+  external_path?: string;
+  display_name?: string;
+  git_remote_url?: string | null;
+  web_url?: string;
+}
+
+export interface RepoSuggestOut {
+  git_remote_url: string | null;
+  matched_repo_link_id: string | null;
+}
+
+export type ExternalLinkKind = "issue" | "merge_request";
+export type ExternalLinkRole = "fixes" | "references" | "produced_mr" | "imported_from";
+
+export interface ExternalLinkOut {
+  id: string;
+  ticket_id: string;
+  repo_link_id: string;
+  kind: ExternalLinkKind;
+  external_iid: string;
+  role: ExternalLinkRole;
+  url: string;
+  title: string;
+  state: string | null;
+  state_detail: Record<string, unknown> | null;
+  author_kind: string;
+  synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExternalLinkCreate {
+  repo_link_id: string;
+  kind: ExternalLinkKind;
+  external_iid: string;
+  role?: ExternalLinkRole;
+}
+
+/** A GitLab issue/MR as returned by the live-proxy browse endpoints (raw
+ *  provider JSON; only the fields the UI reads are typed). */
+export interface GitLabItem {
+  iid: number;
+  title: string;
+  state: string;
+  web_url: string;
+  description?: string | null;
+  updated_at?: string;
+  labels?: string[];
+  author?: { username?: string; name?: string } | null;
+  source_branch?: string;
+  target_branch?: string;
+  merge_status?: string;
+  draft?: boolean;
+  [k: string]: unknown;
+}
+
+export interface GitLabItemPage {
+  items: GitLabItem[];
+  next_page_token: string | null;
+}
+
+export interface ImportTicketRequest {
+  kind?: ExternalLinkKind;
+  external_iid: string;
+  project_id?: string | null;
+  profile_id?: string | null;
+}
