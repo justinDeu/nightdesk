@@ -45,4 +45,8 @@ export const qk = {
     detail: (id: string) => ["cron", "detail", id] as const,
   },
   search: (q: string, projectId?: string | null) => ["search", q, projectId ?? null] as const,
+  tokens: {
+    all: ["tokens"] as const,
+    catalog: ["tokens", "catalog"] as const,
+  },
 } as const;

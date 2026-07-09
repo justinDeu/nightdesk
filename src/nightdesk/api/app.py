@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from sqlalchemy.engine import Engine
 
+from nightdesk.api.auth import make_scoped
 from nightdesk.api.deps import get_session_dep
 from nightdesk.api.routes import analytics as analytics_routes
 from nightdesk.api.routes import auth as auth_routes
@@ -26,6 +27,7 @@ from nightdesk.api.routes import search as search_routes
 from nightdesk.api.routes import agents as agents_routes
 from nightdesk.api.routes import agent_transcript as agent_transcript_routes
 from nightdesk.api.routes import tickets as tickets_routes
+from nightdesk.api.routes import tokens as tokens_routes
 from nightdesk.api.routes import transcript as transcript_routes
 from nightdesk.api.routes import saved_views as saved_views_routes
 from nightdesk.api import spa as spa_app
@@ -68,33 +70,42 @@ def create_app(
     app.include_router(health.router)
 
     get_session = get_session_dep(engine)
-    app.include_router(profiles_routes.build_router(get_session, bearer_token))
-    app.include_router(providers_routes.build_router(get_session, bearer_token))
-    app.include_router(backends_routes.build_router(get_session, bearer_token))
-    app.include_router(projects_routes.build_router(get_session, bearer_token))
-    app.include_router(tickets_routes.build_router(get_session, bearer_token))
+    # One scope-check dependency factory shared by every router. Resolution:
+    # session cookie / root bearer -> admin (browser UX unchanged); ndk_/ndr_
+    # token -> scope check; else 401 (api/auth.py:make_scoped). A router left on
+    # the legacy cookie/bearer gate is simply inaccessible to agent tokens, so
+    # the migration is default-deny even if a route is somehow missed.
+    scoped = make_scoped(bearer_token, engine)
+    app.include_router(profiles_routes.build_router(get_session, bearer_token, scoped))
+    app.include_router(providers_routes.build_router(get_session, bearer_token, scoped))
+    app.include_router(backends_routes.build_router(get_session, bearer_token, scoped))
+    app.include_router(projects_routes.build_router(get_session, bearer_token, scoped))
+    app.include_router(tickets_routes.build_router(get_session, bearer_token, scoped))
     app.include_router(agents_routes.build_router(
-        get_session, bearer_token, worktree_root=worktree_root,
+        get_session, bearer_token, scoped, worktree_root=worktree_root,
     ))
-    app.include_router(agent_transcript_routes.build_router(get_session, bearer_token))
-    app.include_router(runs_routes.build_router(get_session, bearer_token, engine=engine))
-    app.include_router(review_comments_routes.build_router(get_session, bearer_token))
+    app.include_router(agent_transcript_routes.build_router(get_session, bearer_token, scoped))
+    app.include_router(runs_routes.build_router(
+        get_session, bearer_token, engine=engine, scoped=scoped,
+    ))
+    app.include_router(review_comments_routes.build_router(get_session, bearer_token, scoped))
     app.include_router(config_routes.build_router(
-        get_session, bearer_token,
+        get_session, bearer_token, scoped,
         worktree_root=str(worktree_root), transcript_root=str(transcript_root),
     ))
-    app.include_router(search_routes.build_router(get_session, bearer_token))
-    app.include_router(effective_config_routes.build_api_router(get_session, bearer_token))
-    app.include_router(labels_routes.build_router(get_session, bearer_token))
-    app.include_router(transcript_routes.build_router(get_session, bearer_token))
-    app.include_router(cron_jobs_routes.build_router(get_session, bearer_token))
-    app.include_router(saved_views_routes.build_api_router(get_session, bearer_token))
-    app.include_router(inbox_routes.build_api_router(get_session, bearer_token))
-    app.include_router(analytics_routes.build_router(get_session, bearer_token))
+    app.include_router(search_routes.build_router(get_session, bearer_token, scoped))
+    app.include_router(effective_config_routes.build_api_router(get_session, bearer_token, scoped))
+    app.include_router(labels_routes.build_router(get_session, bearer_token, scoped))
+    app.include_router(transcript_routes.build_router(get_session, bearer_token, scoped))
+    app.include_router(cron_jobs_routes.build_router(get_session, bearer_token, scoped))
+    app.include_router(saved_views_routes.build_api_router(get_session, bearer_token, scoped))
+    app.include_router(inbox_routes.build_api_router(get_session, bearer_token, scoped))
+    app.include_router(analytics_routes.build_router(get_session, bearer_token, scoped))
     app.include_router(helpers_routes.build_router(
-        get_session, bearer_token, worktree_root=worktree_root,
+        get_session, bearer_token, scoped, worktree_root=worktree_root,
     ))
-    app.include_router(fs_routes.build_router(bearer_token))
+    app.include_router(fs_routes.build_router(bearer_token, scoped))
+    app.include_router(tokens_routes.build_router(get_session, bearer_token))
     app.include_router(auth_routes.build_router(
         bearer_token=bearer_token,
         one_shot_store=app.state.one_shot_store,

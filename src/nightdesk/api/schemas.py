@@ -1565,3 +1565,45 @@ class DiffCommentOut(BaseModel):
     outdated: bool = False
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# API access tokens (durable ndk_ agent tokens). See docs/design/
+# agent-token-permissions.md and api/routes/tokens.py. A token value is
+# returned exactly once, in TokenMintResult; no other schema ever carries it.
+# ---------------------------------------------------------------------------
+
+
+class TokenMintRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    # A bundle preset name (observer/reviewer/pm-agent/operator) OR None when the
+    # caller specifies scopes directly. When both are given, `scopes` wins and
+    # `bundle` is kept for display only.
+    bundle: Optional[str] = None
+    scopes: Optional[list[str]] = None
+    profile_allowlist: Optional[list[str]] = None
+    project_allowlist: Optional[list[str]] = None
+    # Days until expiry; None = no expiry (UI nudges toward 90).
+    expires_in_days: Optional[int] = Field(default=None, ge=1, le=3650)
+
+
+class TokenOut(BaseModel):
+    """List/metadata view. Never carries a token value or hash."""
+    id: str
+    name: str
+    kind: str
+    bundle: Optional[str] = None
+    scopes: list[str]
+    scope_data: dict
+    prefix_hint: str
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class TokenMintResult(TokenOut):
+    """Mint response: the ONLY place a full token value is ever returned."""
+    token: str

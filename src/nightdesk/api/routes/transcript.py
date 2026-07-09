@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.db.models import Run
 from nightdesk.domain.runs import RunNotFound, get_run, list_runs
 from nightdesk.domain.tickets import get_ticket, TicketNotFound
@@ -59,9 +59,9 @@ def _format_sse(line: str, since_seq: int = -1) -> str:
     return f"data: {stripped}\n\n"
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(tags=["transcript"])
-    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+    auth = Depends(scoped(sc.RUNS_READ))
 
     @router.get("/api/v1/tickets/{tid}/transcript", dependencies=[auth])
     async def transcript_sse(

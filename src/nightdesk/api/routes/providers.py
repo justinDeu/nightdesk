@@ -15,7 +15,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
     CatalogOfferingOut,
     EndpointCreate,
@@ -196,11 +196,12 @@ def _parse_models(protocol: str, payload: Any) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(
         tags=["providers"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.PROVIDERS_READ))],
     )
+    write = Depends(scoped(sc.PROVIDERS_WRITE))
     box = ProfileSecretBox(bearer_token) if bearer_token else None
 
     def _encrypt_optional(value: Optional[Any]) -> Optional[str]:
@@ -242,7 +243,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     async def list_providers_api(session: Session = Depends(get_session)):
         return [_provider_out(p) for p in list_providers(session)]
 
-    @router.post("/api/v1/providers", response_model=ProviderOut, status_code=status.HTTP_201_CREATED)
+    @router.post("/api/v1/providers", response_model=ProviderOut, status_code=status.HTTP_201_CREATED, dependencies=[write])
     async def create_provider_api(payload: ProviderCreate, session: Session = Depends(get_session)):
         for ep_in in payload.endpoints:
             if ep_in.protocol_kind not in PROTOCOL_KINDS:
@@ -272,7 +273,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except ProviderNotFound:
             raise HTTPException(404, "not found")
 
-    @router.patch("/api/v1/providers/{pid}", response_model=ProviderOut)
+    @router.patch("/api/v1/providers/{pid}", response_model=ProviderOut, dependencies=[write])
     async def update_provider_api(
         pid: str, payload: ProviderUpdate, session: Session = Depends(get_session),
     ):
@@ -285,7 +286,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, "name taken")
         return _provider_out(provider)
 
-    @router.delete("/api/v1/providers/{pid}", status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete("/api/v1/providers/{pid}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[write])
     async def delete_provider_api(pid: str, session: Session = Depends(get_session)):
         try:
             delete_provider(session, pid)
@@ -297,7 +298,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     @router.post(
         "/api/v1/providers/{pid}/endpoints", response_model=EndpointOut,
-        status_code=status.HTTP_201_CREATED,
+        status_code=status.HTTP_201_CREATED, dependencies=[write],
     )
     async def create_endpoint_api(
         pid: str, payload: EndpointCreate, session: Session = Depends(get_session),
@@ -313,7 +314,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(400, str(exc))
         return _endpoint_out(ep)
 
-    @router.post("/api/v1/providers/{pid}/rotate-credential", response_model=ProviderRotateResult)
+    @router.post("/api/v1/providers/{pid}/rotate-credential", response_model=ProviderRotateResult, dependencies=[write])
     async def rotate_credential_api(
         pid: str, payload: ProviderRotateCredential, session: Session = Depends(get_session),
     ):
@@ -331,7 +332,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     # -- endpoints -------------------------------------------------------
 
-    @router.patch("/api/v1/provider-endpoints/{eid}", response_model=EndpointOut)
+    @router.patch("/api/v1/provider-endpoints/{eid}", response_model=EndpointOut, dependencies=[write])
     async def update_endpoint_api(
         eid: str, payload: EndpointUpdate, session: Session = Depends(get_session),
     ):
@@ -355,7 +356,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(400, str(exc))
         return _endpoint_out(ep)
 
-    @router.delete("/api/v1/provider-endpoints/{eid}", status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete("/api/v1/provider-endpoints/{eid}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[write])
     async def delete_endpoint_api(eid: str, session: Session = Depends(get_session)):
         try:
             delete_endpoint(session, eid)
@@ -365,7 +366,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, "endpoint is in use")
         return None
 
-    @router.post("/api/v1/provider-endpoints/{eid}/pull-models", response_model=EndpointOut)
+    @router.post("/api/v1/provider-endpoints/{eid}/pull-models", response_model=EndpointOut, dependencies=[write])
     async def pull_models_api(eid: str, session: Session = Depends(get_session)):
         try:
             get_endpoint(session, eid)

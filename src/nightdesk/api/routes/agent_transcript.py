@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.routes.transcript import _format_sse
 from nightdesk.db.models import Session as SessionModel
 from nightdesk.domain import sessions as sess
@@ -35,9 +35,10 @@ def _agent_still_active(db: Session, aid: str) -> bool:
     return sess._queued_count(db, aid) > 0 or sess._has_streaming_turn(db, aid)
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(tags=["agents"])
-    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+    # Admin-only, same posture as the agents router (seam A).
+    auth = Depends(scoped(sc.AGENTS_ADMIN))
 
     @router.get("/api/v1/agents/{aid}/transcript", dependencies=[auth])
     async def agent_transcript_sse(

@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.api.auth import Principal, enforce_profile_allowlist
+from nightdesk.domain import scopes as sc
 from nightdesk.domain.projects import ProjectNotFound
 from nightdesk.api.schemas import (
     AdditionalDirAdd,
@@ -115,15 +116,30 @@ def _ticket_to_out(t) -> TicketOut:
     return TicketOut(**data)
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
-    router = APIRouter(
-        prefix="/api/v1/tickets",
-        tags=["tickets"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
-    )
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
+    # Each route carries exactly the scope its action needs (no router-level read
+    # gate): GET routes require tickets.read, write routes require their action
+    # scope only. This lets a run token holding just tickets.create (a child-
+    # ticket grant) POST /tickets without also needing tickets.read (§7).
+    # Admins bypass the scope check entirely — browser/root-bearer UX unchanged.
+    router = APIRouter(prefix="/api/v1/tickets", tags=["tickets"])
+    read_dep = Depends(scoped(sc.TICKETS_READ))
+    create_dep = Depends(scoped(sc.TICKETS_CREATE))
+    update_dep = Depends(scoped(sc.TICKETS_UPDATE))
+    transition_dep = Depends(scoped(sc.TICKETS_TRANSITION))
+    run_dep = Depends(scoped(sc.TICKETS_RUN))
+    archive_dep = Depends(scoped(sc.TICKETS_ARCHIVE))
+    delete_dep = Depends(scoped(sc.TICKETS_DELETE))
 
     @router.post("", response_model=TicketOut, status_code=status.HTTP_201_CREATED)
-    async def create(payload: TicketCreate, session: Session = Depends(get_session)):
+    async def create(
+        payload: TicketCreate,
+        session: Session = Depends(get_session),
+        principal: Principal = create_dep,
+    ):
+        # A scoped token with a profile_allowlist may only create tickets bound
+        # to a listed profile (the blast-radius knob, §4.4).
+        enforce_profile_allowlist(principal, payload.profile_id)
         data = payload.model_dump()
         # If caller didn't specify status, let domain default it (to 'draft').
         if data.get("status") is None:
@@ -140,7 +156,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except (InvalidTransition, ValueError) as e:
             raise HTTPException(422, str(e))
 
-    @router.get("", response_model=list[TicketOut])
+    @router.get("", response_model=list[TicketOut], dependencies=[read_dep])
     async def lst(
         response: Response,
         status: str | None = Query(default=None),
@@ -195,7 +211,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     # --- Bulk metadata update endpoints -----------------------------------------
     # Registered BEFORE /{tid} routes so FastAPI does not match "bulk" as a tid.
 
-    @router.patch("/bulk/priority", response_model=BulkUpdateResult)
+    @router.patch("/bulk/priority", response_model=BulkUpdateResult, dependencies=[update_dep])
     async def bulk_priority(
         payload: BulkPriorityUpdate,
         session: Session = Depends(get_session),
@@ -211,7 +227,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             skipped=skipped,
         )
 
-    @router.patch("/bulk/status", response_model=BulkUpdateResult)
+    @router.patch("/bulk/status", response_model=BulkUpdateResult, dependencies=[transition_dep])
     async def bulk_status(
         payload: BulkStatusUpdate,
         session: Session = Depends(get_session),
@@ -227,7 +243,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             skipped=skipped,
         )
 
-    @router.patch("/bulk/project", response_model=BulkUpdateResult)
+    @router.patch("/bulk/project", response_model=BulkUpdateResult, dependencies=[update_dep])
     async def bulk_project(
         payload: BulkProjectUpdate,
         session: Session = Depends(get_session),
@@ -243,7 +259,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             skipped=skipped,
         )
 
-    @router.patch("/bulk/profile", response_model=BulkUpdateResult)
+    @router.patch("/bulk/profile", response_model=BulkUpdateResult, dependencies=[update_dep])
     async def bulk_profile(
         payload: BulkProfileUpdate,
         session: Session = Depends(get_session),
@@ -259,7 +275,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             skipped=skipped,
         )
 
-    @router.post("/reorder", response_model=list[TicketOut])
+    @router.post("/reorder", response_model=list[TicketOut], dependencies=[update_dep])
     async def reorder(payload: TicketReorder, session: Session = Depends(get_session)):
         try:
             tickets = reorder_in_column(session, payload.status, payload.ticket_ids)
@@ -267,7 +283,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(422, str(e))
 
-    @router.patch("/bulk/labels", response_model=BulkUpdateResult)
+    @router.patch("/bulk/labels", response_model=BulkUpdateResult, dependencies=[update_dep])
     async def bulk_labels(
         payload: BulkLabelsUpdate,
         session: Session = Depends(get_session),
@@ -289,7 +305,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             skipped=skipped,
         )
 
-    @router.post("/bulk/archive", response_model=BulkUpdateResult)
+    @router.post("/bulk/archive", response_model=BulkUpdateResult, dependencies=[archive_dep])
     async def bulk_archive_route(
         payload: BulkArchiveRequest,
         session: Session = Depends(get_session),
@@ -300,7 +316,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             skipped=skipped,
         )
 
-    @router.post("/bulk/unarchive", response_model=BulkUpdateResult)
+    @router.post("/bulk/unarchive", response_model=BulkUpdateResult, dependencies=[archive_dep])
     async def bulk_unarchive_route(
         payload: BulkArchiveRequest,
         session: Session = Depends(get_session),
@@ -313,7 +329,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     # --- Per-ticket routes (path parameter {tid}) --------------------------------
 
-    @router.get("/{tid}", response_model=TicketOut)
+    @router.get("/{tid}", response_model=TicketOut, dependencies=[read_dep])
     async def show(tid: str, session: Session = Depends(get_session)):
         try:
             t = get_ticket(session, tid)
@@ -321,7 +337,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except TicketNotFound:
             raise HTTPException(404, "not found")
 
-    @router.patch("/{tid}", response_model=TicketOut)
+    @router.patch("/{tid}", response_model=TicketOut, dependencies=[update_dep])
     async def update(tid: str, payload: TicketUpdate, session: Session = Depends(get_session)):
         data = payload.model_dump()
         fields = {k: v for k, v in data.items() if v is not None}
@@ -341,7 +357,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except ValueError as e:
             raise HTTPException(422, str(e))
 
-    @router.post("/{tid}/run-now", response_model=TicketOut)
+    @router.post("/{tid}/run-now", response_model=TicketOut, dependencies=[run_dep])
     async def run_now(tid: str, session: Session = Depends(get_session)):
         try:
             t = request_run_now(session, tid)
@@ -351,7 +367,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.post("/{tid}/cancel-run-now", response_model=TicketOut)
+    @router.post("/{tid}/cancel-run-now", response_model=TicketOut, dependencies=[run_dep])
     async def cancel_run_now(tid: str, session: Session = Depends(get_session)):
         # Symmetric inverse of run-now: clear the run_now flag without changing
         # status (a queued+run-now ticket stays queued, it just stops asking the
@@ -363,7 +379,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except TicketNotFound:
             raise HTTPException(404, "not found")
 
-    @router.post("/{tid}/cancel", response_model=TicketOut)
+    @router.post("/{tid}/cancel", response_model=TicketOut, dependencies=[run_dep])
     async def cancel(tid: str, session: Session = Depends(get_session)):
         try:
             t = transition_status(session, tid, "review")
@@ -373,7 +389,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.post("/{tid}/requeue", response_model=TicketOut)
+    @router.post("/{tid}/requeue", response_model=TicketOut, dependencies=[run_dep])
     async def requeue_route(tid: str, session: Session = Depends(get_session)):
         try:
             t = requeue(session, tid)
@@ -383,7 +399,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.post("/{tid}/transition", response_model=TicketOut)
+    @router.post("/{tid}/transition", response_model=TicketOut, dependencies=[transition_dep])
     async def transition(
         tid: str, payload: TicketTransition,
         session: Session = Depends(get_session),
@@ -398,7 +414,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.post("/{tid}/archive", response_model=TicketOut)
+    @router.post("/{tid}/archive", response_model=TicketOut, dependencies=[archive_dep])
     async def archive_route(tid: str, session: Session = Depends(get_session)):
         try:
             t = archive(session, tid)
@@ -408,7 +424,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.post("/{tid}/unarchive", response_model=TicketOut)
+    @router.post("/{tid}/unarchive", response_model=TicketOut, dependencies=[archive_dep])
     async def unarchive_route(tid: str, session: Session = Depends(get_session)):
         try:
             t = unarchive(session, tid)
@@ -418,7 +434,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.post("/{tid}/send-to-inbox", response_model=TicketOut)
+    @router.post("/{tid}/send-to-inbox", response_model=TicketOut, dependencies=[transition_dep])
     async def send_to_inbox_route(tid: str, session: Session = Depends(get_session)):
         """Send a draft ticket back to the inbox. Valid ONLY from ``draft``;
         every other status is a 409 (see ``domain.tickets.send_to_inbox``).
@@ -436,7 +452,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.post("/{tid}/continue", response_model=TicketOut)
+    @router.post("/{tid}/continue", response_model=TicketOut, dependencies=[run_dep])
     async def continue_route(
         tid: str, payload: TicketContinue,
         session: Session = Depends(get_session),
@@ -461,7 +477,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, str(e))
         return _ticket_to_out(t)
 
-    @router.post("/{tid}/new-conversation", response_model=TicketOut)
+    @router.post("/{tid}/new-conversation", response_model=TicketOut, dependencies=[run_dep])
     async def new_conversation_route(
         tid: str, payload: TicketNewConversation,
         session: Session = Depends(get_session),
@@ -490,7 +506,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "profile not found")
         return _ticket_to_out(t)
 
-    @router.post("/{tid}/resume", response_model=TicketOut)
+    @router.post("/{tid}/resume", response_model=TicketOut, dependencies=[run_dep])
     async def resume_route(
         tid: str, payload: TicketResumeOrRetry,
         session: Session = Depends(get_session),
@@ -505,7 +521,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, str(e))
         return _ticket_to_out(t)
 
-    @router.post("/{tid}/retry", response_model=TicketOut)
+    @router.post("/{tid}/retry", response_model=TicketOut, dependencies=[run_dep])
     async def retry_route(
         tid: str, payload: TicketResumeOrRetry,
         session: Session = Depends(get_session),
@@ -520,7 +536,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, str(e))
         return _ticket_to_out(t)
 
-    @router.post("/{tid}/restart", response_model=TicketOut)
+    @router.post("/{tid}/restart", response_model=TicketOut, dependencies=[run_dep])
     async def restart_route(
         tid: str, payload: TicketRestart,
         session: Session = Depends(get_session),
@@ -541,7 +557,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, str(e))
         return _ticket_to_out(t)
 
-    @router.post("/{tid}/clone", response_model=TicketOut, status_code=status.HTTP_201_CREATED)
+    @router.post("/{tid}/clone", response_model=TicketOut, status_code=status.HTTP_201_CREATED, dependencies=[create_dep])
     async def clone_route(
         tid: str, payload: TicketClone,
         session: Session = Depends(get_session),
@@ -556,7 +572,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
         return _ticket_to_out(cloned)
 
-    @router.post("/{tid}/next-run-context", response_model=TicketOut)
+    @router.post("/{tid}/next-run-context", response_model=TicketOut, dependencies=[update_dep])
     async def next_run_context_route(
         tid: str, payload: TicketNextRunContext,
         session: Session = Depends(get_session),
@@ -568,7 +584,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
         return _ticket_to_out(t)
 
-    @router.post("/{tid}/merge-next-run-context", response_model=TicketOut)
+    @router.post("/{tid}/merge-next-run-context", response_model=TicketOut, dependencies=[update_dep])
     async def merge_next_run_context_route(
         tid: str, session: Session = Depends(get_session),
     ):
@@ -605,7 +621,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         return bool(cap and cap.provides(bc.Capability.STEER_INJECT))
 
     @router.post("/{tid}/steer", response_model=SteerMessageOut,
-                 status_code=status.HTTP_201_CREATED)
+                 status_code=status.HTTP_201_CREATED, dependencies=[update_dep])
     async def steer_add(
         tid: str, payload: SteerMessageCreate,
         session: Session = Depends(get_session),
@@ -632,7 +648,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(422, str(e))
         return _steer_out(m)
 
-    @router.get("/{tid}/steer", response_model=SteerQueueOut)
+    @router.get("/{tid}/steer", response_model=SteerQueueOut, dependencies=[read_dep])
     async def steer_list(tid: str, session: Session = Depends(get_session)):
         from nightdesk.domain.steering import list_steer_messages
         try:
@@ -645,7 +661,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             capability=SteerCapability(inject=_steer_inject_capable(conv)),
         )
 
-    @router.patch("/{tid}/steer/{mid}", response_model=SteerMessageOut)
+    @router.patch("/{tid}/steer/{mid}", response_model=SteerMessageOut, dependencies=[update_dep])
     async def steer_edit(
         tid: str, mid: str, payload: SteerMessageEdit,
         session: Session = Depends(get_session),
@@ -663,7 +679,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(422, str(e))
         return _steer_out(m)
 
-    @router.post("/{tid}/steer/reorder", response_model=SteerQueueOut)
+    @router.post("/{tid}/steer/reorder", response_model=SteerQueueOut, dependencies=[update_dep])
     async def steer_reorder(
         tid: str, payload: SteerReorder,
         session: Session = Depends(get_session),
@@ -686,7 +702,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             capability=SteerCapability(inject=_steer_inject_capable(conv)),
         )
 
-    @router.delete("/{tid}/steer/{mid}", status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete("/{tid}/steer/{mid}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[update_dep])
     async def steer_cancel(
         tid: str, mid: str, session: Session = Depends(get_session),
     ):
@@ -701,7 +717,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, str(e))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @router.post("/{tid}/additional-dirs", response_model=TicketOut)
+    @router.post("/{tid}/additional-dirs", response_model=TicketOut, dependencies=[update_dep])
     async def add_additional_dir_route(
         tid: str, payload: AdditionalDirAdd,
         session: Session = Depends(get_session),
@@ -716,7 +732,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             t = update_ticket(session, tid, additional_dirs=dirs)
         return _ticket_to_out(t)
 
-    @router.delete("/{tid}/additional-dirs", response_model=TicketOut)
+    @router.delete("/{tid}/additional-dirs", response_model=TicketOut, dependencies=[update_dep])
     async def remove_additional_dir_route(
         tid: str, path: str = Query(...),
         session: Session = Depends(get_session),
@@ -729,7 +745,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         t = update_ticket(session, tid, additional_dirs=dirs)
         return _ticket_to_out(t)
 
-    @router.delete("/{tid}", status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete("/{tid}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[delete_dep])
     async def delete(tid: str, session: Session = Depends(get_session)):
         try:
             delete_ticket(session, tid)
@@ -744,7 +760,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
     # field so callers don't need to construct a full TicketUpdate just to
     # change the priority.  The existing full PATCH endpoint is preserved.
 
-    @router.patch("/{tid}/priority", response_model=TicketOut)
+    @router.patch("/{tid}/priority", response_model=TicketOut, dependencies=[update_dep])
     async def update_priority(
         tid: str, payload: TicketPriorityUpdate,
         session: Session = Depends(get_session),
@@ -757,7 +773,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except ValueError as e:
             raise HTTPException(422, str(e))
 
-    @router.patch("/{tid}/status", response_model=TicketOut)
+    @router.patch("/{tid}/status", response_model=TicketOut, dependencies=[transition_dep])
     async def update_status(
         tid: str, payload: TicketStatusUpdate,
         session: Session = Depends(get_session),
@@ -770,7 +786,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.patch("/{tid}/project", response_model=TicketOut)
+    @router.patch("/{tid}/project", response_model=TicketOut, dependencies=[update_dep])
     async def update_project(
         tid: str, payload: TicketProjectUpdate,
         session: Session = Depends(get_session),
@@ -783,7 +799,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except ProjectNotFound:
             raise HTTPException(404, "project not found")
 
-    @router.patch("/{tid}/profile", response_model=TicketOut)
+    @router.patch("/{tid}/profile", response_model=TicketOut, dependencies=[update_dep])
     async def update_profile(
         tid: str, payload: TicketProfileUpdate,
         session: Session = Depends(get_session),
@@ -798,7 +814,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     # --- Dependency endpoints ---------------------------------------------------
 
-    @router.get("/{tid}/dependencies", response_model=list[DependencyOut])
+    @router.get("/{tid}/dependencies", response_model=list[DependencyOut], dependencies=[read_dep])
     async def list_deps(tid: str, session: Session = Depends(get_session)):
         try:
             t = get_ticket(session, tid)
@@ -818,7 +834,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         return out
 
     @router.post("/{tid}/dependencies", response_model=DependencyOut,
-                  status_code=status.HTTP_201_CREATED)
+                  status_code=status.HTTP_201_CREATED, dependencies=[update_dep])
     async def add_dep(
         tid: str, payload: DependencyCreate,
         session: Session = Depends(get_session),
@@ -844,7 +860,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         raise HTTPException(500, "dependency was not created")
 
     @router.delete("/{tid}/dependencies/{dep_on_id}",
-                    status_code=status.HTTP_204_NO_CONTENT)
+                    status_code=status.HTTP_204_NO_CONTENT, dependencies=[update_dep])
     async def remove_dep(tid: str, dep_on_id: str,
                          session: Session = Depends(get_session)):
         try:

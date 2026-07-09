@@ -15,7 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import CronJobCreate, CronJobOut, CronJobUpdate, TicketOut
 from nightdesk.domain.cron_jobs import (
     CronJobNotFound, InvalidCronJob,
@@ -32,14 +32,16 @@ def _coerce_dirs(payload_dirs):
     ]
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/cron-jobs",
         tags=["cron-jobs"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.CRON_READ))],
     )
+    write = Depends(scoped(sc.CRON_WRITE))
+    fire = Depends(scoped(sc.TICKETS_RUN))
 
-    @router.post("", response_model=CronJobOut, status_code=status.HTTP_201_CREATED)
+    @router.post("", response_model=CronJobOut, status_code=status.HTTP_201_CREATED, dependencies=[write])
     async def create(payload: CronJobCreate, session: Session = Depends(get_session)):
         data = payload.model_dump()
         data["additional_dirs"] = _coerce_dirs(payload.additional_dirs) or []
@@ -62,7 +64,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except CronJobNotFound:
             raise HTTPException(404, "not found")
 
-    @router.patch("/{cid}", response_model=CronJobOut)
+    @router.patch("/{cid}", response_model=CronJobOut, dependencies=[write])
     async def update(cid: str, payload: CronJobUpdate, session: Session = Depends(get_session)):
         fields = {k: v for k, v in payload.model_dump().items() if v is not None}
         if "additional_dirs" in fields:
@@ -74,14 +76,14 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidCronJob as e:
             raise HTTPException(422, str(e))
 
-    @router.post("/{cid}/enable", response_model=CronJobOut)
+    @router.post("/{cid}/enable", response_model=CronJobOut, dependencies=[write])
     async def enable(cid: str, session: Session = Depends(get_session)):
         try:
             return enable_cron_job(session, cid)
         except CronJobNotFound:
             raise HTTPException(404, "not found")
 
-    @router.post("/{cid}/disable", response_model=CronJobOut)
+    @router.post("/{cid}/disable", response_model=CronJobOut, dependencies=[write])
     async def disable(cid: str, session: Session = Depends(get_session)):
         try:
             return disable_cron_job(session, cid)
@@ -89,7 +91,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
 
     @router.post("/{cid}/fire-now", response_model=TicketOut,
-                 status_code=status.HTTP_201_CREATED)
+                 status_code=status.HTTP_201_CREATED, dependencies=[fire])
     async def fire_now_route(cid: str, session: Session = Depends(get_session)):
         try:
             return fire_now(session, cid)
@@ -99,7 +101,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(422, str(e))
 
     @router.post("/{cid}/fire-now-and-run", response_model=TicketOut,
-                 status_code=status.HTTP_201_CREATED)
+                 status_code=status.HTTP_201_CREATED, dependencies=[fire])
     async def fire_now_and_run_route(cid: str, session: Session = Depends(get_session)):
         """Materialize a ticket from the template and run it immediately.
 
@@ -114,7 +116,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except InvalidCronJob as e:
             raise HTTPException(422, str(e))
 
-    @router.delete("/{cid}", status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete("/{cid}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[write])
     async def delete(cid: str, session: Session = Depends(get_session)):
         try:
             delete_cron_job(session, cid)

@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
     AgentAnswer,
     AgentCreate,
@@ -63,12 +63,16 @@ def _to_detail(db: Session, row) -> AgentDetailOut:
 
 
 def build_router(
-    get_session, bearer_token: str, *, worktree_root: Optional[Path] = None,
+    get_session, bearer_token: str, scoped, *, worktree_root: Optional[Path] = None,
 ) -> APIRouter:
+    # Whole surface is admin-only: driving a resident agent is a human act
+    # (agents.message / agents.admin are HUMAN_ONLY in the taxonomy). Gating on
+    # a human-only scope routes ndk_/ndr_ tokens to a self-diagnosing 403 rather
+    # than the bare 401 the legacy cookie/bearer gate would give.
     router = APIRouter(
         prefix="/api/v1/agents",
         tags=["agents"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.AGENTS_ADMIN))],
     )
     box = ProfileSecretBox(bearer_token) if bearer_token else None
     scratch_root = worktree_root.parent / "nightdesk-sessions" if worktree_root else None

@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
     ProfileCreate, ProfileImport, ProfileImportFromCC, ProfileImportResult, ProfileOut,
     ProfileUpdate,
@@ -377,15 +377,16 @@ def _profile_export(profile, box: Optional[ProfileSecretBox]) -> dict:
     return out
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/profiles",
         tags=["profiles"],
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.PROFILES_READ))],
     )
+    write = Depends(scoped(sc.PROFILES_WRITE))
     box = ProfileSecretBox(bearer_token) if bearer_token else None
 
-    @router.post("", response_model=ProfileOut, status_code=status.HTTP_201_CREATED)
+    @router.post("", response_model=ProfileOut, status_code=status.HTTP_201_CREATED, dependencies=[write])
     async def create(payload: ProfileCreate, session: Session = Depends(get_session)):
         fields = payload.model_dump()
         creds_in = fields.pop("claude_credentials", None)
@@ -433,7 +434,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         except ProfileNotFound:
             raise HTTPException(404, "not found")
 
-    @router.patch("/{pid}", response_model=ProfileOut)
+    @router.patch("/{pid}", response_model=ProfileOut, dependencies=[write])
     async def update(pid: str, payload: ProfileUpdate, session: Session = Depends(get_session)):
         try:
             existing = get_profile(session, pid)
@@ -483,7 +484,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         )
         return _profile_out(profile, box, warnings=warnings)
 
-    @router.delete("/{pid}", status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete("/{pid}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[write])
     async def delete(pid: str, session: Session = Depends(get_session)):
         try:
             delete_profile(session, pid)
@@ -491,7 +492,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
         return None
 
-    @router.post("/{pid}/copy", response_model=ProfileOut, status_code=status.HTTP_201_CREATED)
+    @router.post("/{pid}/copy", response_model=ProfileOut, status_code=status.HTTP_201_CREATED, dependencies=[write])
     async def copy_api(pid: str, session: Session = Depends(get_session)):
         """Clone an existing profile. Name collisions resolve to "<name> (copy)",
         "<name> (copy 2)", etc."""
@@ -516,7 +517,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
         return JSONResponse(_profile_export(profile, box))
 
-    @router.post("/import", response_model=ProfileImportResult, status_code=status.HTTP_201_CREATED)
+    @router.post("/import", response_model=ProfileImportResult, status_code=status.HTTP_201_CREATED, dependencies=[write])
     async def import_api(body: ProfileImport, session: Session = Depends(get_session)):
         """Re-import a nightdesk profile export (JSON body, not multipart).
 
@@ -565,7 +566,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
 
     @router.post(
         "/import-from-cc", response_model=ProfileImportResult,
-        status_code=status.HTTP_201_CREATED,
+        status_code=status.HTTP_201_CREATED, dependencies=[write],
     )
     async def import_from_cc_api(
         body: ProfileImportFromCC, session: Session = Depends(get_session),

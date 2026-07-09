@@ -11,8 +11,8 @@ from nightdesk.api.auth import (
     Principal,
     enforce_self_ticket,
     require_scopes,
-    require_token_cookie_or_bearer,
 )
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import RunOut
 from nightdesk.db.models import TicketWorkspace
 from nightdesk.domain.diff import (
@@ -26,16 +26,15 @@ from nightdesk.logging_setup import run_log_path
 from nightdesk.transcript import KNOWN_TYPES, append_events
 
 
-def build_router(get_session, bearer_token: str, engine=None) -> APIRouter:
-    # Bare parent (no global auth dep). The read routes carry the UI
-    # cookie/bearer gate; the run-token write-back routes carry their own
-    # per-route scope gate — a run's ndr_ token would 401 against the
-    # cookie/bearer gate, so the two auth models must not share one router-level
-    # dependency.
+def build_router(get_session, bearer_token: str, engine=None, scoped=None) -> APIRouter:
+    # Bare parent (no global auth dep). The read routes carry the runs.read
+    # scope gate; the run-token write-back routes carry their own per-route
+    # self-scope gate. A read token would fail the write-back's self-scope check
+    # and vice versa, so the two auth models must not share one router-level dep.
     router = APIRouter(tags=["runs"])
     read = APIRouter(
         prefix="/api/v1/runs",
-        dependencies=[Depends(require_token_cookie_or_bearer(bearer_token))],
+        dependencies=[Depends(scoped(sc.RUNS_READ))],
     )
 
     @read.get("", response_model=list[RunOut])

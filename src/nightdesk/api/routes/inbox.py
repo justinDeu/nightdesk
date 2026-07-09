@@ -14,7 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_token_cookie_or_bearer
+from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import InboxCountOut, InboxItemOut, TicketPromote
 from nightdesk.domain.tickets import (
     IncompleteTicket,
@@ -27,12 +27,13 @@ from nightdesk.domain.tickets import (
 )
 
 
-def build_api_router(get_session, bearer_token: str) -> APIRouter:
+def build_api_router(get_session, bearer_token: str, scoped) -> APIRouter:
     """JSON /api/v1/inbox — triage list, promote, decline, unread count."""
     from nightdesk.api.routes.tickets import _ticket_to_out
 
     router = APIRouter(prefix="/api/v1", tags=["inbox-api"])
-    auth = Depends(require_token_cookie_or_bearer(bearer_token))
+    auth = Depends(scoped(sc.TICKETS_READ))
+    transition = Depends(scoped(sc.TICKETS_TRANSITION))
 
     @router.get("/inbox", response_model=list[InboxItemOut], dependencies=[auth])
     async def inbox_list_api(
@@ -49,7 +50,7 @@ def build_api_router(get_session, bearer_token: str) -> APIRouter:
     async def inbox_count_api(session: Session = Depends(get_session)):
         return InboxCountOut(count=len(list_inbox(session, limit=10_000)))
 
-    @router.post("/tickets/{tid}/promote", dependencies=[auth])
+    @router.post("/tickets/{tid}/promote", dependencies=[transition])
     async def promote_api(
         tid: str, payload: TicketPromote,
         session: Session = Depends(get_session),
@@ -64,7 +65,7 @@ def build_api_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(409, str(e))
         return _ticket_to_out(t)
 
-    @router.post("/tickets/{tid}/decline", dependencies=[auth])
+    @router.post("/tickets/{tid}/decline", dependencies=[transition])
     async def decline_api(tid: str, session: Session = Depends(get_session)):
         try:
             t = decline_ticket(session, tid)
