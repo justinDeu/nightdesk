@@ -168,3 +168,38 @@ def test_0023_steer_messages_upgrade_downgrade_and_guard(tmp_path):
     # Re-upgrade is idempotent under the inspector guard.
     command.upgrade(cfg, "0023_steer_messages")
     assert inspect(engine).has_table("steer_messages")
+
+
+def test_0026_sessions_upgrade_downgrade_and_shape(tmp_path):
+    """0026 creates the three agent tables (with the partial unique index) and
+    the session config knobs on a clean DB; downgrade drops them; re-upgrade
+    succeeds. Confirms the reworked-in-place 0026 leaves no tickets.kind."""
+    db_path = tmp_path / "nd.db"
+    cfg = _alembic_config(db_path)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    insp = inspect(engine)
+    for tbl in ("sessions", "session_turns", "pending_inputs"):
+        assert insp.has_table(tbl)
+    # Partial unique index enforcing one open pending per agent.
+    pi_idx = {i["name"] for i in insp.get_indexes("pending_inputs")}
+    assert "uq_pending_inputs_open" in pi_idx
+    # Session config knobs.
+    config_columns = {c["name"] for c in insp.get_columns("config")}
+    assert {"session_idle_timeout_s", "max_live_sessions",
+            "max_queued_turns", "max_turn_seconds"} <= config_columns
+    # The reverted v1 discriminator is gone.
+    ticket_columns = {c["name"] for c in insp.get_columns("tickets")}
+    assert "kind" not in ticket_columns
+
+    command.downgrade(cfg, "0025_execution_target")
+    insp = inspect(engine)
+    assert not insp.has_table("sessions")
+    assert not insp.has_table("session_turns")
+    assert not insp.has_table("pending_inputs")
+    config_columns = {c["name"] for c in insp.get_columns("config")}
+    assert "session_idle_timeout_s" not in config_columns
+
+    command.upgrade(cfg, "head")
+    assert inspect(engine).has_table("sessions")
