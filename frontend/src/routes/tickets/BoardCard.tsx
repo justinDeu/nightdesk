@@ -154,6 +154,13 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
         >
           <span className="line-clamp-3">{ticket.title}</span>
         </a>
+        {/* Human-facing what/why. A short snippet where it fits — the prompt
+            (agent instructions) is never shown on the card. */}
+        {ticket.description?.trim() && (
+          <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-moon-500">
+            {ticket.description}
+          </p>
+        )}
       </div>
 
       {ticket.labels.length > 0 && (

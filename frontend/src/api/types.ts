@@ -101,6 +101,8 @@ export interface TicketOut {
   id: string;
   title: string;
   prompt: string;
+  /** Human-facing what/why, split from `prompt` (the agent instructions). */
+  description: string | null;
   status: string;
   /** 'ticket' (board work) | 'session' (ad-hoc interactive chat). */
   kind: string;
@@ -135,6 +137,7 @@ export interface TicketOut {
 export interface AckDigestTicket {
   ticket_id: string;
   title: string;
+  description: string | null;
   status: string;
   project_id: string | null;
   entered_at: string | null;
@@ -168,6 +171,8 @@ export interface BulkAckResult {
 export interface TicketCreate {
   title: string;
   prompt?: string;
+  /** Human-facing what/why, distinct from the agent `prompt`. */
+  description?: string | null;
   status?: string | null;
   priority?: number;
   /** Required for non-inbox creates; may be null when status="inbox"

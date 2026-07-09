@@ -39,6 +39,19 @@ New fields on the ticket object (`TicketOut`, returned everywhere a ticket is):
   populated on list/detail responses (not `updated_at`).
 - `agent_reviewed` (bool) — a run/agent, not a human, moved the ticket into
   review. Only meaningful while `status == "review"`.
+- `description` (nullable) — human-facing what/why, distinct from `prompt`. See
+  the description section below.
+
+### `description`: human summary split from `prompt`
+
+- `TicketCreate` and `TicketUpdate` gain `description` (nullable string). On
+  `TicketUpdate`, an explicit `null` clears it (same as `project_id`).
+- Focused route `PATCH /api/v1/tickets/{tid}/description` with body
+  `{"description": "..."}` (empty/absent clears), matching the other sparse
+  metadata routes (`/priority`, `/status`, `/project`, `/profile`).
+- `prompt` is unchanged and is still exactly what runs. `description` is NEVER
+  injected into the agent's context — it is metadata for humans scanning the
+  board, review, and the ack digest. No mirroring between the two fields.
 
 Note: the ack endpoints are deliberately admin-only. When scoped agent tokens
 land (sibling `agent-token-permissions` design), the ack scope is intentionally
@@ -56,3 +69,10 @@ ack calls above, and note that:
   unarchive) clears the ack.
 - The PM-agent shift-report convention (design section 5 "e garnish") is NOT yet
   implemented as a first-class feature — it remains a convention. No schema.
+
+Add a `description` convention to the "Create a ticket" recipe: when an agent
+files a ticket via the API, it SHOULD set a concise human-readable `description`
+(the what/why) alongside the `prompt` (the agent instructions). The
+`description` is what a human reads on the board, in review, and in the ack
+digest; the `prompt` is what runs. Do not duplicate the prompt into the
+description — write the description for a person skimming outcomes.

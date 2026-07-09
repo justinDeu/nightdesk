@@ -189,6 +189,10 @@ class Ticket(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     title: Mapped[str] = mapped_column(String)
     prompt: Mapped[str] = mapped_column(Text, default="")
+    # Human-facing what/why for scanning the board/review/ack digest. Distinct
+    # from ``prompt`` (the agent instructions that actually run); ``description``
+    # is metadata only and is NEVER injected into the agent's context.
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String, default="draft", index=True)
     priority: Mapped[int] = mapped_column(Integer, default=0, index=True)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

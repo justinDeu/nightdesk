@@ -1180,6 +1180,18 @@ def update_ticket_priority(session: Session, ticket_id: str,
     return t
 
 
+def update_ticket_description(session: Session, ticket_id: str,
+                              description: Optional[str]) -> Ticket:
+    """Set or clear the human-facing description. Never touches ``prompt``."""
+    t = get_ticket(session, ticket_id)
+    clean = (description or "").strip() or None
+    t.description = clean
+    t.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(t)
+    return t
+
+
 def update_ticket_project(session: Session, ticket_id: str,
                           project_id: Optional[str]) -> Ticket:
     """Set or clear the project assignment on a ticket.  Validates that the

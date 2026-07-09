@@ -375,3 +375,31 @@ migration policy.
 - Bulk-ack race: `before` timestamp handles archive-during-read, but a
   requeue-during-read clears ack correctly by rule. Verify the digest
   refetch story in implementation.
+
+## 10. Addendum: ticket `description` (implemented with this branch)
+
+Motivation from the owner: reviewing a ticket by reading its `prompt` is bad —
+the prompt is agent instructions, not a human summary. So authoring splits into
+two fields:
+
+- `prompt` — unchanged. Exactly what the agent runs. The worker's prompt builder
+  is untouched; `description` is NEVER injected into the agent's context.
+- `description` — nullable, human-facing what/why. Metadata only. No backfill, no
+  auto-mirroring between the two fields.
+
+Semantics and surfaces:
+
+- Read surfaces prefer `description` over `title`/`prompt` for the summary line
+  (fallback to `title` when empty): the ack digest rows, the Desk "To
+  acknowledge" / "Needs you" rows, the review-column card. This is the synergy
+  that motivated the addition — it makes acknowledgement readable at a glance.
+- Ticket detail and the side-peek show `description` first-class; `prompt` is
+  demoted to a collapsible "Agent prompt" section.
+- The authoring composer (quick capture + full editor) has both fields, each
+  labeled for who it is for.
+- API: `TicketCreate` / `TicketUpdate` / `TicketOut` carry `description`; a
+  focused `PATCH /api/v1/tickets/{tid}/description` matches the other sparse
+  metadata routes (empty/absent body clears it). It rides migration 0028.
+- Interface to the sibling GitLab/Jira import: imported issue bodies retarget
+  into `description` (not `prompt`) at final merge. The column and API are left
+  ready; this branch does not implement the import.

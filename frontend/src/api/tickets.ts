@@ -133,6 +133,8 @@ export const ticketsApi = {
     api.post<TicketOut>(`${BASE}/${id}/promote`, { body }),
   decline: (id: string) => api.post<TicketOut>(`${BASE}/${id}/decline`),
 
+  setDescription: (id: string, description: string | null) =>
+    api.patch<TicketOut>(`${BASE}/${id}/description`, { body: { description } }),
   setPriority: (id: string, priority: number) =>
     api.patch<TicketOut>(`${BASE}/${id}/priority`, { body: { priority } }),
   setStatus: (id: string, status: TicketStatus) =>

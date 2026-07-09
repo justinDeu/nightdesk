@@ -422,6 +422,10 @@ class ProjectOut(BaseModel):
 class TicketCreate(BaseModel):
     title: str
     prompt: str = ""
+    # Human-facing what/why (board/review/ack digest). Distinct from ``prompt``;
+    # never injected into the agent's context. Agents SHOULD set it alongside
+    # prompt when filing tickets so a human can scan the outcome.
+    description: Optional[str] = None
     status: Optional[str] = None  # defaults to 'draft' server-side
     priority: int = 0
     # Required for every status except "inbox" (enforced server-side in
@@ -463,6 +467,7 @@ class TicketCreate(BaseModel):
 class TicketUpdate(BaseModel):
     title: Optional[str] = None
     prompt: Optional[str] = None
+    description: Optional[str] = None
     priority: Optional[int] = None
     profile_id: Optional[str] = None
     project_id: Optional[str] = None
@@ -502,6 +507,7 @@ class TicketOut(BaseModel):
     id: str
     title: str
     prompt: str
+    description: Optional[str] = None
     status: str
     # 'ticket' (board work) | 'session' (ad-hoc interactive chat).
     kind: str = "ticket"
@@ -876,6 +882,13 @@ class TicketPriorityUpdate(BaseModel):
         if v < 0 or v > 4:
             raise ValueError("priority must be between 0 and 4")
         return v
+
+
+class TicketDescriptionUpdate(BaseModel):
+    """Focused description update (the human-facing what/why). An empty/absent
+    body clears it — parity with the other sparse metadata routes."""
+
+    description: Optional[str] = None
 
 
 class TicketStatusUpdate(BaseModel):
@@ -1329,6 +1342,7 @@ class BulkAckResult(BaseModel):
 class AckDigestTicketOut(BaseModel):
     ticket_id: str
     title: str
+    description: Optional[str] = None
     status: str
     project_id: Optional[str] = None
     entered_at: Optional[datetime] = None

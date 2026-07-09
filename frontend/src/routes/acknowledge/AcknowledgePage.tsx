@@ -237,7 +237,7 @@ const DigestRow = forwardRef<
         className="min-w-0 flex-1 rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
       >
         <span className="block truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
-          {ticket.title}
+          {ticket.description?.trim() || ticket.title}
         </span>
         <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-moon-600">
           <span>{projectName}</span>

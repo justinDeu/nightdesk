@@ -336,7 +336,7 @@ const NeedsRow = forwardRef<
           className="min-w-0 flex-1 rounded-[4px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
         >
           <span className="block text-sm font-medium text-moon-100 group-hover:text-lamp line-clamp-2 md:truncate">
-            {ticket.title}
+            {ticket.description?.trim() || ticket.title}
           </span>
           <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-moon-600 md:flex-nowrap">
             <ProjectTag project={project} showNone />

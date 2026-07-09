@@ -15,6 +15,7 @@ from nightdesk.api.schemas import (
     DependencyCreate, DependencyOut,
     TicketClone, TicketContinue, TicketCreate, TicketNewConversation,
     TicketNextRunContext, TicketOut,
+    TicketDescriptionUpdate,
     TicketPriorityUpdate, TicketProfileUpdate,
     TicketProjectUpdate, TicketReorder, TicketRestart, TicketResumeOrRetry,
     TicketStatusUpdate, TicketTransition,
@@ -34,6 +35,7 @@ from nightdesk.domain.tickets import (
     reorder_in_column, request_run_now, restart_ticket, resume_ticket,
     retry_ticket, send_to_inbox, set_next_run_context, set_run_now, transition_status,
     transition_with_position, unarchive, update_ticket,
+    update_ticket_description,
     update_ticket_priority, update_ticket_profile, update_ticket_project,
     ConversationNotResumable, TicketNotFound, InvalidTransition,
     CyclicDependency, DependencyNotFound,
@@ -103,6 +105,7 @@ def _ticket_to_out(t, *, archived_at=None, agent_reviewed: bool = False) -> Tick
         "id": t.id,
         "title": t.title,
         "prompt": t.prompt,
+        "description": t.description,
         "status": t.status,
         "kind": t.kind,
         "priority": t.priority,
@@ -386,6 +389,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
                         AckDigestTicketOut(
                             ticket_id=dt.ticket_id,
                             title=dt.title,
+                            description=dt.description,
                             status=dt.status,
                             project_id=dt.project_id,
                             entered_at=dt.entered_at,
@@ -447,6 +451,10 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         fields = {k: v for k, v in data.items() if v is not None}
         if "project_id" in payload.model_fields_set:
             fields["project_id"] = data["project_id"]
+        # description is nullable: an explicit null clears it (parity with the
+        # project_id sentinel handling above).
+        if "description" in payload.model_fields_set:
+            fields["description"] = data["description"]
         if "additional_dirs" in fields:
             fields["additional_dirs"] = _coerce_dirs(payload.additional_dirs) or []
         if "workspaces" in fields:
@@ -893,6 +901,17 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "not found")
         except ValueError as e:
             raise HTTPException(422, str(e))
+
+    @router.patch("/{tid}/description", response_model=TicketOut)
+    async def update_description(
+        tid: str, payload: TicketDescriptionUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            t = update_ticket_description(session, tid, payload.description)
+            return _ticket_to_out(t)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
 
     @router.patch("/{tid}/status", response_model=TicketOut)
     async def update_status(

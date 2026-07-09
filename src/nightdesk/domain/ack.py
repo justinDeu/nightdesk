@@ -132,6 +132,8 @@ def bulk_acknowledge(
 class DigestTicket:
     ticket_id: str
     title: str
+    # Human-facing summary; the digest UI prefers this over ``title``.
+    description: Optional[str]
     status: str
     project_id: Optional[str]
     entered_at: Optional[datetime]
@@ -205,6 +207,7 @@ def ack_digest(session: Session, *, project_id: Optional[str] = None) -> Digest:
         dt = DigestTicket(
             ticket_id=t.id,
             title=t.title,
+            description=t.description,
             status=t.status,
             project_id=t.project_id,
             entered_at=entered_at,

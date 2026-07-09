@@ -78,9 +78,17 @@ def upgrade() -> None:
         "tickets",
         sa.Column("acknowledged_by", sa.String(), nullable=True),
     )
+    # Human-facing what/why, split from ``prompt`` (the agent instructions that
+    # actually run). Nullable, no backfill, no mirroring between the two fields.
+    # Never injected into the agent's context — see the run-prompt builder.
+    op.add_column(
+        "tickets",
+        sa.Column("description", sa.Text(), nullable=True),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("tickets", "description")
     op.drop_column("tickets", "acknowledged_by")
     op.drop_column("tickets", "acknowledged_at")
     op.drop_index("ix_ticket_events_ticket_to_status", table_name="ticket_events")
