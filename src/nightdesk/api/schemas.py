@@ -503,8 +503,6 @@ class TicketOut(BaseModel):
     title: str
     prompt: str
     status: str
-    # 'ticket' (board work) | 'session' (ad-hoc interactive chat).
-    kind: str = "ticket"
     priority: int
     position: int
     project_id: Optional[str] = None
@@ -695,6 +693,11 @@ class ConfigOut(BaseModel):
     schedule_timezone: str = "UTC"
     windows: list[ScheduleWindowOut] = Field(default_factory=list)
     toolchain_presets: dict[str, list[str]] = Field(default_factory=dict)
+    # Resident interactive agents (global, live-evaluated).
+    session_idle_timeout_s: int = 300
+    max_live_sessions: int = 4
+    max_queued_turns: int = 20
+    max_turn_seconds: int = 0
     # Harness-global runtime paths (Layer 2). Empty/unset means auto-discover
     # from PATH (and, for opencode, ~/.opencode/bin).
     claude_binary_path: Optional[str] = None
@@ -735,6 +738,12 @@ class ConfigUpdate(BaseModel):
     notify_webhook_url: Optional[str] = None
     schedule_timezone: Optional[str] = None
     toolchain_presets: Optional[dict[str, list[str]]] = None
+    # Resident interactive agents (global, live-evaluated). Applied to every
+    # inheriting agent on the next reaper pass; no restart.
+    session_idle_timeout_s: Optional[int] = None
+    max_live_sessions: Optional[int] = None
+    max_queued_turns: Optional[int] = None
+    max_turn_seconds: Optional[int] = None
     # Empty string clears the override (falls back to PATH discovery).
     claude_binary_path: Optional[str] = None
     opencode_binary_path: Optional[str] = None
@@ -941,17 +950,21 @@ class TicketNewConversation(BaseModel):
 # --------------------------------------------------------------------------
 # Interactive sessions (ticketless chat)
 # --------------------------------------------------------------------------
-class SessionCreate(BaseModel):
-    """Start an interactive session against a profile.
+class AgentCreate(BaseModel):
+    """Create a resident interactive agent (UI label: "Agent").
 
-    ``source_path`` omitted -> a per-session scratch directory is provisioned as
-    the primary workspace. A path -> the agent works in-place on that directory.
+    ``source_path`` omitted -> a per-agent scratch directory. A path -> the agent
+    works in-place on that directory (trusted posture, real ``~/.claude``).
+    ``env`` maps ``KEY -> {value, secret}``; secret values are encrypted at rest.
     """
 
     title: Optional[str] = None
     profile_id: str
     project_id: Optional[str] = None
     source_path: Optional[str] = None
+    model: Optional[str] = None
+    idle_timeout_s: Optional[int] = None
+    env: Optional[dict] = None
 
     @field_validator("source_path", mode="before")
     @classmethod
@@ -959,7 +972,7 @@ class SessionCreate(BaseModel):
         return _normalize_source_path_optional(v)
 
 
-class SessionMessage(BaseModel):
+class AgentMessage(BaseModel):
     """One chat turn. Empty/whitespace is rejected (nothing to send)."""
 
     message: str
@@ -972,44 +985,99 @@ class SessionMessage(BaseModel):
         return v
 
 
-class SessionPromote(BaseModel):
-    """Promote a session into a real board ticket, keeping its history.
+class AgentAnswer(BaseModel):
+    """Answer to an open PendingInput: allow/deny/approve, plus payload."""
 
-    ``target_status`` is ``review`` (default — history stays visible) or
-    ``draft``. ``prompt`` optionally overrides the ticket's prompt.
-    """
-
-    title: str
-    prompt: Optional[str] = None
-    target_status: Literal["review", "draft"] = "review"
-
-    @field_validator("title")
-    @classmethod
-    def _nonempty_title(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("title must not be empty")
-        return v
+    decision: str
+    answer: Optional[str] = None
+    updated_input: Optional[dict] = None
 
 
-class SessionConversationOut(BaseModel):
-    """One conversation (chat thread) of a session, for the detail view."""
+class AgentRestart(BaseModel):
+    force: bool = False
 
+
+class AgentEnvPut(BaseModel):
+    """Replace the agent's env map. ``{KEY: {value, secret}}``; a secret with
+    ``value: null`` keeps the stored cipher (write-only secret contract)."""
+
+    env: dict = Field(default_factory=dict)
+
+
+class AgentTurnOut(BaseModel):
     id: str
-    backend: str
-    status: str
-    session_id: Optional[str] = None
     position: int
-    started_at: datetime
+    kind: str
+    body: str
+    ref_request_id: Optional[str] = None
+    status: str
+    model_used: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost_usd: float = 0.0
+    includes_resume: bool = False
+    error: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
-    cost_usd: Optional[float] = None
-    input_tokens: Optional[int] = None
-    output_tokens: Optional[int] = None
+
+    model_config = {"from_attributes": True}
 
 
-class SessionOut(TicketOut):
-    """A session: the full TicketOut shape plus its conversations."""
+class AgentPendingOut(BaseModel):
+    id: str
+    session_id: str
+    request_id: str
+    kind: str
+    tool: Optional[str] = None
+    payload: dict = Field(default_factory=dict)
+    status: str
+    created_at: datetime
 
-    conversations: list[SessionConversationOut] = []
+    model_config = {"from_attributes": True}
+
+
+class AgentPendingItem(AgentPendingOut):
+    """A pending row plus its agent title, for the cross-agent badge/Desk band."""
+
+    session_title: str = "Agent"
+
+
+class AgentEnvEntryOut(BaseModel):
+    key: str
+    secret: bool
+    set: bool = True
+    value: Optional[str] = None
+
+
+class AgentOut(BaseModel):
+    id: str
+    title: str
+    profile_id: Optional[str] = None
+    project_id: Optional[str] = None
+    backend: str
+    model: Optional[str] = None
+    status: str
+    liveness: str
+    has_pending: bool = False
+    source_path: str
+    idle_timeout_s: Optional[int] = None
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    created_at: datetime
+    updated_at: datetime
+    ended_at: Optional[datetime] = None
+
+
+class AgentDetailOut(AgentOut):
+    turns: list[AgentTurnOut] = []
+    pending_input: Optional[AgentPendingOut] = None
+    env: list[AgentEnvEntryOut] = []
 
 
 class BulkPriorityUpdate(BaseModel):

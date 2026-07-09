@@ -93,7 +93,6 @@ def _ticket_to_out(t) -> TicketOut:
         "title": t.title,
         "prompt": t.prompt,
         "status": t.status,
-        "kind": t.kind,
         "priority": t.priority,
         "position": t.position,
         "project_id": t.project_id,

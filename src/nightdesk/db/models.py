@@ -6,7 +6,7 @@ import uuid
 
 from sqlalchemy import (
     Column, Index, String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, Time,
-    Table, UniqueConstraint,
+    Table, UniqueConstraint, text,
 )
 from sqlalchemy import Float as sa_Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -197,10 +197,6 @@ class Ticket(Base):
     permission_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     toolchain_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     additional_dirs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
-    # 'ticket' (board work) | 'session' (ad-hoc chat, hidden from board/inbox/
-    # analytics/search). Sessions reuse the entire run pipeline; only the ticket
-    # list surfaces filter them out.
-    kind: Mapped[str] = mapped_column(String, default="ticket", nullable=False, index=True)
     run_now: Mapped[bool] = mapped_column(Boolean, default=False)
     # Opt-in: on a successful run, commit this ticket's working-tree changes
     # onto its git_worktree branch so dependent (stacked) tickets whose base_ref
@@ -613,6 +609,21 @@ class ConfigRow(Base):
     # "UTC" reproduces the pre-timezone-fix behavior.
     schedule_timezone: Mapped[str] = mapped_column(String, default="UTC", nullable=False)
     toolchain_presets: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    # --- Resident interactive agents (sessions) ------------------------------
+    # Global idle-reap timeout for warm agents, in seconds. Read LIVE at each
+    # reaper pass (never frozen at spawn), so lowering it reaps already-warm
+    # inheriting agents on the next pass. A per-agent Session.idle_timeout_s
+    # overrides this. See docs/design/session-suite/resident-agents-v3.md §6.
+    session_idle_timeout_s: Mapped[int] = mapped_column(Integer, default=300, nullable=False)
+    # Cap on concurrently-live agent hosts. At the cap a wake stays queued and
+    # the reaper LRU-evicts the least-recently-active idle agent (needs-input
+    # agents are excluded from eviction — the human is the blocker).
+    max_live_sessions: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    # Cap on queued (not-yet-delivered) turns per agent; enqueue past this 429s.
+    max_queued_turns: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
+    # Watchdog: a single streaming turn is interrupted after this many seconds
+    # with no ResultMessage (0 disables the watchdog).
+    max_turn_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # --- Cloud sandbox (Kubernetes executor) ---------------------------------
     # All optional; k8s runs are only possible once a runner image + a
     # cluster-routable API address are configured (see domain/k8s_config.py).
@@ -805,3 +816,154 @@ class SavedView(Base):
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class Session(Base):
+    """A resident interactive agent (UI label: "Agent").
+
+    A live, chat-first Claude session decoupled from the ticket lifecycle. The
+    row owns its turns (:class:`SessionTurn`, the inbox + per-turn record) and at
+    most one open human-input request (:class:`PendingInput`). Liveness is
+    DERIVED from ``_pid_alive(host_pid)`` plus turn/pending state
+    (``domain.sessions.describe_liveness``); ``status`` is a coarse persisted
+    hint. See docs/design/session-suite/resident-agents-v3.md.
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(String, default="Agent")
+    profile_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("profiles.id"), nullable=True,
+    )
+    project_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("projects.id"), nullable=True, index=True,
+    )
+    # Frozen at start. 'claude' only in v1 (runtime lock); 'opencode' reserved.
+    backend: Mapped[str] = mapped_column(String, default="claude", nullable=False)
+    model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Coarse persisted state: 'active' | 'idle' | 'ended' | 'crashed'.
+    status: Mapped[str] = mapped_column(String, default="idle", nullable=False, index=True)
+    workspace_kind: Mapped[str] = mapped_column(String, default="directory", nullable=False)
+    workspace_access: Mapped[str] = mapped_column(String, default="read_write", nullable=False)
+    source_path: Mapped[str] = mapped_column(String, nullable=False)
+    # 'trusted' (v1, runs on the owner's real ~/.claude, no bwrap). 'sandboxed'
+    # reserved for the deferred posture.
+    posture: Mapped[str] = mapped_column(String, default="trusted", nullable=False)
+    host: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    host_pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_activity_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False,
+    )
+    # Per-agent idle-reap override in seconds; NULL inherits the global config.
+    idle_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # {"session_id": ...} — the claude resume handle, refreshed on every turn.
+    resume_handle: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # {"KEY": {"value": <plain|cipher>, "secret": bool}} — secret values are
+    # encrypted at rest with ProfileSecretBox; merged over the host env at spawn.
+    env: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    transcript_path: Mapped[str] = mapped_column(String, nullable=False)
+    pricing_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    cost_usd: Mapped[float] = mapped_column(sa_Float, default=0.0, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    profile: Mapped[Optional["Profile"]] = relationship(lazy="joined")
+    turns: Mapped[list["SessionTurn"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="SessionTurn.position",
+    )
+    pending_inputs: Mapped[list["PendingInput"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="PendingInput.created_at",
+    )
+
+
+class SessionTurn(Base):
+    """One inbox item AND its turn record.
+
+    Every turn — a user message, an interrupt, or an answer to a pending input —
+    is a durable row the host claims from the inbox. Routing answers/interrupts
+    through the same table means a cold host still receives them (it re-spawns
+    and drains the inbox), keeping the API a pure DB writer.
+    """
+
+    __tablename__ = "session_turns"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 'user' | 'interrupt' | 'answer'
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    # user text; or json(decision) for answer/interrupt turns.
+    body: Mapped[str] = mapped_column(Text, default="")
+    # answer turns -> the PendingInput.request_id they resolve.
+    ref_request_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # queued -> delivering -> streaming -> done ; queued->cancelled ;
+    # streaming->interrupted/failed.
+    status: Mapped[str] = mapped_column(String, default="queued", nullable=False, index=True)
+    model_used: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cost_usd: Mapped[float] = mapped_column(sa_Float, default=0.0, nullable=False)
+    # True when this turn's slice includes replayed cold-start/restart tokens
+    # (surfaced with an "includes resume" label; §16).
+    includes_resume: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    session: Mapped["Session"] = relationship(back_populates="turns")
+
+
+class PendingInput(Base):
+    """One open human-input request parked inside the inner ``can_use_tool``.
+
+    A real table (not just an SSE event) so a blocked agent survives API and
+    worker restarts and shows in ``GET /agents/pending``. The partial unique
+    index guarantees at most one open request per agent — a buggy double-emit
+    cannot create two.
+    """
+
+    __tablename__ = "pending_inputs"
+    __table_args__ = (
+        Index(
+            "uq_pending_inputs_open",
+            "session_id",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    # Inner-allocated uuid; unique within the session's lifetime.
+    request_id: Mapped[str] = mapped_column(String, nullable=False)
+    # 'permission' | 'ask_question' | 'plan_approval'
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    tool: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # question+options, plan text, or tool input + suggestions.
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    # 'pending' | 'answered' | 'cancelled'
+    status: Mapped[str] = mapped_column(String, default="pending", nullable=False, index=True)
+    # What the human chose (audit trail).
+    answer: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+    answered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    session: Mapped["Session"] = relationship(back_populates="pending_inputs")

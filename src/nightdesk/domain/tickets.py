@@ -328,18 +328,12 @@ def _ticket_filters(
     label: Optional[str] = None,
     outcome: Optional[str] = None,
     q: Optional[str] = None,
-    kind: Optional[str] = "ticket",
 ) -> list:
     """Shared WHERE-clause builder for ``list_tickets`` / ``count_tickets``.
 
     Centralized so the page (``list_tickets``) and the total
     (``count_tickets``) can never drift apart — a mismatch would defeat the
     truncation metadata callers rely on to detect incomplete results.
-
-    ``kind`` defaults to ``"ticket"`` so every board / Tickets-list / Archive /
-    Desk surface excludes interactive sessions (``kind='session'``) by default.
-    Pass ``kind=None`` to include every kind (or an explicit kind to scope to
-    one). This is the single most important session-exclusion filter.
 
     Beyond the original status/profile/project dimensions the Archive page adds:
     ``priority`` (exact 0-4), ``label`` (name case-insensitive OR id, via an
@@ -349,8 +343,6 @@ def _ticket_filters(
     mirroring the binary the UI's run pill shows).
     """
     filters: list = []
-    if kind is not None:
-        filters.append(Ticket.kind == kind)
     if status is not None:
         filters.append(Ticket.status == status)
     if profile_id is not None:
@@ -395,7 +387,6 @@ def list_tickets(
     label: Optional[str] = None,
     outcome: Optional[str] = None,
     q: Optional[str] = None,
-    kind: Optional[str] = "ticket",
 ) -> list[Ticket]:
     """One page of tickets matching the filters.
 
@@ -448,7 +439,7 @@ def list_tickets(
         select(Ticket)
         .where(*_ticket_filters(
             status, profile_id, project_id,
-            priority=priority, label=label, outcome=outcome, q=q, kind=kind,
+            priority=priority, label=label, outcome=outcome, q=q,
         ))
         .order_by(*order_by)
         .limit(limit)
@@ -466,7 +457,6 @@ def count_tickets(
     label: Optional[str] = None,
     outcome: Optional[str] = None,
     q: Optional[str] = None,
-    kind: Optional[str] = "ticket",
 ) -> int:
     """Total tickets matching the filters, ignoring ``limit``/``offset``.
 
@@ -478,7 +468,7 @@ def count_tickets(
     stmt = select(func.count(Ticket.id)).where(
         *_ticket_filters(
             status, profile_id, project_id,
-            priority=priority, label=label, outcome=outcome, q=q, kind=kind,
+            priority=priority, label=label, outcome=outcome, q=q,
         )
     )
     return int(session.scalar(stmt) or 0)
@@ -692,7 +682,7 @@ def list_inbox(
     """
     stmt = (
         select(Ticket)
-        .where(Ticket.status == "inbox", Ticket.kind == "ticket")
+        .where(Ticket.status == "inbox")
         .order_by(Ticket.priority.desc(), Ticket.created_at.desc())
         .limit(limit)
     )

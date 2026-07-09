@@ -70,6 +70,16 @@ class NightdeskConfig:
     spa_dist: Optional[Path] = None
     secrets: dict[str, str] = field(default_factory=dict)
 
+    @property
+    def session_scratch_root(self) -> Path:
+        """Root for per-agent scratch workspaces (resident interactive agents).
+
+        A sibling of ``worktree_root`` — outside ``~/.local/share/nightdesk`` —
+        so the deferred sandboxed posture can bind-mount it (the sandbox refuses
+        anything under the data dir). Trusted-posture agents just cwd into it.
+        """
+        return self.worktree_root.parent / "nightdesk-sessions"
+
 
 def _parse_secrets(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
