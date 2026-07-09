@@ -83,3 +83,27 @@ parallel surface later. This is exactly Omnigent's dual-surface model for SDK se
 - NOTABLE: the web "Switch agent" button is currently UNMOUNTED (SwitchAgentDialog.tsx:34 — removed,
   plumbing kept + tested). The shipped user-visible flow is Fork/Clone to a NEW session on the target
   harness. The demo was likely an older build or the fork flow.
+
+## ACP reality check (2026-07-08, adapter + spec source)
+
+- ONE maintained adapter: zed-industries/claude-code-acp moved to agentclientprotocol/claude-agent-acp
+  (npm @agentclientprotocol/claude-agent-acp v0.57.0). Wraps the headless Claude Agent SDK, NOT the TUI.
+  Community-governed, very active (releases every 1-3 days), NOT an Anthropic product.
+- Anthropic closed "native ACP in Claude Code" as not_planned (claude-code#6686, 437 upvotes). Adapter-only.
+- Stable ACP surface: session lifecycle + session/request_permission (allow_once/allow_always/
+  reject_once/reject_always with agent-supplied option sets) + PlanEntry display + available_commands.
+  Plan approval (ExitPlanMode) maps onto request_permission with mode-switch options — stable, solid.
+- UNSTABLE surface: elicitation/* (form/url) + session/fork live only in schema.unstable.json.
+  AskUserQuestion renders as a form elicitation (oneOf/anyOf + per-question Other field + previews)
+  ONLY if the client advertises unstable form-elicitation; otherwise it DEGRADES to a generic
+  allow/deny permission prompt — the actual question/options are not rendered. MCP elicitation and
+  refusal-fallback consent ride the same unstable surface.
+- Live correctness bugs: background subagent permission-ID desync deadlock (#851), ScheduleWakeup/
+  CronCreate never fire under ACP (#838/#655), built-in slash commands emit no output (#642),
+  /context unstructured (#643), usage/cost gaps (#596/#625). Subagent internal prose deliberately
+  dropped from the stream.
+- Verdict: core loop production-grade (Zed ships it); rich interactive layer beta-grade on an
+  unstable spec surface. For driving Claude Code specifically, the Agent SDK direct (nightdesk's
+  path) is strictly higher fidelity — native AskUserQuestion/canUseTool/hooks/subagents/cost as
+  typed callbacks, no lossy hop. ACP pays off only if one-protocol-to-many-harnesses is itself the
+  goal; keep on the WATCH LIST (esp. elicitation stabilization), do not build a backend on it yet.
