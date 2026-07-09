@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Run, Ticket, WorkerHeartbeat
+from nightdesk.domain.events import record_transition_event, run_actor
 
 
 log = logging.getLogger(__name__)
@@ -106,6 +107,10 @@ def recover_orphaned_runs(session: Session, *, host: str) -> int:
             # v2: any turn-completion lands the ticket in 'review' so the
             # user can inspect the failure and requeue.
             log.info("transitioning orphaned ticket %s from running to review", t.id)
+            record_transition_event(
+                session, t, from_status=t.status, to_status="review",
+                actor=run_actor(t.current_run_id),
+            )
             t.status = "review"
     session.commit()
     if count:
@@ -137,6 +142,10 @@ def recover_orphaned_runs(session: Session, *, host: str) -> int:
     ))
     for t in runless:
         log.info("resetting runless ticket %s from running to queued", t.id)
+        record_transition_event(
+            session, t, from_status=t.status, to_status="queued",
+            actor=run_actor(t.current_run_id),
+        )
         t.status = "queued"
         t.current_run_id = None
         # NOTE: deliberately do NOT clear current_conversation_id. Pass 2

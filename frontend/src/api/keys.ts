@@ -8,6 +8,11 @@ export const qk = {
     dependencies: (id: string) => ["tickets", id, "dependencies"] as const,
     steer: (id: string) => ["tickets", id, "steer"] as const,
   },
+  ack: {
+    all: ["ack"] as const,
+    digest: (projectId?: string | null) => ["ack", "digest", projectId ?? null] as const,
+    count: ["ack", "count"] as const,
+  },
   runs: {
     all: ["runs"] as const,
     list: (ticketId?: string) => ["runs", "list", ticketId ?? null] as const,

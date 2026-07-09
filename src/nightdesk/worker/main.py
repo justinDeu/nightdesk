@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from nightdesk.db.models import DaemonStatus, Run, Ticket
 from nightdesk.domain.cron_jobs import materialize_due_cron_jobs
+from nightdesk.domain.events import run_actor
 from nightdesk.domain.tickets import transition_status
 from nightdesk.worker.executor import Executor
 from nightdesk.worker.heartbeat import recover_orphaned_runs, write_heartbeat
@@ -300,7 +301,9 @@ class WorkerLoop:
             )
             pick_ids: list[str] = []
             for t in picks:
-                transition_status(session, t.id, "running")
+                # Scheduler pick is a system/run action, never a human one — a
+                # 'run' actor so this never spuriously acknowledges the ticket.
+                transition_status(session, t.id, "running", actor=run_actor(None))
                 pick_ids.append(t.id)
         finally:
             session.close()

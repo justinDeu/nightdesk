@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import { Ban, Check, MoreHorizontal, Zap } from "lucide-react";
+import { Ban, Bot, Check, MoreHorizontal, Zap } from "lucide-react";
 import type { ProjectOut, RunOut, TicketOut } from "@/api/types";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
@@ -154,6 +154,13 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
         >
           <span className="line-clamp-3">{ticket.title}</span>
         </a>
+        {/* Human-facing what/why. A short snippet where it fits — the prompt
+            (agent instructions) is never shown on the card. */}
+        {ticket.description?.trim() && (
+          <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-moon-500">
+            {ticket.description}
+          </p>
+        )}
       </div>
 
       {ticket.labels.length > 0 && (
@@ -192,6 +199,13 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           {ticket.run_now && (
             <span className="inline-flex items-center gap-0.5 rounded-full bg-lamp/12 px-1.5 py-0.5 font-mono text-[10px] text-lamp">
               <Zap size={9} /> now
+            </span>
+          )}
+          {/* A run/agent — not a human — moved this into review: it's finished
+              pending your awareness, not awaiting a decision. */}
+          {ticket.status === "review" && ticket.agent_reviewed && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-ink-800 px-1.5 py-0.5 text-[10px] font-medium text-moon-400">
+              <Bot size={9} /> agent
             </span>
           )}
           {latestRun?.cost_usd != null && (

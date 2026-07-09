@@ -68,6 +68,7 @@ function QuickComposer({
   const invalidate = useInvalidateTickets();
   const projects = useProjects();
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [prompt, setPrompt] = useState("");
   const [projectId, setProjectId] = useState<string>("");
   const [busy, setBusy] = useState(false);
@@ -75,6 +76,7 @@ function QuickComposer({
   useEffect(() => {
     if (open) {
       setTitle(prefill.title ?? "");
+      setDescription("");
       setPrompt("");
       setProjectId(prefill.project_id ?? "");
     }
@@ -88,6 +90,7 @@ function QuickComposer({
       // one at promote time. Only title is required here.
       await ticketsApi.create({
         title: title.trim(),
+        description: description.trim() || null,
         prompt,
         status: "inbox",
         profile_id: null,
@@ -133,9 +136,16 @@ function QuickComposer({
             }}
           />
         </Field>
-        <Field label="Prompt" hint="What should the agent do? Optional now — profile and prompt are required when you promote it to run.">
+        <Field label="Description" hint="For a human: the what/why. Shown on the board, review, and the ack digest.">
           <Textarea
-            placeholder="Describe the task…"
+            placeholder="What is this and why does it matter?"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </Field>
+        <Field label="Agent prompt" hint="Instructions the agent runs. Optional now — profile and prompt are required when you promote it to run.">
+          <Textarea
+            placeholder="Describe the task for the agent…"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
           />
@@ -173,6 +183,7 @@ function FullEditor({
   const labels = useLabels();
 
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [prompt, setPrompt] = useState("");
   const [projectId, setProjectId] = useState("");
   const [profileId, setProfileId] = useState("");
@@ -188,6 +199,7 @@ function FullEditor({
   useEffect(() => {
     if (open) {
       setTitle(prefill.title ?? "");
+      setDescription("");
       setPrompt("");
       setProjectId(prefill.project_id ?? "");
       setProfileId(profiles.data?.[0]?.id ?? "");
@@ -210,6 +222,7 @@ function FullEditor({
     try {
       const body: TicketCreate = {
         title: title.trim(),
+        description: description.trim() || null,
         prompt,
         status: initialStatus,
         profile_id: profileId,
@@ -271,7 +284,15 @@ function FullEditor({
             onChange={(e) => setTitle(e.target.value)}
           />
         </Field>
-        <Field label="Prompt">
+        <Field label="Description" hint="For a human: the what/why. Shown on the board, review, and the ack digest. Not sent to the agent.">
+          <Textarea
+            className="min-h-[80px]"
+            placeholder="What is this and why does it matter?"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </Field>
+        <Field label="Agent prompt" hint="Instructions the agent runs.">
           <Textarea
             className="min-h-[120px]"
             placeholder="Describe the task for the agent…"

@@ -47,6 +47,7 @@ from nightdesk.domain.notifications import (
     fire_webhook,
 )
 from nightdesk.domain.runs import finish_run, start_run
+from nightdesk.domain.events import run_actor
 from nightdesk.domain.tickets import transition_status
 from nightdesk.domain.toolchains import resolve_tool_paths
 from nightdesk.transcript import append_event, append_worker_error
@@ -773,7 +774,7 @@ def _steer_drain_and_autocontinue(
         # Non-resumable (its first turn never recorded a session): fall through
         # to review with next_run_context populated — one click runs it.
         return False
-    transition_status(session, ticket_id, "review")
+    transition_status(session, ticket_id, "review", actor=run_actor(t.current_run_id))
     continue_ticket(session, ticket_id, next_run_context=None,
                     conversation_id=conversation_id)
     log.info("ticket %s: drained queued steer messages into an auto-continue turn",
@@ -1312,7 +1313,9 @@ async def run_one(
             cur = session.get(Ticket, ticket.id)
             if cur is not None and cur.status == "running":
                 try:
-                    transition_status(session, ticket.id, "review")
+                    transition_status(
+                        session, ticket.id, "review", actor=run_actor(run.id),
+                    )
                     log.info("run %s completed for ticket %s: exit=%s, transitioned to review",
                              run.id, ticket.id, result.exit_status)
                 except Exception:
@@ -1427,7 +1430,10 @@ async def run_one(
             try:
                 cur = session.get(Ticket, ticket_id)
                 if cur is not None and cur.status == "running":
-                    transition_status(session, ticket_id, "review")
+                    transition_status(
+                        session, ticket_id, "review",
+                        actor=run_actor(cur.current_run_id),
+                    )
             except Exception:
                 log.exception("could not transition setup-failed ticket %s "
                               "to review", ticket_id)

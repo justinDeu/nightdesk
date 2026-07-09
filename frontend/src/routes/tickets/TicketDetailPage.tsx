@@ -129,11 +129,14 @@ export function TicketDetailPage() {
         {/* CENTER — the adaptive stage */}
         <section className="flex min-h-0 flex-col lg:overflow-hidden">
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-            {authoring ? (
-              <PromptPanel ticket={t} mode="edit" onSave={(prompt) => update.mutate({ prompt })} />
-            ) : (
-              <PromptPanel ticket={t} mode="disclosure" onSave={(prompt) => update.mutate({ prompt })} />
-            )}
+            {/* Description (human-facing what/why) is the hero; the agent prompt
+                is demoted to a collapsible section below it. */}
+            <DescriptionPanel
+              ticket={t}
+              onSave={(description) => update.mutate({ description })}
+            />
+            <PromptPanel ticket={t} mode="disclosure" onSave={(prompt) => update.mutate({ prompt })} />
+
 
             {hasRuns ? (
               <div className={cn("flex flex-col", authoring ? "h-[42vh]" : "h-[62vh]")}>
@@ -336,7 +339,7 @@ function PromptPanel({
             className="flex flex-1 items-center gap-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-moon-400 hover:text-moon-100"
           >
             <ChevronRight size={12} className={cn("transition-transform", open && "rotate-90")} />
-            Prompt
+            Agent prompt
           </button>
           <button
             onClick={() => setEditing(true)}
@@ -379,6 +382,83 @@ function PromptPanel({
       ) : (
         <button onClick={() => setEditing(true)} className="text-sm italic text-moon-600 hover:text-moon-400">
           No prompt yet — click to write one.
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The human-facing description — the hero of the detail stage. Distinct from
+ *  the agent prompt (what actually runs); this is the what/why a person reads. */
+function DescriptionPanel({
+  ticket,
+  onSave,
+}: {
+  ticket: TicketOut;
+  onSave: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(ticket.description ?? "");
+  useEffect(() => setValue(ticket.description ?? ""), [ticket.description]);
+  useUnsavedGuard(editing && value !== (ticket.description ?? ""));
+
+  if (editing) {
+    return (
+      <div className="space-y-2 rounded-card border border-ink-700 bg-ink-900 p-4">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-moon-400">Description</div>
+        <Textarea
+          autoFocus
+          className="min-h-[120px]"
+          placeholder="What is this ticket, and why? Written for a human scanning the board and review."
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => {
+              onSave(value.trim());
+              setEditing(false);
+            }}
+          >
+            Save description
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setValue(ticket.description ?? "");
+              setEditing(false);
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group relative rounded-card border border-ink-700 bg-ink-900 p-4">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-moon-400">Description</span>
+        <button
+          onClick={() => setEditing(true)}
+          className="rounded-control p-1 text-moon-600 hover:bg-ink-800 hover:text-moon-100"
+          aria-label="Edit description"
+        >
+          <Pencil size={13} />
+        </button>
+      </div>
+      {ticket.description?.trim() ? (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-moon-100">{ticket.description}</p>
+      ) : (
+        <button
+          onClick={() => setEditing(true)}
+          className="text-sm italic text-moon-600 hover:text-moon-400"
+        >
+          No description yet — click to add the what/why for a human.
         </button>
       )}
     </div>

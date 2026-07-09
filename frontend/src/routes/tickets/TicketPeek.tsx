@@ -206,7 +206,11 @@ export function TicketPeek({
           </section>
         )}
 
-        {/* Prompt — bounded, with an expand-to-edit popout. */}
+        {/* Description (human what/why) first-class; the agent prompt is demoted
+            below it. */}
+        <DescriptionSection ticket={ticket} />
+
+        {/* Agent prompt — bounded, with an expand-to-edit popout. */}
         <PromptSection ticket={ticket} />
 
         {/* Latest run */}
@@ -309,13 +313,86 @@ function Scheduling({ ticket }: { ticket: TicketOut }) {
 
 /** Prompt bounded to a few lines with internal scroll; an expand affordance opens
  *  a full-height, editable popout backed by the ticket update mutation. */
+/** Description (human what/why) with an inline edit toggle. First-class in the
+ *  peek; the agent prompt sits below it. */
+function DescriptionSection({ ticket }: { ticket: TicketOut }) {
+  const update = useUpdateTicket(ticket.id);
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(ticket.description ?? "");
+  useEffect(() => setValue(ticket.description ?? ""), [ticket.description]);
+  const dirty = value !== (ticket.description ?? "");
+  useUnsavedGuard(editing && dirty);
+
+  const save = () =>
+    update.mutate(
+      { description: value.trim() },
+      {
+        onSuccess: () => setEditing(false),
+        onError: (err) => toast.error("Could not save description", { error: err }),
+      },
+    );
+
+  return (
+    <section>
+      <div className="mb-1 flex items-center gap-2">
+        <SectionLabel>Description</SectionLabel>
+        {!editing && (
+          <button
+            onClick={() => setEditing(true)}
+            className="ml-auto -mt-1 inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-[11px] text-moon-400 hover:bg-ink-800 hover:text-moon-100"
+          >
+            {ticket.description?.trim() ? "Edit" : "Add"}
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <Textarea
+            autoFocus
+            className="min-h-[96px]"
+            placeholder="What is this ticket, and why? For a human, not the agent."
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <Button size="sm" variant="primary" onClick={save}>
+              Save
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setValue(ticket.description ?? "");
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : ticket.description?.trim() ? (
+        <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-moon-100">
+          {ticket.description}
+        </p>
+      ) : (
+        <button
+          onClick={() => setEditing(true)}
+          className="text-sm italic text-moon-600 hover:text-moon-400"
+        >
+          No description yet — add the what/why for a human.
+        </button>
+      )}
+    </section>
+  );
+}
+
 function PromptSection({ ticket }: { ticket: TicketOut }) {
   const [open, setOpen] = useState(false);
   const hasPrompt = ticket.prompt.trim().length > 0;
   return (
     <section>
       <div className="mb-1 flex items-center gap-2">
-        <SectionLabel>Prompt</SectionLabel>
+        <SectionLabel>Agent prompt</SectionLabel>
         <button
           onClick={() => setOpen(true)}
           className="ml-auto -mt-1 inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-[11px] text-moon-400 hover:bg-ink-800 hover:text-moon-100"
@@ -383,7 +460,7 @@ function PromptDialog({
     <Dialog
       open={open}
       onOpenChange={requestClose}
-      title="Prompt"
+      title="Agent prompt"
       description={ticket.title}
       size="lg"
       footer={
