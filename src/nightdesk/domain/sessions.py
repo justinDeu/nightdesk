@@ -34,7 +34,7 @@ from nightdesk.domain.profile_secrets import ProfileSecretBox
 
 
 # Turn kinds carried on the SessionTurn inbox.
-TURN_KINDS = ("user", "interrupt", "answer", "restart")
+TURN_KINDS = ("user", "interrupt", "answer", "restart", "reap")
 # Coarse persisted Session.status values.
 SESSION_STATUSES = ("active", "idle", "ended", "crashed")
 
@@ -56,6 +56,10 @@ class QueueFull(Exception):
 class PendingNotOpen(Exception):
     """Raised when answering a PendingInput that is already answered/cancelled.
     Maps to HTTP 409."""
+
+
+class TurnNotFound(Exception):
+    """Raised when a turn id does not resolve for the given agent. HTTP 404."""
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +460,91 @@ def claim_turn(session: OrmSession, turn_id: str) -> Optional[SessionTurn]:
     if (result.rowcount or 0) == 0:
         return None
     return session.get(SessionTurn, turn_id)
+
+
+# ---------------------------------------------------------------------------
+# Queue-strip operations (edit / reorder / cancel undelivered turns)
+# ---------------------------------------------------------------------------
+def list_queue_turns(session: OrmSession, session_id: str) -> list[SessionTurn]:
+    """The live queue strip: turns not yet fully delivered (queued + delivering),
+    oldest first. Mirrors the ticket steer queue's pre-delivery view."""
+    get_session_row(session, session_id)
+    return list(session.scalars(
+        select(SessionTurn)
+        .where(SessionTurn.session_id == session_id,
+               SessionTurn.status.in_(("queued", "delivering")))
+        .order_by(SessionTurn.position.asc())
+    ))
+
+
+def _get_turn(session: OrmSession, session_id: str, turn_id: str) -> SessionTurn:
+    turn = session.get(SessionTurn, turn_id)
+    if turn is None or turn.session_id != session_id:
+        raise TurnNotFound(turn_id)
+    return turn
+
+
+def edit_turn_body(session: OrmSession, session_id: str, turn_id: str, body: str) -> SessionTurn:
+    """Edit a queued turn's body. Queued-only (409 once it is delivering/done)."""
+    turn = _get_turn(session, session_id, turn_id)
+    if turn.status != "queued":
+        raise SessionBusy("turn is no longer queued")
+    turn.body = body
+    session.commit()
+    session.refresh(turn)
+    return turn
+
+
+def cancel_turn(session: OrmSession, session_id: str, turn_id: str) -> SessionTurn:
+    """Cancel a queued turn (queued -> cancelled). 409 once it has left the queue."""
+    turn = _get_turn(session, session_id, turn_id)
+    if turn.status != "queued":
+        raise SessionBusy("turn is no longer queued")
+    turn.status = "cancelled"
+    turn.finished_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(turn)
+    return turn
+
+
+def reorder_turns(session: OrmSession, session_id: str, ordered_ids: list[str]) -> list[SessionTurn]:
+    """Reorder queued turns among themselves. Every id must be a queued turn of
+    this agent (404 otherwise); positions are reassigned in the given order,
+    reusing the turns' own existing position slots so already-delivering turns
+    are untouched."""
+    get_session_row(session, session_id)
+    queued = {
+        t.id: t
+        for t in session.scalars(
+            select(SessionTurn).where(
+                SessionTurn.session_id == session_id,
+                SessionTurn.status == "queued",
+            )
+        )
+    }
+    for tid in ordered_ids:
+        if tid not in queued:
+            raise TurnNotFound(tid)
+    slots = sorted(t.position for t in queued.values())
+    for slot, tid in zip(slots, ordered_ids):
+        queued[tid].position = slot
+    session.commit()
+    return list_queue_turns(session, session_id)
+
+
+def request_reap(session: OrmSession, session_id: str) -> Optional[SessionTurn]:
+    """Graceful explicit reap: 409 if a turn is streaming or a pending input is
+    open; otherwise ask a live host to run its normal idle-reap now (disconnect,
+    publish resume_handle, status=idle) via a durable control turn. A cold agent
+    is already reaped — returns None (no-op)."""
+    row = get_session_row(session, session_id)
+    if _has_streaming_turn(session, session_id):
+        raise SessionBusy("a turn is streaming; cannot reap")
+    if has_open_pending(session, session_id):
+        raise SessionBusy("a human-input request is open; cannot reap")
+    if not _pid_alive(row.host_pid):
+        return None
+    return enqueue_turn(session, session_id, kind="reap", enforce_cap=False)
 
 
 # ---------------------------------------------------------------------------

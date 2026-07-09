@@ -253,6 +253,36 @@ async def test_restart_reuses_session_id_and_folds_replay_cost(engine, tmp_path)
         await _end(factory, sid, task)
 
 
+async def test_explicit_reap_control_turn_idles_host(engine, tmp_path):
+    """A reap control turn makes a live host run its normal idle-reap flow now:
+    disconnect the inner, publish the resume handle, release to idle."""
+    factory, sid, tpath = _make(engine, tmp_path, idle_timeout_s=3600)
+    with factory() as db:
+        sess.post_message(db, sid, "hi")
+    backend = FakeBackend()
+    host, task = await _run_host(factory, sid, backend)
+    try:
+        assert await _await(lambda: backend.handles
+                            and any(m.get("type") == "user_turn"
+                                    for m in backend.handles[0].sent))
+        backend.handles[0].push({"type": "turn_complete",
+                                 "turn_id": _first_turn_id(factory, sid),
+                                 "session_id": "cc-reap", "usage": {}, "cost_usd": 0.0})
+        assert await _await(lambda: _turn_status(factory, sid) == "done")
+        # Explicit reap while warm.
+        with factory() as db:
+            sess.request_reap(db, sid)
+        assert await asyncio.wait_for(task, timeout=5.0) == 0
+        with factory() as db:
+            row = db.get(SessionModel, sid)
+            assert row.status == "idle" and row.host_pid is None
+            assert (row.resume_handle or {}).get("session_id") == "cc-reap"
+        assert backend.handles[0].closed
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 async def test_max_turn_seconds_watchdog_fails_unresponsive_turn(engine, tmp_path):
     """A turn that never completes: the watchdog interrupts it, and when the
     inner stays silent past the grace window the host tears down (crashed ->

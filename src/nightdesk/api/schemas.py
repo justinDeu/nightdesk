@@ -1078,6 +1078,25 @@ class AgentDetailOut(AgentOut):
     turns: list[AgentTurnOut] = []
     pending_input: Optional[AgentPendingOut] = None
     env: list[AgentEnvEntryOut] = []
+    # The local claude session id (from resume_handle) for the
+    # ``claude --resume <id>`` terminal handoff. Null until the agent has run.
+    # Not a secret — it is the on-disk jsonl id, not a credential.
+    claude_session_id: Optional[str] = None
+
+
+class AgentTurnEdit(BaseModel):
+    body: str
+
+    @field_validator("body")
+    @classmethod
+    def _nonempty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("body must not be empty")
+        return v
+
+
+class AgentTurnReorder(BaseModel):
+    ordered_ids: list[str] = Field(min_length=1)
 
 
 class BulkPriorityUpdate(BaseModel):

@@ -26,7 +26,9 @@ from nightdesk.api.schemas import (
     AgentPendingItem,
     AgentPendingOut,
     AgentRestart,
+    AgentTurnEdit,
     AgentTurnOut,
+    AgentTurnReorder,
 )
 from nightdesk.domain import sessions as sess
 from nightdesk.domain.profile_secrets import ProfileSecretBox
@@ -56,6 +58,7 @@ def _to_detail(db: Session, row) -> AgentDetailOut:
         turns=[AgentTurnOut.model_validate(t) for t in turns],
         pending_input=AgentPendingOut.model_validate(pending) if pending else None,
         env=[AgentEnvEntryOut(**e) for e in sess.masked_env(row)],
+        claude_session_id=(row.resume_handle or {}).get("session_id"),
     )
 
 
@@ -211,6 +214,59 @@ def build_router(
         except sess.SessionBusy as e:
             raise HTTPException(409, str(e))
         sess.nudge_worker(session)
+        return AgentTurnOut.model_validate(turn)
+
+    @router.post("/{aid}/reap", status_code=status.HTTP_202_ACCEPTED,
+                 response_model=AgentOut)
+    async def reap(aid: str, session: Session = Depends(get_session)):
+        try:
+            sess.request_reap(session, aid)
+        except sess.SessionNotFound:
+            raise HTTPException(404, "not found")
+        except sess.SessionBusy as e:
+            raise HTTPException(409, str(e))
+        sess.nudge_worker(session)
+        return _to_out(session, sess.get_session_row(session, aid))
+
+    # --- queue strip (undelivered turns) -----------------------------------
+    @router.get("/{aid}/turns", response_model=list[AgentTurnOut])
+    async def list_turns(aid: str, session: Session = Depends(get_session)):
+        try:
+            turns = sess.list_queue_turns(session, aid)
+        except sess.SessionNotFound:
+            raise HTTPException(404, "not found")
+        return [AgentTurnOut.model_validate(t) for t in turns]
+
+    @router.post("/{aid}/turns/reorder", response_model=list[AgentTurnOut])
+    async def reorder_turns(aid: str, payload: AgentTurnReorder,
+                            session: Session = Depends(get_session)):
+        try:
+            turns = sess.reorder_turns(session, aid, payload.ordered_ids)
+        except sess.SessionNotFound:
+            raise HTTPException(404, "not found")
+        except sess.TurnNotFound as e:
+            raise HTTPException(404, f"turn not queued: {e}")
+        return [AgentTurnOut.model_validate(t) for t in turns]
+
+    @router.patch("/{aid}/turns/{tid}", response_model=AgentTurnOut)
+    async def edit_turn(aid: str, tid: str, payload: AgentTurnEdit,
+                        session: Session = Depends(get_session)):
+        try:
+            turn = sess.edit_turn_body(session, aid, tid, payload.body)
+        except sess.TurnNotFound:
+            raise HTTPException(404, "not found")
+        except sess.SessionBusy as e:
+            raise HTTPException(409, str(e))
+        return AgentTurnOut.model_validate(turn)
+
+    @router.delete("/{aid}/turns/{tid}", response_model=AgentTurnOut)
+    async def cancel_turn(aid: str, tid: str, session: Session = Depends(get_session)):
+        try:
+            turn = sess.cancel_turn(session, aid, tid)
+        except sess.TurnNotFound:
+            raise HTTPException(404, "not found")
+        except sess.SessionBusy as e:
+            raise HTTPException(409, str(e))
         return AgentTurnOut.model_validate(turn)
 
     return router

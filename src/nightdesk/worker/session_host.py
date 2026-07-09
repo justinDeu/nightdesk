@@ -283,6 +283,14 @@ class SessionHost:
         elif kind == "restart":
             self._finish_control_turn(turn)
             await self._restart_inner(force=bool(_decode(turn.body).get("force")))
+        elif kind == "reap":
+            # Explicit graceful reap: run the normal idle-reap flow now. Teardown
+            # (in run()) disconnects the inner, publishes the resume handle, and
+            # releases the host to idle.
+            self._finish_control_turn(turn)
+            self._shutdown = True
+            self._shutdown_status = "idle"
+            self._turn_done_evt.set()
 
     def _finish_control_turn(self, turn: SessionTurn) -> None:
         with self._sf() as db:

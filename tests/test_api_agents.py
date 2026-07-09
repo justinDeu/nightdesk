@@ -154,6 +154,105 @@ async def test_fs_suggest_include_files(client, tmp_path):
     assert any(m.endswith("sub/") for m in matches)
 
 
+async def test_turn_queue_list_edit_reorder_cancel(client, session):
+    from nightdesk.db.models import SessionTurn
+    a = await _create(client)
+    ids = []
+    for msg in ("one", "two", "three"):
+        r = await client.post(f"/api/v1/agents/{a['id']}/messages", json={"message": msg})
+        ids.append(r.json()["id"])
+
+    # GET queue: all three queued, in order.
+    r = await client.get(f"/api/v1/agents/{a['id']}/turns")
+    assert r.status_code == 200
+    assert [t["body"] for t in r.json()] == ["one", "two", "three"]
+
+    # PATCH body (queued-only).
+    r = await client.patch(f"/api/v1/agents/{a['id']}/turns/{ids[0]}",
+                           json={"body": "edited"})
+    assert r.status_code == 200 and r.json()["body"] == "edited"
+
+    # Reorder: reverse.
+    r = await client.post(f"/api/v1/agents/{a['id']}/turns/reorder",
+                          json={"ordered_ids": [ids[2], ids[1], ids[0]]})
+    assert r.status_code == 200
+    assert [t["id"] for t in r.json()] == [ids[2], ids[1], ids[0]]
+
+    # DELETE cancels a queued turn.
+    r = await client.delete(f"/api/v1/agents/{a['id']}/turns/{ids[1]}")
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    r = await client.get(f"/api/v1/agents/{a['id']}/turns")
+    assert ids[1] not in [t["id"] for t in r.json()]
+
+
+async def test_turn_edit_and_cancel_409_when_not_queued(client, session):
+    from nightdesk.db.models import SessionTurn
+    a = await _create(client)
+    turn = SessionTurn(session_id=a["id"], position=1, kind="user",
+                       body="x", status="streaming")
+    session.add(turn)
+    session.commit()
+    r = await client.patch(f"/api/v1/agents/{a['id']}/turns/{turn.id}",
+                           json={"body": "nope"})
+    assert r.status_code == 409
+    r = await client.delete(f"/api/v1/agents/{a['id']}/turns/{turn.id}")
+    assert r.status_code == 409
+
+
+async def test_reap_409_when_streaming_or_pending(client, session):
+    from nightdesk.db.models import SessionTurn
+    from nightdesk.domain import sessions as sess
+    a = await _create(client)
+    # Streaming -> 409.
+    turn = SessionTurn(session_id=a["id"], position=1, kind="user",
+                       body="x", status="streaming")
+    session.add(turn)
+    session.commit()
+    assert (await client.post(f"/api/v1/agents/{a['id']}/reap")).status_code == 409
+    turn.status = "done"
+    session.commit()
+    # Open pending -> 409.
+    sess.create_pending(session, a["id"], request_id="r1", kind="permission",
+                        tool="Bash", payload={})
+    session.commit()
+    assert (await client.post(f"/api/v1/agents/{a['id']}/reap")).status_code == 409
+
+
+async def test_reap_noop_when_cold(client):
+    a = await _create(client)
+    # Cold agent (no live host) -> reap is a no-op, 202.
+    r = await client.post(f"/api/v1/agents/{a['id']}/reap")
+    assert r.status_code == 202
+
+
+async def test_reap_enqueues_control_turn_when_live(client, session):
+    import os
+    from nightdesk.db.models import Session as SessionModel, SessionTurn
+    a = await _create(client)
+    row = session.get(SessionModel, a["id"])
+    row.host_pid = os.getpid()  # pretend a live host owns it
+    row.status = "active"
+    session.commit()
+    r = await client.post(f"/api/v1/agents/{a['id']}/reap")
+    assert r.status_code == 202
+    reap_turns = session.query(SessionTurn).filter_by(
+        session_id=a["id"], kind="reap").all()
+    assert len(reap_turns) == 1 and reap_turns[0].status == "queued"
+
+
+async def test_detail_exposes_claude_session_id(client, session):
+    from nightdesk.db.models import Session as SessionModel
+    a = await _create(client)
+    # Null until the agent has run.
+    r = await client.get(f"/api/v1/agents/{a['id']}")
+    assert r.json()["claude_session_id"] is None
+    row = session.get(SessionModel, a["id"])
+    row.resume_handle = {"session_id": "cc-abc-123"}
+    session.commit()
+    r = await client.get(f"/api/v1/agents/{a['id']}")
+    assert r.json()["claude_session_id"] == "cc-abc-123"
+
+
 async def test_config_exposes_session_knobs(client):
     r = await client.get("/api/v1/config")
     assert r.status_code == 200
