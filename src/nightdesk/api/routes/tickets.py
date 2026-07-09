@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 from nightdesk.api.auth import require_token_cookie_or_bearer
 from nightdesk.domain.projects import ProjectNotFound
 from nightdesk.api.schemas import (
+    AckDigestGroupOut, AckDigestOut, AckDigestTicketOut,
     AdditionalDirAdd,
+    BulkAckRequest, BulkAckResult,
     BulkArchiveRequest, BulkLabelsUpdate,
     BulkPriorityUpdate, BulkProfileUpdate, BulkProjectUpdate, BulkStatusUpdate,
     BulkUpdateResult,
@@ -35,6 +37,10 @@ from nightdesk.domain.tickets import (
     update_ticket_priority, update_ticket_profile, update_ticket_project,
     ConversationNotResumable, TicketNotFound, InvalidTransition,
     CyclicDependency, DependencyNotFound,
+)
+from nightdesk.domain.ack import (
+    Digest, TicketNotAcknowledgeable, ack_digest, acknowledge_ticket,
+    bulk_acknowledge, unacknowledged_count,
 )
 from nightdesk.domain.profiles import ProfileNotFound
 from nightdesk.domain.labels import LabelNotFound, set_ticket_labels
@@ -67,8 +73,13 @@ def _coerce_workspaces(payload_workspaces):
     ]
 
 
-def _ticket_to_out(t) -> TicketOut:
-    """Build a TicketOut including dependency edges."""
+def _ticket_to_out(t, *, archived_at=None, agent_reviewed: bool = False) -> TicketOut:
+    """Build a TicketOut including dependency edges.
+
+    ``archived_at`` / ``agent_reviewed`` are the event-derived garnishes; the
+    list and detail routes pass them from a batched ticket_events lookup, other
+    callers leave them at their defaults (they are display-only).
+    """
     from nightdesk.api.schemas import TicketWorkspaceOut
     deps = []
     for dep in (t.dependencies or []):
@@ -112,8 +123,36 @@ def _ticket_to_out(t) -> TicketOut:
         "dependencies": deps,
         "created_at": t.created_at,
         "updated_at": t.updated_at,
+        "acknowledged_at": t.acknowledged_at,
+        "acknowledged_by": t.acknowledged_by,
+        "archived_at": archived_at,
+        "agent_reviewed": agent_reviewed,
     }
     return TicketOut(**data)
+
+
+def _events_enrichment(session, tickets):
+    """Batch-compute (archived_at, agent_reviewed) per ticket from ticket_events.
+
+    ``archived_at`` is the timestamp the ticket entered ``archived`` (a real
+    archived-at, not ``updated_at``); ``agent_reviewed`` is True when a
+    run/agent — not a human — moved a currently-``review`` ticket into review.
+    Returns two dicts keyed by ticket id.
+    """
+    from nightdesk.domain.ack import _entering_events
+
+    entering = _entering_events(session, list(tickets))
+    archived_at: dict = {}
+    agent_reviewed: dict = {}
+    for t in tickets:
+        ev = entering.get(t.id)
+        if ev is None:
+            continue
+        if t.status == "archived":
+            archived_at[t.id] = ev.created_at
+        if t.status == "review":
+            agent_reviewed[t.id] = ev.actor_kind != "admin"
+    return archived_at, agent_reviewed
 
 
 def build_router(get_session, bearer_token: str) -> APIRouter:
@@ -151,6 +190,7 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
         label: str | None = Query(default=None),
         outcome: str | None = Query(default=None, pattern="^(succeeded|failed)$"),
         q: str | None = Query(default=None),
+        acknowledged: bool | None = Query(default=None),
         limit: int = Query(default=200, ge=1, le=MAX_LIST_LIMIT),
         offset: int = Query(default=0, ge=0),
         sort: str = Query(default="board", pattern="^(board|recent|created|priority|cost)$"),
@@ -182,16 +222,26 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             session, status=status, profile_id=profile_id,
             project_id=project_id, limit=limit, offset=offset, sort=sort,
             order=order, priority=priority, label=label, outcome=outcome, q=q,
+            acknowledged=acknowledged,
         )
         total = count_tickets(
             session, status=status, profile_id=profile_id, project_id=project_id,
             priority=priority, label=label, outcome=outcome, q=q,
+            acknowledged=acknowledged,
         )
         response.headers["X-Total-Count"] = str(total)
         response.headers["X-Has-More"] = "true" if (offset + len(tickets)) < total else "false"
         response.headers["X-Limit"] = str(limit)
         response.headers["X-Offset"] = str(offset)
-        return [_ticket_to_out(t) for t in tickets]
+        archived_at, agent_reviewed = _events_enrichment(session, tickets)
+        return [
+            _ticket_to_out(
+                t,
+                archived_at=archived_at.get(t.id),
+                agent_reviewed=agent_reviewed.get(t.id, False),
+            )
+            for t in tickets
+        ]
 
     # --- Bulk metadata update endpoints -----------------------------------------
     # Registered BEFORE /{tid} routes so FastAPI does not match "bulk" as a tid.
@@ -312,15 +362,84 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             skipped=skipped,
         )
 
+    # --- Acknowledgement (admin-only; see the design's "one thing this feature
+    # must make impossible": an agent acknowledging its own work) ----------------
+    # Registered before /{tid} so "ack" is never matched as a ticket id. The
+    # whole router is admin-only today (require_token_cookie_or_bearer rejects
+    # run tokens), so no extra guard is needed here; when scoped agent tokens can
+    # reach this router, the ack scope is deliberately absent from the grantable
+    # list, keeping these endpoints human-only.
+
+    def _digest_out(d: Digest) -> AckDigestOut:
+        return AckDigestOut(
+            total=d.total,
+            generated_at=d.generated_at,
+            groups=[
+                AckDigestGroupOut(
+                    project_id=g.project_id,
+                    day=g.day,
+                    count=g.count,
+                    succeeded=g.succeeded,
+                    failed=g.failed,
+                    cost_usd=g.cost_usd,
+                    tickets=[
+                        AckDigestTicketOut(
+                            ticket_id=dt.ticket_id,
+                            title=dt.title,
+                            status=dt.status,
+                            project_id=dt.project_id,
+                            entered_at=dt.entered_at,
+                            actor_kind=dt.actor_kind,
+                            outcome=dt.outcome,
+                            cost_usd=dt.cost_usd,
+                            run_id=dt.run_id,
+                        )
+                        for dt in g.tickets
+                    ],
+                )
+                for g in d.groups
+            ],
+        )
+
+    @router.get("/ack/digest", response_model=AckDigestOut)
+    async def ack_digest_route(
+        project_id: str | None = Query(default=None),
+        session: Session = Depends(get_session),
+    ):
+        """Unacknowledged review/archived work, grouped by project then day."""
+        return _digest_out(ack_digest(session, project_id=project_id))
+
+    @router.get("/ack/count")
+    async def ack_count_route(session: Session = Depends(get_session)):
+        """Cheap unacked count for the Desk 'To acknowledge' band header."""
+        return {"count": unacknowledged_count(session)}
+
+    @router.post("/ack", response_model=BulkAckResult)
+    async def bulk_ack_route(
+        payload: BulkAckRequest, session: Session = Depends(get_session),
+    ):
+        if payload.project_scope:
+            acked = bulk_acknowledge(
+                session, project_id=payload.project_id, before=payload.before,
+            )
+        else:
+            acked = bulk_acknowledge(session, ticket_ids=payload.ticket_ids)
+        return BulkAckResult(acknowledged=acked, count=len(acked))
+
     # --- Per-ticket routes (path parameter {tid}) --------------------------------
 
     @router.get("/{tid}", response_model=TicketOut)
     async def show(tid: str, session: Session = Depends(get_session)):
         try:
             t = get_ticket(session, tid)
-            return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")
+        archived_at, agent_reviewed = _events_enrichment(session, [t])
+        return _ticket_to_out(
+            t,
+            archived_at=archived_at.get(t.id),
+            agent_reviewed=agent_reviewed.get(t.id, False),
+        )
 
     @router.patch("/{tid}", response_model=TicketOut)
     async def update(tid: str, payload: TicketUpdate, session: Session = Depends(get_session)):
@@ -341,6 +460,23 @@ def build_router(get_session, bearer_token: str) -> APIRouter:
             raise HTTPException(404, "project not found")
         except ValueError as e:
             raise HTTPException(422, str(e))
+
+    @router.post("/{tid}/ack", response_model=TicketOut)
+    async def ack_route(tid: str, session: Session = Depends(get_session)):
+        """Acknowledge one ticket's outcome (mark it seen). Admin-only; a 409
+        if the ticket is not in review/archived (nothing to acknowledge)."""
+        try:
+            t = acknowledge_ticket(session, tid)
+        except TicketNotFound:
+            raise HTTPException(404, "not found")
+        except TicketNotAcknowledgeable as e:
+            raise HTTPException(409, str(e))
+        archived_at, agent_reviewed = _events_enrichment(session, [t])
+        return _ticket_to_out(
+            t,
+            archived_at=archived_at.get(t.id),
+            agent_reviewed=agent_reviewed.get(t.id, False),
+        )
 
     @router.post("/{tid}/run-now", response_model=TicketOut)
     async def run_now(tid: str, session: Session = Depends(get_session)):

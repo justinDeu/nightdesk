@@ -6,7 +6,10 @@ from typing import Iterable, Optional
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from nightdesk.db.models import Label, Run, Ticket, TicketDependency, TicketWorkspace
+from nightdesk.db.models import (
+    Label, Run, Ticket, TicketDependency, TicketEvent, TicketWorkspace,
+)
+from nightdesk.domain.events import ADMIN, Actor, record_transition_event
 from nightdesk.domain.projects import apply_project_defaults, get_project
 from nightdesk.domain.priority import validate_priority
 from nightdesk.domain.toolchains import (
@@ -329,6 +332,7 @@ def _ticket_filters(
     outcome: Optional[str] = None,
     q: Optional[str] = None,
     kind: Optional[str] = "ticket",
+    acknowledged: Optional[bool] = None,
 ) -> list:
     """Shared WHERE-clause builder for ``list_tickets`` / ``count_tickets``.
 
@@ -379,6 +383,11 @@ def _ticket_filters(
             filters.append(
                 and_(latest_status.is_not(None), latest_status != "success")
             )
+    if acknowledged is not None:
+        if acknowledged:
+            filters.append(Ticket.acknowledged_at.is_not(None))
+        else:
+            filters.append(Ticket.acknowledged_at.is_(None))
     return filters
 
 
@@ -396,6 +405,7 @@ def list_tickets(
     outcome: Optional[str] = None,
     q: Optional[str] = None,
     kind: Optional[str] = "ticket",
+    acknowledged: Optional[bool] = None,
 ) -> list[Ticket]:
     """One page of tickets matching the filters.
 
@@ -449,6 +459,7 @@ def list_tickets(
         .where(*_ticket_filters(
             status, profile_id, project_id,
             priority=priority, label=label, outcome=outcome, q=q, kind=kind,
+            acknowledged=acknowledged,
         ))
         .order_by(*order_by)
         .limit(limit)
@@ -467,6 +478,7 @@ def count_tickets(
     outcome: Optional[str] = None,
     q: Optional[str] = None,
     kind: Optional[str] = "ticket",
+    acknowledged: Optional[bool] = None,
 ) -> int:
     """Total tickets matching the filters, ignoring ``limit``/``offset``.
 
@@ -479,6 +491,7 @@ def count_tickets(
         *_ticket_filters(
             status, profile_id, project_id,
             priority=priority, label=label, outcome=outcome, q=q, kind=kind,
+            acknowledged=acknowledged,
         )
     )
     return int(session.scalar(stmt) or 0)
@@ -539,9 +552,13 @@ def update_ticket(session: Session, ticket_id: str, **fields) -> Ticket:
     return t
 
 
-def transition_status(session: Session, ticket_id: str, new_status: str) -> Ticket:
+def transition_status(
+    session: Session, ticket_id: str, new_status: str, *, actor: Actor = ADMIN,
+) -> Ticket:
     """Plain transition; appends to the bottom of the new column."""
-    return transition_with_position(session, ticket_id, new_status, position=None)
+    return transition_with_position(
+        session, ticket_id, new_status, position=None, actor=actor,
+    )
 
 
 def transition_with_position(
@@ -549,6 +566,8 @@ def transition_with_position(
     ticket_id: str,
     new_status: str,
     position: Optional[int] = None,
+    *,
+    actor: Actor = ADMIN,
 ) -> Ticket:
     """Transition a ticket to ``new_status``, optionally placing it at ``position``.
 
@@ -581,8 +600,12 @@ def transition_with_position(
         if reasons:
             raise IncompleteTicket(reasons)
 
+    from_status = t.status
     _reorder_inserting(session, t, new_status, position)
     t.updated_at = datetime.now(timezone.utc)
+    record_transition_event(
+        session, t, from_status=from_status, to_status=new_status, actor=actor,
+    )
     session.commit()
     session.refresh(t)
     return t
@@ -633,7 +656,7 @@ def reorder_in_column(
 _ARCHIVABLE_SOURCES = {"draft", "queued", "review"}
 
 
-def archive(session: Session, ticket_id: str) -> Ticket:
+def archive(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
     """Convenience: draft|queued|review -> archived.
 
     ``draft``/``queued`` archiving is the non-destructive way to discard a
@@ -645,15 +668,15 @@ def archive(session: Session, ticket_id: str) -> Ticket:
     t = get_ticket(session, ticket_id)
     if t.status not in _ARCHIVABLE_SOURCES:
         raise InvalidTransition(f"cannot archive from {t.status}")
-    return transition_status(session, ticket_id, "archived")
+    return transition_status(session, ticket_id, "archived", actor=actor)
 
 
-def unarchive(session: Session, ticket_id: str) -> Ticket:
+def unarchive(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
     """Convenience: archived -> queued."""
     t = get_ticket(session, ticket_id)
     if t.status != "archived":
         raise InvalidTransition(f"cannot unarchive from {t.status}")
-    return transition_status(session, ticket_id, "queued")
+    return transition_status(session, ticket_id, "queued", actor=actor)
 
 
 def send_to_inbox(session: Session, ticket_id: str) -> Ticket:
@@ -731,7 +754,7 @@ def set_run_now(session: Session, ticket_id: str, run_now: bool) -> Ticket:
     return update_ticket(session, ticket_id, run_now=run_now)
 
 
-def request_run_now(session: Session, ticket_id: str) -> Ticket:
+def request_run_now(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
     """Mark a ticket for immediate execution by the next scheduler tick.
 
     The scheduler only picks tickets where ``status='queued' AND run_now=true``
@@ -765,7 +788,9 @@ def request_run_now(session: Session, ticket_id: str) -> Ticket:
         # transition_with_position will persist both the flag and the
         # status change atomically.
         t.run_now = True
-        return transition_with_position(session, ticket_id, "queued", position=None)
+        return transition_with_position(
+            session, ticket_id, "queued", position=None, actor=actor,
+        )
     # _ALL_STATUSES is exhaustive today, but be defensive against future
     # additions: refuse rather than silently swallow.
     raise InvalidTransition(f"cannot run-now from {t.status}")
@@ -958,12 +983,12 @@ def clone_ticket(session: Session, ticket_id: str, *, title: Optional[str],
         workspaces=workspace_specs,
     )
 
-def requeue(session: Session, ticket_id: str) -> Ticket:
+def requeue(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
     """Move a ticket back to queued. Allowed from review or archived."""
     t = get_ticket(session, ticket_id)
     if t.status not in ("review", "archived"):
         raise InvalidTransition(f"cannot requeue from {t.status}")
-    return transition_status(session, ticket_id, "queued")
+    return transition_status(session, ticket_id, "queued", actor=actor)
 
 
 def delete_ticket(session: Session, ticket_id: str) -> None:

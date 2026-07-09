@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ClaudeCredentialsIn(BaseModel):
@@ -523,6 +523,15 @@ class TicketOut(BaseModel):
     dependencies: list[DependencyOut] = []
     created_at: datetime
     updated_at: datetime
+    # Post-review acknowledgement (docs/design/post-review-acknowledge-flow.md).
+    # ``acknowledged_at``/``acknowledged_by`` come off the ticket columns.
+    # ``archived_at`` (the real archived timestamp from ticket_events) and
+    # ``agent_reviewed`` (a run/agent, not a human, moved this into review) are
+    # derived from the event log and only populated on list/detail responses.
+    acknowledged_at: Optional[datetime] = None
+    acknowledged_by: Optional[str] = None
+    archived_at: Optional[datetime] = None
+    agent_reviewed: bool = False
 
 
 _LIFECYCLE_STATUSES = ("draft", "queued", "running", "review", "archived")
@@ -1281,6 +1290,69 @@ class BulkLabelsUpdate(BaseModel):
 
 class BulkArchiveRequest(BaseModel):
     ticket_ids: list[str] = Field(min_length=1)
+
+
+# --- Post-review acknowledgement --------------------------------------------
+
+
+class BulkAckRequest(BaseModel):
+    """Bulk-acknowledge selection. Exactly one mode:
+
+    - ``ticket_ids``: ack these specific tickets.
+    - project scope: ``project_scope=True`` with ``project_id`` (a real id, or
+      ``null`` for the no-project group) acks every unacked review/archived
+      ticket in that project.
+
+    ``before`` (the timestamp the digest was rendered) makes project-scoped
+    "ack all" race-safe against work archived mid-read.
+    """
+
+    ticket_ids: Optional[list[str]] = None
+    project_scope: bool = False
+    project_id: Optional[str] = None
+    before: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def _one_mode(self):
+        if self.ticket_ids is None and not self.project_scope:
+            raise ValueError("provide ticket_ids or set project_scope")
+        if self.ticket_ids is not None and self.project_scope:
+            raise ValueError("ticket_ids and project_scope are mutually exclusive")
+        return self
+
+
+class BulkAckResult(BaseModel):
+    acknowledged: list[str]
+    count: int
+
+
+class AckDigestTicketOut(BaseModel):
+    ticket_id: str
+    title: str
+    status: str
+    project_id: Optional[str] = None
+    entered_at: Optional[datetime] = None
+    # 'admin' | 'run' | 'token' | None — who moved it into its current status.
+    actor_kind: Optional[str] = None
+    outcome: Optional[str] = None  # 'succeeded' | 'failed' | None
+    cost_usd: Optional[float] = None
+    run_id: Optional[str] = None
+
+
+class AckDigestGroupOut(BaseModel):
+    project_id: Optional[str] = None
+    day: date
+    count: int
+    succeeded: int
+    failed: int
+    cost_usd: float
+    tickets: list[AckDigestTicketOut] = []
+
+
+class AckDigestOut(BaseModel):
+    total: int
+    generated_at: datetime
+    groups: list[AckDigestGroupOut] = []
 
 
 # --- Profiles: copy/export/import --------------------------------------------

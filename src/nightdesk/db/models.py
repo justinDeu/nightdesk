@@ -219,6 +219,13 @@ class Ticket(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    # Post-review acknowledgement (docs/design/post-review-acknowledge-flow.md).
+    # "A human has seen this ticket's current outcome." Set implicitly by
+    # human-initiated transitions and the explicit ack endpoints; never by
+    # run/agent transitions; cleared when the ticket re-enters an active state.
+    # NULL on an archived/review ticket == unacknowledged == shows in the digest.
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     next_run_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     next_run_context_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -253,6 +260,53 @@ class Ticket(Base):
     )
     labels: Mapped[list["Label"]] = relationship(
         secondary=ticket_labels, back_populates="tickets", lazy="selectin",
+    )
+
+
+class TicketEvent(Base):
+    """Append-only record of one ticket status transition with its actor.
+
+    Layer 0 of the post-review acknowledgement flow
+    (``docs/design/post-review-acknowledge-flow.md``). Written at the single
+    choke point every status change funnels through
+    (``domain.tickets.transition_with_position``), so it is a complete transition
+    audit trail — including the worker's own queued->running and running->review
+    moves.
+
+    ``actor_kind`` generalizes ``DiffComment.author_kind``:
+
+    - ``admin`` — the human (admin bearer/cookie), or any internal default caller.
+    - ``run`` — a ticket run / the worker acting on the run's behalf
+      (``run_id`` set). These NEVER acknowledge.
+    - ``token`` — reserved for the sibling scoped-agent-token design; not written
+      on this branch. ``domain.events.actor_from_principal`` is the seam that
+      maps a future ``TokenPrincipal`` onto this kind.
+
+    Rows are never mutated; ``ticket_id`` cascades on ticket delete.
+    """
+
+    __tablename__ = "ticket_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    ticket_id: Mapped[str] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    # NULL only in the theoretical create-as-terminal case; transitions carry it.
+    from_status: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    to_status: Mapped[str] = mapped_column(String, nullable=False)
+    # admin | run | token
+    actor_kind: Mapped[str] = mapped_column(String, nullable=False)
+    run_id: Mapped[Optional[str]] = mapped_column(ForeignKey("runs.id"), nullable=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False,
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_ticket_events_ticket_to_status",
+            "ticket_id", "to_status", "created_at",
+        ),
     )
 
 
