@@ -124,3 +124,134 @@ Carried from `README.md` — each is a deliberate v1 cutline, not a regression:
   `/steer`, review-comments, and run write-back surfaces documented, plus the
   `kind` field and `execution_target` profile field. Not done here (out of this
   worktree's scope; the shared skill dir must be edited once, not per-branch).
+
+
+# Session-suite integration — round 2
+
+Merging the four round-2 feature branches into `integration/session-suite` off
+`dfb096b` (the resident-agents-v3 design commit, itself atop round 1). All four
+were green standalone; each landed as a real `--no-ff` merge commit.
+
+## Merge order and commits
+
+| # | Branch | Merge commit | Standalone | Conflicts |
+|---|---|---|---|---|
+| 1 | `feat/resident-agents` | `54f336c` | 1521 | none (fan-out base) |
+| 2 | `feat/token-perms` | `2482bd7` | 1523 | `app.py`, `routes/sessions.py` (del) |
+| 3 | `feat/ack-flow` | `3309ab0` | 1525 | `app.py`†, `routes/tickets.py`, `domain/tickets.py`, `DeskPage.tsx` |
+| 4 | `feat/gitlab-integration` | `859eb68` | 1541 | `app.py`, `db/models.py`, `schemas.py`, `worker/main.py`, `keys.ts`, `BoardCard.tsx` |
+
+† ack-flow's `app.py` auto-merged; the textual conflicts were the three listed.
+
+## Conflicts and resolutions
+
+- **`api/app.py`** (merges 2, 4): the router-registration block. Kept
+  token-perms' `make_scoped(bearer_token, engine)` threaded into every router;
+  swapped the deleted `sessions` router for resident-agents' `agents` +
+  `agent_transcript` routers (both threaded `scoped`, seam A); added gitlab's
+  `integrations` router (`engine=engine`, its own internal scope gates).
+- **`routes/sessions.py`** (merge 2): resident-agents deleted it (v1 teardown);
+  token-perms had modified it. Kept deleted — `git rm`.
+- **`domain/tickets.py`** (merge 3): resident-agents removed the `Ticket.kind`
+  param (kind-teardown); ack-flow added `acknowledged` and kept `kind`. Resolved
+  by dropping `kind` everywhere and keeping `acknowledged` (five hunks in
+  `_ticket_filters`/`list_tickets`/`count_tickets`).
+- **`routes/tickets.py`** (merge 3): combined token-perms' `scoped()` per-route
+  gates with ack-flow's `_events_enrichment` helper + ack/description routes.
+  See seam B for the actor wiring done on top.
+- **`db/models.py` / `schemas.py`** (merge 4): end-of-file class appends from
+  HEAD (Session/SessionTurn/PendingInput, ApiToken, TicketEvent) vs gitlab
+  (Connection/RepoLink/ProjectRepoLink/ExternalLink). Kept both.
+- **`worker/main.py`** (merge 4): resident-agents' `_session_supervisor_pass`
+  and gitlab's `_maybe_refresh_links` both inserted before the scheduler tick.
+  Kept both; both call sites and `__init__` state auto-merged.
+- **`api/keys.ts`, `BoardCard.tsx`** (merge 4): keep-both (tokens + integrations
+  query keys; `Bot` icon + `ExternalLinkOut`/`MrChip` imports). BoardCard bodies
+  (ack description snippet + gitlab MrChip render) auto-merged.
+
+## Kind-teardown fallout (semantic, not textual)
+
+`domain/ack.py` (a new ack-flow file, so no textual conflict) filtered on
+`Ticket.kind == "ticket"` in three queries — a column resident-agents removed.
+Dropped the filters; all tickets are tickets now.
+
+## Cross-feature seams (A–F)
+
+- **A — token-perms' `make_scoped` over routers it never saw.** The whole
+  `/api/v1/agents` + agent-transcript surface is gated `scoped(AGENTS_ADMIN)`
+  (human-only), so `ndk_`/`ndr_` tokens get a self-diagnosing 403 rather than
+  reaching a resident agent. The ack endpoints stay admin-only via
+  `require_token_cookie_or_bearer` (no ack scope exists, by design). GitLab: the
+  scoped browse/link surface already used `require_scopes(["integrations.read"|
+  "integrations.link.self"])` (token-perms rewired `require_scopes` onto the new
+  resolver, so it Just Works); connection/repo-link writes stay admin-gated.
+  `domain/scopes.py` gained `integrations.read` (grantable), `integrations.link`
+  (grantable; run tokens carry `.self`, aliased), and `integrations.write`
+  (added to `HUMAN_ONLY_SCOPES`, providers.write posture). Run-token GRANTABLE
+  (`integrations.read`, `integrations.link.self`) merged cleanly.
+- **B — actor attribution.** ack-flow's `actor_from_principal` is duck-typed and
+  already token-aware: `AdminPrincipal.kind='admin'` → `admin`;
+  `TokenPrincipal(kind='agent')` → `token` (no run_id) → never auto-acks;
+  `TokenPrincipal(kind='run')` → `run`. Wired the resolved principal through the
+  transition-shaped ticket routes (transition/archive/unarchive/requeue/run-now/
+  cancel/bulk-status/update-status) so a token-driven transition records a
+  token/run event and does NOT auto-ack. `bulk_update_status` gained an `actor`
+  param. New test `test_agent_token_transition_is_token_attributed_and_never_acks`.
+- **C — GitLab import → description.** `import_issue_as_draft` now sets both a
+  self-sufficient `prompt` (quotes the issue body as reference data; the agent
+  runs on it alone) and a human-facing `description` (readable issue summary the
+  board/review/digest prefer). New `_issue_description` helper; import tests
+  updated (domain + API).
+- **D — external_link state_changed → ticket_events: assessed, NOT wired.**
+  `ticket_events` is transition-shaped (`from_status`/`to_status` over the ticket
+  lifecycle, plus the ack + agent-reviewed readers). A link-state change
+  (opened→merged/closed) has no ticket from/to status; writing it there would
+  corrupt every reader. Left `emit_external_link_state_changed` as the log-only
+  seam with a fixed payload shape; recorded as a follow-up (below).
+- **E — Desk band order.** `Agents waiting on you` (blocking) → `To acknowledge`
+  → `Running now`, under the existing `Needs you` triage band.
+- **F — skills consolidation.** `docs/design/session-suite/SKILL-UPDATES.md` is
+  the single apply-at-merge-to-main guide (order + the cross-feature
+  reconciliations); the three per-branch `SKILL-UPDATES-*.md` stay for their
+  verbatim text.
+
+## Migration chain
+
+resident-agents reworked `0026_session_kind` in place into `0026_sessions`. The
+other three forked with `down_revision="0026_session_kind"` and were re-chained
+linearly:
+
+```
+0025_execution_target
+  -> 0026_sessions            (resident-agents; reworks the abandoned 0026)
+  -> 0027_api_tokens          (down_revision 0026_sessions)
+  -> 0028_ticket_events_ack   (down_revision 0027_api_tokens)
+  -> 0029_integrations        (down_revision 0028_ticket_events_ack)   [head]
+```
+
+Verified: `alembic heads` → exactly `0029_integrations`; fresh scratch-DB
+`upgrade head` walks 0026→0029 in order; `downgrade 0025_execution_target` then
+`upgrade head` round-trips cleanly.
+
+## Validation gates (all green)
+
+- `uv run pytest -q` → **1623 passed**, 0 failures/errors (1521 after merge 1;
+  +57 ack, +tokens/gitlab across 2–4, +2 integration seam tests).
+- `npm ci` + `npx tsc --noEmit` → clean (tiptap deps installed).
+- `npm run build` → succeeds; `AgentComposer` (tiptap) code-split to its own
+  chunk; one non-blocking >500 kB warning on the main chunk.
+- alembic chain checks above; `git diff --check` → clean.
+
+## Follow-ups (deliberate cutlines, not regressions)
+
+- **Link-state events.** Seam D: a dedicated link-event surface (not
+  `ticket_events`) for `external_link.state_changed`, feeding the ack/closure
+  policy ("MR merged → nudge archive", "issue closed upstream → flag"). The
+  payload shape is already fixed in `emit_external_link_state_changed`.
+- **`agents.read` grantability.** The taxonomy defines a grantable `agents.read`,
+  but seam A gates the whole agents surface admin-only, so no route consumes it
+  yet. Kept in the vocabulary for a future read-only agent-observer surface.
+- **Run-token / `ndk_` unification** (token doc §7, Phase 2) remains deferred;
+  `run_tokens.py` and `api_tokens.py` coexist, bridged by `expand_run_scopes`.
+- Skills in the shared `~/.claude/skills/` dir still need the SKILL-UPDATES.md
+  edits applied at merge-to-main (this worktree cannot write `~/.claude`).
