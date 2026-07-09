@@ -36,6 +36,22 @@ ticket_labels = Table(
 )
 
 
+# ---------------------------------------------------------------------------
+# Many-to-many: projects <-> repo_links (external forge repositories)
+# ---------------------------------------------------------------------------
+# M:N because a project can span several repos (app + infra) and one repo can
+# back several project lenses. ``position`` orders a repo within a project. See
+# docs/design/gitlab-jira-integrations.md §3.
+project_repo_links = Table(
+    "project_repo_links",
+    Base.metadata,
+    Column("project_id", ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True),
+    Column("repo_link_id", ForeignKey("repo_links.id", ondelete="CASCADE"), primary_key=True),
+    Column("position", Integer, nullable=False, default=0),
+    Index("ix_project_repo_links_repo_link_id", "repo_link_id"),
+)
+
+
 class Provider(Base):
     """A vendor identity: the pricing anchor plus the set of endpoints it owns.
 
@@ -805,3 +821,146 @@ class SavedView(Base):
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+# ---------------------------------------------------------------------------
+# External integrations: Connection / RepoLink / ExternalLink
+# ---------------------------------------------------------------------------
+# See docs/design/gitlab-jira-integrations.md. v1 ships GitLab only, read +
+# link + import. A Connection is one authenticated external system; a RepoLink
+# is one external project on that connection; an ExternalLink is the only
+# persistently-synced external state (a ticket <-> issue/MR reference).
+
+
+class Connection(Base):
+    """One authenticated external system (a GitLab instance in v1).
+
+    Instance-global like :class:`Provider` — it lives in Settings, not inside a
+    project, because one GitLab instance serves many repos and many nightdesk
+    projects, and projects are deliberately not a security boundary.
+
+    ``credential`` is Fernet-encrypted with :class:`ProfileSecretBox` (the same
+    scheme as ``ProviderEndpoint.credential``) and is never returned by the API;
+    responses expose only a ``credential_set`` flag. ``status`` is written by the
+    explicit Test action and by background-refresh failures so a dead token is
+    visible in Settings rather than silently returning empty issue lists.
+    """
+
+    __tablename__ = "connections"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    # gitlab (v1). jira_cloud | jira_dc reserved for v3.
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    base_url: Mapped[str] = mapped_column(String, nullable=False)
+    # pat (v1). api_token_basic reserved for Jira Cloud; room for oauth later.
+    auth_kind: Mapped[str] = mapped_column(String, default="pat", nullable=False)
+    # Encrypted PAT (or, for jira_cloud, an encrypted {"email","token"} JSON).
+    credential: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # ok | auth_failed | unreachable | unchecked
+    status: Mapped[str] = mapped_column(String, default="unchecked", nullable=False)
+    status_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    repo_links: Mapped[list["RepoLink"]] = relationship(
+        back_populates="connection", order_by="RepoLink.external_path",
+    )
+
+
+class RepoLink(Base):
+    """One external project on one :class:`Connection`.
+
+    A GitLab project (or, in v3, a Jira project key). This is the unit users
+    browse and the unit nightdesk projects attach (M:N via ``project_repo_links``).
+    ``git_remote_url`` stores the normalized clone URL so a later feature can
+    resolve a run's ``TicketWorkspace.repo_root`` back to a RepoLink without
+    asking; it is a *suggestion* target, the user's explicit pick is authoritative.
+    """
+
+    __tablename__ = "repo_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id", "external_kind", "external_id",
+            name="uq_repo_links_connection_kind_external_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    connection_id: Mapped[str] = mapped_column(
+        ForeignKey("connections.id", ondelete="RESTRICT"), nullable=False, index=True,
+    )
+    # gitlab_project (v1) | jira_project (v3)
+    external_kind: Mapped[str] = mapped_column(String, nullable=False)
+    # GitLab numeric project id (stable across renames) or Jira project key.
+    external_id: Mapped[str] = mapped_column(String, nullable=False)
+    # "group/repo" or "KEY" — display + URL building.
+    external_path: Mapped[str] = mapped_column(String, default="", nullable=False)
+    display_name: Mapped[str] = mapped_column(String, default="", nullable=False)
+    # Normalized clone URL (host/group/repo); null for Jira.
+    git_remote_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    web_url: Mapped[str] = mapped_column(String, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    connection: Mapped["Connection"] = relationship(back_populates="repo_links")
+    projects: Mapped[list["Project"]] = relationship(
+        secondary=project_repo_links, order_by="Project.name",
+    )
+    external_links: Mapped[list["ExternalLink"]] = relationship(back_populates="repo_link")
+
+
+class ExternalLink(Base):
+    """A ticket <-> external issue/MR reference — the only persistently-synced
+    external state.
+
+    Everything else (issue lists, issue bodies) is a short-lived proxy read, so
+    the freshness problem stays tiny: the background refresh loop touches exactly
+    these rows (the ones that drive always-visible UI). ``state``/``state_detail``
+    are the cached snapshot; ``role`` records intent (fixes | references |
+    produced_mr | imported_from); ``author_kind`` records the acting principal
+    (admin | agent), mirroring ``DiffComment.author_kind``.
+    """
+
+    __tablename__ = "external_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "ticket_id", "repo_link_id", "kind", "external_iid",
+            name="uq_external_links_ticket_repo_kind_iid",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    ticket_id: Mapped[str] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    repo_link_id: Mapped[str] = mapped_column(
+        ForeignKey("repo_links.id", ondelete="RESTRICT"), nullable=False, index=True,
+    )
+    # issue | merge_request | jira_issue
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    # GitLab iid or Jira key.
+    external_iid: Mapped[str] = mapped_column(String, nullable=False)
+    # fixes | references | produced_mr | imported_from
+    role: Mapped[str] = mapped_column(String, default="references", nullable=False)
+    url: Mapped[str] = mapped_column(String, default="", nullable=False)
+    title: Mapped[str] = mapped_column(String, default="", nullable=False)
+    # Cached: opened|closed (issue), opened|merged|closed (MR), or Jira category.
+    state: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Small provider blob (pipeline status, merge sha, assignees) for chips/peeks.
+    state_detail: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Acting principal (an agent may link via API). 'admin' | 'agent'.
+    author_kind: Mapped[str] = mapped_column(String, default="admin", nullable=False)
+    # The run token's run, when agent-authored.
+    author_run_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("runs.id"), nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    repo_link: Mapped["RepoLink"] = relationship(back_populates="external_links")
+    ticket: Mapped["Ticket"] = relationship()
