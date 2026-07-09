@@ -674,6 +674,40 @@ class RunToken(Base):
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ApiToken(Base):
+    """A durable, scoped API token minted for an agent (``ndk_``) or a run.
+
+    Only the sha256 hash of the cleartext is stored; the cleartext is shown
+    exactly once at mint and never persisted or logged. ``scopes`` is the
+    expanded snapshot (a bundle preset is exploded at mint, never referenced
+    live). ``scope_data`` carries restrictions (``profile_allowlist``,
+    ``project_allowlist``, and for run-kind rows ``ticket_id``).
+
+    This table is the eventual home for run tokens too (``kind='run'``); Phase 1
+    leaves the ``run_tokens`` table in place and only serves ``kind='agent'``
+    rows here. See ``docs/design/agent-token-permissions.md`` §3, §7.
+    """
+    __tablename__ = "api_tokens"
+
+    # Stable handle for the UI/audit; the hash rotates on re-mint, this doesn't.
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    # First chars of the cleartext ("ndk_3fA9…") for the list UI. Not a secret.
+    prefix_hint: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, default="agent", nullable=False)
+    scopes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    bundle: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    scope_data: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    run_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    ticket_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String, default="admin", nullable=False)
+
+
 class DaemonStatus(Base):
     __tablename__ = "daemon_status"
 
