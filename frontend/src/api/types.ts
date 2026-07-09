@@ -898,6 +898,17 @@ export interface AgentDetailOut extends AgentOut {
   turns: AgentTurnOut[];
   pending_input: AgentPendingOut | null;
   env: AgentEnvEntryOut[];
+  /** Local claude session id (from resume_handle) for the `claude --resume <id>`
+   *  terminal handoff. Null until the agent has run. Not a secret. */
+  claude_session_id: string | null;
+}
+
+export interface AgentTurnEdit {
+  body: string;
+}
+
+export interface AgentTurnReorder {
+  ordered_ids: string[];
 }
 
 /** One env entry on the wire for PUT: a secret with `value: null` keeps the

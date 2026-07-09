@@ -18,6 +18,7 @@ export const qk = {
     all: ["agents"] as const,
     list: ["agents", "list"] as const,
     detail: (id: string) => ["agents", "detail", id] as const,
+    turns: (id: string) => ["agents", "detail", id, "turns"] as const,
     pending: ["agents", "pending"] as const,
   },
   projects: {

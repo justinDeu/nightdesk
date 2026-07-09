@@ -25,8 +25,10 @@ import {
   useEndAgent,
   useInterrupt,
   usePostMessage,
+  useReap,
   useWake,
 } from "@/api/agents";
+import { ApiError } from "@/api/client";
 import { formatUsd } from "@/lib/status";
 import { relativeTime } from "@/lib/time";
 import { AgentStatePill } from "./AgentStatePill";
@@ -59,6 +61,7 @@ export function AgentScreen() {
   const wake = useWake(id);
   const end = useEndAgent(id);
   const answer = useAnswerPending(id);
+  const reap = useReap(id);
 
   const [termOpen, setTermOpen] = useState(false);
   const [pokedAt, setPokedAt] = useState<number | null>(null);
@@ -250,7 +253,7 @@ export function AgentScreen() {
           {!ended && (
             <div className="space-y-2 border-t border-ink-700 px-4 py-3 sm:px-6">
               {pending && <PendingInputCard pending={pending} onAnswer={onAnswer} busy={answer.isPending} />}
-              <AgentQueue turns={agent.turns} />
+              <AgentQueue agentId={id} refetchInterval={streaming || needsInput ? 2000 : false} />
               <Suspense
                 fallback={
                   <div className="flex items-center gap-2 rounded-card border border-ink-700 bg-ink-950 px-3 py-3 text-sm text-moon-500">
@@ -296,7 +299,10 @@ export function AgentScreen() {
         open={termOpen}
         onOpenChange={setTermOpen}
         sourcePath={agent.source_path}
-        cold={cold}
+        claudeSessionId={agent.claude_session_id}
+        liveness={agent.liveness}
+        onReap={() => reap.mutateAsync(undefined)}
+        reaping={reap.isPending}
       />
     </div>
   );
@@ -350,24 +356,74 @@ function CollapsibleRail({ title, children }: { title: string; children: React.R
   );
 }
 
+function CommandBlock({ cmd }: { cmd: string }) {
+  return (
+    <div className="space-y-2">
+      <pre className="overflow-x-auto rounded-control border border-ink-700 bg-ink-950 px-3 py-2.5 font-mono text-[12px] text-moon-100">
+        {cmd}
+      </pre>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => {
+          void navigator.clipboard?.writeText(cmd);
+          toast.success("Command copied");
+        }}
+      >
+        Copy command
+      </Button>
+    </div>
+  );
+}
+
 function TerminalHandoffDialog({
   open,
   onOpenChange,
   sourcePath,
-  cold,
+  claudeSessionId,
+  liveness,
+  onReap,
+  reaping,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   sourcePath: string;
-  cold: boolean;
+  claudeSessionId: string | null;
+  liveness: "alive" | "needs-input" | "warm" | "cold" | "ended" | "crashed";
+  onReap: () => Promise<unknown>;
+  reaping: boolean;
 }) {
-  const cmd = `cd ${sourcePath} && claude --resume`;
+  const [handedOff, setHandedOff] = useState(false);
+  const warm = liveness === "warm";
+  const exactCmd = claudeSessionId
+    ? `cd ${sourcePath} && claude --resume ${claudeSessionId}`
+    : null;
+
+  const handOff = async () => {
+    try {
+      await onReap();
+      setHandedOff(true);
+      toast.success("Handed off — the desk released its connection");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        toast.error("Can't hand off yet", {
+          description: "A turn is streaming or an input is pending. Let it settle, then try again.",
+        });
+        return;
+      }
+      toast.error("Could not hand off", { description: describeError(err) });
+    }
+  };
+
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(o) => {
+        if (!o) setHandedOff(false);
+        onOpenChange(o);
+      }}
       title="Open in terminal"
-      description="Continue this agent's session from your own terminal — Claude lists the resumable sessions in this directory to pick from."
+      description="Continue this agent's session from your own terminal."
       footer={
         <Button variant="ghost" onClick={() => onOpenChange(false)}>
           Close
@@ -375,25 +431,42 @@ function TerminalHandoffDialog({
       }
     >
       <div className="space-y-3">
-        <pre className="overflow-x-auto rounded-control border border-ink-700 bg-ink-950 px-3 py-2.5 font-mono text-[12px] text-moon-100">
-          {cmd}
-        </pre>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            void navigator.clipboard?.writeText(cmd);
-            toast.success("Command copied");
-          }}
-        >
-          Copy command
-        </Button>
-        {!cold && (
-          <p className="text-[12px] text-moon-500">
-            This agent is still warm here. To avoid two writers on the same session, let it go cold
-            (or end it) before you drive it from a terminal — otherwise the desk keeps its own live
-            connection.
-          </p>
+        {exactCmd == null ? (
+          // Never run: no session id yet. Generic guidance.
+          <>
+            <p className="text-[12px] text-moon-500">
+              This agent hasn&apos;t run yet, so there&apos;s no resumable session to point at. Once it
+              has taken a turn, this dialog shows the exact <span className="font-mono">--resume</span>{" "}
+              command. For now:
+            </p>
+            <CommandBlock cmd={`cd ${sourcePath} && claude --resume`} />
+            <p className="text-[12px] text-moon-500">
+              Claude lists the resumable sessions in this directory to pick from.
+            </p>
+          </>
+        ) : warm && !handedOff ? (
+          // Warm here: reap first so there's a single writer, then reveal the command.
+          <>
+            <p className="text-[12px] text-moon-500">
+              This agent is warm on the desk. Hand it off to release the desk&apos;s connection so the
+              two don&apos;t write the same session at once — then resume it in your terminal.
+            </p>
+            <Button variant="primary" leadingIcon={<TerminalSquare size={14} />} loading={reaping} onClick={handOff}>
+              Hand off to terminal
+            </Button>
+          </>
+        ) : (
+          // Cold / crashed, or just handed off: the exact command is safe to run.
+          <>
+            {handedOff && (
+              <p className="text-[12px] text-success">Released. Resume it from your terminal:</p>
+            )}
+            <CommandBlock cmd={exactCmd} />
+            <p className="text-[12px] text-moon-500">
+              Runs the same on-disk session. Keep a single writer — don&apos;t send from the desk while
+              you drive it from the terminal.
+            </p>
+          </>
         )}
       </div>
     </Dialog>

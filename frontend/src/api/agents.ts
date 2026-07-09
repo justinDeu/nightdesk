@@ -18,6 +18,19 @@ import type {
   AgentTurnOut,
 } from "./types";
 
+/** The queue-strip turns (queued + delivering) for one agent. Polled while the
+ *  agent is live so a claimed turn drops off. */
+export function useAgentTurns(
+  id: string,
+  options?: Partial<UseQueryOptions<AgentTurnOut[]>>,
+) {
+  return useQuery({
+    queryKey: qk.agents.turns(id),
+    queryFn: () => agentsApi.listTurns(id),
+    ...options,
+  });
+}
+
 const BASE = "/api/v1/agents";
 
 /** Live transcript SSE endpoint for one agent (same protocol as tickets/runs). */
@@ -41,6 +54,16 @@ export const agentsApi = {
     api.put<AgentDetailOut>(`${BASE}/${id}/env`, { body }),
   restartRuntime: (id: string, body: AgentRestart) =>
     api.post<AgentTurnOut>(`${BASE}/${id}/restart-runtime`, { body }),
+  reap: (id: string) => api.post<AgentOut>(`${BASE}/${id}/reap`),
+
+  // Queue strip (undelivered turns): queued + delivering.
+  listTurns: (id: string) => api.get<AgentTurnOut[]>(`${BASE}/${id}/turns`),
+  editTurn: (id: string, tid: string, body: string) =>
+    api.patch<AgentTurnOut>(`${BASE}/${id}/turns/${tid}`, { body: { body } }),
+  reorderTurns: (id: string, orderedIds: string[]) =>
+    api.post<AgentTurnOut[]>(`${BASE}/${id}/turns/reorder`, { body: { ordered_ids: orderedIds } }),
+  cancelTurn: (id: string, tid: string) =>
+    api.delete<AgentTurnOut>(`${BASE}/${id}/turns/${tid}`),
 };
 
 // --- Query hooks ---------------------------------------------------------------
@@ -141,4 +164,8 @@ export function usePutEnv(id: string) {
 
 export function useRestartRuntime(id: string) {
   return useAgentControl(id, (body: AgentRestart) => agentsApi.restartRuntime(id, body));
+}
+
+export function useReap(id: string) {
+  return useAgentControl(id, () => agentsApi.reap(id));
 }
