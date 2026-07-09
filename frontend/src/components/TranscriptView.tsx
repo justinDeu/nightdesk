@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
   Circle,
+  HelpCircle,
   ListPlus,
   Loader2,
+  Power,
+  RotateCw,
   Send,
   Terminal,
   Users,
@@ -189,14 +193,64 @@ function EventRow({ event: e, result }: { event: TranscriptEvent; result?: Trans
           delivery={e.delivery === "inject" ? "inject" : "at_turn"}
         />
       );
+    case "needs_input":
+      return <AgentBreadcrumb tone="lamp" icon={<HelpCircle size={13} />} label={needsInputLabel(e)} />;
+    case "runtime_restarted":
+      return <AgentBreadcrumb tone="moon" icon={<RotateCw size={13} />} label="Runtime restarted — resumed the same session with fresh environment." />;
+    case "session_booting":
+      return <AgentBreadcrumb tone="moon" icon={<Power size={13} />} label="Agent booting…" />;
+    case "session_crashed":
+      return <AgentBreadcrumb tone="failed" icon={<AlertTriangle size={13} />} label="Agent runtime crashed — resume is armed; send a message to wake it." />;
     case "meta":
     case "system":
     case "preset":
     case "stats":
+    // Control events (streamed, not persisted). The agent screen consumes
+    // these; the transcript renderer ignores them.
+    case "pending_input":
+    case "pending_resolved":
+    case "turn_complete":
+    case "server_info":
       return null;
     default:
       return null;
   }
+}
+
+function needsInputLabel(e: TranscriptEvent): string {
+  const kind = str(e.kind);
+  if (kind === "plan_approval") return "Agent is waiting for you to approve its plan.";
+  if (kind === "ask_question") return "Agent asked you a question.";
+  const tool = str(e.tool);
+  return tool
+    ? `Agent needs permission to use ${tool}.`
+    : "Agent is waiting on your input.";
+}
+
+/** A quiet lifecycle breadcrumb for resident-agent control moments (needs-input,
+ *  restart, boot, crash) so the transcript keeps context around the inline
+ *  PendingInputCard on the agent screen. */
+function AgentBreadcrumb({
+  tone,
+  icon,
+  label,
+}: {
+  tone: "lamp" | "moon" | "failed";
+  icon: ReactNode;
+  label: string;
+}) {
+  const toneCls =
+    tone === "lamp"
+      ? "border-lamp/25 bg-lamp/[0.05] text-lamp"
+      : tone === "failed"
+        ? "border-failed/30 bg-failed/[0.06] text-failed"
+        : "border-ink-700 bg-ink-950/40 text-moon-400";
+  return (
+    <div className={cn("my-1 flex items-center gap-2 rounded-card border px-3 py-1.5 text-[12px]", toneCls)}>
+      <span className="shrink-0">{icon}</span>
+      <span className="min-w-0 flex-1">{label}</span>
+    </div>
+  );
 }
 
 // --- Assistant narrative (visual primacy) --------------------------------------

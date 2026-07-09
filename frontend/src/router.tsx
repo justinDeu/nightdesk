@@ -12,8 +12,8 @@ import { DeskPage } from "@/routes/desk/DeskPage";
 import { TicketsPage } from "@/routes/tickets/TicketsPage";
 import { TicketDetailPage } from "@/routes/tickets/TicketDetailPage";
 import { RunTheater } from "@/routes/tickets/RunTheater";
-import { SessionsPage } from "@/routes/sessions/SessionsPage";
-import { SessionChatPage } from "@/routes/sessions/SessionChatPage";
+import { AgentsPage } from "@/routes/agents/AgentsPage";
+import { AgentScreen } from "@/routes/agents/AgentScreen";
 import { InboxPage } from "@/routes/InboxPage";
 import { ArchivePage } from "@/routes/ArchivePage";
 import { ScheduledPage } from "@/routes/ScheduledPage";
@@ -70,16 +70,16 @@ const runTheaterRoute = createRoute({
   component: RunTheater,
 });
 
-const sessionsRoute = createRoute({
+const agentsRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/sessions",
-  component: SessionsPage,
+  path: "/agents",
+  component: AgentsPage,
 });
 
-const sessionChatRoute = createRoute({
+const agentScreenRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/sessions/$id",
-  component: SessionChatPage,
+  path: "/agents/$id",
+  component: AgentScreen,
 });
 
 const inboxRoute = createRoute({
@@ -183,8 +183,8 @@ const routeTree = rootRoute.addChildren([
     ticketsRoute,
     ticketDetailRoute,
     runTheaterRoute,
-    sessionsRoute,
-    sessionChatRoute,
+    agentsRoute,
+    agentScreenRoute,
     inboxRoute,
     archiveRoute,
     scheduledRoute,
