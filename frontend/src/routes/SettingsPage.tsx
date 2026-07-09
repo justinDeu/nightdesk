@@ -8,6 +8,7 @@ import {
   Cloud,
   FolderGit2,
   Hexagon,
+  KeyRound,
   Layers,
   Settings2,
   Sparkles,
@@ -26,6 +27,7 @@ import { ProfilesSection } from "@/routes/settings/ProfilesSection";
 import { ProvidersSection } from "@/routes/settings/ProvidersSection";
 import { CloudSandboxSection } from "@/routes/settings/CloudSandboxSection";
 import { ToolsetsSection } from "@/routes/settings/ToolsetsSection";
+import { AccessTokensSection } from "@/routes/settings/AccessTokensSection";
 import { DiagnosticsSection } from "@/routes/settings/DiagnosticsSection";
 
 interface SectionMeta {
@@ -48,6 +50,7 @@ const SECTIONS: SectionMeta[] = [
   { slug: "projects", label: "Projects", icon: Layers, component: ProjectsSection },
   { slug: "profiles", label: "Profiles", icon: Hexagon, component: ProfilesSection },
   { slug: "toolsets", label: "Toolsets", icon: Sparkles, component: ToolsetsSection },
+  { slug: "access-tokens", label: "Access tokens", icon: KeyRound, component: AccessTokensSection },
   { slug: "diagnostics", label: "Diagnostics", icon: Stethoscope, component: DiagnosticsSection },
 ];
 
