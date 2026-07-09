@@ -116,3 +116,20 @@ parallel surface later. This is exactly Omnigent's dual-surface model for SDK se
   mid-session (env vars etc.), turns made there must merge back into the canonical transcript and
   the resume handle must be updated. Watch ~/.claude/projects/<cwd-slug>/ for forked session files.
 - Composer must support skills/slash-commands/hooks — SDK mechanics verification in flight.
+
+## SDK slash-command/skills verification (2026-07-09, empirical vs CLI 2.1.203 + SDK source)
+- /custom-command in a prompt string EXPANDS headless exactly like the TUI ($ARGUMENTS proven live).
+  Just send raw "/name args" via client.query() — no special API.
+- Discovery: stream-json init message carries slash_commands (38 incl. custom cmds AND skills-as-
+  commands), skills, tools, agents. Python: ClaudeSDKClient.get_server_info(). One-time snapshot —
+  must also consume the `commands_changed` stream event to refresh mid-session.
+- Built-ins are per-command: /context WORKS headless; /model refuses ("isn't available in this
+  environment"). Typed methods replace them: set_model(), set_permission_mode(),
+  get_context_usage(), get_mcp_status(), interrupt(). /login, /clear, todos = TUI-only.
+- Skills load headless (keyword trigger proven live). setting_sources non-empty list MUST include
+  "project"; skills option auto-adds the Skill tool; it's a context filter, not a sandbox.
+- AskUserQuestion arrives through can_use_tool (same callback as permissions); selections return
+  as updatedInput. Plan approval = ExitPlanMode through can_use_tool (inferred, not separately
+  proven). MCP elicitation = onElicitation. @-mention completion is client-side (we build it).
+- Verdict for the v2 composer: custom commands verified-yes; autocomplete yes (init + commands_changed);
+  skills yes (setting_sources caveat); hooks verified-yes; dialogs yes (can_use_tool renders all).
