@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import type { TranscriptEvent } from "@/lib/transcript";
 import { toolSummary } from "@/lib/transcript";
+import { Markdown } from "./Markdown";
 import { cn } from "@/lib/cn";
 
 // Tool tag → accent color class.
@@ -143,9 +144,18 @@ function buildTree(events: TranscriptEvent[]): Node[] {
   return out;
 }
 
-export function TranscriptView({ events }: { events: TranscriptEvent[] }) {
+export function TranscriptView({
+  events,
+  suppressEmpty = false,
+}: {
+  events: TranscriptEvent[];
+  /** Skip the "No output yet." placeholder — e.g. while the caller renders a
+   *  working indicator in its place. */
+  suppressEmpty?: boolean;
+}) {
   const nodes = useMemo(() => buildTree(events), [events]);
   if (nodes.length === 0) {
+    if (suppressEmpty) return null;
     return <p className="px-1 py-6 text-center font-mono text-xs text-moon-600">No output yet.</p>;
   }
   return (
@@ -253,59 +263,48 @@ function AgentBreadcrumb({
   );
 }
 
-// --- Assistant narrative (visual primacy) --------------------------------------
+// --- Conversation bubbles (shared visual language) -------------------------------
+//
+// User and agent turns share one shell — ink-900 surface, thin left accent, a
+// small-caps role label — differing only in accent: lamp for the user, sage
+// jade for the agent. Assistant/result prose renders as markdown (the model
+// writes it); user text stays plain with preserved newlines (users don't).
 
-function segments(text: string): { code: boolean; lang: string; body: string }[] {
-  if (!text) return [];
-  const out: { code: boolean; lang: string; body: string }[] = [];
-  let buf: string[] = [];
-  let inCode = false;
-  let lang = "";
-  for (const line of text.split("\n")) {
-    const m = line.match(/^```([A-Za-z0-9_+\-.]*)\s*$/);
-    if (m) {
-      if (inCode) {
-        out.push({ code: true, lang, body: buf.join("\n") });
-        buf = [];
-        inCode = false;
-        lang = "";
-      } else {
-        if (buf.length) out.push({ code: false, lang: "", body: buf.join("\n") });
-        buf = [];
-        inCode = true;
-        lang = m[1] ?? "";
-      }
-      continue;
-    }
-    buf.push(line);
-  }
-  if (buf.length) out.push({ code: inCode, lang, body: buf.join("\n") });
-  return out;
+function MessageShell({
+  accent,
+  label,
+  children,
+}: {
+  accent: "lamp" | "jade";
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-card border border-ink-700 border-l-2 bg-ink-900 px-3.5 py-2.5 shadow-[var(--shadow-panel)]",
+        accent === "lamp" ? "border-l-lamp/70" : "border-l-success/60",
+      )}
+    >
+      <div
+        className={cn(
+          "mb-0.5 text-[10px] font-semibold uppercase tracking-wide",
+          accent === "lamp" ? "text-lamp" : "text-success/80",
+        )}
+      >
+        {label}
+      </div>
+      {children}
+    </div>
+  );
 }
 
 function AssistantText({ text }: { text: string }) {
-  const segs = segments(text);
   if (!text.trim()) return null;
   return (
-    <div className="rounded-card border border-ink-700 border-l-2 border-l-lamp/60 bg-ink-900 px-3.5 py-2.5 shadow-[var(--shadow-panel)]">
-      {segs.map((s, i) =>
-        s.code ? (
-          <pre
-            key={i}
-            className="my-1.5 overflow-x-auto rounded-control border border-ink-700 bg-ink-950 px-2.5 py-2 text-[11px] text-moon-100"
-          >
-            {s.body}
-          </pre>
-        ) : (
-          <p
-            key={i}
-            className="whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed text-moon-100"
-          >
-            {s.body}
-          </p>
-        ),
-      )}
-    </div>
+    <MessageShell accent="jade" label="Agent">
+      <Markdown text={text} />
+    </MessageShell>
   );
 }
 
@@ -526,9 +525,9 @@ function SubagentCard({ node }: { node: Node }) {
             </p>
           )}
           {summary && (
-            <p className="whitespace-pre-wrap rounded-control border border-ink-700/50 bg-ink-900 px-2.5 py-1.5 text-[12px] text-moon-100">
-              {summary}
-            </p>
+            <div className="rounded-control border border-ink-700/50 bg-ink-900 px-2.5 py-1.5">
+              <Markdown text={summary} className="text-[12px]" />
+            </div>
           )}
         </div>
       )}
@@ -541,9 +540,9 @@ function SubagentCard({ node }: { node: Node }) {
 function ResultCard({ text }: { text: string }) {
   if (!text.trim()) return null;
   return (
-    <div className="rounded-card border border-success/30 bg-success/[0.06] px-3.5 py-2.5">
-      <p className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-moon-100">{text}</p>
-    </div>
+    <MessageShell accent="jade" label="Result">
+      <Markdown text={text} className="text-[13px]" />
+    </MessageShell>
   );
 }
 
@@ -561,10 +560,9 @@ function ErrorCard({ text }: { text: string }) {
 function UserTurn({ text }: { text: string }) {
   if (!text.trim()) return null;
   return (
-    <div className="rounded-card border border-lamp/25 bg-lamp/[0.05] px-3.5 py-2.5">
-      <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-lamp">You</div>
-      <p className="whitespace-pre-wrap font-sans text-[13px] text-moon-100">{text}</p>
-    </div>
+    <MessageShell accent="lamp" label="You">
+      <p className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-moon-100">{text}</p>
+    </MessageShell>
   );
 }
 
@@ -572,7 +570,7 @@ function UserTurn({ text }: { text: string }) {
  *  live, delivered into this run (inject) or staged for the next turn (at_turn). */
 function SteerDivider({ text, delivery }: { text: string; delivery: "inject" | "at_turn" }) {
   return (
-    <div className="my-1 flex items-start gap-2 rounded-card border border-dawn/30 bg-dawn/[0.06] px-3.5 py-2.5">
+    <div className="my-1 flex items-start gap-2 rounded-card border border-ink-700 border-l-2 border-l-dawn/70 bg-ink-900 px-3.5 py-2.5">
       <Send size={13} className="mt-0.5 shrink-0 text-dawn" />
       <div className="min-w-0 flex-1">
         <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-dawn">
