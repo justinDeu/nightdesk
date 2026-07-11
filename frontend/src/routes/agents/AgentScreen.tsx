@@ -215,6 +215,23 @@ export function AgentScreen() {
       ),
     [turnsQ.data, deliveredTurnIds],
   );
+  // Memoized so the footer's identity only changes when the pending turns do.
+  // It's a dep of the scroller's pin-to-bottom effect; fresh JSX per render
+  // (the detail poll re-renders every few seconds) would re-fire that effect
+  // and rewrite scrollTop on every poll for no reason.
+  const transcriptFooter = useMemo(
+    () =>
+      pendingTurns.length > 0 ? (
+        // Matches TranscriptView's list wrapper so pending bubbles read as a
+        // continuation of the event list.
+        <div className="mt-2 space-y-2 font-mono text-[12px] leading-relaxed">
+          {pendingTurns.map((t) => (
+            <PendingTurnBubble key={t.id} agentId={id} turn={t} />
+          ))}
+        </div>
+      ) : undefined,
+    [pendingTurns, id],
+  );
 
   // Latest server_info carries the composer autocomplete seed (slash commands +
   // skills). It's a control event, re-sent on reconnect, so the list self-heals.
@@ -462,7 +479,12 @@ export function AgentScreen() {
       {/* Body: transcript stage + right rail */}
       <div
         className={cn(
-          "grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:overflow-hidden",
+          // scrollbar-gutter:stable on the conditional scrollers (this grid
+          // below lg; the rail aside at lg+): with classic space-taking
+          // scrollbars, a bar toggling at the exact overflow boundary rewraps
+          // the content it just measured — a layout feedback loop that shows
+          // up as blur-fast scroll jitter. A reserved gutter breaks the cycle.
+          "grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:overflow-hidden [scrollbar-gutter:stable]",
           railCollapsed
             ? "lg:grid-cols-[minmax(0,1fr)_44px]"
             : "lg:grid-cols-[minmax(0,1fr)_320px]",
@@ -480,17 +502,7 @@ export function AgentScreen() {
                 events={tx.events}
                 status={tx.status}
                 running={streaming}
-                footer={
-                  pendingTurns.length > 0 ? (
-                    // Matches TranscriptView's list wrapper so pending bubbles
-                    // read as a continuation of the event list.
-                    <div className="mt-2 space-y-2 font-mono text-[12px] leading-relaxed">
-                      {pendingTurns.map((t) => (
-                        <PendingTurnBubble key={t.id} agentId={id} turn={t} />
-                      ))}
-                    </div>
-                  ) : undefined
-                }
+                footer={transcriptFooter}
                 className="min-h-0 flex-1"
               />
             ) : (
@@ -535,7 +547,7 @@ export function AgentScreen() {
             transcript below lg; collapsible to a slim strip (persisted). */}
         <aside
           className={cn(
-            "border-t border-ink-700 lg:border-l lg:border-t-0 lg:overflow-y-auto",
+            "border-t border-ink-700 lg:border-l lg:border-t-0 lg:overflow-y-auto lg:[scrollbar-gutter:stable]",
             railCollapsed ? "px-1.5 py-2" : "space-y-3 px-4 py-4",
           )}
         >

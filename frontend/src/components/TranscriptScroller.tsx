@@ -52,7 +52,13 @@ export function TranscriptScroller({
   useEffect(() => {
     if (!pinned) return;
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    // Skip the write when already at the bottom: a redundant scrollTop write
+    // still fires a scroll event, and an effect re-run per poll/render (e.g. a
+    // fresh footer identity) would turn that into a scroll-event drumbeat that
+    // can feed back through onScroll/scroll anchoring into visible jitter.
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 1) return;
+    el.scrollTop = el.scrollHeight;
   }, [events, footer, pinned, working]);
 
   const onScroll = () => {
@@ -95,7 +101,14 @@ export function TranscriptScroller({
         role="log"
         aria-label="Run transcript"
         aria-live={running ? "polite" : "off"}
-        className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-card border border-ink-700 bg-ink-950/40 p-2.5"
+        /* overflow-anchor:none — this component owns the scroll position (pin
+           effect + onScroll); Chrome's scroll anchoring adjusting scrollTop on
+           content-height changes fights those writes and can oscillate.
+           scrollbar-gutter:stable — with the app's classic (space-taking)
+           scrollbars, a scrollbar appearing/disappearing rewraps the content;
+           at a critical width that becomes a wrap↔scrollbar feedback loop.
+           Reserving the gutter makes content width scrollbar-invariant. */
+        className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-card border border-ink-700 bg-ink-950/40 p-2.5 [overflow-anchor:none] [scrollbar-gutter:stable]"
       >
         <TranscriptView events={events} suppressEmpty={working} />
         {working && <WorkingIndicator />}
