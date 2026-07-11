@@ -14,12 +14,18 @@ export function TranscriptScroller({
   status,
   running = false,
   caption,
+  footer,
   className,
 }: {
   events: TranscriptEvent[];
   status: TranscriptStatus;
   running?: boolean;
   caption?: ReactNode;
+  /** Rendered inside the scroll container, after the event list — e.g. pending
+   *  (queued, undelivered) user bubbles on the agent screen. Participates in
+   *  the pin-to-bottom follow so a bubble appearing or resolving keeps the
+   *  view at the bottom. */
+  footer?: ReactNode;
   className?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -30,11 +36,14 @@ export function TranscriptScroller({
   // liveness poll can lag the SSE stream (agents), and a freshly opened
   // transcript should start at its latest output. Scrolling up unpins; the
   // reader is never yanked back down until they return to the bottom.
+  // `footer` is in the deps so pending bubbles appearing/resolving re-pin too;
+  // re-running on an unchanged footer just rewrites scrollTop to its current
+  // value, which is a no-op.
   useEffect(() => {
     if (!pinned) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [events, pinned]);
+  }, [events, footer, pinned]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -79,6 +88,7 @@ export function TranscriptScroller({
         className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-card border border-ink-700 bg-ink-950/40 p-2.5"
       >
         <TranscriptView events={events} />
+        {footer}
       </div>
 
       {running && !pinned && (

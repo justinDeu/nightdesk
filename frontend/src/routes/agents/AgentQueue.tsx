@@ -20,6 +20,11 @@ import type { AgentTurnOut } from "@/api/types";
  * shown above the composer. Queued chips are inline-editable, cancelable, and
  * drag-reorderable; a delivering chip locks with a spinner (the host has claimed
  * it — edits/reorder/cancel 409 there). Mirrors the ticket SteerQueue.
+ *
+ * The widget only appears with 2+ queued turns — its point is reordering, which
+ * is meaningless for one. Every queued turn (including a single one) also
+ * renders inline at the bottom of the transcript as a PendingTurnBubble, so the
+ * message reads as part of the conversation.
  */
 export function AgentQueue({
   agentId,
@@ -85,7 +90,9 @@ export function AgentQueue({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order, messages, agentId]);
 
-  if (order.length === 0) return null;
+  // One queued turn is represented solely by its inline pending bubble in the
+  // transcript; the management widget earns its space only when order matters.
+  if (order.length < 2) return null;
 
   return (
     <div className="mb-2 space-y-1.5">
@@ -228,6 +235,51 @@ function QueueChip({
           </Tooltip>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * A queued (not yet delivered) user turn rendered inline at the bottom of the
+ * chat transcript: the same shape as a delivered user_message bubble
+ * (TranscriptView's UserTurn), dimmed with a "queued" affix. When the host
+ * delivers the turn, the real user_message event (carrying this turn's id)
+ * lands in the transcript and the caller drops the bubble.
+ */
+export function PendingTurnBubble({ agentId, turn }: { agentId: string; turn: AgentTurnOut }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+
+  const cancel = async () => {
+    setBusy(true);
+    try {
+      await agentsApi.cancelTurn(agentId, turn.id);
+      qc.invalidateQueries({ queryKey: qk.agents.turns(agentId) });
+      qc.invalidateQueries({ queryKey: qk.agents.detail(agentId) });
+    } catch (err) {
+      toast.error("Remove failed", { error: err });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="group rounded-card border border-lamp/25 bg-lamp/[0.05] px-3.5 py-2.5 opacity-60 transition-opacity hover:opacity-80">
+      <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-lamp">
+        You
+        <span className="font-normal normal-case text-moon-500">· queued</span>
+        <Tooltip content="Remove from queue">
+          <button
+            onClick={cancel}
+            disabled={busy}
+            aria-label="Remove queued message"
+            className="ml-auto rounded-control p-0.5 text-moon-500 opacity-0 transition-opacity hover:bg-ink-800 hover:text-failed focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <X size={12} />
+          </button>
+        </Tooltip>
+      </div>
+      <p className="whitespace-pre-wrap font-sans text-[13px] text-moon-100">{turn.body}</p>
     </div>
   );
 }

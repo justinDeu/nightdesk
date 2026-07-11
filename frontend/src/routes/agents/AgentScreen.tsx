@@ -21,6 +21,7 @@ import { buildSubagentList, buildTodoList, useLiveTranscript } from "@/lib/trans
 import {
   agentTranscriptPath,
   useAgent,
+  useAgentTurns,
   useAnswerPending,
   useEndAgent,
   useInterrupt,
@@ -35,7 +36,7 @@ import { Tooltip } from "@/ui/Tooltip";
 import { WakeStatusChip, WakeNotice } from "./WakeStatus";
 import { useWakeState } from "./useWakeState";
 import { PendingInputCard } from "./PendingInputCard";
-import { AgentQueue } from "./AgentQueue";
+import { AgentQueue, PendingTurnBubble } from "./AgentQueue";
 import { AgentEnvPanel } from "./AgentEnvPanel";
 import type { ServerCommands } from "./AgentComposer";
 import type { AgentAnswer } from "@/api/types";
@@ -82,6 +83,32 @@ export function AgentScreen() {
 
   const todos = useMemo(() => buildTodoList(tx.events), [tx.events]);
   const subagents = useMemo(() => buildSubagentList(tx.events), [tx.events]);
+
+  // Queued (undelivered) turns render inline at the bottom of the transcript
+  // as pending user bubbles. Same query key as AgentQueue below, so the two
+  // share one cache entry and one poll.
+  const turnsQ = useAgentTurns(id, {
+    refetchInterval:
+      liveness === "alive" || liveness === "needs-input" ? 2000 : false,
+  });
+  // Turn ids whose user_message already landed in the transcript. Guards the
+  // claim race: the host writes {"type":"user_message","turn_id",...} when it
+  // delivers a turn, and that can beat the turns poll noticing the turn left
+  // "queued" — without this, the message would double-render for a beat.
+  const deliveredTurnIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of tx.events) {
+      if (e.type === "user_message" && typeof e.turn_id === "string") ids.add(e.turn_id);
+    }
+    return ids;
+  }, [tx.events]);
+  const pendingTurns = useMemo(
+    () =>
+      (turnsQ.data ?? []).filter(
+        (t) => t.status === "queued" && !deliveredTurnIds.has(t.id),
+      ),
+    [turnsQ.data, deliveredTurnIds],
+  );
 
   // Latest server_info carries the composer autocomplete seed (slash commands +
   // skills). It's a control event, re-sent on reconnect, so the list self-heals.
@@ -266,6 +293,17 @@ export function AgentScreen() {
                 events={tx.events}
                 status={tx.status}
                 running={streaming}
+                footer={
+                  pendingTurns.length > 0 ? (
+                    // Matches TranscriptView's list wrapper so pending bubbles
+                    // read as a continuation of the event list.
+                    <div className="mt-2 space-y-2 font-mono text-[12px] leading-relaxed">
+                      {pendingTurns.map((t) => (
+                        <PendingTurnBubble key={t.id} agentId={id} turn={t} />
+                      ))}
+                    </div>
+                  ) : undefined
+                }
                 className="min-h-0 flex-1"
               />
             ) : (

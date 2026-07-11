@@ -118,7 +118,9 @@ export function useDeleteAgent() {
 }
 
 /** Shared invalidation after any control action: refresh this agent's detail
- *  (turns / liveness / pending) plus the list and the cross-agent pending feed. */
+ *  (turns / liveness / pending), the queue-strip turns (so a just-sent message
+ *  shows up as a pending bubble instantly), plus the list and the cross-agent
+ *  pending feed. */
 function useAgentControl<TVars, TData>(
   id: string,
   fn: (vars: TVars) => Promise<TData>,
@@ -128,6 +130,7 @@ function useAgentControl<TVars, TData>(
     mutationFn: fn,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.agents.detail(id) });
+      qc.invalidateQueries({ queryKey: qk.agents.turns(id) });
       qc.invalidateQueries({ queryKey: qk.agents.list });
       qc.invalidateQueries({ queryKey: qk.agents.pending });
     },
