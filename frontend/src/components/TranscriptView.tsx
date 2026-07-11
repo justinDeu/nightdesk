@@ -60,11 +60,31 @@ function str(v: unknown): string {
   return v == null ? "" : String(v);
 }
 
+/** Every turn's terminal `result` event carries the full final assistant text
+ *  as its summary (verified against live session ndjson: exact match, every
+ *  turn), so rendering both shows each final message twice. A success result
+ *  whose summary echoes the preceding top-level assistant_text is dropped
+ *  outright — the prose is already on screen, the event carries no cost or
+ *  duration fields to breadcrumb, and per-turn "turn complete" lines would be
+ *  noise next to the (already suppressed) stats events. Error results and
+ *  results with no preceding matching assistant_text always render. */
+function echoesAssistant(summary: string, lastAssistant: string): boolean {
+  if (!summary || !lastAssistant) return false;
+  return (
+    summary === lastAssistant ||
+    summary.startsWith(lastAssistant) ||
+    lastAssistant.startsWith(summary) ||
+    summary.endsWith(lastAssistant) ||
+    lastAssistant.endsWith(summary)
+  );
+}
+
 /**
- * Build the render tree: pair tool_use↔tool_result, drop a trailing result that
- * echoes the last assistant_text, fold subagent lifecycle events into one card,
- * and nest each subagent's child tool calls (matched by parent_tool_use_id)
- * under it. Mirrors transcript_view.pair_tool_events + group_by_subagent.
+ * Build the render tree: pair tool_use↔tool_result, drop success results that
+ * echo their turn's final assistant_text, fold subagent lifecycle events into
+ * one card, and nest each subagent's child tool calls (matched by
+ * parent_tool_use_id) under it. Mirrors transcript_view.pair_tool_events +
+ * group_by_subagent.
  */
 function buildTree(events: TranscriptEvent[]): Node[] {
   const resultById = new Map<string, TranscriptEvent>();
@@ -77,19 +97,6 @@ function buildTree(events: TranscriptEvent[]): Node[] {
   for (const e of events) {
     if (e.type === "subagent" && typeof e.tool_use_id === "string") subagentTuids.add(e.tool_use_id);
   }
-
-  // Duplicate trailing result detection.
-  let lastAssistant: string | null = null;
-  let lastResultIdx = -1;
-  events.forEach((e, i) => {
-    if (e.type === "assistant_text" && str(e.text).trim()) lastAssistant = str(e.text);
-    if (e.type === "result") lastResultIdx = i;
-  });
-  const dropResult =
-    lastResultIdx >= 0 &&
-    lastAssistant !== null &&
-    str(events[lastResultIdx].summary).trim() === str(lastAssistant).trim() &&
-    str(events[lastResultIdx].summary).trim() !== "";
 
   const paired = new Set<string>();
   const nodesByTuid = new Map<string, Node>();
@@ -111,8 +118,29 @@ function buildTree(events: TranscriptEvent[]): Node[] {
     return { event: e, children: [] };
   };
 
-  events.forEach((e, i) => {
-    if (e.type === "result" && dropResult && i === lastResultIdx) return;
+  // Running accumulator: the turn's latest top-level assistant prose, compared
+  // against each result's summary. Subagent output (parent_tool_use_id set)
+  // doesn't count — results echo the parent turn's final message.
+  let lastAssistant = "";
+
+  events.forEach((e) => {
+    if (
+      (e.type === "assistant_text" || e.type === "text" || e.type === "assistant") &&
+      typeof e.parent_tool_use_id !== "string" &&
+      str(e.text).trim()
+    ) {
+      lastAssistant = str(e.text).trim();
+    }
+    // A new turn opens: don't let a later bare result match a previous turn's
+    // prose and lose its only copy of the content.
+    if (e.type === "user_message" || e.type === "user" || e.type === "steer_delivered") {
+      lastAssistant = "";
+    }
+
+    if (e.type === "result") {
+      const isError = str(e.subtype).toLowerCase().includes("error") || Boolean(e.is_error);
+      if (!isError && echoesAssistant(str(e.summary).trim(), lastAssistant)) return;
+    }
 
     if (e.type === "subagent") {
       const key = str(e.task_id) || str(e.tool_use_id);
@@ -187,6 +215,11 @@ function EventRow({ event: e, result }: { event: TranscriptEvent; result?: Trans
     case "tool_result":
       return <ToolResult event={e} />;
     case "result":
+      // Duplicated success results were dropped in buildTree; what reaches
+      // here is either an error result (loud) or a run whose only copy of the
+      // final content is the summary itself (agent bubble).
+      if (str(e.subtype).toLowerCase().includes("error") || Boolean(e.is_error))
+        return <ErrorCard text={str(e.summary || e.text || "Run failed")} />;
       return <ResultCard text={str(e.summary || e.text)} />;
     case "worker_error":
     case "cancelled":
