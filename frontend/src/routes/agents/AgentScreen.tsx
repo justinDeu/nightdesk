@@ -3,6 +3,8 @@ import { Link, useParams } from "@tanstack/react-router";
 import {
   ChevronLeft,
   Mail,
+  PanelRight,
+  PanelRightClose,
   Pencil,
   Power,
   Square,
@@ -89,6 +91,16 @@ export function AgentScreen() {
   const restart = useRestartRuntime(id);
 
   const [termOpen, setTermOpen] = useState(false);
+  // Right-rail collapse persists per browser (matches the left nav's idiom).
+  const [railCollapsed, setRailCollapsed] = useState(
+    () => localStorage.getItem(RAIL_COLLAPSE_KEY) === "1",
+  );
+  const toggleRail = () =>
+    setRailCollapsed((c) => {
+      const next = !c;
+      localStorage.setItem(RAIL_COLLAPSE_KEY, next ? "1" : "0");
+      return next;
+    });
   // Arriving from the create dialog carries a wake seed (create wakes the agent
   // server-side), so the fresh mount shows "Waking" instead of a false "Cold".
   const [pokedAt, setPokedAt] = useState<number | null>(() => consumeWakeSeed(id));
@@ -412,7 +424,14 @@ export function AgentScreen() {
       </header>
 
       {/* Body: transcript stage + right rail */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_320px] lg:overflow-hidden">
+      <div
+        className={cn(
+          "grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:overflow-hidden",
+          railCollapsed
+            ? "lg:grid-cols-[minmax(0,1fr)_44px]"
+            : "lg:grid-cols-[minmax(0,1fr)_320px]",
+        )}
+      >
         <section className="flex min-h-0 flex-col lg:overflow-hidden">
           <WakeNotice wake={wakeState} />
           {/* The scroller owns the scrolling (its inner div is the overflow
@@ -477,16 +496,37 @@ export function AgentScreen() {
         </section>
 
         {/* Right rail: progress + runtime + usage + env. Folds under the
-            transcript below lg. */}
-        <aside className="space-y-3 border-t border-ink-700 px-4 py-4 lg:border-l lg:border-t-0 lg:overflow-y-auto">
-          <TasksPanel todos={todos} />
-          <SubagentsPanel subagents={subagents} />
-          <RuntimeCard agent={agent} />
-          <UsageCard agent={agent} context={context} />
-          <RailInfo sourcePath={agent.source_path} updatedAt={agent.updated_at} />
-          <CollapsibleRail title="Environment">
-            <AgentEnvPanel agentId={id} env={agent.env} liveness={agent.liveness} />
-          </CollapsibleRail>
+            transcript below lg; collapsible to a slim strip (persisted). */}
+        <aside
+          className={cn(
+            "border-t border-ink-700 lg:border-l lg:border-t-0 lg:overflow-y-auto",
+            railCollapsed ? "px-1.5 py-2" : "space-y-3 px-4 py-4",
+          )}
+        >
+          <div className={cn("flex", railCollapsed ? "justify-center" : "justify-end -my-1.5")}>
+            <Tooltip content={railCollapsed ? "Expand details" : "Collapse details"} side="left">
+              <button
+                onClick={toggleRail}
+                aria-label={railCollapsed ? "Expand details rail" : "Collapse details rail"}
+                aria-expanded={!railCollapsed}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-control text-moon-400 hover:bg-ink-800 hover:text-moon-100"
+              >
+                {railCollapsed ? <PanelRight size={15} /> : <PanelRightClose size={15} />}
+              </button>
+            </Tooltip>
+          </div>
+          {!railCollapsed && (
+            <>
+              <TasksPanel todos={todos} />
+              <SubagentsPanel subagents={subagents} />
+              <RuntimeCard agent={agent} />
+              <UsageCard agent={agent} context={context} />
+              <RailInfo sourcePath={agent.source_path} updatedAt={agent.updated_at} />
+              <CollapsibleRail title="Environment">
+                <AgentEnvPanel agentId={id} env={agent.env} liveness={agent.liveness} />
+              </CollapsibleRail>
+            </>
+          )}
         </aside>
       </div>
 
@@ -502,6 +542,8 @@ export function AgentScreen() {
     </div>
   );
 }
+
+const RAIL_COLLAPSE_KEY = "nightdesk:agent-rail-collapsed";
 
 /** Frontend-side context estimate derived from the live transcript. */
 interface ContextEstimate {
