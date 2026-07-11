@@ -326,6 +326,113 @@ async def test_run_transcript_404_for_unknown_run(app):
     assert r.status_code == 404
 
 
+# --- agent transcript (GET /api/v1/agents/{aid}/transcript) ----------------
+#
+# The agent stream must stay open while the session lives, even when the
+# agent is parked (idle, nothing queued): an idle agent can wake at any
+# moment, and an open agent screen holding a dead stream misses the wake
+# turn's user_message/assistant_text entirely (they land in the file with
+# nothing tailing, and the client never reconnects).
+
+def _make_agent(session, tmp_path):
+    from pathlib import Path
+
+    from nightdesk.domain import sessions as sess
+
+    p = create_profile(session, name="agent-sse", fs_read=[], fs_write=[],
+                       allowed_tools=[], denied_tools=[], network_mode="off",
+                       network_allowlist=[], secret_keys=[], default_model=None)
+    a = sess.create_session(session, profile_id=p.id,
+                            source_path=str(tmp_path),
+                            transcript_root=tmp_path / "transcripts")
+    path = Path(a.transcript_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("ab") as f:
+        write_event(f, {"type": "meta", "ts": now_iso(), "seq": 0,
+                        "session_id": a.id})
+    return a, path
+
+
+async def test_agent_transcript_idle_stream_stays_open_and_delivers_wake(
+    app, session, tmp_path,
+):
+    """An idle (parked) agent's stream must NOT end; when the agent later
+    wakes and the host appends to the transcript, the still-open tail must
+    deliver the new events.
+
+    ASGITransport buffers the whole ASGI response, so the test can't observe
+    an unending stream directly. Instead: leave the agent parked across a
+    couple of idle poll cycles, append the wake event, then end the session
+    so the stream terminates. If the tail had died on idle (the old
+    end-on-inactive behavior), the wake line — written well after connect —
+    could never appear in the stream at all."""
+    a, path = _make_agent(session, tmp_path)
+
+    async def _wake_then_end():
+        # A couple of idle poll cycles (idle backoff is 2s) with nothing
+        # queued: the old code would already have ended the stream here.
+        await asyncio.sleep(2.5)
+        with path.open("ab") as f:
+            write_event(f, {"type": "user_message", "ts": now_iso(),
+                            "seq": 1, "text": "wake hello"})
+        # Give the tail time to deliver, then end the session so the
+        # (correctly still-open) stream terminates and the test can finish.
+        await asyncio.sleep(3.0)
+        from nightdesk.domain import sessions as sess
+        row = sess.get_session_row(session, a.id)
+        row.status = "ended"
+        session.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test",
+                           headers={"Authorization": "Bearer t"}) as ac:
+        waker = asyncio.ensure_future(_wake_then_end())
+
+        async def _read_stream():
+            async with ac.stream(
+                "GET", f"/api/v1/agents/{a.id}/transcript"
+            ) as r:
+                assert r.status_code == 200
+                chunks = []
+                async for chunk in r.aiter_text():
+                    chunks.append(chunk)
+                    if "event: end" in chunk:
+                        break
+                return chunks
+
+        try:
+            chunks = await asyncio.wait_for(_read_stream(), timeout=30)
+        finally:
+            await waker
+
+    text = "".join(chunks)
+    assert "wake hello" in text
+    assert "event: end" in text
+    # The wake event streamed before the end marker — the tail was alive.
+    assert text.index("wake hello") < text.index("event: end")
+
+
+async def test_agent_transcript_ended_session_stream_ends(app, session, tmp_path):
+    """An ended session's stream replays the file once and ends — the only
+    legitimate end for the agent stream (besides row deletion)."""
+    a, _path = _make_agent(session, tmp_path)
+    a.status = "ended"
+    session.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test",
+                           headers={"Authorization": "Bearer t"}) as ac:
+        async with ac.stream("GET", f"/api/v1/agents/{a.id}/transcript") as r:
+            chunks = []
+            async for chunk in r.aiter_text():
+                chunks.append(chunk)
+                if "event: end" in chunk:
+                    break
+    text = "".join(chunks)
+    assert "id: 0\n" in text
+    assert "event: end" in text
+
+
 async def test_run_transcript_404_when_transcript_file_missing(app, session, tmp_path):
     from nightdesk.domain.runs import start_run
 

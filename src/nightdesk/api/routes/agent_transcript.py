@@ -1,10 +1,14 @@
 """Agent transcript SSE endpoint.
 
 Reuses ``routes.transcript._format_sse`` + the Last-Event-ID watermark verbatim.
-The only difference from the ticket stream is the tail predicate: it tails the
-agent's transcript file until the agent is not live AND nothing is queued /
-streaming / pending (a needs-input agent keeps streaming so the client sees the
-pending card resolve).
+The only difference from the ticket stream is the tail predicate: the tail
+stays open for as long as the session row exists and is not ``ended`` — an
+idle (parked) agent can wake at any moment, and an open agent screen must see
+the wake turn's user_message/assistant_text land live rather than holding a
+dead stream. ``event: end`` is emitted only when the session is deleted or
+its status becomes ``ended``. To keep idle tails cheap the poll interval
+backs off: 0.5s while the agent is active (live host / queued / streaming /
+pending input), 2s while it is parked.
 """
 from __future__ import annotations
 
@@ -21,8 +25,15 @@ from nightdesk.domain import sessions as sess
 from nightdesk.transcript import is_canonical
 
 
+def _session_over(db: Session, aid: str) -> bool:
+    """True once the stream should end: session row gone or status ``ended``."""
+    row = db.get(SessionModel, aid)
+    return row is None or row.status == "ended"
+
+
 def _agent_still_active(db: Session, aid: str) -> bool:
-    """True while the SSE tail should keep polling for new events."""
+    """True while the agent is doing (or about to do) work. Drives the poll
+    backoff only — an inactive-but-alive session keeps its tail open."""
     row = db.get(SessionModel, aid)
     if row is None:
         return False
@@ -77,10 +88,13 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
                     line = f.readline()
                     if not line:
                         session.expire_all()
-                        if not _agent_still_active(session, aid):
+                        if _session_over(session, aid):
                             yield "event: end\ndata: done\n\n"
                             return
-                        await asyncio.sleep(0.5)
+                        # Idle agents keep the tail open (they can wake any
+                        # moment) but poll less often.
+                        active = _agent_still_active(session, aid)
+                        await asyncio.sleep(0.5 if active else 2.0)
                         continue
                     chunk = _format_sse(line, since_seq) if canonical else _legacy(line)
                     if chunk:
