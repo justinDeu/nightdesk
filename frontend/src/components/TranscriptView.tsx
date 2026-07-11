@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Circle,
+  Eraser,
   HelpCircle,
   ListPlus,
   Loader2,
@@ -239,7 +240,7 @@ function EventRow({ event: e, result }: { event: TranscriptEvent; result?: Trans
     case "needs_input":
       return <AgentBreadcrumb tone="lamp" icon={<HelpCircle size={13} />} label={needsInputLabel(e)} />;
     case "runtime_restarted":
-      return <AgentBreadcrumb tone="moon" icon={<RotateCw size={13} />} label="Runtime restarted — resumed the same session with fresh environment." />;
+      return <RuntimeDivider cleared={Boolean(e.context_cleared)} />;
     case "session_booting":
       return <AgentBreadcrumb tone="moon" icon={<Power size={13} />} label="Agent booting…" />;
     case "session_crashed":
@@ -258,6 +259,39 @@ function EventRow({ event: e, result }: { event: TranscriptEvent; result?: Trans
     default:
       return null;
   }
+}
+
+/** Full-width divider where the runtime restarted — the SteerDivider family's
+ *  "something structural happened here" treatment. The context-cleared variant
+ *  (session_host emits `context_cleared: true` only for /clear) is the loud
+ *  one: a brighter rule + label, because nothing above the line is in the
+ *  agent's context anymore. A plain restart keeps the same shape, dimmer. */
+function RuntimeDivider({ cleared }: { cleared: boolean }) {
+  const rule = cleared ? "bg-moon-600" : "bg-ink-700";
+  return (
+    <div
+      role="separator"
+      aria-label={cleared ? "Context cleared" : "Runtime restarted"}
+      className="my-2 flex items-center gap-2.5 px-1"
+    >
+      <span className={cn("h-px flex-1", rule)} />
+      <span
+        className={cn(
+          "flex shrink-0 items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-wide",
+          cleared ? "text-moon-400" : "text-moon-600",
+        )}
+      >
+        {cleared ? <Eraser size={11} /> : <RotateCw size={11} />}
+        {cleared ? "context cleared" : "runtime restarted"}
+        {cleared && (
+          <span className="font-normal normal-case text-moon-600">
+            · nothing above is in the agent's context
+          </span>
+        )}
+      </span>
+      <span className={cn("h-px flex-1", rule)} />
+    </div>
+  );
 }
 
 function needsInputLabel(e: TranscriptEvent): string {
