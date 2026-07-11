@@ -74,8 +74,9 @@ const HighlightExtension = Extension.create({
 /**
  * The agent composer: a tiptap editor with `/` slash-command autocomplete
  * (seeded from the runner's server_info), `@` file mentions (fs/suggest with
- * files), command/skill chips, and live highlighting. Cmd/Ctrl+Enter sends;
- * sends always enqueue (the composer stays enabled while streaming).
+ * files), command/skill chips, and live highlighting. Enter sends
+ * (Shift+Enter for a newline); sends always enqueue (the composer stays
+ * enabled while streaming).
  * Code-split to the agents route (lazy-imported by AgentScreen).
  */
 export function AgentComposer({
@@ -260,8 +261,9 @@ export function AgentComposer({
         "aria-label": "Message",
       },
       handleKeyDown: (_view, event) => {
-        // Cmd/Ctrl+Enter sends, but never while a suggestion popup is capturing.
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !popupRef.current) {
+        // Enter sends (Cmd/Ctrl+Enter too); Shift+Enter inserts a newline.
+        // Never send while a suggestion popup is capturing or mid-IME composition.
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !popupRef.current) {
           event.preventDefault();
           void doSend();
           return true;
@@ -311,7 +313,7 @@ export function AgentComposer({
           </span>
           {hint && <span className="text-[11px] text-dawn">{hint}</span>}
           <span className="ml-auto hidden items-center gap-1 text-[10px] text-moon-600 sm:flex">
-            <Kbd>⌘</Kbd>/<Kbd>Ctrl</Kbd> + <Kbd>↵</Kbd>
+            <Kbd>↵</Kbd> send · <Kbd>⇧↵</Kbd> newline
           </span>
           <Button
             size="sm"
