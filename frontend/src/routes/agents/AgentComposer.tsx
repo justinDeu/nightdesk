@@ -40,6 +40,11 @@ const LOCAL_COMMANDS: PopupItem[] = [
   },
 ];
 
+/** Command names the desk handles itself. Server-advertised commands with the
+ *  same name (the CLI ships its own `clear`) are shadowed out of the popup so
+ *  each local command appears exactly once — the amber-badged local entry. */
+const LOCAL_COMMAND_NAMES = new Set(LOCAL_COMMANDS.map((c) => c.value.slice(1)));
+
 interface PopupState {
   kind: "slash" | "mention" | "ticket";
   items: PopupItem[];
@@ -200,7 +205,11 @@ export function AgentComposer({
                 c.label.slice(1).toLowerCase().includes(q),
               );
               const server = [...commands, ...skills]
-                .filter((c) => c.name.toLowerCase().includes(q))
+                .filter(
+                  (c) =>
+                    c.name.toLowerCase().includes(q) &&
+                    !LOCAL_COMMAND_NAMES.has(c.name.toLowerCase()),
+                )
                 .map((c) => ({ value: `/${c.name}`, label: `/${c.name}`, hint: c.description }));
               return [...local, ...server].slice(0, 20);
             },
