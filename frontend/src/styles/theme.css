@@ -56,6 +56,12 @@
   --color-warn: #d9a13d;
   --color-warn-soft: #e6b45c;
 
+  /* Azure — the human's voice in transcripts (user bubbles, queued turns).
+     A desaturated sky blue held apart from the review violet and the queued
+     steel so "you said" never reads as a status; the agent side keeps the
+     jade family. ~6.9:1 text contrast on panel ink. */
+  --color-azure: #6aabdf;
+
   /* Typography */
   --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;

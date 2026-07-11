@@ -265,8 +265,8 @@ export function PendingTurnBubble({ agentId, turn }: { agentId: string; turn: Ag
   };
 
   return (
-    <div className="group rounded-card border border-ink-700 border-l-2 border-l-lamp/70 bg-ink-900 px-3.5 py-2.5 opacity-60 transition-opacity hover:opacity-80">
-      <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-lamp">
+    <div className="group rounded-card border border-ink-700 border-l-2 border-l-azure/80 bg-ink-900 px-3.5 py-2.5 opacity-60 transition-opacity hover:opacity-80">
+      <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-azure">
         You
         <span className="font-normal normal-case text-moon-500">· queued</span>
         <Tooltip content="Remove from queue">
@@ -280,7 +280,7 @@ export function PendingTurnBubble({ agentId, turn }: { agentId: string; turn: Ag
           </button>
         </Tooltip>
       </div>
-      <p className="whitespace-pre-wrap font-sans text-[13px] text-moon-100">{turn.body}</p>
+      <p className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-moon-100">{turn.body}</p>
     </div>
   );
 }

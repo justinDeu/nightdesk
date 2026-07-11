@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import type { TranscriptEvent } from "@/lib/transcript";
 import { toolSummary } from "@/lib/transcript";
-import { Markdown } from "./Markdown";
+import { MarkdownSource } from "./MarkdownSource";
 import { cn } from "@/lib/cn";
 
 // Tool tag → accent color class.
@@ -266,16 +266,17 @@ function AgentBreadcrumb({
 // --- Conversation bubbles (shared visual language) -------------------------------
 //
 // User and agent turns share one shell — ink-900 surface, thin left accent, a
-// small-caps role label — differing only in accent: lamp for the user, sage
-// jade for the agent. Assistant/result prose renders as markdown (the model
-// writes it); user text stays plain with preserved newlines (users don't).
+// small-caps role label — differing only in hue: azure (blue) for the user,
+// jade (lamp) for the agent, unmistakable at a glance. Assistant/result prose
+// renders as highlighted raw markdown source (the model writes markdown); user
+// text stays plain with preserved newlines (users don't write it reliably).
 
 function MessageShell({
   accent,
   label,
   children,
 }: {
-  accent: "lamp" | "jade";
+  accent: "azure" | "jade";
   label: string;
   children: ReactNode;
 }) {
@@ -283,13 +284,13 @@ function MessageShell({
     <div
       className={cn(
         "rounded-card border border-ink-700 border-l-2 bg-ink-900 px-3.5 py-2.5 shadow-[var(--shadow-panel)]",
-        accent === "lamp" ? "border-l-lamp/70" : "border-l-success/60",
+        accent === "azure" ? "border-l-azure/80" : "border-l-lamp/70",
       )}
     >
       <div
         className={cn(
           "mb-0.5 text-[10px] font-semibold uppercase tracking-wide",
-          accent === "lamp" ? "text-lamp" : "text-success/80",
+          accent === "azure" ? "text-azure" : "text-lamp",
         )}
       >
         {label}
@@ -303,7 +304,7 @@ function AssistantText({ text }: { text: string }) {
   if (!text.trim()) return null;
   return (
     <MessageShell accent="jade" label="Agent">
-      <Markdown text={text} />
+      <MarkdownSource text={text} />
     </MessageShell>
   );
 }
@@ -526,7 +527,7 @@ function SubagentCard({ node }: { node: Node }) {
           )}
           {summary && (
             <div className="rounded-control border border-ink-700/50 bg-ink-900 px-2.5 py-1.5">
-              <Markdown text={summary} className="text-[12px]" />
+              <MarkdownSource text={summary} className="text-[12px]" />
             </div>
           )}
         </div>
@@ -541,7 +542,7 @@ function ResultCard({ text }: { text: string }) {
   if (!text.trim()) return null;
   return (
     <MessageShell accent="jade" label="Result">
-      <Markdown text={text} className="text-[13px]" />
+      <MarkdownSource text={text} className="text-[12px]" />
     </MessageShell>
   );
 }
@@ -552,7 +553,7 @@ function ErrorCard({ text }: { text: string }) {
       <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-failed">
         <AlertTriangle size={13} /> Error
       </div>
-      <p className="whitespace-pre-wrap font-sans text-[12.5px] leading-relaxed text-failed">{text}</p>
+      <p className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-failed">{text}</p>
     </div>
   );
 }
@@ -560,8 +561,8 @@ function ErrorCard({ text }: { text: string }) {
 function UserTurn({ text }: { text: string }) {
   if (!text.trim()) return null;
   return (
-    <MessageShell accent="lamp" label="You">
-      <p className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-moon-100">{text}</p>
+    <MessageShell accent="azure" label="You">
+      <p className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-moon-100">{text}</p>
     </MessageShell>
   );
 }
@@ -577,7 +578,7 @@ function SteerDivider({ text, delivery }: { text: string; delivery: "inject" | "
           You steered {delivery === "inject" ? "· delivered to the running agent" : "· queued for the next turn"}
         </div>
         {text.trim() && (
-          <p className="whitespace-pre-wrap font-sans text-[13px] text-moon-100">{text}</p>
+          <p className="whitespace-pre-wrap break-words text-[12.5px] text-moon-100">{text}</p>
         )}
       </div>
     </div>
