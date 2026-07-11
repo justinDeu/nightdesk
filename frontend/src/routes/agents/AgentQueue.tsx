@@ -265,7 +265,7 @@ export function PendingTurnBubble({ agentId, turn }: { agentId: string; turn: Ag
   };
 
   return (
-    <div className="group rounded-card border border-lamp/25 bg-lamp/[0.05] px-3.5 py-2.5 opacity-60 transition-opacity hover:opacity-80">
+    <div className="group rounded-card border border-ink-700 border-l-2 border-l-lamp/70 bg-ink-900 px-3.5 py-2.5 opacity-60 transition-opacity hover:opacity-80">
       <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-lamp">
         You
         <span className="font-normal normal-case text-moon-500">· queued</span>
