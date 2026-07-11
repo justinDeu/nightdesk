@@ -885,6 +885,10 @@ export interface AgentOut {
   /** The agent replied past the human's seen stamp (unread-reply marker). */
   unread: boolean;
   source_path: string;
+  /** Sandbox posture the inner runtime runs under (v1: always "trusted"). */
+  posture: string;
+  /** Workspace access mode (e.g. "read_write"). */
+  workspace_access: string;
   idle_timeout_s: number | null;
   cost_usd: number;
   input_tokens: number;
@@ -1014,6 +1018,14 @@ export interface AgentEnvPut {
 
 export interface AgentRestart {
   force?: boolean;
+  /** Drop the resume handle so the fresh runtime starts with an empty
+   *  conversation context. The transcript log is kept. */
+  clear_context?: boolean;
+}
+
+/** Rename an agent (the only mutable field for now). */
+export interface AgentUpdate {
+  title: string;
 }
 
 // ---------------------------------------------------------------------------

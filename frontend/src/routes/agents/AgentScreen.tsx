@@ -3,6 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import {
   ChevronLeft,
   Mail,
+  Pencil,
   Power,
   Square,
   SunMedium,
@@ -10,6 +11,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/ui/Button";
+import { IconButton } from "@/ui/IconButton";
+import { Input } from "@/ui/Input";
 import { Dialog } from "@/ui/Dialog";
 import { ErrorState } from "@/ui/ErrorState";
 import { Spinner } from "@/ui/Spinner";
@@ -30,10 +33,13 @@ import {
   useMarkUnread,
   usePostMessage,
   useReap,
+  useRenameAgent,
   useWake,
 } from "@/api/agents";
+import { useProfiles } from "@/api/profiles";
 import { ApiError } from "@/api/client";
-import { formatUsd } from "@/lib/status";
+import { cn } from "@/lib/cn";
+import { formatTokens, formatUsd } from "@/lib/status";
 import { relativeTime } from "@/lib/time";
 import { Tooltip } from "@/ui/Tooltip";
 import { WakeStatusChip, WakeNotice } from "./WakeStatus";
@@ -48,7 +54,7 @@ import { PendingInputCard } from "./PendingInputCard";
 import { AgentQueue, PendingTurnBubble } from "./AgentQueue";
 import { AgentEnvPanel } from "./AgentEnvPanel";
 import { normalizeCommandList, type ServerCommands } from "./serverInfo";
-import type { AgentAnswer } from "@/api/types";
+import type { AgentAnswer, AgentDetailOut } from "@/api/types";
 
 // Code-split the tiptap composer to the agents route (design §8.1, §19.2).
 const AgentComposer = lazy(() =>
@@ -78,6 +84,7 @@ export function AgentScreen() {
   const end = useEndAgent(id);
   const answer = useAnswerPending(id);
   const reap = useReap(id);
+  const rename = useRenameAgent(id);
 
   const [termOpen, setTermOpen] = useState(false);
   // Arriving from the create dialog carries a wake seed (create wakes the agent
@@ -174,6 +181,29 @@ export function AgentScreen() {
       }
     }
     return { commands: [], skills: [] };
+  }, [tx.events]);
+
+  // Approximate current context: the newest turn-scope stats event carries the
+  // last API call's input + cache_read + cache_write tokens — together, what
+  // the model actually held in context on that call. A context-clearing
+  // restart that lands after the newest stats event resets the estimate.
+  const context = useMemo<ContextEstimate | null>(() => {
+    for (let i = tx.events.length - 1; i >= 0; i--) {
+      const e = tx.events[i];
+      if (e.type === "runtime_restarted" && e.context_cleared === true) {
+        return { tokens: 0, model: null, cleared: true };
+      }
+      if (e.type === "stats" && e.scope === "turn") {
+        const n = (v: unknown) => (typeof v === "number" ? v : 0);
+        return {
+          tokens:
+            n(e.input_tokens) + n(e.cache_read_tokens) + n(e.cache_write_tokens),
+          model: typeof e.model === "string" ? e.model : null,
+          cleared: false,
+        };
+      }
+    }
+    return null;
   }, [tx.events]);
 
   // Track liveness transitions to clear the "waking" affordance honestly:
@@ -288,13 +318,20 @@ export function AgentScreen() {
             <ChevronLeft size={16} />
           </Link>
         </Button>
-        <h1 className="min-w-0 flex-1 truncate font-display text-lg font-semibold text-moon-100">
-          {agent.title}
-        </h1>
+        <EditableTitle
+          title={agent.title}
+          disabled={ended}
+          saving={rename.isPending}
+          onRename={async (title) => {
+            try {
+              await rename.mutateAsync({ title });
+            } catch (err) {
+              toast.error("Could not rename agent", { description: describeError(err) });
+            }
+          }}
+        />
         <WakeStatusChip liveness={agent.liveness} wake={wakeState} />
-        {agent.cost_usd > 0 && (
-          <span className="font-mono text-[11px] tabular-nums text-lamp">{formatUsd(agent.cost_usd)}</span>
-        )}
+        {/* Cost lives in the Usage rail card (one source of truth). */}
 
         {(streaming || needsInput) && (
           <Button
@@ -408,15 +445,14 @@ export function AgentScreen() {
           )}
         </section>
 
-        {/* Right rail: progress + env. Folds under the transcript below lg. */}
+        {/* Right rail: progress + runtime + usage + env. Folds under the
+            transcript below lg. */}
         <aside className="space-y-3 border-t border-ink-700 px-4 py-4 lg:border-l lg:border-t-0 lg:overflow-y-auto">
           <TasksPanel todos={todos} />
           <SubagentsPanel subagents={subagents} />
-          <RailInfo
-            sourcePath={agent.source_path}
-            model={agent.model}
-            updatedAt={agent.updated_at}
-          />
+          <RuntimeCard agent={agent} />
+          <UsageCard agent={agent} context={context} />
+          <RailInfo sourcePath={agent.source_path} updatedAt={agent.updated_at} />
           <CollapsibleRail title="Environment">
             <AgentEnvPanel agentId={id} env={agent.env} liveness={agent.liveness} />
           </CollapsibleRail>
@@ -436,15 +472,216 @@ export function AgentScreen() {
   );
 }
 
-function RailInfo({
-  sourcePath,
-  model,
-  updatedAt,
-}: {
-  sourcePath: string;
+/** Frontend-side context estimate derived from the live transcript. */
+interface ContextEstimate {
+  tokens: number;
+  /** Model the newest stats event reported (more truthful than the row's
+   *  configured model, which may be null = harness default). */
   model: string | null;
-  updatedAt: string;
+  /** A context-clearing restart landed after the newest stats event. */
+  cleared: boolean;
+}
+
+/** Context windows for model ids we actually know. Prefix-matched; unknown
+ *  models get no bar (a number without a made-up denominator). */
+const CONTEXT_WINDOWS: [prefix: string, window: number][] = [
+  ["claude-opus-4", 200_000],
+  ["claude-sonnet-4", 200_000],
+  ["claude-haiku-4", 200_000],
+  ["claude-3-", 200_000],
+];
+
+function contextWindowFor(model: string | null): number | null {
+  if (!model) return null;
+  if (model.includes("[1m]")) return 1_000_000;
+  for (const [prefix, window] of CONTEXT_WINDOWS) {
+    if (model.startsWith(prefix)) return window;
+  }
+  return null;
+}
+
+/** Inline-editable agent title: pencil swaps the h1 for an input. Enter or
+ *  blur commits (trimmed, non-empty, only if changed); Escape cancels. */
+function EditableTitle({
+  title,
+  disabled,
+  saving,
+  onRename,
+}: {
+  title: string;
+  disabled?: boolean;
+  saving?: boolean;
+  onRename: (title: string) => Promise<void>;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+  // Escape must skip the input's blur-commit that fires as the input unmounts.
+  const cancelled = useRef(false);
+
+  const start = () => {
+    setDraft(title);
+    cancelled.current = false;
+    setEditing(true);
+  };
+  const commit = () => {
+    if (cancelled.current) return;
+    setEditing(false);
+    const next = draft.trim();
+    if (!next || next === title) return;
+    void onRename(next);
+  };
+
+  if (!editing) {
+    return (
+      <div className="group flex min-w-0 flex-1 items-center gap-1.5">
+        <h1 className="min-w-0 truncate font-display text-lg font-semibold text-moon-100">
+          {title}
+        </h1>
+        {!disabled && (
+          <IconButton
+            label="Rename agent"
+            size="sm"
+            icon={<Pencil size={13} />}
+            disabled={saving}
+            onClick={start}
+            className="opacity-0 transition-opacity duration-100 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
+          />
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="min-w-0 flex-1">
+      <Input
+        autoFocus
+        value={draft}
+        maxLength={200}
+        aria-label="Agent name"
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={(e) => e.target.select()}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          } else if (e.key === "Escape") {
+            cancelled.current = true;
+            setEditing(false);
+          }
+        }}
+        className="h-8 max-w-md font-display text-lg font-semibold"
+      />
+    </div>
+  );
+}
+
+function RailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="shrink-0 text-moon-600">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/** Read-only runtime facts: harness, model, profile, posture, access. */
+function RuntimeCard({ agent }: { agent: AgentDetailOut }) {
+  const profiles = useProfiles();
+  const profile = profiles.data?.find((p) => p.id === agent.profile_id);
+  // Row model null = harness default; the profile's default_model is what the
+  // spawn actually resolves to when set.
+  const model = agent.model ?? profile?.default_model ?? null;
+  return (
+    <div className="space-y-1 rounded-card border border-ink-700 bg-ink-900 px-3 py-2.5 text-[11px] text-moon-500">
+      <div className="pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-moon-400">
+        Runtime
+      </div>
+      <RailRow label="Harness">
+        <span className="font-mono text-moon-300">{agent.backend}</span>
+      </RailRow>
+      <RailRow label="Model">
+        <span className="min-w-0 truncate font-mono text-moon-300">
+          {model ?? "harness default"}
+          {agent.model == null && model != null && (
+            <span className="text-moon-600"> (profile)</span>
+          )}
+        </span>
+      </RailRow>
+      <RailRow label="Profile">
+        <span className="min-w-0 truncate font-mono text-moon-300">
+          {profile?.name ?? (agent.profile_id ? `${agent.profile_id.slice(0, 8)}…` : "—")}
+        </span>
+      </RailRow>
+      <RailRow label="Posture">
+        <span className="font-mono text-moon-300">{agent.posture}</span>
+      </RailRow>
+      <RailRow label="Access">
+        <span className="font-mono text-moon-300">
+          {agent.workspace_access.replace(/_/g, " ")}
+        </span>
+      </RailRow>
+    </div>
+  );
+}
+
+/** Cumulative usage + the live context estimate. Cost's single home (the
+ *  header chip was retired in favor of this card). */
+function UsageCard({
+  agent,
+  context,
+}: {
+  agent: AgentDetailOut;
+  context: ContextEstimate | null;
+}) {
+  const window = context && !context.cleared ? contextWindowFor(context.model) : null;
+  const pct = window && context ? Math.min(100, (context.tokens / window) * 100) : null;
+  return (
+    <div className="space-y-1 rounded-card border border-ink-700 bg-ink-900 px-3 py-2.5 text-[11px] text-moon-500">
+      <div className="pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-moon-400">
+        Usage
+      </div>
+      <RailRow label="Tokens in">
+        <span className="font-mono tabular-nums text-moon-300">
+          {formatTokens(agent.input_tokens + agent.cache_read_tokens + agent.cache_write_tokens)}
+        </span>
+      </RailRow>
+      <RailRow label="Tokens out">
+        <span className="font-mono tabular-nums text-moon-300">
+          {formatTokens(agent.output_tokens)}
+        </span>
+      </RailRow>
+      <RailRow label="Cost">
+        <span className="font-mono tabular-nums text-lamp">{formatUsd(agent.cost_usd)}</span>
+      </RailRow>
+      {context && (
+        <div className="pt-1">
+          <RailRow label="Context">
+            <Tooltip content="Approximate: the last turn's input + cache tokens">
+              <span className="cursor-help font-mono tabular-nums text-moon-300">
+                {context.cleared
+                  ? "cleared"
+                  : `~${formatTokens(context.tokens)} tokens`}
+                {window != null && (
+                  <span className="text-moon-600"> / {formatTokens(window)}</span>
+                )}
+              </span>
+            </Tooltip>
+          </RailRow>
+          {pct != null && (
+            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-ink-700">
+              <div
+                className={cn("h-full rounded-full", pct > 85 ? "bg-failed" : "bg-lamp")}
+                style={{ width: `${Math.max(2, pct)}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RailInfo({ sourcePath, updatedAt }: { sourcePath: string; updatedAt: string }) {
   return (
     <div className="rounded-card border border-ink-700 bg-ink-900 px-3 py-2.5 text-[11px] text-moon-500">
       <div className="mb-1 flex items-baseline justify-between gap-2">
@@ -455,12 +692,6 @@ function RailInfo({
           </span>
         </Tooltip>
       </div>
-      {model && (
-        <div className="mb-1 flex items-baseline justify-between gap-2">
-          <span className="text-moon-600">Model</span>
-          <span className="font-mono text-moon-300">{model}</span>
-        </div>
-      )}
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-moon-600">Last activity</span>
         <span className="font-mono text-moon-300">{relativeTime(updatedAt)}</span>

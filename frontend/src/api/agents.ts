@@ -17,6 +17,7 @@ import type {
   AgentPendingItem,
   AgentRestart,
   AgentTurnOut,
+  AgentUpdate,
 } from "./types";
 
 /** The queue-strip turns (queued + delivering) for one agent. Polled while the
@@ -41,6 +42,8 @@ export const agentsApi = {
   list: () => api.get<AgentOut[]>(BASE),
   get: (id: string) => api.get<AgentDetailOut>(`${BASE}/${id}`),
   create: (body: AgentCreate) => api.post<AgentDetailOut>(BASE, { body }),
+  update: (id: string, body: AgentUpdate) =>
+    api.patch<AgentOut>(`${BASE}/${id}`, { body }),
   remove: (id: string) => api.delete<void>(`${BASE}/${id}`),
   pending: () => api.get<AgentPendingItem[]>(`${BASE}/pending`),
   attention: () => api.get<AgentAttentionOut>(`${BASE}/attention`),
@@ -146,6 +149,16 @@ export function useCreateAgent() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: AgentCreate) => agentsApi.create(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.agents.all }),
+  });
+}
+
+/** Rename an agent. Invalidates the whole agents cache — the title shows on
+ *  the header, list cards, and attention rows (nav badge / Desk band). */
+export function useRenameAgent(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AgentUpdate) => agentsApi.update(id, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.agents.all }),
   });
 }
