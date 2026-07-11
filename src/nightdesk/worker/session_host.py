@@ -282,7 +282,9 @@ class SessionHost:
             self._finish_control_turn(turn)
         elif kind == "restart":
             self._finish_control_turn(turn)
-            await self._restart_inner(force=bool(_decode(turn.body).get("force")))
+            body = _decode(turn.body)
+            await self._restart_inner(force=bool(body.get("force")),
+                                      clear_context=bool(body.get("clear_context")))
         elif kind == "wake":
             # No-op boot marker (wake endpoint / wake-on-create): its whole job
             # was making the supervisor spawn this host. The agent now idles
@@ -466,12 +468,22 @@ class SessionHost:
     # ------------------------------------------------------------------
     # Restart (shared by explicit restart; a cold wake is a fresh host)
     # ------------------------------------------------------------------
-    async def _restart_inner(self, *, force: bool) -> None:
+    async def _restart_inner(self, *, force: bool, clear_context: bool = False) -> None:
         old = self._handle
         # Publish the resume handle, then re-decrypt env and respawn with resume.
+        # ``clear_context`` respawns WITHOUT resume (fresh conversation context)
+        # and drops the persisted handle — belt-and-braces on top of the
+        # enqueue-time wipe in ``request_restart``, covering a turn that
+        # completed (and re-published a session id) between enqueue and claim.
         with self._sf() as db:
             row = sess.get_session_row(db, self._sid)
-            resume = (row.resume_handle or {}).get("session_id")
+            if clear_context:
+                resume = None
+                if row.resume_handle is not None:
+                    row.resume_handle = None
+                    db.commit()
+            else:
+                resume = (row.resume_handle or {}).get("session_id")
             try:
                 env = sess.decrypt_env_for_spawn(row, self._box)
             except ValueError as exc:
@@ -487,7 +499,10 @@ class SessionHost:
         self._reset_generation(resumed=bool(resume))
         self._handle = await self._backend.start(spec, "trusted")
         self._reader_restarted()
-        self._write_transcript({"type": "runtime_restarted"})
+        evt: dict = {"type": "runtime_restarted"}
+        if clear_context:
+            evt["context_cleared"] = True
+        self._write_transcript(evt)
 
     def _reader_restarted(self) -> None:
         # Rebind the reader to the new handle.

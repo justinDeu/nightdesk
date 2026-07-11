@@ -428,3 +428,64 @@ async def test_ended_agent_never_unread(client, session):
     session.expire_all()
     r = await client.get("/api/v1/agents/attention")
     assert r.json()["unread"] == []
+
+
+async def test_rename_agent(client):
+    a = await _create(client, title="Old name")
+    r = await client.patch(f"/api/v1/agents/{a['id']}", json={"title": "  New name  "})
+    assert r.status_code == 200
+    assert r.json()["title"] == "New name"  # trimmed
+
+    # The new title shows on the list rows too.
+    r = await client.get("/api/v1/agents")
+    row = next(x for x in r.json() if x["id"] == a["id"])
+    assert row["title"] == "New name"
+
+
+async def test_rename_agent_validation(client):
+    a = await _create(client)
+    r = await client.patch(f"/api/v1/agents/{a['id']}", json={"title": "   "})
+    assert r.status_code == 422
+    r = await client.patch(f"/api/v1/agents/{a['id']}", json={"title": "x" * 201})
+    assert r.status_code == 422
+    r = await client.patch("/api/v1/agents/does-not-exist", json={"title": "ok"})
+    assert r.status_code == 404
+
+
+async def test_restart_clear_context_wipes_resume_handle(client, session):
+    import json as _json
+    from nightdesk.db.models import Session as SessionModel
+
+    a = await _create(client)
+    row = session.get(SessionModel, a["id"])
+    row.resume_handle = {"session_id": "cc-123", "imported_lines": 7}
+    session.commit()
+
+    r = await client.post(f"/api/v1/agents/{a['id']}/restart-runtime",
+                          json={"clear_context": True})
+    assert r.status_code == 202
+    turn = r.json()
+    assert turn["kind"] == "restart"
+    assert _json.loads(turn["body"]) == {"force": False, "clear_context": True}
+
+    session.expire_all()
+    row = session.get(SessionModel, a["id"])
+    assert row.resume_handle is None  # next spawn is fresh (no --resume)
+    # The terminal-handoff hint disappears with the wiped handle.
+    r = await client.get(f"/api/v1/agents/{a['id']}")
+    assert r.json()["claude_session_id"] is None
+
+
+async def test_restart_without_clear_keeps_resume_handle(client, session):
+    from nightdesk.db.models import Session as SessionModel
+
+    a = await _create(client)
+    row = session.get(SessionModel, a["id"])
+    row.resume_handle = {"session_id": "cc-123"}
+    session.commit()
+
+    r = await client.post(f"/api/v1/agents/{a['id']}/restart-runtime", json={})
+    assert r.status_code == 202
+    session.expire_all()
+    row = session.get(SessionModel, a["id"])
+    assert row.resume_handle == {"session_id": "cc-123"}

@@ -1018,8 +1018,29 @@ class AgentAnswer(BaseModel):
     updated_input: Optional[dict] = None
 
 
+class AgentUpdate(BaseModel):
+    """Rename an agent. Title is trimmed, must be non-empty, capped at 200."""
+
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def _title_ok(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("title must not be empty")
+        if len(v) > 200:
+            raise ValueError("title must be at most 200 characters")
+        return v
+
+
 class AgentRestart(BaseModel):
+    """Restart the inner runtime. ``clear_context`` drops the resume handle so
+    the fresh runtime starts with an empty conversation context (the ndjson
+    transcript log is untouched); default keeps the same claude session."""
+
     force: bool = False
+    clear_context: bool = False
 
 
 class AgentEnvPut(BaseModel):
@@ -1110,6 +1131,8 @@ class AgentOut(BaseModel):
     # The agent replied past the human's seen stamp (unread-reply marker).
     unread: bool = False
     source_path: str
+    posture: str = "trusted"
+    workspace_access: str = "read_write"
     idle_timeout_s: Optional[int] = None
     cost_usd: float = 0.0
     input_tokens: int = 0

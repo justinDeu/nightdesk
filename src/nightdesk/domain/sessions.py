@@ -294,6 +294,15 @@ def list_sessions(session: OrmSession, *, limit: int = 200) -> list[Session]:
     return list(session.scalars(stmt))
 
 
+def rename_session(session: OrmSession, session_id: str, title: str) -> Session:
+    """Rename an agent. The caller (API schema) trims/validates the title."""
+    row = get_session_row(session, session_id)
+    row.title = title
+    session.commit()
+    session.refresh(row)
+    return row
+
+
 def delete_session(session: OrmSession, session_id: str) -> None:
     """Delete an agent. 409 while a host is live (end it first)."""
     row = get_session_row(session, session_id)
@@ -405,14 +414,31 @@ def request_interrupt(session: OrmSession, session_id: str) -> SessionTurn:
     return enqueue_turn(session, session_id, kind="interrupt", enforce_cap=False)
 
 
-def request_restart(session: OrmSession, session_id: str, *, force: bool = False) -> SessionTurn:
-    """Enqueue a runtime-restart control turn. 409 if streaming and not forced."""
+def request_restart(
+    session: OrmSession,
+    session_id: str,
+    *,
+    force: bool = False,
+    clear_context: bool = False,
+) -> SessionTurn:
+    """Enqueue a runtime-restart control turn. 409 if streaming and not forced.
+
+    ``clear_context`` wipes the resume handle here (not just host-side): a live
+    host then respawns the inner WITHOUT ``--resume`` (fresh conversation
+    context), and a cold agent's next host boots fresh too instead of resuming
+    first and restarting after. The transcript ndjson is never touched — the
+    log survives; only the model's conversation context resets.
+    """
     row = get_session_row(session, session_id)
     if _has_streaming_turn(session, session_id) and not force:
         raise SessionBusy("a turn is streaming; pass force to interrupt and restart")
+    if clear_context:
+        row.resume_handle = None
+        session.commit()
     return enqueue_turn(
         session, session_id, kind="restart",
-        body=json.dumps({"force": bool(force)}), enforce_cap=False,
+        body=json.dumps({"force": bool(force), "clear_context": bool(clear_context)}),
+        enforce_cap=False,
     )
 
 

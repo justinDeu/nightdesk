@@ -31,6 +31,7 @@ from nightdesk.api.schemas import (
     AgentTurnOut,
     AgentTurnReorder,
     AgentUnreadItem,
+    AgentUpdate,
 )
 from nightdesk.domain import sessions as sess
 from nightdesk.domain.profile_secrets import ProfileSecretBox
@@ -44,7 +45,8 @@ def _to_out(db: Session, row) -> AgentOut:
         project_id=row.project_id, backend=row.backend, model=row.model,
         status=row.status, liveness=liveness, has_pending=open_pending,
         unread=sess.is_unread(db, row.id),
-        source_path=row.source_path, idle_timeout_s=row.idle_timeout_s,
+        source_path=row.source_path, posture=row.posture,
+        workspace_access=row.workspace_access, idle_timeout_s=row.idle_timeout_s,
         cost_usd=row.cost_usd, input_tokens=row.input_tokens,
         output_tokens=row.output_tokens, cache_read_tokens=row.cache_read_tokens,
         cache_write_tokens=row.cache_write_tokens, created_at=row.created_at,
@@ -160,6 +162,16 @@ def build_router(
             raise HTTPException(404, "not found")
         return _to_detail(session, row)
 
+    @router.patch("/{aid}", response_model=AgentOut)
+    async def rename(aid: str, payload: AgentUpdate,
+                     session: Session = Depends(get_session)):
+        """Rename an agent (the only mutable field for now is ``title``)."""
+        try:
+            row = sess.rename_session(session, aid, payload.title)
+        except sess.SessionNotFound:
+            raise HTTPException(404, "not found")
+        return _to_out(session, row)
+
     @router.post("/{aid}/seen", response_model=AgentOut)
     async def mark_seen(aid: str, session: Session = Depends(get_session)):
         """Stamp the seen high-water mark to now. The agent screen calls this
@@ -270,7 +282,8 @@ def build_router(
     async def restart_runtime(aid: str, payload: AgentRestart,
                               session: Session = Depends(get_session)):
         try:
-            turn = sess.request_restart(session, aid, force=payload.force)
+            turn = sess.request_restart(session, aid, force=payload.force,
+                                        clear_context=payload.clear_context)
         except sess.SessionNotFound:
             raise HTTPException(404, "not found")
         except sess.SessionBusy as e:
