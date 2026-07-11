@@ -235,7 +235,12 @@ function show(variant: Variant, title: ReactNode, opts: ToastOptions): string | 
         action={opts.action}
       />
     ),
-    { duration: Infinity, id: opts.id },
+    // NB: only pass `id` when the caller set one. sonner's `toast.custom`
+    // spreads these options AFTER its own generated id, so an explicit
+    // `id: undefined` clobbers it — the store then mints a different id than
+    // the one handed to the render fn, and `dismiss(id)` matches nothing
+    // (toasts become undismissable).
+    { duration: Infinity, ...(opts.id !== undefined ? { id: opts.id } : {}) },
   );
 }
 
