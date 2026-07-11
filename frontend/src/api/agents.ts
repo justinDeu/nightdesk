@@ -153,13 +153,49 @@ export function useCreateAgent() {
   });
 }
 
-/** Rename an agent. Invalidates the whole agents cache — the title shows on
- *  the header, list cards, and attention rows (nav badge / Desk band). */
+/** Rename an agent, optimistically: the new title lands in the cache before
+ *  the PATCH resolves (no old-name flash when the inline edit closes), rolls
+ *  back on error, and the whole agents cache re-syncs on settle — the title
+ *  shows on the header, list cards, and attention rows (nav badge / Desk band). */
 export function useRenameAgent(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: AgentUpdate) => agentsApi.update(id, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.agents.all }),
+    onMutate: async ({ title }: AgentUpdate) => {
+      // Stop in-flight refetches from clobbering the optimistic write.
+      await qc.cancelQueries({ queryKey: qk.agents.all });
+      const prevDetail = qc.getQueryData<AgentDetailOut>(qk.agents.detail(id));
+      const prevList = qc.getQueryData<AgentOut[]>(qk.agents.list);
+      const prevAttention = qc.getQueryData<AgentAttentionOut>(qk.agents.attention);
+      if (prevDetail) {
+        qc.setQueryData<AgentDetailOut>(qk.agents.detail(id), { ...prevDetail, title });
+      }
+      if (prevList) {
+        qc.setQueryData<AgentOut[]>(
+          qk.agents.list,
+          prevList.map((a) => (a.id === id ? { ...a, title } : a)),
+        );
+      }
+      if (prevAttention) {
+        qc.setQueryData<AgentAttentionOut>(qk.agents.attention, {
+          ...prevAttention,
+          pending: prevAttention.pending.map((p) =>
+            p.session_id === id ? { ...p, session_title: title } : p,
+          ),
+          unread: prevAttention.unread.map((u) =>
+            u.session_id === id ? { ...u, session_title: title } : u,
+          ),
+        });
+      }
+      return { prevDetail, prevList, prevAttention };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return;
+      if (ctx.prevDetail) qc.setQueryData(qk.agents.detail(id), ctx.prevDetail);
+      if (ctx.prevList) qc.setQueryData(qk.agents.list, ctx.prevList);
+      if (ctx.prevAttention) qc.setQueryData(qk.agents.attention, ctx.prevAttention);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.agents.all }),
   });
 }
 

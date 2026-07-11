@@ -503,7 +503,20 @@ export function AgentScreen() {
             railCollapsed ? "px-1.5 py-2" : "space-y-3 px-4 py-4",
           )}
         >
-          <div className={cn("flex", railCollapsed ? "justify-center" : "justify-end -my-1.5")}>
+          {/* The toggle owns a slim header row (a real slot in the space-y
+              flow, no negative margins) so it never overlaps the rail cards;
+              collapsed, the 44px strip holds only the centered button. */}
+          <div
+            className={cn(
+              "flex items-center",
+              railCollapsed ? "justify-center" : "justify-between",
+            )}
+          >
+            {!railCollapsed && (
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-moon-600">
+                Details
+              </span>
+            )}
             <Tooltip content={railCollapsed ? "Expand details" : "Collapse details"} side="left">
               <button
                 onClick={toggleRail}
@@ -588,6 +601,12 @@ function EditableTitle({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
+  // Committed-but-unconfirmed name: shown in place of the title prop so the
+  // edit closes straight into the new name with zero old-name frame, even
+  // before the optimistic cache write (useRenameAgent) reaches this prop.
+  // Cleared when the rename settles: on success the prop already matches; on
+  // error the (rolled-back) old title honestly returns.
+  const [pending, setPending] = useState<string | null>(null);
   // One-shot latch: Escape sets it so the unmount blur doesn't commit, and
   // commit sets it so Enter's blur (as the input unmounts) can't double-fire.
   const settled = useRef(false);
@@ -603,14 +622,15 @@ function EditableTitle({
     setEditing(false);
     const next = draft.trim();
     if (!next || next === title) return;
-    void onRename(next);
+    setPending(next);
+    void onRename(next).finally(() => setPending(null));
   };
 
   if (!editing) {
     return (
       <div className="group flex min-w-0 flex-1 items-center gap-1.5">
         <h1 className="min-w-0 truncate font-display text-lg font-semibold text-moon-100">
-          {title}
+          {pending ?? title}
         </h1>
         {!disabled && (
           <IconButton
