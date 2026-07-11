@@ -47,7 +47,7 @@ import {
 import { PendingInputCard } from "./PendingInputCard";
 import { AgentQueue, PendingTurnBubble } from "./AgentQueue";
 import { AgentEnvPanel } from "./AgentEnvPanel";
-import type { ServerCommands } from "./AgentComposer";
+import { normalizeCommandList, type ServerCommands } from "./serverInfo";
 import type { AgentAnswer } from "@/api/types";
 
 // Code-split the tiptap composer to the agents route (design §8.1, §19.2).
@@ -165,9 +165,11 @@ export function AgentScreen() {
     for (let i = tx.events.length - 1; i >= 0; i--) {
       const e = tx.events[i];
       if (e.type === "server_info") {
+        // Live runners send commands/skills as {name, description} objects;
+        // older ones sent plain strings. Normalize both.
         return {
-          commands: Array.isArray(e.commands) ? (e.commands as string[]) : [],
-          skills: Array.isArray(e.skills) ? (e.skills as string[]) : [],
+          commands: normalizeCommandList(e.commands),
+          skills: normalizeCommandList(e.skills),
         };
       }
     }

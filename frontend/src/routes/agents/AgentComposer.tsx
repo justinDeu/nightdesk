@@ -14,15 +14,15 @@ import { Kbd } from "@/ui/Kbd";
 import { fsApi } from "@/api/fs";
 import { cn } from "@/lib/cn";
 
-export interface ServerCommands {
-  commands: string[];
-  skills: string[];
-}
+import type { ServerCommands } from "./serverInfo";
+
+export type { ServerCommands } from "./serverInfo";
 
 interface PopupItem {
-  /** what gets inserted (raw), e.g. "/plan" or a file path */
+  /** what gets inserted (raw), e.g. "/plan", a file path, or a ticket id */
   value: string;
   label: string;
+  /** secondary line: command description, file path, or ticket meta */
   hint?: string;
 }
 
@@ -73,8 +73,8 @@ const HighlightExtension = Extension.create({
 
 /**
  * The agent composer: a tiptap editor with `/` slash-command autocomplete
- * (seeded from the runner's server_info), `@` file mentions (fs/suggest with
- * files), command/skill chips, and live highlighting. Enter sends
+ * (commands + skills, seeded from the runner's server_info), `@` file mentions
+ * (fs/suggest), and live highlighting. Enter sends
  * (Shift+Enter for a newline); sends always enqueue (the composer stays
  * enabled while streaming).
  * Code-split to the agents route (lazy-imported by AgentScreen).
@@ -122,7 +122,7 @@ export function AgentComposer({
   const extensions = useMemo(() => {
     // A shared render() that drives the React popup. `kind` distinguishes the
     // two triggers so the popup can label rows.
-    const makeRender = (kind: "slash" | "mention") => () => ({
+    const makeRender = (kind: PopupState["kind"]) => () => ({
       onStart: (props: SuggestionProps<PopupItem>) => {
         setSel(0);
         setPopup({
@@ -177,10 +177,11 @@ export function AgentComposer({
             startOfLine: true,
             items: ({ query }): PopupItem[] => {
               const q = query.toLowerCase();
-              return serverRef.current.commands
-                .filter((c) => c.toLowerCase().includes(q))
+              const { commands, skills } = serverRef.current;
+              return [...commands, ...skills]
+                .filter((c) => c.name.toLowerCase().includes(q))
                 .slice(0, 20)
-                .map((c) => ({ value: `/${c}`, label: `/${c}` }));
+                .map((c) => ({ value: `/${c.name}`, label: `/${c.name}`, hint: c.description }));
             },
             command: ({ editor, range, props }: { editor: Editor; range: Range; props: PopupItem }) => {
               // Insert the raw "/name " text — custom commands expand headlessly.
@@ -362,17 +363,21 @@ function SuggestionPopup({
             onPick(i);
           }}
           className={cn(
-            "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left",
+            "flex w-full items-start gap-2 rounded-control px-2 py-1.5 text-left",
             i === cursor ? "bg-ink-700 text-moon-100" : "text-moon-300 hover:bg-ink-700/60",
           )}
         >
           {popup.kind === "slash" ? (
-            <Terminal size={12} className="shrink-0 text-lamp" />
+            <Terminal size={12} className="mt-0.5 shrink-0 text-lamp" />
           ) : (
-            <FileCode2 size={12} className="shrink-0 text-dawn" />
+            <FileCode2 size={12} className="mt-0.5 shrink-0 text-dawn" />
           )}
-          <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{item.label}</span>
-          {item.hint && <span className="shrink-0 truncate font-mono text-[10px] text-moon-600">{item.hint}</span>}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-mono text-[12px]">{item.label}</span>
+            {item.hint && (
+              <span className="block truncate text-[10px] text-moon-600">{item.hint}</span>
+            )}
+          </span>
         </button>
       ))}
     </div>
