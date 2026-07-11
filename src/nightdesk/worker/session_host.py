@@ -425,6 +425,38 @@ class SessionHost:
                 if sid:
                     srow.resume_handle = {**(srow.resume_handle or {}), "session_id": str(sid)}
                 db.commit()
+                # Everything the CLI appended to its session jsonl during this
+                # turn was ALSO streamed to us live and already written to the
+                # transcript. Advance the delta-import watermark past it so the
+                # next wake's _delta_import does not replay this turn's history
+                # into the transcript again (only genuine terminal round-trips
+                # made while the agent is cold land past the watermark).
+                self._advance_import_watermark(db, srow)
+
+    def _advance_import_watermark(self, db, srow: Session) -> None:
+        """Mark the CC session jsonl as fully imported up to its current length.
+
+        Called after live-streamed output lands in the transcript (per-turn and
+        at teardown). Uses the same read/count semantics as ``_delta_import``
+        so the watermark is exact. Best-effort: silently a no-op when the jsonl
+        cannot be located.
+        """
+        handle = srow.resume_handle or {}
+        cc_sid = handle.get("session_id")
+        if not cc_sid:
+            return
+        try:
+            path = _cc_session_jsonl(srow.source_path, str(cc_sid))
+            if path is None or not path.exists():
+                return
+            n = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+        except OSError:
+            log.exception("watermark advance failed for session %s", self._sid)
+            return
+        if int(handle.get("imported_lines") or 0) == n:
+            return
+        srow.resume_handle = {**handle, "imported_lines": n}
+        db.commit()
 
     # ------------------------------------------------------------------
     # Restart (shared by explicit restart; a cold wake is a fresh host)
@@ -496,6 +528,11 @@ class SessionHost:
                     pass
         with self._sf() as db:
             row = db.get(Session, self._sid)
+            if row is not None:
+                # Cover turns that ended without turn_complete (interrupted /
+                # crashed): their streamed output is in the transcript, so the
+                # next wake must not delta-import it again.
+                self._advance_import_watermark(db, row)
             resume = row.resume_handle if row is not None else None
             sess.release_host(db, self._sid, status=self._shutdown_status,
                               resume_handle=resume)

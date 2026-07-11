@@ -326,6 +326,91 @@ async def test_max_turn_seconds_watchdog_fails_unresponsive_turn(engine, tmp_pat
             task.cancel()
 
 
+async def test_rewake_does_not_reimport_live_streamed_history(
+        engine, tmp_path, monkeypatch):
+    """A resumed-generation boot must not replay already-transcribed history.
+
+    Turns streamed live by the resident land in BOTH the transcript and the
+    CLI's session jsonl. The wake-time delta-import exists only for terminal
+    round-trips made while the agent is cold; it must not re-emit the live
+    turns (the watermark advances as turns complete). Lines appended while
+    cold ARE still imported exactly once.
+    """
+    from claude_agent_sdk import project_key_for_directory
+    from nightdesk.transcript import read_events as _read
+
+    factory, sid, tpath = _make(engine, tmp_path, idle_timeout_s=3600)
+    cc_root = tmp_path / "cc-projects"
+    monkeypatch.setenv("NIGHTDESK_CC_PROJECTS_DIR", str(cc_root))
+    slug = project_key_for_directory(str(tmp_path / "src"))
+    jsonl = cc_root / slug / "cc-live-1.jsonl"
+    jsonl.parent.mkdir(parents=True)
+
+    def _append(entry):
+        import json as _json
+        with jsonl.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry) + "\n")
+
+    # --- generation 1: one live turn ------------------------------------
+    with factory() as db:
+        sess.post_message(db, sid, "hello")
+    backend = FakeBackend()
+    host, task = await _run_host(factory, sid, backend)
+    assert await _await(lambda: backend.handles
+                        and any(m.get("type") == "user_turn"
+                                for m in backend.handles[0].sent))
+    h = backend.handles[0]
+    h.push({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "hi there"}]}})
+    # The CLI persists the same turn to its own jsonl as it streams it.
+    _append({"type": "user", "message": {"role": "user", "content": "hello"}})
+    _append({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "hi there"}]}})
+    h.push({"type": "turn_complete", "turn_id": _first_turn_id(factory, sid),
+            "session_id": "cc-live-1", "usage": {}, "cost_usd": 0.0})
+    assert await _await(lambda: _turn_status(factory, sid) == "done")
+    with factory() as db:
+        handle = db.get(SessionModel, sid).resume_handle or {}
+        assert handle.get("session_id") == "cc-live-1"
+        assert handle.get("imported_lines") == 2  # watermark past the live turn
+    with factory() as db:
+        sess.request_reap(db, sid)
+    assert await asyncio.wait_for(task, timeout=5.0) == 0
+
+    def _texts():
+        return [e.get("text") for e in _read(tpath) if e["type"] == "assistant_text"]
+
+    assert _texts() == ["hi there"]
+
+    # --- generation 2: cold wake, nothing happened while cold -----------
+    backend2 = FakeBackend()
+    host2, task2 = await _run_host(factory, sid, backend2)
+    assert await _await(lambda: len(backend2.starts) == 1)
+    assert backend2.starts[0][0].resume == "cc-live-1"
+    await asyncio.sleep(0.1)  # let any (wrong) delta-import land
+    assert _texts() == ["hi there"]  # history NOT re-emitted
+    with factory() as db:
+        sess.request_reap(db, sid)
+    assert await asyncio.wait_for(task2, timeout=5.0) == 0
+
+    # --- generation 3: a terminal round-trip happened while cold --------
+    _append({"type": "user", "message": {"role": "user", "content": "psst"}})
+    _append({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "terminal reply"}]}})
+    backend3 = FakeBackend()
+    host3, task3 = await _run_host(factory, sid, backend3)
+    assert await _await(lambda: len(backend3.starts) == 1)
+    assert await _await(lambda: _texts() == ["hi there", "terminal reply"])
+    with factory() as db:
+        assert (db.get(SessionModel, sid).resume_handle or {}).get(
+            "imported_lines") == 4
+    with factory() as db:
+        sess.request_reap(db, sid)
+    assert await asyncio.wait_for(task3, timeout=5.0) == 0
+    # Still exactly once after the reap-time watermark refresh.
+    assert _texts() == ["hi there", "terminal reply"]
+
+
 # ---- helpers --------------------------------------------------------------
 def _first_turn_id(factory, sid):
     with factory() as db:
