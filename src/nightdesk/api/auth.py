@@ -20,8 +20,9 @@ Enforcement:
   else 401. A token missing a scope 403s with a body naming ``missing_scopes``.
 - ``require_scopes`` is a thin wrapper over the same resolver, kept for the
   run-token write-back routes in ``runs.py``.
-- ``require_bearer`` is the strict root-only gate for ``/auth/*`` and the
-  token mint/revoke routes.
+- ``require_bearer`` is the strict root-only gate for ``/auth/*``. The token
+  mint/revoke routes gate on ``scoped(tokens.admin)`` — human-only and
+  unmintable, so only the admin session (cookie or root bearer) passes.
 - ``enforce_self_ticket`` constrains ``*.self`` run-token scopes to their ticket.
 
 The signed cookie is an itsdangerous payload ``{"bearer": "..."}`` whose secret

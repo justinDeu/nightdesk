@@ -84,23 +84,67 @@ async def test_mint_reveals_once_and_stores_only_hash(client, engine):
     assert "token_hash" not in entry
 
 
-async def test_mint_requires_root_bearer(client):
+async def test_mint_requires_admin(client):
     # No auth -> 401.
     r = await client.post("/api/v1/tokens", json={"name": "x", "bundle": "observer"})
     assert r.status_code == 401
 
 
-async def test_agent_token_cannot_mint_tokens(client, engine):
-    # Even an operator token (broad) cannot reach the mint route — it gates on
-    # the root bearer, and tokens.admin is unmintable.
+async def test_session_cookie_manages_tokens(app):
+    # The browser's signed session cookie IS the admin session: the Settings UI
+    # must be able to list/mint/revoke/delete without the raw bearer.
+    from nightdesk.api.auth import SESSION_COOKIE, issue_session_cookie
+
+    cookies = {SESSION_COOKIE: issue_session_cookie("bearer-admin")}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://t", cookies=cookies) as c:
+        lst = await c.get("/api/v1/tokens")
+        assert lst.status_code == 200
+
+        cat = await c.get("/api/v1/tokens/catalog")
+        assert cat.status_code == 200
+
+        r = await c.post("/api/v1/tokens",
+                         json={"name": "via-cookie", "bundle": "observer"})
+        assert r.status_code == 201
+        tid = r.json()["id"]
+
+        rev = await c.post(f"/api/v1/tokens/{tid}/revoke")
+        assert rev.status_code == 200
+
+        d = await c.delete(f"/api/v1/tokens/{tid}")
+        assert d.status_code == 204
+
+
+async def test_agent_token_cannot_manage_tokens(client, engine):
+    # Even an operator token (broad) cannot reach ANY tokens route — the router
+    # gates on tokens.admin, which is human-only and unmintable, so a scoped
+    # ndk_ token always 403s with the human-only hint.
     with Session(engine) as s:
         issued = mint_api_token(s, name="op", scopes=["tickets.read", "tickets.run"])
     hdr = {"Authorization": f"Bearer {issued.cleartext}"}
+
     r = await client.post("/api/v1/tokens", headers=hdr,
                           json={"name": "x", "bundle": "observer"})
+    assert r.status_code == 403
+    detail = r.json()["detail"]
+    assert "tokens.admin" in detail["missing_scopes"]
+    assert "human-only" in detail["hint"]
+
+    for method, path in [
+        ("GET", "/api/v1/tokens"),
+        ("GET", "/api/v1/tokens/catalog"),
+        ("POST", "/api/v1/tokens/some-id/revoke"),
+        ("DELETE", "/api/v1/tokens/some-id"),
+    ]:
+        resp = await client.request(method, path, headers=hdr)
+        assert resp.status_code == 403, (method, path, resp.status_code)
+
+
+async def test_garbage_bearer_cannot_manage_tokens(client):
+    hdr = {"Authorization": "Bearer ndk_not_a_real_token"}
+    r = await client.get("/api/v1/tokens", headers=hdr)
     assert r.status_code == 401
-    r2 = await client.get("/api/v1/tokens", headers=hdr)
-    assert r2.status_code == 401
 
 
 # --- human-only mint rejection --------------------------------------------

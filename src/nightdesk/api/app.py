@@ -107,7 +107,7 @@ def create_app(
         get_session, bearer_token, scoped, worktree_root=worktree_root,
     ))
     app.include_router(fs_routes.build_router(bearer_token, scoped))
-    app.include_router(tokens_routes.build_router(get_session, bearer_token))
+    app.include_router(tokens_routes.build_router(get_session, bearer_token, scoped))
     app.include_router(auth_routes.build_router(
         bearer_token=bearer_token,
         one_shot_store=app.state.one_shot_store,

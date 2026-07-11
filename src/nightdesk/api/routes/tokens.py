@@ -1,9 +1,12 @@
-"""Access-token mint / list / revoke API — root bearer only.
+"""Access-token mint / list / revoke API — admin session only.
 
-Every route here gates on ``require_bearer`` (the root config bearer), never on
-a scope: a token that could mint tokens would be admin (``tokens.admin`` is
-unmintable, §4.3). The mint response is the ONLY place a full token value is
-ever returned; the list view carries metadata + ``prefix_hint`` and never a
+Every route here gates on ``scoped(TOKENS_ADMIN)``: the admin principal (the
+root config bearer OR the browser's signed session cookie — the Settings UI
+speaks cookie auth) passes, while ``tokens.admin`` is human-only and unmintable
+(§4.3), so no ``ndk_``/``ndr_`` token can ever hold it — a scoped token 403s
+with the human-only hint, and anything else 401s. A token that could mint
+tokens would be admin. The mint response is the ONLY place a full token value
+is ever returned; the list view carries metadata + ``prefix_hint`` and never a
 value or hash. See ``docs/design/agent-token-permissions.md`` §3, §6.3.
 """
 from __future__ import annotations
@@ -14,7 +17,6 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from nightdesk.api.auth import require_bearer
 from nightdesk.api.schemas import (
     TokenMintRequest,
     TokenMintResult,
@@ -47,11 +49,13 @@ def _token_out(row) -> TokenOut:
     )
 
 
-def build_router(get_session, bearer_token: str) -> APIRouter:
+def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/tokens",
         tags=["tokens"],
-        dependencies=[Depends(require_bearer(bearer_token))],
+        # tokens.admin is human-only + unmintable: only AdminPrincipal (root
+        # bearer or signed session cookie) can ever satisfy this.
+        dependencies=[Depends(scoped(scope_vocab.TOKENS_ADMIN))],
     )
 
     @router.get("/catalog")

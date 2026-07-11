@@ -69,9 +69,10 @@ INTEGRATIONS_WRITE = "integrations.write"
 
 FS_READ = "fs.read"
 
-# Never mintable; the mint/revoke/list routes gate on the root bearer directly,
-# never on a scope. Present in the vocabulary only so it can be named as
-# human-only and rendered (disabled) in the UI.
+# Never mintable; the token mint/revoke/list routes gate on
+# ``scoped(TOKENS_ADMIN)``, which only the admin principal (root bearer or the
+# browser's signed session cookie) can satisfy. Also rendered (disabled) in
+# the mint UI.
 TOKENS_ADMIN = "tokens.admin"
 
 
