@@ -56,7 +56,9 @@ const SECTIONS: SectionMeta[] = [
   { slug: "projects", label: "Projects", icon: Layers, component: ProjectsSection },
   { slug: "profiles", label: "Profiles", icon: Hexagon, component: ProfilesSection },
   { slug: "toolsets", label: "Toolsets", icon: Sparkles, component: ToolsetsSection },
-  { slug: "access-tokens", label: "Access tokens", icon: KeyRound, component: AccessTokensSection },
+  // Slug "tokens" matches the API surface (/api/v1/tokens) and the deep link
+  // users reach for (/settings/tokens).
+  { slug: "tokens", label: "Access tokens", icon: KeyRound, component: AccessTokensSection },
   { slug: "diagnostics", label: "Diagnostics", icon: Stethoscope, component: DiagnosticsSection },
 ];
 
