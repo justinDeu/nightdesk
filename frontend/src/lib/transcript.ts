@@ -141,6 +141,43 @@ export function useLiveTranscript(
   return { events, status };
 }
 
+// --- Turn liveness ---------------------------------------------------------------
+
+/** Events that (re)open a turn: the user spoke, steered, or resolved a pending
+ *  input, so the agent is now working on a reply. Ticket runs have none of
+ *  these — the whole run is one implicit turn. */
+const TURN_START_TYPES = new Set(["user_message", "user", "steer_delivered", "pending_resolved"]);
+
+/** Events that settle a turn. `result` is the persisted per-turn closer on both
+ *  agent sessions and ticket runs; `turn_complete` is the streamed control
+ *  sibling on agents. `needs_input` pauses the agent on a question/permission
+ *  (not working), and errors/cancellation end the turn outright. */
+const TURN_END_TYPES = new Set([
+  "result",
+  "turn_complete",
+  "worker_error",
+  "cancelled",
+  "needs_input",
+  "session_crashed",
+]);
+
+/**
+ * True while a turn is in flight given the event buffer: no settling event has
+ * landed since the last turn-opening event (or since the start of the stream,
+ * which covers ticket runs — running from the first event until their single
+ * trailing `result`). Callers AND this with the live `running` flag; a resident
+ * agent idles "alive" between turns, so liveness alone over-reports.
+ */
+export function isTurnInFlight(events: TranscriptEvent[]): boolean {
+  let lastStart = -1;
+  let lastEnd = -1;
+  events.forEach((e, i) => {
+    if (TURN_START_TYPES.has(e.type)) lastStart = i;
+    if (TURN_END_TYPES.has(e.type)) lastEnd = i;
+  });
+  return lastEnd === -1 || lastEnd < lastStart;
+}
+
 // --- Display helpers -----------------------------------------------------------
 
 export interface ToolSummary {

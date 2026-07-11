@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 import type { TranscriptEvent, TranscriptStatus } from "@/lib/transcript";
+import { isTurnInFlight } from "@/lib/transcript";
 import { TranscriptView } from "./TranscriptView";
+import { WorkingIndicator } from "./WorkingIndicator";
 import { cn } from "@/lib/cn";
 
 /** Presentational transcript: an auto-scrolling, pin-to-bottom log of already-
@@ -31,6 +33,12 @@ export function TranscriptScroller({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
 
+  // "The agent is working": a turn is in flight (user message delivered / run
+  // started, no settling result yet) while the run/session is live. Drives the
+  // tail indicator inside the scroll container.
+  const inFlight = useMemo(() => isTurnInFlight(events), [events]);
+  const working = running && inFlight;
+
   // Pinned-to-bottom chat behavior: follow every new event while the reader is
   // at (or near) the bottom, whether or not the run is flagged as live — the
   // liveness poll can lag the SSE stream (agents), and a freshly opened
@@ -39,11 +47,13 @@ export function TranscriptScroller({
   // `footer` is in the deps so pending bubbles appearing/resolving re-pin too;
   // re-running on an unchanged footer just rewrites scrollTop to its current
   // value, which is a no-op.
+  // `working` is in the deps so the indicator appearing/disappearing re-pins
+  // (it lives inside the scroll container and changes its height).
   useEffect(() => {
     if (!pinned) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [events, footer, pinned]);
+  }, [events, footer, pinned, working]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -87,7 +97,8 @@ export function TranscriptScroller({
         aria-live={running ? "polite" : "off"}
         className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-card border border-ink-700 bg-ink-950/40 p-2.5"
       >
-        <TranscriptView events={events} />
+        <TranscriptView events={events} suppressEmpty={working} />
+        {working && <WorkingIndicator />}
         {footer}
       </div>
 
