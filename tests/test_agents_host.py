@@ -120,8 +120,15 @@ async def test_turn_streams_transcript_and_slices_usage(engine, tmp_path):
             row = db.get(SessionModel, sid)
             assert row.input_tokens == 100 and row.cost_usd == 0.5
             assert (row.resume_handle or {}).get("session_id") == "cc-sess-1"
-        events = [e["type"] for e in read_events(tpath)]
-        assert "session_booting" in events and "assistant_text" in events
+        events = list(read_events(tpath))
+        types = [e["type"] for e in events]
+        assert "session_booting" in types and "assistant_text" in types
+        # The user's message is persisted before the assistant output so the
+        # transcript reads in conversation order.
+        assert types.index("user_message") < types.index("assistant_text")
+        um = next(e for e in events if e["type"] == "user_message")
+        assert um["text"] == "hello"
+        assert um["turn_id"] == _first_turn_id(factory, sid)
     finally:
         await _end(factory, sid, task)
 

@@ -312,6 +312,12 @@ class SessionHost:
             if srow is not None:
                 srow.last_activity_at = _now()
                 db.commit()
+        # Persist the user's message before delivery: the inner runner never
+        # echoes the prompt back, so this is the transcript's only record of
+        # it. ``user_message`` matches the ticket-run continue event, which the
+        # frontend already renders as a user bubble.
+        self._write_transcript({"type": "user_message", "turn_id": turn.id,
+                                "text": turn.body})
         await self._handle.send({"type": "user_turn", "turn_id": turn.id, "text": turn.body})
 
         # Wait for turn_complete (the reader signals it). Control turns delivered
