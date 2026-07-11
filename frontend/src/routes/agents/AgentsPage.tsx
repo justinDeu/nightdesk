@@ -19,6 +19,7 @@ import { relativeTime } from "@/lib/time";
 import { formatUsd, formatTokens } from "@/lib/status";
 import { cn } from "@/lib/cn";
 import { AgentStatePill } from "./AgentStatePill";
+import { seedWake } from "./wakeSeed";
 import type { AgentLiveness, AgentOut } from "@/api/types";
 
 /** Resident interactive agents: long-lived chats an agent drives against a
@@ -97,6 +98,9 @@ export function AgentsPage() {
         onOpenChange={setDialogOpen}
         onCreated={(id) => {
           setDialogOpen(false);
+          // Create wakes the agent server-side; seed the wake timestamp so the
+          // detail screen mounts showing "Waking", not a false "Cold".
+          seedWake(id);
           navigate({ to: "/agents/$id", params: { id } });
         }}
       />

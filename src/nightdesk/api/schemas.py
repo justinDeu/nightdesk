@@ -978,6 +978,8 @@ class AgentCreate(BaseModel):
     ``source_path`` omitted -> a per-agent scratch directory. A path -> the agent
     works in-place on that directory (trusted posture, real ``~/.claude``).
     ``env`` maps ``KEY -> {value, secret}``; secret values are encrypted at rest.
+    ``wake`` (default true) boots the agent's host immediately so it does not
+    sit cold until the first message; pass false to create it parked.
     """
 
     title: Optional[str] = None
@@ -987,6 +989,7 @@ class AgentCreate(BaseModel):
     model: Optional[str] = None
     idle_timeout_s: Optional[int] = None
     env: Optional[dict] = None
+    wake: bool = True
 
     @field_validator("source_path", mode="before")
     @classmethod

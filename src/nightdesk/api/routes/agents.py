@@ -99,6 +99,14 @@ def build_router(
             )
         except ValueError as e:
             raise HTTPException(422, str(e))
+        if payload.wake:
+            # Wake-on-create: reuse the wake endpoint's mechanism (a queued
+            # no-op wake turn) so the next supervision tick spawns the host
+            # instead of the agent sitting cold until its first message. Cap
+            # semantics are the supervisor's: over max_live_sessions the wake
+            # stays queued until a slot frees.
+            sess.wake_session(session, row.id)
+            sess.nudge_worker(session)
         return _to_detail(session, row)
 
     @router.get("", response_model=list[AgentOut])

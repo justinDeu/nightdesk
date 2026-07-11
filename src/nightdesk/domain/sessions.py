@@ -34,7 +34,7 @@ from nightdesk.domain.profile_secrets import ProfileSecretBox
 
 
 # Turn kinds carried on the SessionTurn inbox.
-TURN_KINDS = ("user", "interrupt", "answer", "restart", "reap")
+TURN_KINDS = ("user", "interrupt", "answer", "restart", "reap", "wake")
 # Coarse persisted Session.status values.
 SESSION_STATUSES = ("active", "idle", "ended", "crashed")
 
@@ -334,13 +334,15 @@ def _next_turn_position(session: OrmSession, session_id: str) -> int:
     return (hi or 0) + 1
 
 
-def _queued_count(session: OrmSession, session_id: str) -> int:
-    return session.scalar(
-        select(func.count(SessionTurn.id)).where(
-            SessionTurn.session_id == session_id,
-            SessionTurn.status == "queued",
-        )
-    ) or 0
+def _queued_count(session: OrmSession, session_id: str,
+                  kind: Optional[str] = None) -> int:
+    stmt = select(func.count(SessionTurn.id)).where(
+        SessionTurn.session_id == session_id,
+        SessionTurn.status == "queued",
+    )
+    if kind is not None:
+        stmt = stmt.where(SessionTurn.kind == kind)
+    return session.scalar(stmt) or 0
 
 
 def enqueue_turn(
@@ -367,7 +369,9 @@ def enqueue_turn(
     if enforce_cap and kind == "user":
         cfg = session.get(ConfigRow, 1)
         cap = int(cfg.max_queued_turns) if cfg and cfg.max_queued_turns else 20
-        if _queued_count(session, session_id) >= cap:
+        # Only user turns count toward the cap: a queued wake/control turn
+        # (e.g. the create-time wake) must not eat message capacity.
+        if _queued_count(session, session_id, kind="user") >= cap:
             raise QueueFull(f"queued-turn cap ({cap}) reached")
     turn = SessionTurn(
         session_id=session_id,
@@ -413,10 +417,14 @@ def request_restart(session: OrmSession, session_id: str, *, force: bool = False
 
 
 def wake_session(session: OrmSession, session_id: str) -> Session:
-    """Nudge a cold agent awake without a message: bump last_activity_at so the
-    supervisor's next pass spawns a host (it spawns any session with a queued
-    turn OR a recent wake with no live host). A wake with an empty inbox becomes
-    a no-op boot that idles; harmless."""
+    """Wake a cold agent without a message. The supervisor spawns hosts only
+    for sessions with a queued turn (the one spawn signal), so a wake enqueues
+    a no-op ``wake`` control turn when the agent has no live host and an empty
+    inbox — the host claims it at boot and marks it done. Also bumps
+    ``last_activity_at`` (so the fresh host is not instantly idle-reaped) and
+    recovers ``crashed`` -> ``idle``. Reused by create (wake-on-create) and the
+    explicit wake endpoint; the cap is respected downstream — a wake past
+    ``max_live_sessions`` stays queued until a slot frees, like any work."""
     row = get_session_row(session, session_id)
     if row.status == "ended":
         raise SessionBusy("agent has ended")
@@ -424,6 +432,10 @@ def wake_session(session: OrmSession, session_id: str) -> Session:
     if row.status == "crashed":
         row.status = "idle"
     session.commit()
+    if not _pid_alive(row.host_pid) and _queued_count(session, session_id) == 0:
+        # Empty inbox and no host: create the work item that makes the
+        # supervisor spawn one. Any already-queued turn triggers spawn itself.
+        enqueue_turn(session, session_id, kind="wake", enforce_cap=False)
     session.refresh(row)
     return row
 

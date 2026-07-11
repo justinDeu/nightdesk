@@ -35,6 +35,7 @@ import { relativeTime } from "@/lib/time";
 import { Tooltip } from "@/ui/Tooltip";
 import { WakeStatusChip, WakeNotice } from "./WakeStatus";
 import { useWakeState } from "./useWakeState";
+import { consumeWakeSeed } from "./wakeSeed";
 import { PendingInputCard } from "./PendingInputCard";
 import { AgentQueue, PendingTurnBubble } from "./AgentQueue";
 import { AgentEnvPanel } from "./AgentEnvPanel";
@@ -71,7 +72,9 @@ export function AgentScreen() {
   const reap = useReap(id);
 
   const [termOpen, setTermOpen] = useState(false);
-  const [pokedAt, setPokedAt] = useState<number | null>(null);
+  // Arriving from the create dialog carries a wake seed (create wakes the agent
+  // server-side), so the fresh mount shows "Waking" instead of a false "Cold".
+  const [pokedAt, setPokedAt] = useState<number | null>(() => consumeWakeSeed(id));
 
   const liveness = agent?.liveness;
   const hasActivity =
@@ -105,7 +108,7 @@ export function AgentScreen() {
   const pendingTurns = useMemo(
     () =>
       (turnsQ.data ?? []).filter(
-        (t) => t.status === "queued" && !deliveredTurnIds.has(t.id),
+        (t) => t.kind === "user" && t.status === "queued" && !deliveredTurnIds.has(t.id),
       ),
     [turnsQ.data, deliveredTurnIds],
   );

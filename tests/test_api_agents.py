@@ -22,8 +22,11 @@ async def test_create_list_get_delete(client):
     r = await client.get("/api/v1/agents")
     assert r.status_code == 200 and any(x["id"] == a["id"] for x in r.json())
 
+    # Create wakes by default: the inbox carries the queued no-op wake turn
+    # that makes the supervisor spawn a host.
     r = await client.get(f"/api/v1/agents/{a['id']}")
-    assert r.status_code == 200 and r.json()["turns"] == []
+    assert r.status_code == 200
+    assert [(t["kind"], t["status"]) for t in r.json()["turns"]] == [("wake", "queued")]
 
     r = await client.delete(f"/api/v1/agents/{a['id']}")
     assert r.status_code == 204
@@ -140,6 +143,54 @@ async def test_wake_202(client):
     assert r.status_code == 202
 
 
+async def test_create_is_host_eligible(client, session):
+    """A freshly created agent must not sit cold: it shows up in the
+    supervisor's spawn list on the next tick, exactly like a woken one."""
+    from nightdesk.worker.session_reaper import sessions_needing_host
+
+    a = await _create(client)
+    assert a["id"] in [r.id for r in sessions_needing_host(session)]
+
+
+async def test_create_wake_false_stays_parked(client, session):
+    from nightdesk.worker.session_reaper import sessions_needing_host
+
+    a = await _create(client, wake=False)
+    r = await client.get(f"/api/v1/agents/{a['id']}")
+    assert r.json()["turns"] == [] and r.json()["liveness"] == "cold"
+    assert a["id"] not in [r.id for r in sessions_needing_host(session)]
+
+
+async def test_wake_endpoint_makes_agent_host_eligible(client, session):
+    """The explicit wake endpoint enqueues the same no-op wake turn create
+    uses, and does not stack a second one on repeat wakes."""
+    from nightdesk.worker.session_reaper import sessions_needing_host
+
+    a = await _create(client, wake=False)
+    assert a["id"] not in [r.id for r in sessions_needing_host(session)]
+
+    assert (await client.post(f"/api/v1/agents/{a['id']}/wake")).status_code == 202
+    assert a["id"] in [r.id for r in sessions_needing_host(session)]
+
+    assert (await client.post(f"/api/v1/agents/{a['id']}/wake")).status_code == 202
+    turns = (await client.get(f"/api/v1/agents/{a['id']}")).json()["turns"]
+    assert [t["kind"] for t in turns] == ["wake"]
+
+
+async def test_wake_turn_does_not_consume_message_cap(client, session):
+    """The queued wake turn is a control marker: with max_queued_turns=1 the
+    first user message must still fit; the second hits the cap."""
+    from nightdesk.db.models import ConfigRow
+    session.add(ConfigRow(id=1, worktree_root="/w", transcript_root="/t",
+                          max_queued_turns=1))
+    session.commit()
+    a = await _create(client)  # wake turn queued
+    assert (await client.post(f"/api/v1/agents/{a['id']}/messages",
+                              json={"message": "1"})).status_code == 202
+    assert (await client.post(f"/api/v1/agents/{a['id']}/messages",
+                              json={"message": "2"})).status_code == 429
+
+
 async def test_fs_suggest_include_files(client, tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "file.txt").write_text("x")
@@ -156,7 +207,8 @@ async def test_fs_suggest_include_files(client, tmp_path):
 
 async def test_turn_queue_list_edit_reorder_cancel(client, session):
     from nightdesk.db.models import SessionTurn
-    a = await _create(client)
+    # wake=False keeps the create-time wake turn out of the queue under test.
+    a = await _create(client, wake=False)
     ids = []
     for msg in ("one", "two", "three"):
         r = await client.post(f"/api/v1/agents/{a['id']}/messages", json={"message": msg})

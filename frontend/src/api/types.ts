@@ -894,7 +894,8 @@ export interface AgentOut {
   ended_at: string | null;
 }
 
-/** One inbox item AND turn record. `kind`: user | interrupt | answer. */
+/** One inbox item AND turn record.
+ *  `kind`: user | interrupt | answer | restart | reap | wake. */
 export interface AgentTurnOut {
   id: string;
   position: number;
@@ -972,6 +973,8 @@ export interface AgentCreate {
   model?: string | null;
   idle_timeout_s?: number | null;
   env?: Record<string, AgentEnvEntryIn>;
+  /** Boot the host immediately (server default true); false creates it parked. */
+  wake?: boolean;
 }
 
 export interface AgentMessage {

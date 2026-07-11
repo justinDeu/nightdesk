@@ -35,11 +35,12 @@ export function AgentQueue({
 }) {
   const qc = useQueryClient();
   const turnsQ = useAgentTurns(agentId, { refetchInterval });
-  // Only turns still WAITING belong in the queue. A turn leaves the widget the
-  // moment the host claims/streams it — from that point its user_message is in
-  // the transcript, and showing it here too would double-render it.
+  // Only user turns still WAITING belong in the queue. A turn leaves the widget
+  // the moment the host claims/streams it — from that point its user_message is
+  // in the transcript, and showing it here too would double-render it. Control
+  // turns (e.g. the create-time wake marker) are not messages and never render.
   const messages = useMemo(
-    () => (turnsQ.data ?? []).filter((t) => t.status === "queued"),
+    () => (turnsQ.data ?? []).filter((t) => t.kind === "user" && t.status === "queued"),
     [turnsQ.data],
   );
   const [order, setOrder] = useState<AgentTurnOut[]>(messages);

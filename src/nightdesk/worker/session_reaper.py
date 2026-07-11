@@ -35,8 +35,9 @@ def _now() -> datetime:
 def sessions_needing_host(db: OrmSession) -> list[Session]:
     """Cold agents that have queued work (a queued turn) and no live host.
 
-    A wake with an empty inbox is intentionally NOT spawned here — ``wake`` only
-    bumps ``last_activity_at``; the message enqueue is what creates work.
+    The queued turn is the single spawn signal: messages queue user turns, and
+    an explicit wake (wake endpoint / wake-on-create) queues a no-op ``wake``
+    control turn, so both land here.
     """
     rows = db.scalars(
         select(Session).where(Session.status.in_(("idle", "active", "crashed")))

@@ -283,6 +283,11 @@ class SessionHost:
         elif kind == "restart":
             self._finish_control_turn(turn)
             await self._restart_inner(force=bool(_decode(turn.body).get("force")))
+        elif kind == "wake":
+            # No-op boot marker (wake endpoint / wake-on-create): its whole job
+            # was making the supervisor spawn this host. The agent now idles
+            # until a real turn or the idle timeout.
+            self._finish_control_turn(turn)
         elif kind == "reap":
             # Explicit graceful reap: run the normal idle-reap flow now. Teardown
             # (in run()) disconnects the inner, publishes the resume handle, and
