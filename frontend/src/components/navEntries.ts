@@ -18,7 +18,8 @@ export interface NavEntry {
   icon: LucideIcon;
   /** exact match only (the Desk root) */
   exact?: boolean;
-  /** Optional live count rendered as a badge (e.g. agents awaiting input). The
+  /** Optional live count rendered as a badge. "agents-pending" carries the
+   *  agent attention total (structured needs-input + unread replies). The
    *  value is supplied by the shell, not baked into the static list. */
   badgeKey?: "agents-pending";
 }

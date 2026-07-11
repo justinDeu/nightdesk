@@ -882,6 +882,8 @@ export interface AgentOut {
   status: string;
   liveness: AgentLiveness;
   has_pending: boolean;
+  /** The agent replied past the human's seen stamp (unread-reply marker). */
+  unread: boolean;
   source_path: string;
   idle_timeout_s: number | null;
   cost_usd: number;
@@ -931,6 +933,23 @@ export interface AgentPendingOut {
 /** A pending row plus its agent title, for the cross-agent badge / Desk band. */
 export interface AgentPendingItem extends AgentPendingOut {
   session_title: string;
+}
+
+/** An agent whose conversation advanced past what the human has seen. */
+export interface AgentUnreadItem {
+  session_id: string;
+  session_title: string;
+  last_activity_at: string;
+  /** Last assistant_text snippet from the transcript tail; best-effort. */
+  preview: string | null;
+}
+
+/** Everything agent-side that wants the human: structured needs-input plus
+ *  unread replies. One poll feeds the nav badge and the Desk band. */
+export interface AgentAttentionOut {
+  pending: AgentPendingItem[];
+  unread: AgentUnreadItem[];
+  total: number;
 }
 
 /** API-safe env view: a secret value is never returned (only `set`). */

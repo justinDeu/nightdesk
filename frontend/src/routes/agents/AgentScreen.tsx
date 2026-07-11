@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import {
   ChevronLeft,
+  Mail,
   Power,
   Square,
   SunMedium,
@@ -25,6 +26,8 @@ import {
   useAnswerPending,
   useEndAgent,
   useInterrupt,
+  useMarkSeen,
+  useMarkUnread,
   usePostMessage,
   useReap,
   useWake,
@@ -36,6 +39,11 @@ import { Tooltip } from "@/ui/Tooltip";
 import { WakeStatusChip, WakeNotice } from "./WakeStatus";
 import { useWakeState } from "./useWakeState";
 import { consumeWakeSeed } from "./wakeSeed";
+import {
+  clearAutoSeenSuppression,
+  isAutoSeenSuppressed,
+  suppressAutoSeen,
+} from "./seenSuppress";
 import { PendingInputCard } from "./PendingInputCard";
 import { AgentQueue, PendingTurnBubble } from "./AgentQueue";
 import { AgentEnvPanel } from "./AgentEnvPanel";
@@ -86,6 +94,44 @@ export function AgentScreen() {
 
   const todos = useMemo(() => buildTodoList(tx.events), [tx.events]);
   const subagents = useMemo(() => buildSubagentList(tx.events), [tx.events]);
+
+  // Auto-mark-seen: viewing the conversation IS seeing it. Stamp on mount and
+  // whenever transcript events land while the tab is visible, trailing-debounced
+  // so a streaming turn costs one request after it settles (turn completion ends
+  // the event burst, so "seen after the reply finished" falls out naturally).
+  // This never fights the unread computation — the stamp only moves forward —
+  // and a manual "Mark unread" suppresses it (seenSuppress) until the user
+  // leaves the screen and comes back, so re-raised attention sticks.
+  const markSeen = useMarkSeen();
+  const markSeenRef = useRef(markSeen);
+  markSeenRef.current = markSeen;
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (isAutoSeenSuppressed(id)) return;
+      if (document.visibilityState !== "visible") return;
+      markSeenRef.current.mutate(id);
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, [id, tx.events.length]);
+  // Leaving the screen re-arms auto-seen for the next visit (email semantics:
+  // mark unread, walk away, the badge stays lit until you actually return).
+  useEffect(() => () => clearAutoSeenSuppression(id), [id]);
+
+  const markUnread = useMarkUnread();
+  const onMarkUnread = async () => {
+    // Mute the auto-stamp FIRST so the debounced effect (or an in-flight timer)
+    // cannot immediately re-mark the agent seen while we're still on screen.
+    suppressAutoSeen(id);
+    try {
+      await markUnread.mutateAsync(id);
+      toast.success("Marked unread", {
+        description: "This agent will show as waiting on you again.",
+      });
+    } catch (err) {
+      clearAutoSeenSuppression(id);
+      toast.error("Could not mark unread", { description: describeError(err) });
+    }
+  };
 
   // Queued (undelivered) turns render inline at the bottom of the transcript
   // as pending user bubbles. Same query key as AgentQueue below, so the two
@@ -263,6 +309,19 @@ export function AgentScreen() {
           <Button size="sm" variant="ghost" leadingIcon={<SunMedium size={14} />} loading={wake.isPending} onClick={onWake}>
             Wake
           </Button>
+        )}
+        {!ended && (
+          <Tooltip content="Re-raise attention: this agent shows as waiting on you again">
+            <Button
+              size="sm"
+              variant="ghost"
+              leadingIcon={<Mail size={14} />}
+              loading={markUnread.isPending}
+              onClick={onMarkUnread}
+            >
+              <span className="hidden sm:inline">Mark unread</span>
+            </Button>
+          </Tooltip>
         )}
         {!ended && (
           <Button

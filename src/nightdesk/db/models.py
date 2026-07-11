@@ -963,6 +963,14 @@ class Session(Base):
     last_activity_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False,
     )
+    # High-water mark of what the human has seen of this agent's conversation.
+    # NULL = never viewed (or explicitly marked unread). Stamped by
+    # POST /agents/{id}/seen (the agent screen auto-calls it while visible);
+    # cleared by DELETE .../seen. Unread = a completed user turn's finished_at
+    # is newer than this.
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
     # Per-agent idle-reap override in seconds; NULL inherits the global config.
     idle_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # {"session_id": ...} — the claude resume handle, refreshed on every turn.

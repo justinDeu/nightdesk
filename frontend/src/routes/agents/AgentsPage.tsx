@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Bot, Plus, Trash2 } from "lucide-react";
+import { Bot, Mail, MailOpen, Plus, Trash2 } from "lucide-react";
 import { Page } from "@/components/Page";
 import { Button } from "@/ui/Button";
 import { Dialog } from "@/ui/Dialog";
@@ -14,7 +14,13 @@ import { PathInput } from "@/components/PathInput";
 import { toast, describeError } from "@/ui/Toast";
 import { confirm } from "@/ui/confirm";
 import { useProfiles } from "@/api/profiles";
-import { useAgents, useCreateAgent, useDeleteAgent } from "@/api/agents";
+import {
+  useAgents,
+  useCreateAgent,
+  useDeleteAgent,
+  useMarkSeen,
+  useMarkUnread,
+} from "@/api/agents";
 import { relativeTime } from "@/lib/time";
 import { formatUsd, formatTokens } from "@/lib/status";
 import { cn } from "@/lib/cn";
@@ -136,6 +142,18 @@ function AgentRow({
   const live =
     agent.liveness === "alive" || agent.liveness === "needs-input" || agent.liveness === "warm";
   const tokens = agent.input_tokens + agent.output_tokens;
+  const markSeen = useMarkSeen();
+  const markUnread = useMarkUnread();
+  const toggleSeen = async () => {
+    try {
+      await (agent.unread ? markSeen : markUnread).mutateAsync(agent.id);
+    } catch (err) {
+      toast.error(
+        agent.unread ? "Could not mark read" : "Could not mark unread",
+        { description: describeError(err) },
+      );
+    }
+  };
   return (
     <li className="group relative overflow-hidden rounded-card border border-ink-700 bg-ink-900/60 transition-colors hover:border-ink-600 hover:bg-ink-800/60">
       <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[2px]", ROW_ACCENT[agent.liveness])} />
@@ -147,6 +165,14 @@ function AgentRow({
         >
           <span className="flex w-full items-center gap-2">
             <Bot size={14} className="shrink-0 text-moon-500" />
+            {agent.unread && (
+              <Tooltip content="Replied — waiting on you">
+                <span
+                  aria-label="Unread reply"
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-lamp"
+                />
+              </Tooltip>
+            )}
             <span className="min-w-0 flex-1 truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
               {agent.title}
             </span>
@@ -198,6 +224,13 @@ function AgentRow({
           <span className="hidden w-14 shrink-0 text-right font-mono text-[11px] text-moon-600 md:inline">
             {relativeTime(agent.updated_at)}
           </span>
+          <IconButton
+            label={agent.unread ? "Mark read" : "Mark unread"}
+            size="sm"
+            icon={agent.unread ? <MailOpen size={14} /> : <Mail size={14} />}
+            onClick={toggleSeen}
+            className="opacity-0 transition-opacity group-hover:opacity-100"
+          />
           <IconButton
             label={live ? "End the agent before deleting" : "Delete agent"}
             size="sm"

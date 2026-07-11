@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
     AgentAnswer,
+    AgentAttentionOut,
     AgentCreate,
     AgentDetailOut,
     AgentEnvEntryOut,
@@ -29,6 +30,7 @@ from nightdesk.api.schemas import (
     AgentTurnEdit,
     AgentTurnOut,
     AgentTurnReorder,
+    AgentUnreadItem,
 )
 from nightdesk.domain import sessions as sess
 from nightdesk.domain.profile_secrets import ProfileSecretBox
@@ -41,12 +43,27 @@ def _to_out(db: Session, row) -> AgentOut:
         id=row.id, title=row.title, profile_id=row.profile_id,
         project_id=row.project_id, backend=row.backend, model=row.model,
         status=row.status, liveness=liveness, has_pending=open_pending,
+        unread=sess.is_unread(db, row.id),
         source_path=row.source_path, idle_timeout_s=row.idle_timeout_s,
         cost_usd=row.cost_usd, input_tokens=row.input_tokens,
         output_tokens=row.output_tokens, cache_read_tokens=row.cache_read_tokens,
         cache_write_tokens=row.cache_write_tokens, created_at=row.created_at,
         updated_at=row.updated_at, ended_at=row.ended_at,
     )
+
+
+def _pending_items(db: Session) -> list[AgentPendingItem]:
+    """Open pending inputs across all agents, decorated with agent titles.
+    Shared by /pending (legacy callers) and /attention."""
+    from nightdesk.db.models import Session as SessionModel
+
+    out = []
+    for p in sess.list_open_pending(db):
+        srow = db.get(SessionModel, p.session_id)
+        item = AgentPendingItem.model_validate(p)
+        item.session_title = srow.title if srow is not None else "Agent"
+        out.append(item)
+    return out
 
 
 def _to_detail(db: Session, row) -> AgentDetailOut:
@@ -115,15 +132,25 @@ def build_router(
 
     @router.get("/pending", response_model=list[AgentPendingItem])
     async def pending(session: Session = Depends(get_session)):
-        from nightdesk.db.models import Session as SessionModel
+        return _pending_items(session)
 
-        out = []
-        for p in sess.list_open_pending(session):
-            srow = session.get(SessionModel, p.session_id)
-            item = AgentPendingItem.model_validate(p)
-            item.session_title = srow.title if srow is not None else "Agent"
-            out.append(item)
-        return out
+    @router.get("/attention", response_model=AgentAttentionOut)
+    async def attention(session: Session = Depends(get_session)):
+        """Everything agent-side that wants the human: structured needs-input
+        plus unread replies. One poll feeds the nav badge and the Desk band."""
+        pending = _pending_items(session)
+        unread = [
+            AgentUnreadItem(
+                session_id=row.id,
+                session_title=row.title,
+                last_activity_at=row.last_activity_at,
+                preview=sess.last_assistant_preview(row),
+            )
+            for row, _reply_at in sess.list_unread(session)
+        ]
+        return AgentAttentionOut(
+            pending=pending, unread=unread, total=len(pending) + len(unread),
+        )
 
     @router.get("/{aid}", response_model=AgentDetailOut)
     async def get_one(aid: str, session: Session = Depends(get_session)):
@@ -132,6 +159,29 @@ def build_router(
         except sess.SessionNotFound:
             raise HTTPException(404, "not found")
         return _to_detail(session, row)
+
+    @router.post("/{aid}/seen", response_model=AgentOut)
+    async def mark_seen(aid: str, session: Session = Depends(get_session)):
+        """Stamp the seen high-water mark to now. The agent screen calls this
+        on mount and when a streaming turn completes while visible, so an
+        actively-viewed conversation never flaps unread."""
+        try:
+            row = sess.mark_seen(session, aid)
+        except sess.SessionNotFound:
+            raise HTTPException(404, "not found")
+        return _to_out(session, row)
+
+    @router.delete("/{aid}/seen", response_model=AgentOut)
+    async def mark_unread(aid: str, session: Session = Depends(get_session)):
+        """Mark-unread: rewind the seen stamp so the agent re-raises attention
+        (nav badge + Desk band), like marking a text/email unread. A session
+        with no completed user turn stays read — clearing the stamp on a fresh
+        agent does not invent attention."""
+        try:
+            row = sess.mark_unread(session, aid)
+        except sess.SessionNotFound:
+            raise HTTPException(404, "not found")
+        return _to_out(session, row)
 
     @router.delete("/{aid}", status_code=status.HTTP_204_NO_CONTENT)
     async def remove(aid: str, session: Session = Depends(get_session)):

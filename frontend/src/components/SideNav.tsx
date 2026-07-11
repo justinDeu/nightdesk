@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { LogOut, PanelLeftClose, PanelLeft } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Tooltip } from "@/ui/Tooltip";
-import { usePendingAgents } from "@/api/agents";
+import { useAgentAttention } from "@/api/agents";
 import { ENTRIES, signOut } from "./navEntries";
 
 const COLLAPSE_KEY = "nightdesk:nav-collapsed";
@@ -12,8 +12,10 @@ export function SideNav() {
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(COLLAPSE_KEY) === "1",
   );
-  const pending = usePendingAgents();
-  const pendingCount = pending.data?.length ?? 0;
+  // Attention = structured needs-input + unread replies; shares the Desk
+  // band's queryKey so the two surfaces cost one poll.
+  const attention = useAgentAttention();
+  const pendingCount = attention.data?.total ?? 0;
 
   const toggle = () => {
     setCollapsed((c) => {

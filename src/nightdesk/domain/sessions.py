@@ -728,6 +728,114 @@ def list_open_pending(session: OrmSession) -> list[PendingInput]:
 
 
 # ---------------------------------------------------------------------------
+# Seen / unread (attention)
+# ---------------------------------------------------------------------------
+# A session is UNREAD when the agent replied past what the human has seen: it
+# has at least one completed user turn AND the newest such turn finished after
+# ``last_seen_at`` (or the stamp is NULL). A done user turn's ``finished_at``
+# is the reliable "assistant replied" instant — the host stamps it exactly
+# when the turn's result lands (``session_host``'s turn-complete handler) —
+# whereas ``last_activity_at`` also bumps on the human's own sends, which
+# would flag a just-sent-and-walked-away message as unread before any reply.
+
+def mark_seen(session: OrmSession, session_id: str) -> Session:
+    """Stamp the seen high-water mark to now (always moves forward)."""
+    row = get_session_row(session, session_id)
+    row.last_seen_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def mark_unread(session: OrmSession, session_id: str) -> Session:
+    """Rewind the seen stamp (NULL), re-raising attention on this agent.
+
+    Only sessions with a completed user turn ever compute as unread, so
+    clearing the stamp on a never-used agent is a no-op for the badge."""
+    row = get_session_row(session, session_id)
+    row.last_seen_at = None
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def is_unread(session: OrmSession, session_id: str) -> bool:
+    """Unread flag for one session (list rows / seen responses)."""
+    srow = session.get(Session, session_id)
+    if srow is None or srow.status == "ended":
+        return False
+    last_reply = session.scalar(
+        select(func.max(SessionTurn.finished_at)).where(
+            SessionTurn.session_id == session_id,
+            SessionTurn.kind == "user",
+            SessionTurn.status == "done",
+        )
+    )
+    if last_reply is None:
+        return False
+    return srow.last_seen_at is None or last_reply > srow.last_seen_at
+
+
+def list_unread(session: OrmSession) -> list[tuple[Session, datetime]]:
+    """All unread sessions with their last-reply instant, newest reply first.
+
+    One grouped query (no per-session round trips); the datetime comparison
+    happens in SQL, which is safe because every writer stamps aware-UTC
+    datetimes, so the stored values compare consistently."""
+    sub = (
+        select(
+            SessionTurn.session_id.label("session_id"),
+            func.max(SessionTurn.finished_at).label("last_reply_at"),
+        )
+        .where(SessionTurn.kind == "user", SessionTurn.status == "done")
+        .group_by(SessionTurn.session_id)
+        .subquery()
+    )
+    rows = session.execute(
+        select(Session, sub.c.last_reply_at)
+        .join(sub, sub.c.session_id == Session.id)
+        .where(
+            Session.status != "ended",
+            sub.c.last_reply_at.isnot(None),
+            (Session.last_seen_at.is_(None))
+            | (sub.c.last_reply_at > Session.last_seen_at),
+        )
+        .order_by(sub.c.last_reply_at.desc())
+    )
+    return [(srow, last_reply) for srow, last_reply in rows]
+
+
+def last_assistant_preview(row: Session, *, max_chars: int = 160) -> Optional[str]:
+    """Last assistant_text snippet from the transcript tail, or None.
+
+    Cheap by construction: reads at most the final 32 KiB of the ndjson and
+    scans backwards. Any I/O or parse trouble degrades to no preview."""
+    if not row.transcript_path:
+        return None
+    try:
+        with open(row.transcript_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 32768))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            evt = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if evt.get("type") == "assistant_text" and isinstance(evt.get("text"), str):
+            text = " ".join(evt["text"].split())
+            if text:
+                return text[:max_chars]
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Env replace (API)
 # ---------------------------------------------------------------------------
 def nudge_worker(session: OrmSession) -> bool:

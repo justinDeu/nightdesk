@@ -25,7 +25,7 @@ import { ProjectTag } from "@/components/ProjectDot";
 import { RunningCard } from "./RunningCard";
 import { useTickets } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
-import { usePendingAgents } from "@/api/agents";
+import { useAgentAttention } from "@/api/agents";
 import { useInbox } from "@/api/inbox";
 import { useAckDigest, useBulkAck } from "@/api/ack";
 import type { AckDigestGroup } from "@/api/types";
@@ -125,7 +125,12 @@ export function DeskPage() {
   const running = useTickets({ status: "running" }, { refetchInterval: POLL });
   const runs = useRuns(undefined, { refetchInterval: POLL });
   const inbox = useInbox(null, { refetchInterval: POLL });
-  const pendingAgents = usePendingAgents();
+  // Structured needs-input + unread replies, one poll (queryKey shared with
+  // the nav badge so the Desk doesn't double-fetch).
+  const attention = useAgentAttention();
+  const attentionPending = attention.data?.pending ?? [];
+  const attentionUnread = attention.data?.unread ?? [];
+  const attentionTotal = attention.data?.total ?? 0;
 
   // Capture the visit watermark once at mount; refresh it on unmount so the
   // "while you were away" feed reflects the gap since the previous session.
@@ -273,15 +278,16 @@ export function DeskPage() {
 
       {/* Seam E order: blocking agents first, then acknowledgement debt, then
           the live-runs band. */}
-      {(pendingAgents.data?.length ?? 0) > 0 && (
+      {attentionTotal > 0 && (
         <DeskBand
           icon={<HelpCircle size={15} />}
           title="Agents waiting on you"
           accent
-          count={pendingAgents.data!.length}
+          count={attentionTotal}
         >
           <div className="space-y-1.5">
-            {pendingAgents.data!.map((p) => (
+            {/* Structured asks first — a blocked agent outranks an unread reply. */}
+            {attentionPending.map((p) => (
               <Link
                 key={p.id}
                 to="/agents/$id"
@@ -297,6 +303,31 @@ export function DeskPage() {
                 </span>
                 <span className="rounded-full bg-lamp/15 px-2 py-0.5 text-[11px] font-medium text-lamp">
                   Answer
+                </span>
+              </Link>
+            ))}
+            {/* Unread replies: the agent finished and idled — dimmer accent
+                than a hard ask, click opens the conversation (which marks it
+                seen). */}
+            {attentionUnread.map((u) => (
+              <Link
+                key={u.session_id}
+                to="/agents/$id"
+                params={{ id: u.session_id }}
+                className="group flex items-center gap-3 rounded-control border border-ink-600 bg-ink-900/60 px-3 py-2.5 transition-colors hover:bg-ink-800/70"
+              >
+                <Bot size={15} className="shrink-0 text-moon-400" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
+                    {u.session_title}
+                  </span>
+                  <span className="block truncate text-xs text-moon-500">
+                    replied · waiting on you
+                    {u.preview ? <span className="text-moon-600"> — {u.preview}</span> : null}
+                  </span>
+                </span>
+                <span className="rounded-full bg-ink-800 px-2 py-0.5 text-[11px] font-medium text-moon-400">
+                  Read
                 </span>
               </Link>
             ))}

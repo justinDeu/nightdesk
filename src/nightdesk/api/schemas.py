@@ -1070,6 +1070,26 @@ class AgentPendingItem(AgentPendingOut):
     session_title: str = "Agent"
 
 
+class AgentUnreadItem(BaseModel):
+    """An agent whose conversation advanced past what the human has seen."""
+
+    session_id: str
+    session_title: str = "Agent"
+    last_activity_at: datetime
+    # Last assistant_text snippet from the transcript tail; None when the
+    # transcript is missing/unreadable (preview is best-effort, never blocking).
+    preview: Optional[str] = None
+
+
+class AgentAttentionOut(BaseModel):
+    """Everything agent-side that wants the human: structured needs-input
+    (pending) plus unread replies. Feeds the nav badge and the Desk band."""
+
+    pending: list[AgentPendingItem] = []
+    unread: list[AgentUnreadItem] = []
+    total: int = 0
+
+
 class AgentEnvEntryOut(BaseModel):
     key: str
     secret: bool
@@ -1087,6 +1107,8 @@ class AgentOut(BaseModel):
     status: str
     liveness: str
     has_pending: bool = False
+    # The agent replied past the human's seen stamp (unread-reply marker).
+    unread: bool = False
     source_path: str
     idle_timeout_s: Optional[int] = None
     cost_usd: float = 0.0

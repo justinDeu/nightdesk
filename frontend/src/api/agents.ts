@@ -8,6 +8,7 @@ import { api } from "./client";
 import { qk } from "./keys";
 import type {
   AgentAnswer,
+  AgentAttentionOut,
   AgentCreate,
   AgentDetailOut,
   AgentEnvPut,
@@ -42,6 +43,9 @@ export const agentsApi = {
   create: (body: AgentCreate) => api.post<AgentDetailOut>(BASE, { body }),
   remove: (id: string) => api.delete<void>(`${BASE}/${id}`),
   pending: () => api.get<AgentPendingItem[]>(`${BASE}/pending`),
+  attention: () => api.get<AgentAttentionOut>(`${BASE}/attention`),
+  markSeen: (id: string) => api.post<AgentOut>(`${BASE}/${id}/seen`),
+  markUnread: (id: string) => api.delete<AgentOut>(`${BASE}/${id}/seen`),
 
   postMessage: (id: string, body: AgentMessage) =>
     api.post<AgentTurnOut>(`${BASE}/${id}/messages`, { body }),
@@ -99,6 +103,43 @@ export function usePendingAgents(pollMs = 15000) {
     retry: false,
     staleTime: 0,
   });
+}
+
+/** Structured needs-input PLUS unread replies, one poll. The nav badge and the
+ *  Desk band share this queryKey so mounting both costs a single request. */
+export function useAgentAttention(pollMs = 15000) {
+  return useQuery({
+    queryKey: qk.agents.attention,
+    queryFn: () => agentsApi.attention(),
+    refetchInterval: pollMs,
+    retry: false,
+    staleTime: 0,
+  });
+}
+
+/** Shared cache refresh after a seen-stamp change: the attention feed (badge +
+ *  Desk band) and the agents list (unread dot) both derive from it. */
+function useSeenMutation(fn: (id: string) => Promise<AgentOut>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.agents.attention });
+      qc.invalidateQueries({ queryKey: qk.agents.list });
+    },
+  });
+}
+
+/** Stamp the seen high-water mark. The agent screen calls this while the
+ *  conversation is actually on screen; the stamp only moves forward. */
+export function useMarkSeen() {
+  return useSeenMutation((id) => agentsApi.markSeen(id));
+}
+
+/** Mark-unread: rewind the seen stamp so the agent re-raises attention, like
+ *  marking a text/email unread. */
+export function useMarkUnread() {
+  return useSeenMutation((id) => agentsApi.markUnread(id));
 }
 
 export function useCreateAgent() {

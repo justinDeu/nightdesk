@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { LogOut, X } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { usePendingAgents } from "@/api/agents";
+import { useAgentAttention } from "@/api/agents";
 import { ENTRIES, signOut } from "./navEntries";
 
 /** Mobile navigation drawer (below md). Slides in from the left over a scrim;
@@ -13,8 +13,10 @@ export function NavDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const pending = usePendingAgents();
-  const pendingCount = pending.data?.length ?? 0;
+  // Attention = structured needs-input + unread replies; shares the Desk
+  // band's queryKey so the two surfaces cost one poll.
+  const attention = useAgentAttention();
+  const pendingCount = attention.data?.total ?? 0;
 
   // Close whenever the route changes (covers Link taps + programmatic nav).
   useEffect(() => {

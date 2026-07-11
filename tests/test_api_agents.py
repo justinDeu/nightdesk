@@ -312,3 +312,119 @@ async def test_config_exposes_session_knobs(client):
     assert body["session_idle_timeout_s"] == 300 and body["max_live_sessions"] == 4
     r = await client.patch("/api/v1/config", json={"session_idle_timeout_s": 120})
     assert r.status_code == 200 and r.json()["session_idle_timeout_s"] == 120
+
+
+# ---------------------------------------------------------------------------
+# Attention: unread replies + seen / mark-unread
+# ---------------------------------------------------------------------------
+def _complete_user_turn(session, agent_id, turn_id=None):
+    """Force a user turn into 'done' with a fresh finished_at (what the host
+    does when the assistant's reply lands)."""
+    from datetime import datetime, timezone
+    from nightdesk.db.models import SessionTurn
+    if turn_id is None:
+        turn = SessionTurn(session_id=agent_id, position=99, kind="user",
+                           body="hi", status="done",
+                           finished_at=datetime.now(timezone.utc))
+        session.add(turn)
+    else:
+        turn = session.get(SessionTurn, turn_id)
+        turn.status = "done"
+        turn.finished_at = datetime.now(timezone.utc)
+    session.commit()
+    return turn
+
+
+async def test_unread_appears_after_completed_turn_and_clears_on_seen(client, session):
+    a = await _create(client)
+
+    # Fresh agent: no completed user turn -> never unread, even with a NULL
+    # seen stamp.
+    r = await client.get("/api/v1/agents/attention")
+    assert r.status_code == 200
+    assert r.json()["unread"] == [] and r.json()["pending"] == []
+    assert r.json()["total"] == 0
+
+    # Post a message and complete it (the host's reply landed) with the seen
+    # stamp still NULL -> unread.
+    r = await client.post(f"/api/v1/agents/{a['id']}/messages", json={"message": "hi"})
+    _complete_user_turn(session, a["id"], r.json()["id"])
+
+    r = await client.get("/api/v1/agents/attention")
+    body = r.json()
+    assert [u["session_id"] for u in body["unread"]] == [a["id"]]
+    assert body["unread"][0]["session_title"] == "A"
+    assert body["total"] == 1
+
+    # The list rows carry the unread flag (agents-page dot).
+    r = await client.get("/api/v1/agents")
+    assert next(x for x in r.json() if x["id"] == a["id"])["unread"] is True
+
+    # Seen stamp clears it.
+    r = await client.post(f"/api/v1/agents/{a['id']}/seen")
+    assert r.status_code == 200 and r.json()["unread"] is False
+    r = await client.get("/api/v1/agents/attention")
+    assert r.json()["unread"] == [] and r.json()["total"] == 0
+
+    # A NEW completed reply after the stamp -> unread again.
+    _complete_user_turn(session, a["id"])
+    r = await client.get("/api/v1/agents/attention")
+    assert [u["session_id"] for u in r.json()["unread"]] == [a["id"]]
+
+
+async def test_mark_unread_rewinds_seen(client, session):
+    a = await _create(client)
+    r = await client.post(f"/api/v1/agents/{a['id']}/messages", json={"message": "hi"})
+    _complete_user_turn(session, a["id"], r.json()["id"])
+
+    # View it (seen) -> read.
+    await client.post(f"/api/v1/agents/{a['id']}/seen")
+    r = await client.get("/api/v1/agents/attention")
+    assert r.json()["unread"] == []
+
+    # Mark-unread re-raises attention despite the recent view.
+    r = await client.delete(f"/api/v1/agents/{a['id']}/seen")
+    assert r.status_code == 200 and r.json()["unread"] is True
+    r = await client.get("/api/v1/agents/attention")
+    assert [u["session_id"] for u in r.json()["unread"]] == [a["id"]]
+    assert r.json()["total"] == 1
+
+
+async def test_mark_unread_on_fresh_agent_is_inert(client):
+    a = await _create(client)
+    # No completed user turn: clearing the stamp cannot invent attention.
+    r = await client.delete(f"/api/v1/agents/{a['id']}/seen")
+    assert r.status_code == 200 and r.json()["unread"] is False
+    r = await client.get("/api/v1/agents/attention")
+    assert r.json()["unread"] == [] and r.json()["total"] == 0
+
+
+async def test_attention_combines_pending_and_unread(client, session):
+    from nightdesk.domain import sessions as sess
+
+    blocked = await _create(client, title="Blocked")
+    sess.create_pending(session, blocked["id"], request_id="r1",
+                        kind="permission", tool="Bash", payload={})
+    replied = await _create(client, title="Replied")
+    _complete_user_turn(session, replied["id"])
+
+    r = await client.get("/api/v1/agents/attention")
+    body = r.json()
+    assert [p["session_id"] for p in body["pending"]] == [blocked["id"]]
+    assert body["pending"][0]["session_title"] == "Blocked"
+    assert [u["session_id"] for u in body["unread"]] == [replied["id"]]
+    assert body["total"] == 2
+
+    # /agents/pending keeps working for existing callers (pending only).
+    r = await client.get("/api/v1/agents/pending")
+    assert [p["session_id"] for p in r.json()] == [blocked["id"]]
+
+
+async def test_ended_agent_never_unread(client, session):
+    a = await _create(client)
+    _complete_user_turn(session, a["id"])
+    r = await client.post(f"/api/v1/agents/{a['id']}/end")
+    assert r.status_code == 200
+    session.expire_all()
+    r = await client.get("/api/v1/agents/attention")
+    assert r.json()["unread"] == []
