@@ -489,3 +489,122 @@ async def test_restart_without_clear_keeps_resume_handle(client, session):
     session.expire_all()
     row = session.get(SessionModel, a["id"])
     assert row.resume_handle == {"session_id": "cc-123"}
+
+
+# ---------------------------------------------------------------------------
+# Terminal drift + sync-terminal (turns made via `claude --resume` while cold)
+# ---------------------------------------------------------------------------
+def _cc_jsonl(tmp_path, monkeypatch, source_path, cc_sid):
+    """Point $NIGHTDESK_CC_PROJECTS_DIR at a scratch root and return the jsonl
+    path CC would use for this cwd + session id (parent dirs created)."""
+    from claude_agent_sdk import project_key_for_directory
+
+    cc_root = tmp_path / "cc-projects"
+    monkeypatch.setenv("NIGHTDESK_CC_PROJECTS_DIR", str(cc_root))
+    jsonl = cc_root / project_key_for_directory(str(source_path)) / f"{cc_sid}.jsonl"
+    jsonl.parent.mkdir(parents=True, exist_ok=True)
+    return jsonl
+
+
+def _append_jsonl(path, entry):
+    import json as _json
+
+    with path.open("a", encoding="utf-8") as f:
+        f.write(_json.dumps(entry) + "\n")
+
+
+async def test_terminal_drift_and_sync_import(client, session, tmp_path, monkeypatch):
+    from nightdesk.db.models import Session as SessionModel
+    from nightdesk.transcript import read_events
+
+    src = tmp_path / "src"
+    a = await _create(client, source_path=str(src))
+
+    # No resume handle yet -> clean.
+    r = await client.get(f"/api/v1/agents/{a['id']}")
+    assert r.json()["terminal_drift"] == 0
+
+    row = session.get(SessionModel, a["id"])
+    row.resume_handle = {"session_id": "cc-term-1", "imported_lines": 0}
+    tpath = tmp_path / "transcripts" / f"{a['id']}.ndjson"
+    row.transcript_path = str(tpath)
+    session.commit()
+
+    jsonl = _cc_jsonl(tmp_path, monkeypatch, src, "cc-term-1")
+    _append_jsonl(jsonl, {"type": "user",
+                          "message": {"role": "user", "content": "psst"}})
+    _append_jsonl(jsonl, {"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "terminal reply"}]}})
+
+    # Detail sees the two unimported lines.
+    r = await client.get(f"/api/v1/agents/{a['id']}")
+    assert r.json()["terminal_drift"] == 2
+
+    # Sync imports exactly the delta into the canonical transcript and
+    # advances the watermark.
+    r = await client.post(f"/api/v1/agents/{a['id']}/sync-terminal")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"imported": 2, "terminal_drift": 0}
+    texts = [e.get("text") for e in read_events(tpath)
+             if e["type"] == "assistant_text"]
+    assert texts == ["terminal reply"]
+    session.expire_all()
+    handle = session.get(SessionModel, a["id"]).resume_handle
+    assert handle == {"session_id": "cc-term-1", "imported_lines": 2}
+
+    # Idempotent: a second sync with no new lines imports nothing and the
+    # transcript does not grow.
+    n_events = len(list(read_events(tpath)))
+    r = await client.post(f"/api/v1/agents/{a['id']}/sync-terminal")
+    assert r.status_code == 200
+    assert r.json() == {"imported": 0, "terminal_drift": 0}
+    assert len(list(read_events(tpath))) == n_events
+    r = await client.get(f"/api/v1/agents/{a['id']}")
+    assert r.json()["terminal_drift"] == 0
+
+
+async def test_sync_terminal_409_when_host_live(client, session, tmp_path, monkeypatch):
+    import os
+
+    from nightdesk.db.models import Session as SessionModel
+
+    src = tmp_path / "src"
+    a = await _create(client, source_path=str(src))
+    row = session.get(SessionModel, a["id"])
+    row.resume_handle = {"session_id": "cc-term-2", "imported_lines": 0}
+    row.host_pid = os.getpid()  # pretend a live host owns it
+    row.status = "active"
+    session.commit()
+
+    jsonl = _cc_jsonl(tmp_path, monkeypatch, src, "cc-term-2")
+    _append_jsonl(jsonl, {"type": "user",
+                          "message": {"role": "user", "content": "racy"}})
+
+    # Drift reports 0 while a host is live (the host owns the file), and the
+    # sync is refused.
+    r = await client.get(f"/api/v1/agents/{a['id']}")
+    assert r.json()["terminal_drift"] == 0
+    r = await client.post(f"/api/v1/agents/{a['id']}/sync-terminal")
+    assert r.status_code == 409
+    assert "live host" in r.json()["detail"]
+
+    # Host gone -> the same lines become visible drift and sync is allowed.
+    row.host_pid = None
+    row.status = "idle"
+    session.commit()
+    r = await client.get(f"/api/v1/agents/{a['id']}")
+    assert r.json()["terminal_drift"] == 1
+    r = await client.post(f"/api/v1/agents/{a['id']}/sync-terminal")
+    assert r.status_code == 200 and r.json()["imported"] == 1
+
+
+async def test_sync_terminal_409_when_ended_and_noop_without_handle(client, session):
+    a = await _create(client)
+    # No resume handle: nothing to import, but the call is legal and inert.
+    r = await client.post(f"/api/v1/agents/{a['id']}/sync-terminal")
+    assert r.status_code == 200
+    assert r.json() == {"imported": 0, "terminal_drift": 0}
+
+    await client.post(f"/api/v1/agents/{a['id']}/end")
+    r = await client.post(f"/api/v1/agents/{a['id']}/sync-terminal")
+    assert r.status_code == 409

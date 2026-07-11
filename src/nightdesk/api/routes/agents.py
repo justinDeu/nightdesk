@@ -27,12 +27,14 @@ from nightdesk.api.schemas import (
     AgentPendingItem,
     AgentPendingOut,
     AgentRestart,
+    AgentTerminalSyncOut,
     AgentTurnEdit,
     AgentTurnOut,
     AgentTurnReorder,
     AgentUnreadItem,
     AgentUpdate,
 )
+from nightdesk.domain import session_import as simp
 from nightdesk.domain import sessions as sess
 from nightdesk.domain.profile_secrets import ProfileSecretBox
 
@@ -78,6 +80,10 @@ def _to_detail(db: Session, row) -> AgentDetailOut:
         pending_input=AgentPendingOut.model_validate(pending) if pending else None,
         env=[AgentEnvEntryOut(**e) for e in sess.masked_env(row)],
         claude_session_id=(row.resume_handle or {}).get("session_id"),
+        # Only meaningful without a live host: a live host streams terminal
+        # turns itself, and drift computed against a file it is mid-writing is
+        # noise. One stat+read of a small jsonl per detail fetch is fine.
+        terminal_drift=0 if sess.host_alive(row) else simp.terminal_drift(row),
     )
 
 
@@ -290,6 +296,30 @@ def build_router(
             raise HTTPException(409, str(e))
         sess.nudge_worker(session)
         return AgentTurnOut.model_validate(turn)
+
+    @router.post("/{aid}/sync-terminal", response_model=AgentTerminalSyncOut)
+    async def sync_terminal(aid: str, session: Session = Depends(get_session)):
+        """Import terminal turns (``claude --resume`` round-trips made while the
+        agent was cold) into the canonical transcript, without waking a host.
+
+        Only legal when NO host is live: a live host owns the CC jsonl — it
+        streams those turns itself and imports any cold-window delta on its next
+        boot, and an out-of-band import would race its watermark accounting.
+        Idempotent: a second call with no new lines imports nothing.
+        """
+        try:
+            row = sess.get_session_row(session, aid)
+        except sess.SessionNotFound:
+            raise HTTPException(404, "not found")
+        if row.status == "ended":
+            raise HTTPException(409, "agent has ended; its transcript is read-only")
+        if sess.host_alive(row):
+            raise HTTPException(
+                409, "agent has a live host; it owns the session file and "
+                     "imports terminal turns itself on boot")
+        imported = simp.sync_terminal(session, row)
+        return AgentTerminalSyncOut(
+            imported=imported, terminal_drift=simp.terminal_drift(row))
 
     @router.post("/{aid}/reap", status_code=status.HTTP_202_ACCEPTED,
                  response_model=AgentOut)

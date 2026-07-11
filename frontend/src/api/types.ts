@@ -971,6 +971,17 @@ export interface AgentDetailOut extends AgentOut {
   /** Local claude session id (from resume_handle) for the `claude --resume <id>`
    *  terminal handoff. Null until the agent has run. Not a secret. */
   claude_session_id: string | null;
+  /** CC session-jsonl lines not yet imported into the canonical transcript —
+   *  turns made via the terminal handoff while the agent was cold. Always 0
+   *  while a host is live or when there is no jsonl. Nonzero invites
+   *  POST /agents/{id}/sync-terminal (the agent screen does this itself). */
+  terminal_drift: number;
+}
+
+/** Result of POST /agents/{id}/sync-terminal. */
+export interface AgentTerminalSyncOut {
+  imported: number;
+  terminal_drift: number;
 }
 
 export interface AgentTurnEdit {

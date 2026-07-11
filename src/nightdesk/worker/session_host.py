@@ -31,6 +31,7 @@ from typing import Any, Optional
 from nightdesk.config import NightdeskConfig, load_config
 from nightdesk.db.models import ConfigRow, Session, SessionTurn
 from nightdesk.domain import sessions as sess
+from nightdesk.domain import session_import as simp
 from nightdesk.domain.profile_secrets import ProfileSecretBox
 from nightdesk.transcript import (
     append_event,
@@ -444,26 +445,10 @@ class SessionHost:
         """Mark the CC session jsonl as fully imported up to its current length.
 
         Called after live-streamed output lands in the transcript (per-turn and
-        at teardown). Uses the same read/count semantics as ``_delta_import``
-        so the watermark is exact. Best-effort: silently a no-op when the jsonl
-        cannot be located.
+        at teardown). Shared logic in ``domain.session_import`` — the API's
+        sync-terminal endpoint uses the same watermark semantics.
         """
-        handle = srow.resume_handle or {}
-        cc_sid = handle.get("session_id")
-        if not cc_sid:
-            return
-        try:
-            path = _cc_session_jsonl(srow.source_path, str(cc_sid))
-            if path is None or not path.exists():
-                return
-            n = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
-        except OSError:
-            log.exception("watermark advance failed for session %s", self._sid)
-            return
-        if int(handle.get("imported_lines") or 0) == n:
-            return
-        srow.resume_handle = {**handle, "imported_lines": n}
-        db.commit()
+        simp.advance_import_watermark(db, srow)
 
     # ------------------------------------------------------------------
     # Restart (shared by explicit restart; a cold wake is a fresh host)
@@ -584,34 +569,24 @@ class SessionHost:
 
         ``--resume`` keeps one jsonl per session (no fork), so this is a trivial
         delta: read OUR OWN session file past the last line we imported and
-        translate the new entries into the canonical transcript.
+        translate the new entries into the canonical transcript. Shared logic
+        in ``domain.session_import``; the host writes through its live seq
+        counter so imported lines land exactly where inner output would.
         """
-        path = _cc_session_jsonl(source_path, session_id)
+        path = simp.cc_session_jsonl(source_path, session_id)
         if path is None or not path.exists():
             return
         with self._sf() as db:
             row = sess.get_session_row(db, self._sid)
             watermark = int((row.resume_handle or {}).get("imported_lines") or 0)
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if len(lines) <= watermark:
+        imported, total = simp.import_delta(path, watermark, self._write_transcript)
+        if total <= watermark:
             return
-        imported = 0
-        for line in lines[watermark:]:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            for c in translate(entry) if isinstance(entry, dict) else []:
-                self._write_transcript(c)
-            imported += 1
         with self._sf() as db:
             row = sess.get_session_row(db, self._sid)
             row.resume_handle = {**(row.resume_handle or {}),
                                  "session_id": session_id,
-                                 "imported_lines": len(lines)}
+                                 "imported_lines": total}
             db.commit()
         log.info("delta-imported %d jsonl entries for session %s", imported, self._sid)
 
@@ -628,24 +603,6 @@ def _as_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-def _cc_session_jsonl(source_path: Optional[str], session_id: str) -> Optional[Path]:
-    """Locate the claude session jsonl for the agent's cwd + session id.
-
-    Trusted posture reads the real ``~/.claude/projects/<slug>/<session_id>.jsonl``.
-    An explicit ``$NIGHTDESK_CC_PROJECTS_DIR`` overrides the projects root (used
-    by tests). Best-effort: returns None if the directory-key helper is absent.
-    """
-    if not source_path:
-        return None
-    try:
-        from claude_agent_sdk import project_key_for_directory
-        slug = project_key_for_directory(source_path)
-    except Exception:  # noqa: BLE001
-        return None
-    root = os.environ.get("NIGHTDESK_CC_PROJECTS_DIR") or os.path.expanduser("~/.claude/projects")
-    return Path(root) / slug / f"{session_id}.jsonl"
 
 
 async def _amain(session_id: str) -> int:

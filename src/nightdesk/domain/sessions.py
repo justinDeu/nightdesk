@@ -80,6 +80,16 @@ def _pid_alive(pid: Optional[int]) -> bool:
     return True
 
 
+def host_alive(row: Session) -> bool:
+    """True while a host process owns this session (its ``host_pid`` is live).
+
+    Public wrapper over ``_pid_alive`` for callers outside this module (e.g.
+    the sync-terminal endpoint, which must refuse to touch the CC jsonl while
+    a live host owns it).
+    """
+    return _pid_alive(row.host_pid)
+
+
 def has_open_pending(session: OrmSession, session_id: str) -> bool:
     return (session.scalar(
         select(func.count(PendingInput.id)).where(

@@ -1152,6 +1152,20 @@ class AgentDetailOut(AgentOut):
     # ``claude --resume <id>`` terminal handoff. Null until the agent has run.
     # Not a secret — it is the on-disk jsonl id, not a credential.
     claude_session_id: Optional[str] = None
+    # CC session-jsonl lines not yet imported into the canonical transcript —
+    # turns made via the terminal handoff while the agent was cold. Always 0
+    # while a host is live (the host streams and accounts those turns itself)
+    # or when there is no jsonl. Nonzero invites POST /agents/{aid}/sync-terminal.
+    terminal_drift: int = 0
+
+
+class AgentTerminalSyncOut(BaseModel):
+    """Result of POST /agents/{aid}/sync-terminal: how many jsonl entries were
+    imported into the canonical transcript, and the drift after the sync
+    (0 unless the file grew mid-import)."""
+
+    imported: int = 0
+    terminal_drift: int = 0
 
 
 class AgentTurnEdit(BaseModel):

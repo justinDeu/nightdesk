@@ -24,7 +24,10 @@ import { TranscriptScroller } from "@/components/TranscriptScroller";
 import { TasksPanel } from "@/components/TasksPanel";
 import { SubagentsPanel } from "@/components/SubagentsPanel";
 import { buildSubagentList, buildTodoList, useLiveTranscript } from "@/lib/transcript";
+import { useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/api/keys";
 import {
+  agentsApi,
   agentTranscriptPath,
   useAgent,
   useAgentTurns,
@@ -137,6 +140,39 @@ export function AgentScreen() {
   // Leaving the screen re-arms auto-seen for the next visit (email semantics:
   // mark unread, walk away, the badge stays lit until you actually return).
   useEffect(() => () => clearAutoSeenSuppression(id), [id]);
+
+  // Auto-import terminal turns: "Open in terminal" writes to CC's session
+  // jsonl only, so a round-trip made while the agent is cold never reaches the
+  // transcript until a host boots. When the detail poll reports drift on a
+  // hostless agent, sync it server-side — the imported lines then flow down
+  // the already-open SSE tail (it re-reads the file), no transcript refetch
+  // needed. Single-flight, one call per drift observation: the effect only
+  // re-fires when the drift value or liveness actually changes, and a 409
+  // (host woke mid-flight) is dropped — the host imports on its own boot.
+  const qc = useQueryClient();
+  const syncingTerminal = useRef(false);
+  const terminalDrift = agent?.terminal_drift ?? 0;
+  useEffect(() => {
+    if (terminalDrift <= 0 || syncingTerminal.current) return;
+    if (liveness !== "cold" && liveness !== "crashed") return;
+    if (document.visibilityState !== "visible") return;
+    syncingTerminal.current = true;
+    agentsApi
+      .syncTerminal(id)
+      .then((res) => {
+        if (res.imported > 0) {
+          // Reset the drift count (and any turn/usage bookkeeping) promptly
+          // instead of waiting out the cold 3s poll.
+          qc.invalidateQueries({ queryKey: qk.agents.detail(id) });
+        }
+      })
+      .catch(() => {
+        // 409/network: the host owns the file (or will import on boot).
+      })
+      .finally(() => {
+        syncingTerminal.current = false;
+      });
+  }, [id, terminalDrift, liveness, qc]);
 
   const markUnread = useMarkUnread();
   const onMarkUnread = async () => {

@@ -16,6 +16,7 @@ import type {
   AgentOut,
   AgentPendingItem,
   AgentRestart,
+  AgentTerminalSyncOut,
   AgentTurnOut,
   AgentUpdate,
 } from "./types";
@@ -62,6 +63,10 @@ export const agentsApi = {
   restartRuntime: (id: string, body: AgentRestart) =>
     api.post<AgentTurnOut>(`${BASE}/${id}/restart-runtime`, { body }),
   reap: (id: string) => api.post<AgentOut>(`${BASE}/${id}/reap`),
+  /** Import terminal turns (`claude --resume` round-trips made while cold)
+   *  into the canonical transcript. 409 while a host is live. */
+  syncTerminal: (id: string) =>
+    api.post<AgentTerminalSyncOut>(`${BASE}/${id}/sync-terminal`),
 
   // Queue strip (undelivered turns): queued + delivering.
   listTurns: (id: string) => api.get<AgentTurnOut[]>(`${BASE}/${id}/turns`),
