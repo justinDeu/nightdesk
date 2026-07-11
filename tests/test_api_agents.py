@@ -541,13 +541,17 @@ async def test_terminal_drift_and_sync_import(client, session, tmp_path, monkeyp
     assert r.json()["terminal_drift"] == 2
 
     # Sync imports exactly the delta into the canonical transcript and
-    # advances the watermark.
+    # advances the watermark. Both sides of the round-trip land: the terminal
+    # prompt as a user_message bubble, then the assistant reply.
     r = await client.post(f"/api/v1/agents/{a['id']}/sync-terminal")
     assert r.status_code == 200, r.text
     assert r.json() == {"imported": 2, "terminal_drift": 0}
-    texts = [e.get("text") for e in read_events(tpath)
-             if e["type"] == "assistant_text"]
-    assert texts == ["terminal reply"]
+    convo = [(e["type"], e.get("text")) for e in read_events(tpath)
+             if e["type"] in ("user_message", "assistant_text")]
+    assert convo == [("user_message", "psst"),
+                     ("assistant_text", "terminal reply")]
+    assert [e.get("source") for e in read_events(tpath)
+            if e["type"] == "user_message"] == ["terminal"]
     session.expire_all()
     handle = session.get(SessionModel, a["id"]).resume_handle
     assert handle == {"session_id": "cc-term-1", "imported_lines": 2}
@@ -608,3 +612,47 @@ async def test_sync_terminal_409_when_ended_and_noop_without_handle(client, sess
     await client.post(f"/api/v1/agents/{a['id']}/end")
     r = await client.post(f"/api/v1/agents/{a['id']}/sync-terminal")
     assert r.status_code == 409
+
+async def test_sync_terminal_skips_non_conversational_user_entries(
+        client, session, tmp_path, monkeypatch):
+    """Only human prompts become user bubbles. Tool results stay tool_result
+    cards, and meta / sidechain / slash-command / interrupt-marker entries
+    import silently (they count toward the watermark but render nothing)."""
+    from nightdesk.db.models import Session as SessionModel
+    from nightdesk.transcript import read_events
+
+    src = tmp_path / "src"
+    a = await _create(client, source_path=str(src))
+    row = session.get(SessionModel, a["id"])
+    row.resume_handle = {"session_id": "cc-term-3", "imported_lines": 0}
+    tpath = tmp_path / "transcripts" / f"{a['id']}.ndjson"
+    row.transcript_path = str(tpath)
+    session.commit()
+
+    jsonl = _cc_jsonl(tmp_path, monkeypatch, src, "cc-term-3")
+    # Text-blocks content: renders as a user bubble (joined).
+    _append_jsonl(jsonl, {"type": "user", "message": {"role": "user", "content": [
+        {"type": "text", "text": "real prompt"}]}})
+    # Caveat preamble / skill injection: isMeta -> skipped.
+    _append_jsonl(jsonl, {"type": "user", "isMeta": True,
+                          "message": {"role": "user", "content": "Caveat: ..."}})
+    # Subagent traffic -> skipped.
+    _append_jsonl(jsonl, {"type": "user", "isSidechain": True,
+                          "message": {"role": "user", "content": "sidechain prompt"}})
+    # Slash command wrapper -> skipped.
+    _append_jsonl(jsonl, {"type": "user", "message": {
+        "role": "user",
+        "content": "<command-name>/model</command-name>\n<command-message>model</command-message>"}})
+    # Interrupt marker -> skipped.
+    _append_jsonl(jsonl, {"type": "user", "message": {"role": "user", "content": [
+        {"type": "text", "text": "[Request interrupted by user]"}]}})
+    # Tool result -> a tool_result card, never a user bubble.
+    _append_jsonl(jsonl, {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}})
+
+    r = await client.post(f"/api/v1/agents/{a['id']}/sync-terminal")
+    assert r.status_code == 200
+    assert r.json() == {"imported": 6, "terminal_drift": 0}
+    events = list(read_events(tpath))
+    assert [e["text"] for e in events if e["type"] == "user_message"] == ["real prompt"]
+    assert [e["tool_use_id"] for e in events if e["type"] == "tool_result"] == ["t1"]

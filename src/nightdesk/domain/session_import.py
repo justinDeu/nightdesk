@@ -60,6 +60,66 @@ def cc_session_jsonl(source_path: Optional[str], session_id: str) -> Optional[Pa
     return Path(root) / slug / f"{session_id}.jsonl"
 
 
+# Slash commands and local-command output land in the jsonl as user entries
+# whose text is wrapped in these tags. They are UI plumbing, not something the
+# human said conversationally — never render them as user bubbles.
+_NON_CONVERSATIONAL_PREFIXES = (
+    "<command-name>",
+    "<command-message>",
+    "<local-command-stdout>",
+    "<local-command-caveat>",
+    # CC writes this synthetic user entry when a turn is interrupted (Esc);
+    # the human did not type it.
+    "[Request interrupted",
+)
+
+
+def _terminal_user_message(entry: dict) -> Optional[dict]:
+    """A ``user_message`` event for a conversational CC-jsonl user entry.
+
+    Returns None for everything that is not a human prompt:
+    - entries flagged ``isMeta`` (caveat preambles), ``isSidechain`` (subagent
+      traffic) or ``isCompactSummary`` (compaction artifacts);
+    - entries carrying ``tool_result`` blocks — that is tool plumbing the
+      translator already renders as tool_result cards;
+    - slash-command / local-command wrapper entries (see the prefixes above);
+    - entries with no extractable text (content neither a string nor a list
+      of text blocks, or empty after extraction).
+
+    Content may be a plain string or a list of ``{"type": "text"}`` blocks
+    (joined with newlines). The emitted shape matches the host's
+    delivery-time ``user_message`` so the frontend renders it as the same
+    user bubble; ``source: "terminal"`` marks its provenance.
+    """
+    if entry.get("type") != "user":
+        return None
+    if entry.get("isMeta") or entry.get("isSidechain") or entry.get("isCompactSummary"):
+        return None
+    msg = entry.get("message")
+    if not isinstance(msg, dict):
+        return None
+    content = msg.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_result":
+                return None
+            if block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        text = "\n".join(parts)
+    else:
+        return None
+    if not text.strip():
+        return None
+    if text.lstrip().startswith(_NON_CONVERSATIONAL_PREFIXES):
+        return None
+    return {"type": "user_message", "text": text, "source": "terminal"}
+
+
 def import_delta(
     path: Path, watermark: int, write: Callable[[dict], None],
 ) -> tuple[int, int]:
@@ -70,6 +130,14 @@ def import_delta(
     each entry's canonical events to the writer. Returns
     ``(imported_entries, total_lines)``; writes nothing when the file has not
     grown. The caller owns updating the watermark to ``total_lines``.
+
+    Conversational user entries (the prompt the human typed in the terminal)
+    are emitted as ``user_message`` events ahead of the translator output, so
+    an imported round-trip shows both sides. This cannot double-bubble live
+    nightdesk turns: the host writes ``user_message`` itself at delivery time
+    and advances the watermark past the CLI's mirror of the turn when it
+    completes (and again at teardown), so those lines are never re-read here
+    — only genuine cold-window terminal lines land past the watermark.
     """
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     if len(lines) <= watermark:
@@ -83,8 +151,12 @@ def import_delta(
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
-        for c in translate(entry) if isinstance(entry, dict) else []:
-            write(c)
+        if isinstance(entry, dict):
+            um = _terminal_user_message(entry)
+            if um is not None:
+                write(um)
+            for c in translate(entry):
+                write(c)
         imported += 1
     return imported, len(lines)
 
