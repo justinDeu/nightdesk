@@ -31,7 +31,15 @@ export function TranscriptScroller({
   className?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // `pinned` drives rendering (the Jump-to-latest button); `pinnedRef` mirrors
+  // it for the follow effect below, which must GATE on pinnedness without
+  // TRIGGERING on it — see the effect's comment.
   const [pinned, setPinned] = useState(true);
+  const pinnedRef = useRef(true);
+  const setPinnedBoth = (v: boolean) => {
+    pinnedRef.current = v;
+    setPinned(v);
+  };
 
   // "The agent is working": a turn is in flight (user message delivered / run
   // started, no settling result yet) while the run/session is live. Drives the
@@ -49,8 +57,18 @@ export function TranscriptScroller({
   // value, which is a no-op.
   // `working` is in the deps so the indicator appearing/disappearing re-pins
   // (it lives inside the scroll container and changes its height).
+  //
+  // Pinnedness is read through a ref and deliberately kept OUT of the dep
+  // array: the effect must write only when CONTENT changes while pinned, never
+  // on the pinned flip itself. With `pinned` as a dep, a user-initiated scroll
+  // that crosses the 40px threshold re-ran the effect and force-wrote
+  // scrollTop = scrollHeight WHILE the wheel/trackpad gesture was still
+  // delivering deltas — a user-vs-effect tug of war at gesture rate (verified:
+  // one forced snap per threshold crossing) that reads as the view "bouncing
+  // off the bottom". Becoming pinned via user scroll needs no write: the user
+  // is already effectively at the bottom.
   useEffect(() => {
-    if (!pinned) return;
+    if (!pinnedRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
     // Skip the write when already at the bottom: a redundant scrollTop write
@@ -59,17 +77,17 @@ export function TranscriptScroller({
     // can feed back through onScroll/scroll anchoring into visible jitter.
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 1) return;
     el.scrollTop = el.scrollHeight;
-  }, [events, footer, pinned, working]);
+  }, [events, footer, working]);
 
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+    setPinnedBoth(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
   };
   const jumpToBottom = () => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-    setPinned(true);
+    setPinnedBoth(true);
   };
 
   const live = running && (status === "open" || status === "connecting");
