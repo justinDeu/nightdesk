@@ -4,6 +4,8 @@ import { ArrowRight, CalendarClock, Cpu, Maximize2, Zap, X } from "lucide-react"
 import type { LabelOut, ProjectOut, RunOut, TicketOut } from "@/api/types";
 import { qk } from "@/api";
 import { labelsApi } from "@/api/labels";
+import { useAcknowledge } from "@/api/ack";
+import { ticketNeedsAck } from "@/components/UnackedDot";
 import { ticketsApi, useUpdateTicket } from "@/api/tickets";
 import { useProfiles } from "@/api/profiles";
 import { Button } from "@/ui/Button";
@@ -497,6 +499,14 @@ function StatusActions({
   ticket: TicketOut;
   actions: ReturnType<typeof useTicketActions>;
 }) {
+  const acknowledge = useAcknowledge();
+  // Settled outcome no human has stamped as seen — the peek is where a
+  // surfaced "unacked" marker gets resolved.
+  const ackButton = ticketNeedsAck(ticket) ? (
+    <Button size="sm" variant="subtle" onClick={() => acknowledge.mutate(ticket.id)}>
+      Ack
+    </Button>
+  ) : null;
   switch (ticket.status) {
     case "draft":
       return (
@@ -535,6 +545,7 @@ function StatusActions({
           <Button size="sm" variant="primary" onClick={() => actions.requeue(ticket)}>
             Requeue
           </Button>
+          {ackButton}
           <Button size="sm" variant="ghost" onClick={() => actions.archive(ticket)}>
             Archive
           </Button>
@@ -542,9 +553,12 @@ function StatusActions({
       );
     case "archived":
       return (
-        <Button size="sm" variant="ghost" onClick={() => actions.unarchive(ticket)}>
-          Restore
-        </Button>
+        <>
+          {ackButton}
+          <Button size="sm" variant="ghost" onClick={() => actions.unarchive(ticket)}>
+            Restore
+          </Button>
+        </>
       );
     default:
       return null;

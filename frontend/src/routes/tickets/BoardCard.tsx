@@ -4,6 +4,7 @@ import type { ExternalLinkOut, ProjectOut, RunOut, TicketOut } from "@/api/types
 import { MrChip } from "@/components/ExternalItemChips";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
+import { UnackedDot, ticketNeedsAck } from "@/components/UnackedDot";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -207,12 +208,19 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
               <Zap size={9} /> now
             </span>
           )}
-          {/* A run/agent — not a human — moved this into review: it's finished
-              pending your awareness, not awaiting a decision. */}
-          {ticket.status === "review" && ticket.agent_reviewed && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-ink-800 px-1.5 py-0.5 text-[10px] font-medium text-moon-400">
-              <Bot size={9} /> agent
-            </span>
+          {/* Acknowledgement debt: a settled outcome no human has seen yet.
+              Subsumes the old agent-reviewed provenance chip while unacked —
+              two chips saying "you haven't looked" would be noise. */}
+          {ticketNeedsAck(ticket) ? (
+            <UnackedDot />
+          ) : (
+            /* A run/agent — not a human — moved this into review: it's
+               finished pending your awareness, not awaiting a decision. */
+            ticket.status === "review" && ticket.agent_reviewed && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-ink-800 px-1.5 py-0.5 text-[10px] font-medium text-moon-400">
+                <Bot size={9} /> agent
+              </span>
+            )
           )}
           {latestRun?.cost_usd != null && (
             <span className="font-mono tabular-nums">{formatUsd(latestRun.cost_usd)}</span>

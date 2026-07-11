@@ -14,6 +14,7 @@ import { StatusPill } from "@/ui/StatusPill";
 import { Tooltip } from "@/ui/Tooltip";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
+import { UnackedDot, ticketNeedsAck } from "@/components/UnackedDot";
 import { useTicketPages, ticketsApi } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
 import { useProjectMap, useProjects } from "@/api/projects";
@@ -292,13 +293,16 @@ export function ArchivePage() {
                   className="accent-lamp"
                   aria-label={`Select ${t.title}`}
                 />
-                <Link
-                  to="/tickets/$id"
-                  params={{ id: t.id }}
-                  className="min-w-0 flex-1 truncate text-moon-100 hover:text-lamp"
-                >
-                  {t.title}
-                </Link>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <Link
+                    to="/tickets/$id"
+                    params={{ id: t.id }}
+                    className="min-w-0 truncate text-moon-100 hover:text-lamp"
+                  >
+                    {t.title}
+                  </Link>
+                  {ticketNeedsAck(t) && <UnackedDot />}
+                </span>
                 <span className="hidden w-32 shrink-0 md:block">
                   <ProjectTag project={project} showNone />
                 </span>

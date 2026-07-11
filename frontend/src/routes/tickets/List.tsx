@@ -5,6 +5,7 @@ import { qk } from "@/api";
 import { labelsApi } from "@/api/labels";
 import { StatusPill } from "@/ui/StatusPill";
 import { PriorityPicker, ProjectPicker, LabelPicker } from "@/components/PropertyPickers";
+import { UnackedDot, ticketNeedsAck } from "@/components/UnackedDot";
 import type { TicketGroup } from "./displayModel";
 import { formatUsd } from "@/lib/status";
 import { ticketHref } from "@/lib/routes";
@@ -209,6 +210,7 @@ export function List({
                       <span className="h-1.5 w-1.5 rounded-full bg-failed" /> Failed
                     </span>
                   )}
+                  {ticketNeedsAck(t) && <UnackedDot />}
                   <span className="hidden w-14 shrink-0 text-right font-mono text-[11px] text-moon-600 sm:block">
                     {run?.cost_usd != null ? formatUsd(run.cost_usd) : ""}
                   </span>
