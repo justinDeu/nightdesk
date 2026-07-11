@@ -25,11 +25,16 @@ export function TranscriptScroller({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
 
+  // Pinned-to-bottom chat behavior: follow every new event while the reader is
+  // at (or near) the bottom, whether or not the run is flagged as live — the
+  // liveness poll can lag the SSE stream (agents), and a freshly opened
+  // transcript should start at its latest output. Scrolling up unpins; the
+  // reader is never yanked back down until they return to the bottom.
   useEffect(() => {
-    if (!pinned || !running) return;
+    if (!pinned) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [events, pinned, running]);
+  }, [events, pinned]);
 
   const onScroll = () => {
     const el = scrollRef.current;

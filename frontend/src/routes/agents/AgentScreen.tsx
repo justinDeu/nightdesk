@@ -234,13 +234,17 @@ export function AgentScreen() {
       {/* Body: transcript stage + right rail */}
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_320px] lg:overflow-hidden">
         <section className="flex min-h-0 flex-col lg:overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+          {/* The scroller owns the scrolling (its inner div is the overflow
+              container) so its pin-to-bottom logic actually engages; a scrolling
+              wrapper here would grow the scroller to content height and leave
+              the pin logic watching a div that never overflows. */}
+          <div className="flex min-h-0 flex-1 flex-col px-4 py-4 sm:px-6">
             {hasActivity ? (
               <TranscriptScroller
                 events={tx.events}
                 status={tx.status}
                 running={streaming}
-                className="min-h-0"
+                className="min-h-0 flex-1"
               />
             ) : (
               <div className="flex min-h-[40vh] items-center justify-center rounded-card border border-dashed border-ink-700 bg-ink-900/40 text-center text-sm text-moon-500">
