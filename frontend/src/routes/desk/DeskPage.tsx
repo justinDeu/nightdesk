@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Bot,
   CheckCircle2,
+  ChevronRight,
   HelpCircle,
   Inbox as InboxIcon,
   Moon,
@@ -23,13 +24,15 @@ import { StatusPill } from "@/ui/StatusPill";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
 import { RunningCard } from "./RunningCard";
-import { useTickets } from "@/api/tickets";
+import { TicketPeek } from "@/routes/tickets/TicketPeek";
+import { useTicket, useTickets } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
 import { useAgentAttention } from "@/api/agents";
 import { useInbox } from "@/api/inbox";
-import { useAckDigest, useBulkAck } from "@/api/ack";
-import type { AckDigestGroup } from "@/api/types";
-import { useProjectMap } from "@/api/projects";
+import { useLabels } from "@/api/labels";
+import { useAckDigest, useAcknowledge, useBulkAck } from "@/api/ack";
+import type { AckDigestGroup, AckDigestTicket } from "@/api/types";
+import { useProjectMap, useProjects } from "@/api/projects";
 import type { ProjectOut, RunOut, TicketOut } from "@/api/types";
 import { useTicketActions } from "@/lib/ticketActions";
 import { useKeybinds } from "@/lib/keymap";
@@ -120,6 +123,15 @@ export function DeskPage() {
   const navigate = useNavigate();
   const actions = useTicketActions();
   const projects = useProjectMap();
+  const projectsQ = useProjects();
+  const labelsQ = useLabels();
+
+  // Side-peek for tickets opened from the To-acknowledge band. Tickets never
+  // navigate away from the Desk — inspection happens in the same peek panel
+  // the Tickets board uses.
+  const [peekId, setPeekId] = useState<string | null>(null);
+  const peekQ = useTicket(peekId ?? undefined);
+  const peekTicket = peekId ? peekQ.data : undefined;
 
   const review = useTickets({ status: "review" }, { refetchInterval: POLL });
   const running = useTickets({ status: "running" }, { refetchInterval: POLL });
@@ -188,6 +200,7 @@ export function DeskPage() {
     { combo: "o", label: "Open ticket", group: "Desk", handler: openFocused },
     { combo: "r", label: "Requeue", group: "Desk", handler: () => focused && actions.requeue(focused.ticket) },
     { combo: "a", label: "Archive", group: "Desk", handler: () => focused && actions.archive(focused.ticket) },
+    { combo: "Escape", label: "Close peek", group: "Desk", handler: () => setPeekId(null) },
   ]);
 
   const inboxCount = inbox.data?.length ?? 0;
@@ -335,7 +348,7 @@ export function DeskPage() {
         </DeskBand>
       )}
 
-      <ToAcknowledgeBand projects={projects} />
+      <ToAcknowledgeBand projects={projects} onPeek={setPeekId} />
 
       <DeskBand icon={<Zap size={15} />} title="Running now" accent count={running.data?.length}>
         {running.data && running.data.length > 0 ? (
@@ -360,6 +373,19 @@ export function DeskPage() {
       <DeskBand icon={<Moon size={15} />} title="While you were away">
         <AwayFeed away={away} projects={projects} />
       </DeskBand>
+
+      {peekTicket && (
+        <TicketPeek
+          key={peekTicket.id}
+          ticket={peekTicket}
+          project={peekTicket.project_id ? projects.get(peekTicket.project_id) : undefined}
+          latestRun={latest.get(peekTicket.id)}
+          projects={projectsQ.data ?? []}
+          labels={labelsQ.data ?? []}
+          onClose={() => setPeekId(null)}
+          onOpenFull={() => navigate({ to: "/tickets/$id", params: { id: peekTicket.id } })}
+        />
+      )}
     </Page>
   );
 }
@@ -462,10 +488,12 @@ const NeedsRow = forwardRef<
 // --- To acknowledge ------------------------------------------------------------
 
 /** Durable acknowledgement debt: agent-archived / agent-reviewed work the human
- *  never saw, grouped by project-day. Collapsed to group rows here; the full
- *  per-ticket digest with keyboard batch-ack lives at /acknowledge. Unlike
- *  "While you were away" (an ephemeral since-last-visit diff), this is
- *  server-backed and only clears when explicitly acknowledged. */
+ *  never saw, grouped by project-day. Each group row expands in place to its
+ *  tickets (the digest already carries them — no extra fetch): outcome, title,
+ *  cost, when it landed, plus a per-ticket Ack. Clicking a ticket opens the
+ *  side-peek; nothing here navigates away from the Desk. Unlike "While you
+ *  were away" (an ephemeral since-last-visit diff), this is server-backed and
+ *  only clears when explicitly acknowledged. */
 function ackDayLabel(day: string): string {
   const d = new Date(`${day}T00:00:00`);
   const today = new Date();
@@ -476,12 +504,30 @@ function ackDayLabel(day: string): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function ToAcknowledgeBand({ projects }: { projects: Map<string, ProjectOut> }) {
+function ToAcknowledgeBand({
+  projects,
+  onPeek,
+}: {
+  projects: Map<string, ProjectOut>;
+  onPeek: (ticketId: string) => void;
+}) {
   const digest = useAckDigest(null, { refetchInterval: POLL });
   const bulkAck = useBulkAck();
+  const acknowledge = useAcknowledge();
   const total = digest.data?.total ?? 0;
   const groups = digest.data?.groups ?? [];
   const before = digest.data?.generated_at;
+
+  // Expanded project-day groups, keyed like the row key. Survives digest
+  // re-polls (the key is stable) and quietly drops with the group when a
+  // group empties out.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
 
   if (total === 0) return null;
 
@@ -503,31 +549,118 @@ function ToAcknowledgeBand({ projects }: { projects: Map<string, ProjectOut> }) 
         <Button size="sm" variant="subtle" onClick={ackAll}>
           Ack all ({total})
         </Button>
-        <Button asChild size="sm" variant="ghost">
-          <Link to="/acknowledge">Open digest</Link>
-        </Button>
       </div>
       <div className="space-y-1.5">
-        {groups.slice(0, 8).map((group) => (
-          <div
-            key={`${group.project_id ?? "none"}-${group.day}`}
-            className="flex items-center gap-3 rounded-control border border-ink-700 bg-ink-900 px-3 py-2.5"
-          >
-            <span className="min-w-0 flex-1 truncate text-sm text-moon-100">
-              {projName(group.project_id)}, {ackDayLabel(group.day)}
-            </span>
-            <span className="shrink-0 text-xs text-moon-600">
-              {group.count} ticket{group.count === 1 ? "" : "s"} · {group.succeeded} ok
-              {group.failed > 0 && <span className="text-failed"> · {group.failed} failed</span>}
-              {group.cost_usd > 0 && <span> · {formatUsd(group.cost_usd)}</span>}
-            </span>
-            <Button size="sm" variant="ghost" onClick={() => ackGroup(group)} className="shrink-0">
-              Ack
-            </Button>
-          </div>
-        ))}
+        {groups.slice(0, 8).map((group) => {
+          const key = `${group.project_id ?? "none"}-${group.day}`;
+          const open = expanded.has(key);
+          return (
+            <div
+              key={key}
+              className="overflow-hidden rounded-control border border-ink-700 bg-ink-900"
+            >
+              <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={open}
+                onClick={() => toggle(key)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggle(key);
+                  }
+                }}
+                className="flex cursor-pointer items-center gap-2 px-3 py-2.5 transition-colors hover:bg-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lamp"
+              >
+                <ChevronRight
+                  size={14}
+                  className={cn(
+                    "shrink-0 text-moon-500 transition-transform",
+                    open && "rotate-90",
+                  )}
+                />
+                <span className="min-w-0 flex-1 truncate text-sm text-moon-100">
+                  {projName(group.project_id)}, {ackDayLabel(group.day)}
+                </span>
+                <span className="shrink-0 text-xs text-moon-600">
+                  {group.count} ticket{group.count === 1 ? "" : "s"} · {group.succeeded} ok
+                  {group.failed > 0 && <span className="text-failed"> · {group.failed} failed</span>}
+                  {group.cost_usd > 0 && <span> · {formatUsd(group.cost_usd)}</span>}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    ackGroup(group);
+                  }}
+                  className="shrink-0"
+                >
+                  Ack
+                </Button>
+              </div>
+              {open && (
+                <div className="border-t border-ink-700/60 bg-ink-950/40">
+                  {group.tickets.map((t) => (
+                    <AckTicketRow
+                      key={t.ticket_id}
+                      ticket={t}
+                      onPeek={() => onPeek(t.ticket_id)}
+                      onAck={() => acknowledge.mutate(t.ticket_id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </DeskBand>
+  );
+}
+
+/** One digest ticket inside an expanded group: outcome, title, cost, when it
+ *  landed. Clicking opens the side-peek (never navigates); Ack clears just
+ *  this ticket. */
+function AckTicketRow({
+  ticket,
+  onPeek,
+  onAck,
+}: {
+  ticket: AckDigestTicket;
+  onPeek: () => void;
+  onAck: () => void;
+}) {
+  return (
+    <div className="group flex items-center gap-3 border-t border-ink-700/40 px-3 py-2 first:border-t-0 transition-colors hover:bg-ink-800/60">
+      {ticket.outcome === "failed" ? (
+        <StatusPill status="failed" label="Failed" />
+      ) : (
+        <StatusPill status={ticket.status === "archived" ? "archived" : "review"} />
+      )}
+      <a
+        href={ticketHref(ticket.ticket_id)}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey) return;
+          e.preventDefault();
+          onPeek();
+        }}
+        className="min-w-0 flex-1 rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
+      >
+        <span className="block truncate text-sm text-moon-100 group-hover:text-lamp">
+          {ticket.description?.trim() || ticket.title}
+        </span>
+      </a>
+      <span className="flex shrink-0 items-center gap-2 text-xs text-moon-600">
+        {ticket.cost_usd != null && (
+          <span className="font-mono tabular-nums">{formatUsd(ticket.cost_usd)}</span>
+        )}
+        {ticket.entered_at && <span>{relativeTime(ticket.entered_at)}</span>}
+      </span>
+      <Button size="sm" variant="ghost" onClick={onAck} className="shrink-0">
+        Ack
+      </Button>
+    </div>
   );
 }
 
