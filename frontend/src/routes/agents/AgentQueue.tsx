@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   draggable,
@@ -30,7 +30,13 @@ export function AgentQueue({
 }) {
   const qc = useQueryClient();
   const turnsQ = useAgentTurns(agentId, { refetchInterval });
-  const messages = turnsQ.data ?? [];
+  // Only turns still WAITING belong in the queue. A turn leaves the widget the
+  // moment the host claims/streams it — from that point its user_message is in
+  // the transcript, and showing it here too would double-render it.
+  const messages = useMemo(
+    () => (turnsQ.data ?? []).filter((t) => t.status === "queued"),
+    [turnsQ.data],
+  );
   const [order, setOrder] = useState<AgentTurnOut[]>(messages);
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
