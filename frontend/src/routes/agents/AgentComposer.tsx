@@ -8,10 +8,11 @@ import Suggestion from "@tiptap/suggestion";
 import type { SuggestionProps, SuggestionKeyDownProps } from "@tiptap/suggestion";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import { ArrowUp, FileCode2, Hash, Terminal } from "lucide-react";
+import { ArrowUp, FileCode2, Terminal, Ticket } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { Kbd } from "@/ui/Kbd";
 import { fsApi } from "@/api/fs";
+import { ticketsApi } from "@/api/tickets";
 import { cn } from "@/lib/cn";
 
 import type { ServerCommands } from "./serverInfo";
@@ -27,7 +28,7 @@ interface PopupItem {
 }
 
 interface PopupState {
-  kind: "slash" | "mention";
+  kind: "slash" | "mention" | "ticket";
   items: PopupItem[];
   command: (item: PopupItem) => void;
   rect: DOMRect | null;
@@ -37,6 +38,10 @@ interface PopupState {
 // Colors /commands and `code` spans as you type. @-mentions are already chips
 // (mention nodes), so they need no decoration.
 const highlightKey = new PluginKey("agent-composer-highlight");
+
+// A distinct node type for `#` ticket references so it can coexist with the
+// `@` file Mention (each tiptap Mention instance is one named node).
+const TicketMention = Mention.extend({ name: "ticketMention" });
 
 const HighlightExtension = Extension.create({
   name: "agentComposerHighlight",
@@ -74,7 +79,7 @@ const HighlightExtension = Extension.create({
 /**
  * The agent composer: a tiptap editor with `/` slash-command autocomplete
  * (commands + skills, seeded from the runner's server_info), `@` file mentions
- * (fs/suggest), and live highlighting. Enter sends
+ * (fs/suggest), `#` ticket references, and live highlighting. Enter sends
  * (Shift+Enter for a newline); sends always enqueue (the composer stays
  * enabled while streaming).
  * Code-split to the agents route (lazy-imported by AgentScreen).
@@ -249,6 +254,64 @@ export function AgentComposer({
           render: makeRender("mention"),
         },
       }),
+      // `#` ticket references: a second mention node type (tiptap Mention is a
+      // named node, so the file-mention and ticket-mention triggers must not
+      // share one). The chip shows "#shortid Title"; getText() serializes it as
+      // "ticket <id> (<title>)" so the agent gets an actionable reference.
+      TicketMention.configure({
+        HTMLAttributes: {
+          class: "rounded-control bg-lamp/15 px-1 py-0.5 font-mono text-[12px] text-lamp",
+        },
+        renderText: ({ node }) => `ticket ${node.attrs.id} (${node.attrs.label ?? ""})`,
+        renderHTML: ({ options, node }) => [
+          "span",
+          options.HTMLAttributes,
+          `#${String(node.attrs.id ?? "").slice(0, 8)} ${node.attrs.label ?? ""}`,
+        ],
+        suggestion: {
+          char: "#",
+          items: async ({ query }): Promise<PopupItem[]> => {
+            try {
+              // Server-side substring filter over title+prompt, newest first.
+              const tickets = await ticketsApi.list({
+                q: query.trim() || undefined,
+                limit: 20,
+                sort: "recent",
+                order: "desc",
+              });
+              return tickets.map((t) => ({
+                value: t.id,
+                label: t.title,
+                hint: `#${t.id.slice(0, 8)} · ${t.status}`,
+              }));
+            } catch {
+              return [];
+            }
+          },
+          command: ({
+            editor,
+            range,
+            props,
+          }: {
+            editor: Editor;
+            range: Range;
+            props: { value?: string; label?: string | null };
+          }) => {
+            editor
+              .chain()
+              .focus()
+              .insertContentAt(range, [
+                {
+                  type: "ticketMention",
+                  attrs: { id: props.value ?? "", label: props.label ?? props.value ?? "" },
+                },
+                { type: "text", text: " " },
+              ])
+              .run();
+          },
+          render: makeRender("ticket"),
+        },
+      }),
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -306,12 +369,7 @@ export function AgentComposer({
       <div className="rounded-card border border-ink-700 bg-ink-950 focus-within:border-lamp">
         <EditorContent editor={editor} />
         <div className="flex items-center gap-2 border-t border-ink-700/60 px-2.5 py-1.5">
-          <span className="flex items-center gap-1 text-[10px] text-moon-600">
-            <Terminal size={11} /> /
-            <span className="ml-1.5 flex items-center gap-1">
-              <Hash size={11} /> @
-            </span>
-          </span>
+          <span className="text-[10px] text-moon-600">/ commands · @ files · # tickets</span>
           {hint && <span className="text-[11px] text-dawn">{hint}</span>}
           <span className="ml-auto hidden items-center gap-1 text-[10px] text-moon-600 sm:flex">
             <Kbd>↵</Kbd> send · <Kbd>⇧↵</Kbd> newline
@@ -369,6 +427,8 @@ function SuggestionPopup({
         >
           {popup.kind === "slash" ? (
             <Terminal size={12} className="mt-0.5 shrink-0 text-lamp" />
+          ) : popup.kind === "ticket" ? (
+            <Ticket size={12} className="mt-0.5 shrink-0 text-lamp" />
           ) : (
             <FileCode2 size={12} className="mt-0.5 shrink-0 text-dawn" />
           )}
