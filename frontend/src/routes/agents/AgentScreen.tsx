@@ -34,6 +34,7 @@ import {
   usePostMessage,
   useReap,
   useRenameAgent,
+  useRestartRuntime,
   useWake,
 } from "@/api/agents";
 import { useProfiles } from "@/api/profiles";
@@ -85,6 +86,7 @@ export function AgentScreen() {
   const answer = useAnswerPending(id);
   const reap = useReap(id);
   const rename = useRenameAgent(id);
+  const restart = useRestartRuntime(id);
 
   const [termOpen, setTermOpen] = useState(false);
   // Arriving from the create dialog carries a wake seed (create wakes the agent
@@ -254,6 +256,35 @@ export function AgentScreen() {
   const waking = pokedAt != null && cold;
 
   const send = async (text: string) => {
+    // "/clear" is a LOCAL command: it never reaches the model as text (the SDK
+    // would treat it as a literal message). It restarts the runtime with
+    // clear_context so the fresh inner starts without --resume.
+    if (text.trim() === "/clear") {
+      const ok = await confirm({
+        title: "Clear this agent's context?",
+        body: "Clears the agent's conversation context. The transcript log is kept.",
+        confirmLabel: "Clear context",
+        danger: true,
+      });
+      // Throwing puts "/clear" back in the composer instead of eating it.
+      if (!ok) throw new Error("cancelled");
+      try {
+        await restart.mutateAsync({ clear_context: true });
+        toast.success("Context cleared", {
+          description: "The runtime restarts fresh; the transcript log is kept.",
+        });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          toast.error("Can't clear while a turn is streaming", {
+            description: "Interrupt the agent first, then /clear.",
+          });
+        } else {
+          toast.error("Could not clear context", { description: describeError(err) });
+        }
+        throw err;
+      }
+      return;
+    }
     if (cold) setPokedAt(Date.now());
     try {
       await post.mutateAsync({ message: text });

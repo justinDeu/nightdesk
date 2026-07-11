@@ -25,7 +25,20 @@ interface PopupItem {
   label: string;
   /** secondary line: command description, file path, or ticket meta */
   hint?: string;
+  /** handled by the desk itself (never sent to the agent as text) */
+  local?: boolean;
 }
+
+/** Commands the desk intercepts in the send path instead of posting as text.
+ *  Listed in the slash popup (marked "local") so they're discoverable. */
+const LOCAL_COMMANDS: PopupItem[] = [
+  {
+    value: "/clear",
+    label: "/clear",
+    hint: "clears context (local)",
+    local: true,
+  },
+];
 
 interface PopupState {
   kind: "slash" | "mention" | "ticket";
@@ -183,10 +196,13 @@ export function AgentComposer({
             items: ({ query }): PopupItem[] => {
               const q = query.toLowerCase();
               const { commands, skills } = serverRef.current;
-              return [...commands, ...skills]
+              const local = LOCAL_COMMANDS.filter((c) =>
+                c.label.slice(1).toLowerCase().includes(q),
+              );
+              const server = [...commands, ...skills]
                 .filter((c) => c.name.toLowerCase().includes(q))
-                .slice(0, 20)
                 .map((c) => ({ value: `/${c.name}`, label: `/${c.name}`, hint: c.description }));
+              return [...local, ...server].slice(0, 20);
             },
             command: ({ editor, range, props }: { editor: Editor; range: Range; props: PopupItem }) => {
               // Insert the raw "/name " text — custom commands expand headlessly.
@@ -433,7 +449,14 @@ function SuggestionPopup({
             <FileCode2 size={12} className="mt-0.5 shrink-0 text-dawn" />
           )}
           <span className="min-w-0 flex-1">
-            <span className="block truncate font-mono text-[12px]">{item.label}</span>
+            <span className="flex items-center gap-1.5 font-mono text-[12px]">
+              <span className="min-w-0 truncate">{item.label}</span>
+              {item.local && (
+                <span className="shrink-0 rounded-full bg-dawn/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-dawn">
+                  local
+                </span>
+              )}
+            </span>
             {item.hint && (
               <span className="block truncate text-[10px] text-moon-600">{item.hint}</span>
             )}
