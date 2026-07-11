@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Bot, Plus, Trash2 } from "lucide-react";
 import { Page } from "@/components/Page";
 import { Button } from "@/ui/Button";
@@ -9,15 +9,17 @@ import { Select } from "@/ui/Select";
 import { EmptyState } from "@/ui/EmptyState";
 import { ErrorState } from "@/ui/ErrorState";
 import { IconButton } from "@/ui/IconButton";
+import { Tooltip } from "@/ui/Tooltip";
 import { PathInput } from "@/components/PathInput";
 import { toast, describeError } from "@/ui/Toast";
 import { confirm } from "@/ui/confirm";
 import { useProfiles } from "@/api/profiles";
 import { useAgents, useCreateAgent, useDeleteAgent } from "@/api/agents";
 import { relativeTime } from "@/lib/time";
-import { formatUsd } from "@/lib/status";
+import { formatUsd, formatTokens } from "@/lib/status";
+import { cn } from "@/lib/cn";
 import { AgentStatePill } from "./AgentStatePill";
-import type { AgentOut } from "@/api/types";
+import type { AgentLiveness, AgentOut } from "@/api/types";
 
 /** Resident interactive agents: long-lived chats an agent drives against a
  *  profile and a working tree, with a first-class needs-input loop. Each row
@@ -85,12 +87,7 @@ export function AgentsPage() {
       ) : (
         <ul className="flex flex-col gap-2">
           {agentsQ.data!.map((a) => (
-            <AgentRow
-              key={a.id}
-              agent={a}
-              onOpen={() => navigate({ to: "/agents/$id", params: { id: a.id } })}
-              onDelete={() => onDelete(a)}
-            />
+            <AgentRow key={a.id} agent={a} onDelete={() => onDelete(a)} />
           ))}
         </ul>
       )}
@@ -107,51 +104,106 @@ export function AgentsPage() {
   );
 }
 
+/** Left accent strip keyed to liveness: the dawn-edge gradient marks a live
+ *  agent (sibling of the running-ticket treatment), the accent marks needs-input,
+ *  ember marks crashed. */
+const ROW_ACCENT: Record<AgentLiveness, string> = {
+  alive: "dawn-edge",
+  "needs-input": "bg-lamp",
+  warm: "bg-dawn",
+  cold: "bg-ink-700",
+  ended: "bg-ink-700",
+  crashed: "bg-failed",
+};
+
+/** Shorten a model id for a tight card row; the full id is in its tooltip. */
+function shortModel(model: string): string {
+  const tail = model.split("/").pop() ?? model;
+  return tail.length > 22 ? `${tail.slice(0, 21)}…` : tail;
+}
+
 function AgentRow({
   agent,
-  onOpen,
   onDelete,
 }: {
   agent: AgentOut;
-  onOpen: () => void;
   onDelete: () => void;
 }) {
-  const live = agent.liveness === "alive" || agent.liveness === "needs-input" || agent.liveness === "warm";
+  const live =
+    agent.liveness === "alive" || agent.liveness === "needs-input" || agent.liveness === "warm";
+  const tokens = agent.input_tokens + agent.output_tokens;
   return (
-    <li className="group flex items-center gap-3 rounded-card border border-ink-700 bg-ink-900/60 px-4 py-3 transition-colors hover:border-ink-600 hover:bg-ink-800/60">
-      <button onClick={onOpen} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-        <Bot size={16} className="shrink-0 text-moon-500" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
-            {agent.title}
+    <li className="group relative overflow-hidden rounded-card border border-ink-700 bg-ink-900/60 transition-colors hover:border-ink-600 hover:bg-ink-800/60">
+      <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[2px]", ROW_ACCENT[agent.liveness])} />
+      <div className="flex items-center gap-3 py-2.5 pl-4 pr-2">
+        <Link
+          to="/agents/$id"
+          params={{ id: agent.id }}
+          className="flex min-w-0 flex-1 flex-col items-start gap-1 rounded-[4px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
+        >
+          <span className="flex w-full items-center gap-2">
+            <Bot size={14} className="shrink-0 text-moon-500" />
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
+              {agent.title}
+            </span>
+            {agent.has_pending && agent.liveness !== "needs-input" && (
+              <span className="shrink-0 rounded-full bg-lamp/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-lamp">
+                queued
+              </span>
+            )}
           </span>
-          <span className="mt-0.5 flex items-center gap-2 truncate font-mono text-[11px] text-moon-600">
-            <span className="truncate">{agent.source_path}</span>
+          <span className="flex w-full items-center gap-1.5 pl-[22px] font-mono text-[11px] text-moon-600">
+            <span className="min-w-0 flex-1 truncate">{agent.source_path || "(scratch dir)"}</span>
+            {agent.model && (
+              <Tooltip content={agent.model} mono>
+                <span className="hidden shrink-0 text-moon-500 hover:text-moon-300 sm:inline">
+                  · {shortModel(agent.model)}
+                </span>
+              </Tooltip>
+            )}
           </span>
-        </span>
-      </button>
-      {agent.has_pending && agent.liveness !== "needs-input" && (
-        <span className="rounded-full bg-lamp/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-lamp">
-          waiting
-        </span>
-      )}
-      {agent.cost_usd > 0 && (
-        <span className="hidden shrink-0 font-mono text-[11px] tabular-nums text-moon-500 sm:inline">
-          {formatUsd(agent.cost_usd)}
-        </span>
-      )}
-      <AgentStatePill liveness={agent.liveness} />
-      <span className="hidden w-24 shrink-0 text-right font-mono text-[11px] text-moon-600 md:inline">
-        {relativeTime(agent.updated_at)}
-      </span>
-      <IconButton
-        label={live ? "End the agent before deleting" : "Delete agent"}
-        size="sm"
-        icon={<Trash2 size={14} />}
-        disabled={live}
-        onClick={onDelete}
-        className="opacity-0 transition-opacity group-hover:opacity-100 hover:text-failed"
-      />
+        </Link>
+
+        {/* At-a-glance metrics, right-aligned. Cost + tokens fold away on narrow
+            screens; the state pill and delete stay reachable. */}
+        <div className="flex shrink-0 items-center gap-2.5 pl-1">
+          {tokens > 0 && (
+            <Tooltip
+              mono
+              content={
+                <span>
+                  in {formatTokens(agent.input_tokens)} · out {formatTokens(agent.output_tokens)} ·
+                  cache {formatTokens(agent.cache_read_tokens + agent.cache_write_tokens)} tokens
+                </span>
+              }
+            >
+              <span className="hidden font-mono text-[11px] tabular-nums text-moon-500 sm:inline">
+                {formatTokens(tokens)}
+                <span className="ml-0.5 text-moon-600">tok</span>
+              </span>
+            </Tooltip>
+          )}
+          {agent.cost_usd > 0 && (
+            <Tooltip content="Total spend" mono>
+              <span className="hidden font-mono text-[11px] tabular-nums text-moon-400 sm:inline">
+                {formatUsd(agent.cost_usd)}
+              </span>
+            </Tooltip>
+          )}
+          <AgentStatePill liveness={agent.liveness} />
+          <span className="hidden w-14 shrink-0 text-right font-mono text-[11px] text-moon-600 md:inline">
+            {relativeTime(agent.updated_at)}
+          </span>
+          <IconButton
+            label={live ? "End the agent before deleting" : "Delete agent"}
+            size="sm"
+            icon={<Trash2 size={14} />}
+            disabled={live}
+            onClick={onDelete}
+            className="opacity-0 transition-opacity group-hover:opacity-100 hover:text-failed"
+          />
+        </div>
+      </div>
     </li>
   );
 }

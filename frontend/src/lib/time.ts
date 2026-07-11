@@ -56,6 +56,17 @@ export function durationBetween(
   return formatDuration(b - a);
 }
 
+/** Compact elapsed for a live "time-in-state" chip: "40s", then "1m 12s".
+ *  Sibling of formatDuration (M:SS) for the few places that read better in
+ *  seconds-first form (a wake timer, a short heartbeat). */
+export function formatCompactElapsed(ms: number): string {
+  if (ms < 0) ms = 0;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
 /** Absolute local time label, e.g. "Jul 5, 21:14". */
 export function absoluteTime(iso: string | null | undefined): string {
   const ms = parseTs(iso);
