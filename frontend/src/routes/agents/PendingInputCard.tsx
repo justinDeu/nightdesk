@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check, HelpCircle, ShieldQuestion, X, ClipboardCheck } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { Textarea } from "@/ui/Input";
+import { Tooltip } from "@/ui/Tooltip";
 import { cn } from "@/lib/cn";
 import type { AgentAnswer, AgentPendingOut } from "@/api/types";
 
@@ -220,23 +221,23 @@ function AskQuestion({
             {q.options.map((o) => {
               const on = (selected[qi] ?? []).includes(o.label);
               return (
-                <button
-                  key={o.label}
-                  type="button"
-                  title={o.description}
-                  onClick={() => toggle(qi, o.label, Boolean(q.multiSelect))}
-                  className={cn(
-                    "rounded-control border px-2.5 py-1 text-left text-[12px] transition-colors",
-                    on
-                      ? "border-lamp bg-lamp/15 text-lamp"
-                      : "border-ink-700 text-moon-200 hover:border-ink-600 hover:text-moon-100",
-                  )}
-                >
-                  <span className="font-medium">{o.label}</span>
-                  {o.description && (
-                    <span className="ml-1.5 text-[11px] text-moon-500">— {o.description}</span>
-                  )}
-                </button>
+                <Tooltip key={o.label} content={o.description}>
+                  <button
+                    type="button"
+                    onClick={() => toggle(qi, o.label, Boolean(q.multiSelect))}
+                    className={cn(
+                      "rounded-control border px-2.5 py-1 text-left text-[12px] transition-colors",
+                      on
+                        ? "border-lamp bg-lamp/15 text-lamp"
+                        : "border-ink-700 text-moon-200 hover:border-ink-600 hover:text-moon-100",
+                    )}
+                  >
+                    <span className="font-medium">{o.label}</span>
+                    {o.description && (
+                      <span className="ml-1.5 text-[11px] text-moon-500">— {o.description}</span>
+                    )}
+                  </button>
+                </Tooltip>
               );
             })}
             <button

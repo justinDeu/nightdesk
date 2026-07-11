@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import {
   ChevronLeft,
@@ -31,7 +31,9 @@ import {
 import { ApiError } from "@/api/client";
 import { formatUsd } from "@/lib/status";
 import { relativeTime } from "@/lib/time";
-import { AgentStatePill } from "./AgentStatePill";
+import { Tooltip } from "@/ui/Tooltip";
+import { WakeStatusChip, WakeNotice } from "./WakeStatus";
+import { useWakeState } from "./useWakeState";
 import { PendingInputCard } from "./PendingInputCard";
 import { AgentQueue } from "./AgentQueue";
 import { AgentEnvPanel } from "./AgentEnvPanel";
@@ -51,6 +53,10 @@ export function AgentScreen() {
       const l = q.state.data?.liveness;
       if (l === "alive" || l === "needs-input") return 2000;
       if (l === "warm") return 5000;
+      // Cold / crashed: poll while the screen is focused so a boot — or a crash
+      // during a wake — is detected, instead of leaving "Waking" up forever.
+      // refetchIntervalInBackground defaults to false, so background tabs don't poll.
+      if (l === "cold" || l === "crashed") return 3000;
       return false;
     },
   });
@@ -92,12 +98,27 @@ export function AgentScreen() {
     return { commands: [], skills: [] };
   }, [tx.events]);
 
-  // Clear the "waking" affordance once the agent is actually up.
+  // Track liveness transitions to clear the "waking" affordance honestly:
+  //  - once the agent is actually up (alive / warm / needs-input), or
+  //  - when a wake attempt ends in a crash (a cold→crashed transition) so the
+  //    crash is surfaced as "Crashed" instead of hiding behind a ticking "Waking"
+  //    timer. Waking an already-crashed agent is not a transition into crashed,
+  //    so it correctly keeps showing "Waking" (recovery in flight).
+  const prevLiveness = useRef(liveness);
   useEffect(() => {
+    const prev = prevLiveness.current;
     if (liveness === "alive" || liveness === "warm" || liveness === "needs-input") {
       setPokedAt(null);
+    } else if (liveness === "crashed" && prev !== "crashed") {
+      setPokedAt(null);
     }
+    prevLiveness.current = liveness;
   }, [liveness]);
+
+  // Truthful wake state: splits "cold" into parked vs. waking, layers in the
+  // worker heartbeat, and times how long a wake has been outstanding. Drives the
+  // header chip and the transcript banner so a stuck wake is diagnosed, not spun.
+  const wakeState = useWakeState(agent?.liveness ?? "cold", pokedAt);
 
   if (agentQ.isLoading) {
     return <div className="p-8 text-sm text-moon-600">Loading agent…</div>;
@@ -192,7 +213,7 @@ export function AgentScreen() {
         <h1 className="min-w-0 flex-1 truncate font-display text-lg font-semibold text-moon-100">
           {agent.title}
         </h1>
-        <AgentStatePill liveness={agent.liveness} />
+        <WakeStatusChip liveness={agent.liveness} wake={wakeState} />
         {agent.cost_usd > 0 && (
           <span className="font-mono text-[11px] tabular-nums text-lamp">{formatUsd(agent.cost_usd)}</span>
         )}
@@ -234,6 +255,7 @@ export function AgentScreen() {
       {/* Body: transcript stage + right rail */}
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_320px] lg:overflow-hidden">
         <section className="flex min-h-0 flex-col lg:overflow-hidden">
+          <WakeNotice wake={wakeState} />
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
             {hasActivity ? (
               <TranscriptScroller
@@ -321,9 +343,11 @@ function RailInfo({
     <div className="rounded-card border border-ink-700 bg-ink-900 px-3 py-2.5 text-[11px] text-moon-500">
       <div className="mb-1 flex items-baseline justify-between gap-2">
         <span className="text-moon-600">Working dir</span>
-        <span className="min-w-0 truncate font-mono text-moon-300" title={sourcePath}>
-          {sourcePath}
-        </span>
+        <Tooltip content={sourcePath} mono>
+          <span className="min-w-0 cursor-help truncate font-mono text-moon-300">
+            {sourcePath}
+          </span>
+        </Tooltip>
       </div>
       {model && (
         <div className="mb-1 flex items-baseline justify-between gap-2">
