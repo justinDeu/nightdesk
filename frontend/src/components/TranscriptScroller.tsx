@@ -102,7 +102,11 @@ export function TranscriptScroller({
         {footer}
       </div>
 
-      {running && !pinned && (
+      {/* Whenever the reader is scrolled up, offer the way back — an idle
+          agent's (or finished run's) transcript needs it as much as a live
+          one. Unpinning only happens via onScroll at >=40px above the bottom,
+          so !pinned already implies the container overflows. */}
+      {!pinned && (
         <button
           onClick={jumpToBottom}
           className="absolute bottom-3 right-3 inline-flex items-center gap-1 rounded-full border border-ink-700 bg-ink-800 px-2.5 py-1 text-[11px] text-moon-100 shadow-[var(--shadow-pop)] hover:bg-ink-700"
