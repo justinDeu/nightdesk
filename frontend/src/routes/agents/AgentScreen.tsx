@@ -588,16 +588,18 @@ function EditableTitle({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
-  // Escape must skip the input's blur-commit that fires as the input unmounts.
-  const cancelled = useRef(false);
+  // One-shot latch: Escape sets it so the unmount blur doesn't commit, and
+  // commit sets it so Enter's blur (as the input unmounts) can't double-fire.
+  const settled = useRef(false);
 
   const start = () => {
     setDraft(title);
-    cancelled.current = false;
+    settled.current = false;
     setEditing(true);
   };
   const commit = () => {
-    if (cancelled.current) return;
+    if (settled.current) return;
+    settled.current = true;
     setEditing(false);
     const next = draft.trim();
     if (!next || next === title) return;
@@ -638,7 +640,7 @@ function EditableTitle({
             e.preventDefault();
             commit();
           } else if (e.key === "Escape") {
-            cancelled.current = true;
+            settled.current = true;
             setEditing(false);
           }
         }}
