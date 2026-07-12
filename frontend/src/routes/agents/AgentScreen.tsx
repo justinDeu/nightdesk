@@ -13,7 +13,6 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/ui/Button";
-import { ExperimentalBanner } from "@/components/ExperimentalBanner";
 import { IconButton } from "@/ui/IconButton";
 import { Input } from "@/ui/Input";
 import { Dialog } from "@/ui/Dialog";
@@ -410,7 +409,9 @@ export function AgentScreen() {
     <div className="flex h-full min-h-0 flex-col">
       {/* Header */}
       <header className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-ink-700 bg-ink-950/80 px-4 py-3 backdrop-blur sm:px-6">
-        <Button asChild variant="ghost" size="sm">
+        {/* Mobile-only: the rail is hidden below lg, so this is the way back to
+            the list. On desktop the list is always visible beside the pane. */}
+        <Button asChild variant="ghost" size="sm" className="lg:hidden">
           <Link to="/agents" aria-label="Back to agents">
             <ChevronLeft size={16} />
           </Link>
@@ -476,12 +477,6 @@ export function AgentScreen() {
           </Button>
         )}
       </header>
-
-      <ExperimentalBanner
-        feature="Agent sessions"
-        storageKey="agents"
-        className="mx-4 mt-3 sm:mx-6"
-      />
 
       {/* Body: transcript stage + right rail */}
       <div

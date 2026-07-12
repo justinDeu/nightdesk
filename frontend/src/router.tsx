@@ -70,6 +70,10 @@ const runTheaterRoute = createRoute({
   component: RunTheater,
 });
 
+// Split view: AgentsPage owns the list rail + detail pane and stays mounted
+// across switches, so navigating /agents -> /agents/$id only swaps the detail
+// (the <Outlet/>) — no full-page reload, but the URL still carries the agent id
+// so Desk deep-links and middle-click keep working.
 const agentsRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/agents",
@@ -77,9 +81,12 @@ const agentsRoute = createRoute({
 });
 
 const agentScreenRoute = createRoute({
-  getParentRoute: () => appLayoutRoute,
-  path: "/agents/$id",
+  getParentRoute: () => agentsRoute,
+  path: "$id",
   component: AgentScreen,
+  // Remount on agent switch: the rail swaps $id without unmounting, which
+  // would otherwise leak per-agent UI state (title draft, composer, dialogs).
+  remountDeps: ({ params }) => params.id,
 });
 
 const inboxRoute = createRoute({
@@ -183,8 +190,7 @@ const routeTree = rootRoute.addChildren([
     ticketsRoute,
     ticketDetailRoute,
     runTheaterRoute,
-    agentsRoute,
-    agentScreenRoute,
+    agentsRoute.addChildren([agentScreenRoute]),
     inboxRoute,
     archiveRoute,
     scheduledRoute,
