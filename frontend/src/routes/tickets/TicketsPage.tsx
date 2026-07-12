@@ -429,7 +429,10 @@ export function TicketsPage() {
       <header
         className={cn(
           "relative z-40 flex shrink-0 flex-wrap items-center gap-2.5 border-b border-ink-700 bg-ink-950 px-4 py-2 transition-[padding] duration-150 md:h-12 md:flex-nowrap md:py-0",
-          anyPeekOpen && "lg:pr-[440px]",
+          // With the rail open the controls can exceed the padded width on
+          // mid-size screens; let the bar wrap back to two rows instead of
+          // letting the trailing buttons slide under the peek.
+          anyPeekOpen && "lg:h-auto lg:flex-wrap lg:py-2 lg:pr-[440px]",
         )}
       >
         <span className="shrink-0 font-display text-sm font-semibold tracking-tight text-moon-100">
