@@ -346,17 +346,26 @@ function RepoLinkRow({ repo }: { repo: RepoLinkOut }) {
 function AttachToProjectMenu({ repo }: { repo: RepoLinkOut }) {
   const projects = useProjects();
   const toggle = useToggleProjectRepoLink();
-  const [pendingId, setPendingId] = useState<string | null>(null);
+  // A Set, not a single id: `useToggleProjectRepoLink` now queues concurrent
+  // toggles per project instead of racing them, so rapid-clicking several
+  // projects keeps them all genuinely in flight at once — a single pendingId
+  // would get clobbered by whichever click fired last and the earlier rows
+  // would wrongly look idle/clickable while still queued.
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
   const list = projects.data ?? [];
 
   async function onToggle(projectId: string, attach: boolean) {
-    setPendingId(projectId);
+    setPendingIds((prev) => new Set(prev).add(projectId));
     try {
       await toggle.mutateAsync({ projectId, repoLinkId: repo.id, attach });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Could not update project attachment");
     } finally {
-      setPendingId(null);
+      setPendingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(projectId);
+        return next;
+      });
     }
   }
 
@@ -382,14 +391,14 @@ function AttachToProjectMenu({ repo }: { repo: RepoLinkOut }) {
               <DropdownMenuItem
                 key={p.id}
                 keepOpen
-                disabled={pendingId === p.id}
+                disabled={pendingIds.has(p.id)}
                 onSelect={() => onToggle(p.id, !on)}
               >
                 <span className="flex flex-1 items-center gap-2 min-w-0">
                   <ProjectDot color={p.color} className={!on ? "opacity-40" : undefined} />
                   <span className="truncate">{p.name}</span>
                 </span>
-                {pendingId === p.id ? <Spinner size={12} /> : on && <Check size={14} className="text-lamp" />}
+                {pendingIds.has(p.id) ? <Spinner size={12} /> : on && <Check size={14} className="text-lamp" />}
               </DropdownMenuItem>
             );
           })

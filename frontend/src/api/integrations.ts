@@ -155,14 +155,43 @@ export function useRepoSuggest(projectId: string) {
   });
 }
 
+// Module-scoped (not per-hook-instance) so it serializes across every caller —
+// ConnectionsSection's per-repo-link project dropdown and ProjectsSection's
+// per-project repo-link dropdown each call `useToggleProjectRepoLink()`
+// independently, and even within one dropdown `keepOpen` lets a user fire
+// several toggles for the same project before the first PUT returns. Keyed by
+// projectId; holds only the current tail of that project's toggle chain.
+const projectRepoLinkQueues = new Map<string, Promise<unknown>>();
+
+/** Run `op` after every previously-queued toggle for `projectId` has settled
+ *  (success or failure), so each toggle's "fetch current, then PUT merged"
+ *  round-trip sees the previous toggle's write instead of racing it — two
+ *  concurrent toggles reading the same pre-toggle list would otherwise
+ *  compute conflicting merges and the second PUT would silently drop the
+ *  first attachment (lost update). A failed toggle doesn't wedge the queue:
+ *  the chain continues via the reject handler. The map entry is removed once
+ *  its chain is idle again so it can't grow unbounded over a long session. */
+function enqueueProjectRepoLinkToggle<T>(projectId: string, op: () => Promise<T>): Promise<T> {
+  const prior = projectRepoLinkQueues.get(projectId) ?? Promise.resolve();
+  const next = prior.then(op, op);
+  const tracked = next.catch(() => undefined);
+  projectRepoLinkQueues.set(projectId, tracked);
+  void tracked.finally(() => {
+    if (projectRepoLinkQueues.get(projectId) === tracked) projectRepoLinkQueues.delete(projectId);
+  });
+  return next;
+}
+
 /** Attach/detach one repo link for one project. `setProjectRepoLinks` is a PUT
  *  that replaces the *entire* repo_link_ids list for the project, so a single
  *  toggle first re-fetches the project's current links and merges — otherwise
- *  toggling one repo off would clobber every other repo already attached. */
+ *  toggling one repo off would clobber every other repo already attached.
+ *  Concurrent toggles for the same project are serialized via
+ *  `enqueueProjectRepoLinkToggle` — see its comment for why. */
 export function useToggleProjectRepoLink() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({
+    mutationFn: ({
       projectId,
       repoLinkId,
       attach,
@@ -170,13 +199,14 @@ export function useToggleProjectRepoLink() {
       projectId: string;
       repoLinkId: string;
       attach: boolean;
-    }) => {
-      const current = await integrationsApi.listProjectRepoLinks(projectId);
-      const ids = new Set(current.map((rl) => rl.id));
-      if (attach) ids.add(repoLinkId);
-      else ids.delete(repoLinkId);
-      return integrationsApi.setProjectRepoLinks(projectId, Array.from(ids));
-    },
+    }) =>
+      enqueueProjectRepoLinkToggle(projectId, async () => {
+        const current = await integrationsApi.listProjectRepoLinks(projectId);
+        const ids = new Set(current.map((rl) => rl.id));
+        if (attach) ids.add(repoLinkId);
+        else ids.delete(repoLinkId);
+        return integrationsApi.setProjectRepoLinks(projectId, Array.from(ids));
+      }),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: qk.integrations.projectRepoLinks(vars.projectId) });
       qc.invalidateQueries({ queryKey: qk.integrations.repoSuggest(vars.projectId) });

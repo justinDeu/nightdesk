@@ -350,7 +350,12 @@ function LinkedRepositoriesField({ project }: { project: ProjectOut }) {
   const allRepoLinks = useRepoLinks();
   const suggest = useRepoSuggest(project.id);
   const toggle = useToggleProjectRepoLink();
-  const [pendingId, setPendingId] = useState<string | null>(null);
+  // A Set, not a single id: every row here toggles the *same* project, and
+  // `useToggleProjectRepoLink` now queues those concurrent toggles instead of
+  // racing them, so clicking two repos in quick succession keeps both
+  // genuinely in flight — a single pendingId would get clobbered by whichever
+  // click fired last, leaving the earlier row's spinner/disabled state wrong.
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
 
   const attached = attachedQuery.data ?? [];
   const attachedIds = new Set(attached.map((r) => r.id));
@@ -364,14 +369,18 @@ function LinkedRepositoriesField({ project }: { project: ProjectOut }) {
   const showSuggestion = suggestedRepo && !attachedIds.has(suggestedRepo.id);
 
   async function toggleLink(repoLinkId: string, attach: boolean) {
-    setPendingId(repoLinkId);
+    setPendingIds((prev) => new Set(prev).add(repoLinkId));
     try {
       await toggle.mutateAsync({ projectId: project.id, repoLinkId, attach });
       if (attach) toast.success("Repository attached");
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Could not update repository link");
     } finally {
-      setPendingId(null);
+      setPendingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(repoLinkId);
+        return next;
+      });
     }
   }
 
@@ -388,7 +397,7 @@ function LinkedRepositoriesField({ project }: { project: ProjectOut }) {
               size="sm"
               variant="ghost"
               className="shrink-0"
-              loading={pendingId === suggestedRepo.id}
+              loading={pendingIds.has(suggestedRepo.id)}
               onClick={() => toggleLink(suggestedRepo.id, true)}
             >
               Attach
@@ -416,11 +425,11 @@ function LinkedRepositoriesField({ project }: { project: ProjectOut }) {
                 <button
                   type="button"
                   onClick={() => toggleLink(r.id, false)}
-                  disabled={pendingId === r.id}
+                  disabled={pendingIds.has(r.id)}
                   className="shrink-0 text-moon-600 hover:text-failed disabled:opacity-50"
                   aria-label={`Remove ${r.external_path}`}
                 >
-                  {pendingId === r.id ? <Spinner size={12} /> : <X size={13} />}
+                  {pendingIds.has(r.id) ? <Spinner size={12} /> : <X size={13} />}
                 </button>
               </div>
             ))}
@@ -463,11 +472,11 @@ function LinkedRepositoriesField({ project }: { project: ProjectOut }) {
                   <DropdownMenuItem
                     key={r.id}
                     keepOpen
-                    disabled={pendingId === r.id}
+                    disabled={pendingIds.has(r.id)}
                     onSelect={() => toggleLink(r.id, true)}
                   >
                     <span className="flex-1 truncate">{r.display_name || r.external_path}</span>
-                    {pendingId === r.id && <Spinner size={12} />}
+                    {pendingIds.has(r.id) && <Spinner size={12} />}
                   </DropdownMenuItem>
                 ))
               )}
