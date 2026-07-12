@@ -31,8 +31,6 @@ export interface BoardCardProps {
   latestRun?: RunOut;
   /** Plain click — select + open the side peek. */
   onSelect: () => void;
-  /** Explicit open — full navigation (cmd/ctrl/middle-click). */
-  onOpen: () => void;
   /** Shift-click — extend the multi-selection to a range. */
   onRangeSelect: () => void;
   /** Click the corner glyph — toggle this card in/out of the selection. */
@@ -53,7 +51,7 @@ export interface BoardCardProps {
 }
 
 export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function BoardCard(
-  { ticket, project, latestRun, onSelect, onOpen, onRangeSelect, onToggleSelect, dragging, focused, peeked, selected, hideProject, mrLink },
+  { ticket, project, latestRun, onSelect, onRangeSelect, onToggleSelect, dragging, focused, peeked, selected, hideProject, mrLink },
   ref,
 ) {
   const running = ticket.status === "running";
@@ -72,9 +70,6 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
   return (
     <div
       ref={ref}
-      onClick={(e) =>
-        e.metaKey || e.ctrlKey ? onOpen() : e.shiftKey ? onRangeSelect() : onSelect()
-      }
       data-ticket-id={ticket.id}
       className={cn(
         "cv-card group relative shrink-0 cursor-pointer overflow-hidden rounded-card border bg-ink-900 p-3 pt-3.5",
@@ -102,9 +97,30 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
         dragging && "opacity-40",
       )}
     >
+      {/* Stretched link: the whole card is one anchor so middle-click,
+          cmd/ctrl-click, and right-click copy-link work anywhere on the card —
+          not just the title. Plain click opens the side peek; shift-click
+          extends the selection; every other activation falls through to the
+          browser. Inner interactive controls sit above this (z-10) and keep
+          working; the decorative dawn edge lets pointer events pass through. */}
+      <a
+        href={ticketHref(ticket.id)}
+        draggable={false}
+        aria-label={ticket.title}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (e.button !== 0 || e.metaKey || e.ctrlKey) return;
+          e.preventDefault();
+          if (e.shiftKey) onRangeSelect();
+          else onSelect();
+        }}
+        className="absolute inset-0 z-0 rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lamp"
+      />
       {/* Running keeps the animated dawn edge; failed is carried by the wash +
           pill below (no top line — it read as bolted-on). */}
-      {running && <span aria-hidden className="dawn-edge absolute inset-x-0 top-0 h-[2px]" />}
+      {running && (
+        <span aria-hidden className="dawn-edge pointer-events-none absolute inset-x-0 top-0 h-[2px]" />
+      )}
 
       {/* Corner select toggle: a low-emphasis outline target that sits at rest
           (so touch users can always (de)select) and brightens on hover/focus;
@@ -120,7 +136,7 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           onToggleSelect();
         }}
         className={cn(
-          "absolute right-0.5 top-0.5 grid h-6 w-6 place-items-center rounded-full transition",
+          "absolute right-0.5 top-0.5 z-10 grid h-6 w-6 place-items-center rounded-full transition",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp",
           selected
             ? "opacity-100"
@@ -143,23 +159,12 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
           corner select toggle (absolute, top-right, 24px). Priority moved to the
           meta row so nothing crowds the checkbox during multi-select. */}
       <div className="mb-2 pr-7">
-        {/* Real anchor so middle/cmd-click open a new tab natively; plain click
-            still opens the peek (preventDefault). draggable=false keeps the
-            card's pragmatic-DnD drag intact instead of dragging the link. */}
-        <a
-          href={ticketHref(ticket.id)}
-          draggable={false}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (e.metaKey || e.ctrlKey) return;
-            e.preventDefault();
-            if (e.shiftKey) onRangeSelect();
-            else onSelect();
-          }}
-          className="block min-w-0 rounded-[4px] text-sm font-medium leading-snug text-moon-100 hover:text-lamp focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp group-hover:text-lamp"
-        >
+        {/* The card's stretched link (above) carries navigation for the whole
+            card; the title is plain text so there's a single tab stop and one
+            screen-reader link per card. */}
+        <span className="block min-w-0 rounded-[4px] text-sm font-medium leading-snug text-moon-100 group-hover:text-lamp">
           <span className="line-clamp-3">{ticket.title}</span>
-        </a>
+        </span>
         {/* Human-facing what/why. A short snippet where it fits — the prompt
             (agent instructions) is never shown on the card. */}
         {ticket.description?.trim() && (
@@ -237,7 +242,7 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
                   aria-label="Move ticket"
                   onClick={(e) => e.stopPropagation()}
                   className={cn(
-                    "-mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-control text-moon-400 transition",
+                    "-mr-1 relative z-10 grid h-6 w-6 shrink-0 place-items-center rounded-control text-moon-400 transition",
                     "hover:bg-ink-800 hover:text-moon-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp",
                     "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
                   )}

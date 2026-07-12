@@ -38,8 +38,6 @@ export interface BoardProps {
   orderBy: OrderBy;
   /** Plain click — open the side peek. */
   onSelect: (id: string) => void;
-  /** Explicit open — full navigation. */
-  onOpen: (id: string) => void;
   onRangeSelect: (id: string) => void;
   onToggleSelect: (id: string) => void;
   selected: Set<string>;
@@ -56,7 +54,6 @@ export function Board({
   latestRun,
   orderBy,
   onSelect,
-  onOpen,
   onRangeSelect,
   onToggleSelect,
   selected,
@@ -161,7 +158,6 @@ export function Board({
           projects={projects}
           latestRun={latestRun}
           onSelect={onSelect}
-          onOpen={onOpen}
           onRangeSelect={onRangeSelect}
           onToggleSelect={onToggleSelect}
           selected={selected}
@@ -182,7 +178,6 @@ function Column({
   projects,
   latestRun,
   onSelect,
-  onOpen,
   onRangeSelect,
   onToggleSelect,
   selected,
@@ -197,7 +192,6 @@ function Column({
   projects: Map<string, ProjectOut>;
   latestRun: Map<string, RunOut>;
   onSelect: (id: string) => void;
-  onOpen: (id: string) => void;
   onRangeSelect: (id: string) => void;
   onToggleSelect: (id: string) => void;
   selected: Set<string>;
@@ -261,7 +255,6 @@ function Column({
             project={t.project_id ? projects.get(t.project_id) : undefined}
             latestRun={latestRun.get(t.id)}
             onSelect={() => onSelect(t.id)}
-            onOpen={() => onOpen(t.id)}
             onRangeSelect={() => onRangeSelect(t.id)}
             onToggleSelect={() => onToggleSelect(t.id)}
             selected={selected.has(t.id)}
@@ -284,7 +277,6 @@ function DraggableCard({
   project,
   latestRun,
   onSelect,
-  onOpen,
   onRangeSelect,
   onToggleSelect,
   selected,
@@ -297,7 +289,6 @@ function DraggableCard({
   project?: ProjectOut;
   latestRun?: RunOut;
   onSelect: () => void;
-  onOpen: () => void;
   onRangeSelect: () => void;
   onToggleSelect: () => void;
   selected: boolean;
@@ -324,7 +315,6 @@ function DraggableCard({
       project={project}
       latestRun={latestRun}
       onSelect={onSelect}
-      onOpen={onOpen}
       onRangeSelect={onRangeSelect}
       onToggleSelect={onToggleSelect}
       selected={selected}

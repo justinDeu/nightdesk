@@ -12,7 +12,6 @@ export function GroupedBoard({
   projects,
   latestRun,
   onSelect,
-  onOpen,
   onRangeSelect,
   onToggleSelect,
   selected,
@@ -25,7 +24,6 @@ export function GroupedBoard({
   projects: Map<string, ProjectOut>;
   latestRun: Map<string, RunOut>;
   onSelect: (id: string) => void;
-  onOpen: (id: string) => void;
   onRangeSelect: (id: string) => void;
   onToggleSelect: (id: string) => void;
   selected: Set<string>;
@@ -69,7 +67,6 @@ export function GroupedBoard({
                 project={t.project_id ? projects.get(t.project_id) : undefined}
                 latestRun={latestRun.get(t.id)}
                 onSelect={() => onSelect(t.id)}
-                onOpen={() => onOpen(t.id)}
                 onRangeSelect={() => onRangeSelect(t.id)}
                 onToggleSelect={() => onToggleSelect(t.id)}
                 selected={selected.has(t.id)}

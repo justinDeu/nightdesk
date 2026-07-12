@@ -19,6 +19,7 @@ import { EffectiveConfigCard } from "@/components/EffectiveConfigCard";
 import { WorkspaceList } from "@/components/WorkspaceList";
 import { useTicketActions } from "@/lib/ticketActions";
 import { useUnsavedGuard } from "@/lib/useUnsavedGuard";
+import { ticketHref, inAppNav } from "@/lib/routes";
 import { cn } from "@/lib/cn";
 import { ticketStatusKind, runStatusKind, formatUsd } from "@/lib/status";
 import { durationBetween, relativeTime } from "@/lib/time";
@@ -85,13 +86,16 @@ export function TicketPeek({
         <span className="font-mono text-xs text-moon-600">{ticket.id.slice(0, 8)}</span>
         <div className="ml-auto flex items-center gap-1">
           <Tooltip content="Open full ticket">
-            <button
-              onClick={onOpenFull}
+            <a
+              href={ticketHref(ticket.id)}
               aria-label="Open full ticket"
+              onClick={(e) => {
+                if (inAppNav(e)) onOpenFull();
+              }}
               className="rounded-control p-1.5 text-moon-400 hover:bg-ink-800 hover:text-moon-100"
             >
               <ArrowRight size={16} />
-            </button>
+            </a>
           </Tooltip>
           <Tooltip content="Close (Esc)">
             <button
@@ -106,17 +110,31 @@ export function TicketPeek({
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4">
-        <button onClick={onOpenFull} className="block w-full text-left">
+        <a
+          href={ticketHref(ticket.id)}
+          onClick={(e) => {
+            if (inAppNav(e)) onOpenFull();
+          }}
+          className="block w-full text-left"
+        >
           <h2 className="font-display text-base font-semibold leading-snug text-moon-100 hover:text-lamp">
             {ticket.title}
           </h2>
-        </button>
+        </a>
 
         {/* Quick actions */}
         <div className="flex flex-wrap gap-1.5">
           <StatusActions ticket={ticket} actions={actions} />
-          <Button size="sm" variant="subtle" trailingIcon={<ArrowRight size={13} />} onClick={onOpenFull}>
-            Open
+          <Button asChild size="sm" variant="subtle">
+            <a
+              href={ticketHref(ticket.id)}
+              onClick={(e) => {
+                if (inAppNav(e)) onOpenFull();
+              }}
+            >
+              Open
+              <ArrowRight size={13} />
+            </a>
           </Button>
         </div>
 
