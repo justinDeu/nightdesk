@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Archive, Layers, Pencil, Plus } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Archive, Layers, Pencil, Plus, X } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { IconButton } from "@/ui/IconButton";
 import { Input, Field } from "@/ui/Input";
@@ -9,12 +10,27 @@ import { Dialog } from "@/ui/Dialog";
 import { Spinner } from "@/ui/Spinner";
 import { EmptyState } from "@/ui/EmptyState";
 import { Tooltip } from "@/ui/Tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/ui/DropdownMenu";
 import { toast } from "@/ui/Toast";
+import { ApiError } from "@/api/client";
 import { projectsApi, useProjects } from "@/api/projects";
 import { useProjectActivity } from "@/api/projectActivity";
+import {
+  useConnections,
+  useProjectRepoLinks,
+  useRepoLinks,
+  useRepoSuggest,
+  useToggleProjectRepoLink,
+} from "@/api/integrations";
 import { qk } from "@/api/keys";
 import { PathInput } from "@/components/PathInput";
-import type { ProjectCreate, ProjectOut, WorkspaceKind } from "@/api/types";
+import type { ProjectCreate, ProjectOut, RepoLinkOut, WorkspaceKind } from "@/api/types";
 import { relativeTime, formatDuration } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import { SectionHeader } from "./parts/SettingsSection";
@@ -301,6 +317,14 @@ function ProjectDialog({
           <ListEditor value={toolPaths} onChange={setToolPaths} placeholder="/home/you/tools" emptyHint="None." />
         </Field>
 
+        {project ? (
+          <LinkedRepositoriesField project={project} />
+        ) : (
+          <Field label="Linked repositories" hint="Save the project first, then attach repositories here.">
+            <p className="text-xs text-moon-600">Available after creating the project.</p>
+          </Field>
+        )}
+
         {project?.default_linked_workspaces && project.default_linked_workspaces.length > 0 && (
           <div className="rounded-control border border-ink-700 bg-ink-950/40 px-3 py-2">
             <p className="text-xs text-moon-400">
@@ -311,5 +335,155 @@ function ProjectDialog({
         )}
       </div>
     </Dialog>
+  );
+}
+
+/** Editor field for step 3 of Connection → repo link → project (the step that
+ *  previously had no UI): repos currently attached to this project, a picker to
+ *  attach more, and a one-click suggestion when the project's git remote
+ *  matches an already-connected repo. Every toggle goes through
+ *  `useToggleProjectRepoLink`, which merges with the project's existing repo
+ *  links rather than replacing them (the PUT endpoint replaces the full list). */
+function LinkedRepositoriesField({ project }: { project: ProjectOut }) {
+  const connections = useConnections();
+  const attachedQuery = useProjectRepoLinks(project.id);
+  const allRepoLinks = useRepoLinks();
+  const suggest = useRepoSuggest(project.id);
+  const toggle = useToggleProjectRepoLink();
+  // A Set, not a single id: every row here toggles the *same* project, and
+  // `useToggleProjectRepoLink` now queues those concurrent toggles instead of
+  // racing them, so clicking two repos in quick succession keeps both
+  // genuinely in flight — a single pendingId would get clobbered by whichever
+  // click fired last, leaving the earlier row's spinner/disabled state wrong.
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+
+  const attached = attachedQuery.data ?? [];
+  const attachedIds = new Set(attached.map((r) => r.id));
+  const available = (allRepoLinks.data ?? []).filter((r) => !attachedIds.has(r.id));
+  const noConnections = (connections.data ?? []).length === 0;
+
+  const suggestedRepo: RepoLinkOut | null =
+    suggest.data?.matched_repo_link_id
+      ? (allRepoLinks.data ?? []).find((r) => r.id === suggest.data?.matched_repo_link_id) ?? null
+      : null;
+  const showSuggestion = suggestedRepo && !attachedIds.has(suggestedRepo.id);
+
+  async function toggleLink(repoLinkId: string, attach: boolean) {
+    setPendingIds((prev) => new Set(prev).add(repoLinkId));
+    try {
+      await toggle.mutateAsync({ projectId: project.id, repoLinkId, attach });
+      if (attach) toast.success("Repository attached");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Could not update repository link");
+    } finally {
+      setPendingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(repoLinkId);
+        return next;
+      });
+    }
+  }
+
+  return (
+    <Field label="Linked repositories" hint="Attached repos surface their issues and MRs on this project's tickets.">
+      <div className="space-y-2">
+        {showSuggestion && suggestedRepo && (
+          <div className="flex items-center justify-between gap-2 rounded-control border border-lamp/30 bg-lamp/10 px-2.5 py-2">
+            <span className="min-w-0 truncate text-xs text-moon-100">
+              Detected <span className="font-mono text-[11px] text-moon-400">{suggest.data?.git_remote_url}</span> —
+              attach {suggestedRepo.display_name || suggestedRepo.external_path}?
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="shrink-0"
+              loading={pendingIds.has(suggestedRepo.id)}
+              onClick={() => toggleLink(suggestedRepo.id, true)}
+            >
+              Attach
+            </Button>
+          </div>
+        )}
+
+        {attachedQuery.isLoading ? (
+          <div className="flex items-center gap-2 text-xs text-moon-400">
+            <Spinner size={12} /> Loading…
+          </div>
+        ) : attached.length === 0 ? (
+          <p className="text-xs text-moon-600">No repositories linked.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {attached.map((r) => (
+              <div
+                key={r.id}
+                className="flex items-center gap-2 rounded-control border border-ink-700 bg-ink-950/40 px-2.5 py-1.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs font-medium text-moon-100">{r.display_name || r.external_path}</div>
+                  <div className="truncate font-mono text-[10px] text-moon-600">{r.external_path}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleLink(r.id, false)}
+                  disabled={pendingIds.has(r.id)}
+                  className="shrink-0 text-moon-600 hover:text-failed disabled:opacity-50"
+                  aria-label={`Remove ${r.external_path}`}
+                >
+                  {pendingIds.has(r.id) ? <Spinner size={12} /> : <X size={13} />}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {noConnections ? (
+          <p className="text-xs text-moon-600">
+            No connections yet.{" "}
+            <Link
+              to="/settings/$section"
+              params={{ section: "connections" }}
+              className="text-lamp hover:underline"
+            >
+              Add one in Connections
+            </Link>{" "}
+            to attach repositories.
+          </p>
+        ) : (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                leadingIcon={<Plus size={13} />}
+                disabled={available.length === 0 && !allRepoLinks.isLoading}
+              >
+                Attach repository
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel>Available repositories</DropdownMenuLabel>
+              {allRepoLinks.isLoading ? (
+                <div className="px-2 py-1.5 text-xs text-moon-600">Loading…</div>
+              ) : available.length === 0 ? (
+                <div className="px-2 py-1.5 text-xs text-moon-600">All repositories already attached.</div>
+              ) : (
+                available.map((r) => (
+                  <DropdownMenuItem
+                    key={r.id}
+                    keepOpen
+                    disabled={pendingIds.has(r.id)}
+                    onSelect={() => toggleLink(r.id, true)}
+                  >
+                    <span className="flex-1 truncate">{r.display_name || r.external_path}</span>
+                    {pendingIds.has(r.id) && <Spinner size={12} />}
+                  </DropdownMenuItem>
+                ))
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    </Field>
   );
 }
