@@ -14,8 +14,8 @@ import { GroupedBoard } from "./GroupedBoard";
 import { List } from "./List";
 import { TicketPeek } from "./TicketPeek";
 import { DisplayOptions } from "./DisplayOptions";
-import { IntegrationLensPanel, type Lens } from "./IntegrationLens";
-import { useProjectRepoLinks } from "@/api/integrations";
+import { IntegrationLensPanel, type Lens, type LensScope } from "./IntegrationLens";
+import { useProjectRepoLinks, useRepoLinks } from "@/api/integrations";
 import {
   groupTickets,
   type DisplayContext,
@@ -29,7 +29,7 @@ import { useRuns, runsApi } from "@/api/runs";
 import { useProjects } from "@/api/projects";
 import { useProfiles } from "@/api/profiles";
 import { useLabels } from "@/api/labels";
-import type { RunOut, TicketOut } from "@/api/types";
+import type { ProjectOut, RunOut, TicketOut } from "@/api/types";
 import { applyFilter, commitTrailingToken, parseFilter, type FilterContext } from "./filterModel";
 import { useTicketActions } from "@/lib/ticketActions";
 import { useKeybinds, type Keybind } from "@/lib/keymap";
@@ -102,23 +102,55 @@ export function TicketsPage() {
     [projectsQ.data],
   );
 
-  // Project-lens integration (Issues / MRs). Available only when the filter
-  // names exactly one project that has repo links attached (§7).
-  const lensProject = useMemo(() => {
-    const tok = parseFilter(filter).tokens.find((t) => t.key === "project");
-    if (!tok) return undefined;
-    const v = tok.value.toLowerCase();
-    return (projectsQ.data ?? []).find(
-      (p) => p.slug.toLowerCase() === v || p.id === tok.value || p.name.toLowerCase() === v,
-    );
+  // Integration lens (Issues / MRs). Toggles appear whenever the install has any
+  // repo links at all; the panel scope depends on whether the filter resolves
+  // exactly one *linked* project (§7). No single linked project → browse every
+  // repo link; a single project with no links → action-directing empty state.
+  const repoLinksQ = useRepoLinks();
+  const allRepoLinks = repoLinksQ.data ?? [];
+
+  // Distinct projects named by `project:` tokens in the current filter.
+  const resolvedProjects = useMemo(() => {
+    const toks = parseFilter(filter).tokens.filter((t) => t.key === "project");
+    const projects = projectsQ.data ?? [];
+    const seen = new Set<string>();
+    const out: ProjectOut[] = [];
+    for (const tok of toks) {
+      const v = tok.value.toLowerCase();
+      const p = projects.find(
+        (pp) => pp.slug.toLowerCase() === v || pp.id === tok.value || pp.name.toLowerCase() === v,
+      );
+      if (p && !seen.has(p.id)) {
+        seen.add(p.id);
+        out.push(p);
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, projectsQ.data]);
-  const lensRepos = useProjectRepoLinks(lensProject?.id ?? "");
-  const lensAvailable = !!lensProject && (lensRepos.data?.length ?? 0) > 0;
+
+  const singleProject = resolvedProjects.length === 1 ? resolvedProjects[0] : undefined;
+  const projectReposQ = useProjectRepoLinks(singleProject?.id ?? "");
+  const projectRepos = projectReposQ.data ?? [];
+
+  const lensAvailable = allRepoLinks.length > 0;
+
+  const lensScope: LensScope = singleProject
+    ? projectRepos.length > 0
+      ? { kind: "project", projectId: singleProject.id }
+      : { kind: "unlinked", projectId: singleProject.id }
+    : { kind: "global" };
+  const lensRepos = lensScope.kind === "global" ? allRepoLinks : projectRepos;
+  // Defer the empty state until the per-project repo-link list resolves, so a
+  // linked project never flashes the "no repositories" state on the way in.
+  const lensResolving =
+    repoLinksQ.isLoading || (resolvedProjects.length === 1 && projectReposQ.isLoading);
+
   const [lens, setLens] = useState<"tickets" | Lens>("tickets");
   useEffect(() => {
     if (!lensAvailable && lens !== "tickets") setLens("tickets");
   }, [lensAvailable, lens]);
-  const lensActive = lens !== "tickets" && !!lensProject;
+  const lensActive = lens !== "tickets" && lensAvailable;
   const latestRun = useMemo(() => latestRunMap(runsQ.data ?? []), [runsQ.data]);
 
   // Non-archived tickets, filtered.
@@ -427,8 +459,14 @@ export function TicketsPage() {
           peekTicket && "lg:pr-[420px]",
         )}
       >
-        {lensActive && lensProject ? (
-          <IntegrationLensPanel projectId={lensProject.id} lens={lens as Lens} />
+        {lensActive ? (
+          <IntegrationLensPanel
+            scope={lensScope}
+            lens={lens as Lens}
+            repos={lensRepos}
+            projects={projectsQ.data ?? []}
+            loading={lensResolving}
+          />
         ) : ticketsQ.isLoading ? (
           <div className="grid h-full place-items-center text-sm text-moon-600">Loading tickets…</div>
         ) : visible.length === 0 ? (
