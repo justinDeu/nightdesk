@@ -155,7 +155,7 @@ export function WorkerPill() {
             {TONE_LABEL[tone]}
           </span>
           <span aria-hidden className="hidden h-3 w-px shrink-0 bg-ink-700 sm:inline" />
-          <span className="shrink-0 font-mono tabular-nums text-moon-300">{slots}</span>
+          <span className="shrink-0 font-mono tabular-nums text-moon-400">{slots}</span>
           <span aria-hidden className="hidden h-3 w-px shrink-0 bg-ink-700 sm:inline" />
           <span className="hidden shrink-0 font-mono sm:inline">
             <span className="text-lamp">{formatUsd(data?.day_spend_usd)}</span>
@@ -218,7 +218,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-0.5">
       <dt className="shrink-0 text-[11px] text-moon-600">{label}</dt>
-      <dd className="min-w-0 truncate text-right font-mono text-[11px] text-moon-200">
+      <dd className="min-w-0 truncate text-right font-mono text-[11px] text-moon-100">
         {children}
       </dd>
     </div>
@@ -341,7 +341,7 @@ function WorkerPopoverContent({
             <span className="text-moon-400">{formatTokens(data.day_tokens)} tok</span>
           </Row>
           <Row label="Month to date">
-            <span className="text-moon-200">{formatUsd(data.month_spend_usd)}</span>
+            <span className="text-moon-100">{formatUsd(data.month_spend_usd)}</span>
           </Row>
         </dl>
 
@@ -377,7 +377,7 @@ function WorkerPopoverContent({
                     className="flex items-center gap-2 rounded-control px-1.5 py-0.5"
                   >
                     <Cpu size={10} className="shrink-0 text-moon-600" />
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-moon-300">
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-moon-400">
                       {m.model}
                     </span>
                     <span className="shrink-0 font-mono text-[11px] text-lamp">
@@ -390,7 +390,7 @@ function WorkerPopoverContent({
                 ))}
               </ul>
             )}
-            <p className="flex items-center gap-1 px-1 pt-0.5 text-[9px] text-moon-700">
+            <p className="flex items-center gap-1 px-1 pt-0.5 text-[9px] text-moon-600">
               <Clock size={9} />
               repriced · {spend.price_source}
             </p>
