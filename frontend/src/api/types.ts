@@ -734,6 +734,13 @@ export interface BackendOut {
   runtime: BackendRuntimeOut | null;
 }
 
+export interface RunningTicketOut {
+  id: string;
+  title: string;
+  started_at: string;
+  run_now: boolean;
+}
+
 export interface WorkerStatusOut {
   host: string | null;
   pid: number | null;
@@ -751,6 +758,12 @@ export interface WorkerStatusOut {
   running_count: number;
   day_spend_usd: number;
   month_spend_usd: number;
+  /** The backend's own clock at response time (aware UTC ISO). */
+  server_now: string;
+  /** Today's completed-run token total (input + output + cache read/write). */
+  day_tokens: number;
+  /** The tickets behind `total_running`, newest first, capped server-side. */
+  running_tickets: RunningTicketOut[];
 }
 
 // --- Search --------------------------------------------------------------------

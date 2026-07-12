@@ -162,6 +162,9 @@ export interface SpendResponse {
   by_ticket: SpendTicketRow[];
   by_project: ProjectRollupRow[];
   daily_series: DailyPoint[];
+  // Price provenance for the repriced figures (mirrors AnalyticsSpendOut).
+  price_source: string;
+  price_as_of: string;
 }
 
 const BASE = "/api/v1/analytics";

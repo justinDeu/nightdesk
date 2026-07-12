@@ -828,6 +828,17 @@ class ConfigUpdate(BaseModel):
         return v
 
 
+class RunningTicketOut(BaseModel):
+    """One currently-running ticket, surfaced so the header popover can link
+    straight to it. Rooted on in-flight ``Run`` rows (``finished_at`` IS NULL)
+    so a ticket wedged in ``running`` without a Run row doesn't appear here."""
+
+    id: str
+    title: str
+    started_at: datetime
+    run_now: bool = False
+
+
 class WorkerStatusOut(BaseModel):
     host: Optional[str] = None
     pid: Optional[int] = None
@@ -847,6 +858,17 @@ class WorkerStatusOut(BaseModel):
     # Live completed-run spend estimate for the header chip / worker pill.
     day_spend_usd: float = 0.0
     month_spend_usd: float = 0.0
+    # The backend's own clock at response time (aware UTC instant). The header
+    # popover renders this localized to ``schedule_timezone`` so the user can
+    # see what time the scheduler thinks it is, without a second round trip.
+    server_now: datetime
+    # Today's completed-run token total (input + output + cache read + cache
+    # write), a cheap SUM that keeps the popover rich without hitting the
+    # (heavier) analytics dashboard endpoint.
+    day_tokens: int = 0
+    # The tickets behind ``total_running``, newest first, so the popover can
+    # link to each. Capped to avoid an unbounded response.
+    running_tickets: list[RunningTicketOut] = []
 
 
 class SearchHit(BaseModel):

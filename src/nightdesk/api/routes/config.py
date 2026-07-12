@@ -11,6 +11,7 @@ from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
     ConfigOut,
     ConfigUpdate,
+    RunningTicketOut,
     ScheduleWindowCreate,
     ScheduleWindowOut,
     ScheduleWindowUpdate,
@@ -18,11 +19,14 @@ from nightdesk.api.schemas import (
     WorkerStatusOut,
 )
 from nightdesk.db.models import ConfigRow, Run, ScheduleWindow, Ticket, WorkerHeartbeat
-from nightdesk.domain.analytics import compute_spend_status
+from nightdesk.domain.analytics import compute_spend_status, start_of_day
 from nightdesk.worker.scheduler import capacity_for, window_matches
 
 
 _STALE_THRESHOLD_SECONDS = 30.0
+# Cap on the running-tickets list so a worker with many in-flight runs keeps
+# the status response small; the counts above still report the true total.
+_MAX_RUNNING_TICKETS = 25
 
 
 def _ensure_config(session: Session, *, worktree_root: str, transcript_root: str) -> ConfigRow:
@@ -203,6 +207,37 @@ def build_router(get_session, bearer_token: str, scoped, *, worktree_root: str,
 
         spend = compute_spend_status(session, now=now, tz=tz)
 
+        # Today's completed-run token total (cheap single SUM), localized to
+        # the schedule zone the same way ``spend`` is.
+        day_start = start_of_day(now, tz)
+        day_tokens = session.scalar(
+            select(
+                func.coalesce(func.sum(Run.input_tokens), 0)
+                + func.coalesce(func.sum(Run.output_tokens), 0)
+                + func.coalesce(func.sum(Run.cache_read_tokens), 0)
+                + func.coalesce(func.sum(Run.cache_write_tokens), 0)
+            ).where(Run.started_at >= day_start)
+        )
+        day_tokens = int(day_tokens or 0)
+
+        # The tickets behind the running counts, newest first. Rooted on
+        # in-flight Run rows so the list and ``total_running`` can never
+        # disagree. Capped so a runaway worker can't balloon the response.
+        running_rows = session.execute(
+            select(Ticket.id, Ticket.title, Run.started_at, Run.started_as_run_now)
+            .select_from(Run)
+            .join(Ticket, Run.ticket_id == Ticket.id)
+            .where(Run.finished_at.is_(None))
+            .order_by(Run.started_at.desc())
+            .limit(_MAX_RUNNING_TICKETS)
+        ).all()
+        running_tickets = [
+            RunningTicketOut(
+                id=tid, title=title or "", started_at=started, run_now=bool(run_now)
+            )
+            for tid, title, started, run_now in running_rows
+        ]
+
         stale = True
         last_seen_at = None
         host = None
@@ -234,6 +269,9 @@ def build_router(get_session, bearer_token: str, scoped, *, worktree_root: str,
             running_count=total_running,
             day_spend_usd=spend.day_spend_usd,
             month_spend_usd=spend.month_spend_usd,
+            server_now=now,
+            day_tokens=day_tokens,
+            running_tickets=running_tickets,
         )
 
     return router
