@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, Pencil } from "lucide-react";
+import { ChevronRight, Maximize2, Pencil } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { Textarea } from "@/ui/Input";
+import { Dialog } from "@/ui/Dialog";
 import { useUnsavedGuard } from "@/lib/useUnsavedGuard";
 import { cn } from "@/lib/cn";
 import type { TicketOut } from "@/api/types";
@@ -159,5 +160,155 @@ function BriefPanel({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Rail placement for the agent prompt once a ticket has runs: a single-line row
+ * (label + preview snippet + open icon) that opens a large dialog instead of
+ * expanding inside the narrow rail. Long prompts are unreadable in a 264px
+ * column, so the body lives in a wide, internally-scrolling, monospaced dialog.
+ * Edit happens inside the dialog with the same unsaved-guard behavior the
+ * collapsible BriefPanel uses.
+ */
+export function PromptRailRow({
+  ticket,
+  onSave,
+}: {
+  ticket: TicketOut;
+  onSave: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const prompt = ticket.prompt ?? "";
+  const hasText = prompt.trim().length > 0;
+  const firstLine = prompt.trim().split("\n").find((l) => l.trim()) ?? "";
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="group flex w-full items-center gap-2 rounded-card border border-ink-700 bg-ink-900 px-3 py-2 text-left hover:bg-ink-800"
+        aria-label="View agent prompt"
+      >
+        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-moon-400">
+          Agent prompt
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-moon-600">
+          {hasText ? firstLine : "No prompt yet — click to write one"}
+        </span>
+        <Maximize2
+          size={12}
+          className="shrink-0 text-moon-600 group-hover:text-moon-100"
+        />
+      </button>
+      <PromptDialog
+        open={open}
+        onOpenChange={setOpen}
+        value={prompt}
+        onSave={onSave}
+      />
+    </>
+  );
+}
+
+function PromptDialog({
+  open,
+  onOpenChange,
+  value,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  value: string;
+  onSave: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+
+  const dirty = editing && draft !== value;
+  useUnsavedGuard(dirty);
+
+  const save = () => {
+    onSave(draft);
+    setEditing(false);
+  };
+  const cancel = () => {
+    setDraft(value);
+    setEditing(false);
+  };
+  // Route blocker + beforeunload don't cover Radix's own close triggers
+  // (Escape, overlay, X); confirm those here, same as TicketPeek's dialog.
+  const requestClose = (next: boolean) => {
+    if (!next && dirty && !window.confirm("Discard your unsaved prompt changes?")) return;
+    onOpenChange(next);
+  };
+  const close = () => {
+    requestClose(false);
+  };
+
+  const hasText = value.trim().length > 0;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={requestClose}
+      title="Agent prompt"
+      description="The instructions the agent actually runs."
+      size="xl"
+      footer={
+        editing ? (
+          <>
+            <Button size="sm" variant="ghost" onClick={cancel}>
+              Cancel
+            </Button>
+            <Button size="sm" variant="primary" onClick={save}>
+              Save prompt
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button size="sm" variant="ghost" onClick={close}>
+              Close
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              leadingIcon={<Pencil size={13} />}
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </Button>
+          </>
+        )
+      }
+    >
+      {editing ? (
+        <Textarea
+          autoFocus
+          mono
+          className="h-[44vh] max-h-[55dvh]"
+          placeholder="The instructions the agent actually runs."
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      ) : (
+        // Body scrolls internally (capped at 55dvh) so the title + footer stay
+        // fixed and the dialog never grows past the viewport. Mono + preserved
+        // whitespace so prompts read like they do in the transcript.
+        <div className="max-h-[55dvh] overflow-y-auto overscroll-contain rounded-control border border-ink-700/60 bg-ink-950/60 p-3">
+          {hasText ? (
+            <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-moon-100">
+              {value}
+            </pre>
+          ) : (
+            <p className="text-sm italic text-moon-600">
+              No prompt yet — click Edit to write one.
+            </p>
+          )}
+        </div>
+      )}
+    </Dialog>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { History, Maximize2, Zap } from "lucide-react";
+import { Cpu, History, Maximize2, Zap } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { ErrorState } from "@/ui/ErrorState";
 import { useTicketActions } from "@/lib/ticketActions";
@@ -23,9 +23,10 @@ import { SubagentsPanel } from "@/components/SubagentsPanel";
 import { DetailHeader } from "./detail/DetailHeader";
 import { PropertiesRail } from "./detail/PropertiesRail";
 import { ActivityComposer } from "./detail/ActivityComposer";
-import { DescriptionPanel, PromptPanel } from "./detail/BriefPanels";
+import { DescriptionPanel, PromptPanel, PromptRailRow } from "./detail/BriefPanels";
 import { RunTimeline } from "./RunTimeline";
-import { relativeTime } from "@/lib/time";
+import { relativeTime, durationBetween } from "@/lib/time";
+import { formatUsd, formatTokens } from "@/lib/status";
 import { cn } from "@/lib/cn";
 
 /**
@@ -108,8 +109,8 @@ export function TicketDetailPage() {
     <div className="flex h-full min-h-0 flex-col">
       <DetailHeader
         ticket={t}
-        latestRun={latestRun}
         onSaveTitle={(title) => update.mutate({ title })}
+        onSaveDescription={(description) => update.mutate({ description })}
       />
 
       <div
@@ -129,13 +130,7 @@ export function TicketDetailPage() {
             ticket={t}
             brief={
               hasRuns ? (
-                <>
-                  <DescriptionPanel
-                    ticket={t}
-                    onSave={(description) => update.mutate({ description })}
-                  />
-                  <PromptPanel ticket={t} onSave={(prompt) => update.mutate({ prompt })} />
-                </>
+                <PromptRailRow ticket={t} onSave={(prompt) => update.mutate({ prompt })} />
               ) : null
             }
           />
@@ -153,17 +148,34 @@ export function TicketDetailPage() {
           {hasRuns ? (
             <>
               <div className="flex min-h-0 flex-1 flex-col px-5 pt-3">
-                <div className="mb-1.5 flex items-center justify-between">
-                  <h2 className="font-display text-xs font-semibold uppercase tracking-wide text-moon-400">
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <h2 className="min-w-0 truncate font-display text-xs font-semibold uppercase tracking-wide text-moon-400">
                     {running ? "Live transcript" : "Run transcript"}
                   </h2>
+                  {/* Relocated run timer: a compact mono chip inline with the
+                      transcript title. It is the theater anchor (real <Link>,
+                      so middle-click opens the run theater in a new tab). */}
                   {latestRun && (
                     <Link
                       to="/tickets/$id/runs/$rid"
                       params={{ id: t.id, rid: latestRun.id }}
-                      className="inline-flex items-center gap-1 text-[11px] text-moon-400 hover:text-moon-100"
+                      className="inline-flex shrink-0 items-center gap-2 rounded-control border border-ink-700 bg-ink-900 px-2 py-0.5 font-mono text-[11px] text-moon-400 hover:bg-ink-800 hover:text-moon-100"
                     >
-                      <Maximize2 size={11} /> Theater
+                      {latestRun.model_used && (
+                        <span className="inline-flex items-center gap-1">
+                          <Cpu size={11} /> {latestRun.model_used}
+                        </span>
+                      )}
+                      <span>{durationBetween(latestRun.started_at, latestRun.finished_at)}</span>
+                      {latestRun.cost_usd != null && (
+                        <span className="tabular-nums text-lamp">{formatUsd(latestRun.cost_usd)}</span>
+                      )}
+                      {(latestRun.input_tokens != null || latestRun.output_tokens != null) && (
+                        <span>
+                          {formatTokens((latestRun.input_tokens ?? 0) + (latestRun.output_tokens ?? 0))} tok
+                        </span>
+                      )}
+                      <Maximize2 size={11} className="text-moon-600" />
                     </Link>
                   )}
                 </div>
