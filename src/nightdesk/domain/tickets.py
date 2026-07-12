@@ -34,7 +34,7 @@ _VALID_TRANSITIONS: dict[str, set[str]] = {
     "queued":   {"draft", "running", "archived"},
     "running":  {"review"},
     "review":   {"queued", "archived"},
-    "archived": {"queued"},
+    "archived": {"queued", "inbox"},  # unarchive: complete->queued, incomplete->inbox
 }
 
 _ALL_STATUSES = ("inbox", "draft", "queued", "running", "review", "archived")
@@ -643,30 +643,54 @@ def reorder_in_column(
     return out
 
 
-_ARCHIVABLE_SOURCES = {"draft", "queued", "review"}
-
-
 def archive(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
-    """Convenience: draft|queued|review -> archived.
+    """Archive any ticket that is not actively running.
 
-    ``draft``/``queued`` archiving is the non-destructive way to discard a
-    ticket that will never run (abandoned triage, or finished out of band) —
-    the alternative is a destructive ``delete_ticket``. ``running`` is
-    deliberately excluded: a live run must go through ``review`` first
-    (cancel or finish) before it can be archived.
+    Policy: ``inbox``, ``draft``, ``queued``, and ``review`` are ALL
+    archivable — archiving is the non-destructive way to discard a ticket that
+    will never run (stale triage, an abandoned draft, work finished out of
+    band); the destructive alternative is ``delete_ticket``. ``running`` is the
+    ONE exception: a live run must reach ``review`` first (cancel or finish)
+    before it can be archived. An already-``archived`` ticket is a no-op
+    (idempotent) so callers can archive without first checking current state.
+
+    A queued ticket is cleanly removed from the queue: its ``run_now`` flag is
+    cleared so the scheduler can never pick it and a later ``unarchive`` does
+    not surprise the caller with an immediate run.
     """
     t = get_ticket(session, ticket_id)
-    if t.status not in _ARCHIVABLE_SOURCES:
-        raise InvalidTransition(f"cannot archive from {t.status}")
+    if t.status == "running":
+        raise InvalidTransition("cannot archive a running ticket")
+    if t.status == "archived":
+        return t
+    # Clear run_now so a queued ticket leaves the scheduler's radar and a later
+    # unarchive does not auto-run. transition_status (below) commits this.
+    t.run_now = False
     return transition_status(session, ticket_id, "archived", actor=actor)
 
 
 def unarchive(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
-    """Convenience: archived -> queued."""
+    """Reverse an archive, routing the ticket to a status it can actually use.
+
+    A *complete* ticket (title + profile + primary workspace — everything a run
+    needs, per ``ticket_completeness``) goes back to ``queued`` and is staged
+    for the scheduler. An *incomplete* one goes back to ``inbox`` instead.
+
+    The inbox routing matters because archiving is allowed from any non-running
+    status: an under-specified inbox item (no profile/workspace, even no title)
+    can be archived, and sending it straight to ``queued`` on unarchive would
+    let the scheduler pick it (the completeness gate in
+    ``transition_with_position`` only fires when the SOURCE is ``inbox``, and
+    here the source is ``archived``) — the run would then fail on missing
+    fields. Triage items come back to triage, finished work comes back to the
+    queue. ``archived → inbox`` is a domain-only hop: like ``draft → inbox`` it
+    is NOT a valid ``POST /transition`` target (the API enum excludes inbox).
+    """
     t = get_ticket(session, ticket_id)
     if t.status != "archived":
         raise InvalidTransition(f"cannot unarchive from {t.status}")
-    return transition_status(session, ticket_id, "queued", actor=actor)
+    target = "inbox" if ticket_completeness(t) else "queued"
+    return transition_status(session, ticket_id, target, actor=actor)
 
 
 def send_to_inbox(session: Session, ticket_id: str) -> Ticket:
@@ -1308,11 +1332,12 @@ def bulk_archive(
     session: Session,
     ticket_ids: list[str],
 ) -> tuple[list[Ticket], list[dict]]:
-    """Bulk archive.  Archives each ticket that is in ``draft``, ``queued``, or
-    ``review`` (see ``_ARCHIVABLE_SOURCES``); every other ticket (e.g.
-    ``running``, already ``archived``) is skipped with a reason rather than
-    failing the whole batch.  Returns ``(updated, skipped)`` where each
-    skipped entry is ``{"ticket_id": ..., "reason": ...}``."""
+    """Bulk archive.  Archives every ticket that is not actively running (see
+    ``archive``): ``inbox``/``draft``/``queued``/``review`` all move to
+    ``archived`` and an already-``archived`` ticket is a no-op success; a
+    ``running`` ticket is skipped with a reason rather than failing the whole
+    batch.  Returns ``(updated, skipped)`` where each skipped entry is
+    ``{"ticket_id": ..., "reason": ...}``."""
     updated: list[Ticket] = []
     skipped: list[dict] = []
     for tid in ticket_ids:
@@ -1330,9 +1355,10 @@ def bulk_unarchive(
     session: Session,
     ticket_ids: list[str],
 ) -> tuple[list[Ticket], list[dict]]:
-    """Bulk unarchive.  Returns each archived ticket to ``queued`` (the
-    supported reverse of archiving) and is the undo path for ``bulk_archive``.
-    Tickets that are not archived are skipped.  Returns ``(updated, skipped)``."""
+    """Bulk unarchive.  Returns each archived ticket to ``queued`` if complete
+    or ``inbox`` if incomplete (the supported reverse of archiving — see
+    ``unarchive``) and is the undo path for ``bulk_archive``.  Tickets that are
+    not archived are skipped.  Returns ``(updated, skipped)``."""
     updated: list[Ticket] = []
     skipped: list[dict] = []
     for tid in ticket_ids:

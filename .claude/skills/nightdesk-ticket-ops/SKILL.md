@@ -26,13 +26,13 @@ Valid transitions (`_VALID_TRANSITIONS`, `src/nightdesk/domain/tickets.py:28`):
 | `queued` | `draft`, `running`, `archived` |
 | `running` | `review` |
 | `review` | `queued`, `archived` |
-| `archived` | `queued` |
+| `archived` | `queued`, `inbox` (unarchive: complete→queued, incomplete→inbox; `inbox` is domain-only, not a `/transition` target) |
 
 Anything else returns `409 invalid transition`. Dropping into `running` from `draft` or `queued` sets `run_now=true` so the scheduler picks it on the next tick.
 
 **API surface caveats — the state machine and the JSON API don't fully line up:**
 - `POST /api/v1/tickets/{tid}/transition` only accepts targets `draft|queued|running|review|archived`. **`inbox` is NOT a valid `/transition` target** even though `draft → inbox` is state-machine-legal. There is a dedicated endpoint for that one hop instead — `POST /api/v1/tickets/{tid}/send-to-inbox`, valid ONLY from `draft` (`409` from any other status; see "Send to inbox" below). Tickets otherwise move *into* `inbox` by being captured there directly at creation (`status: "inbox"`).
-- `archived` is reachable from `review` (`/archive` or `transition status=archived`), from `draft`/`queued` directly (`/archive` or `transition status=archived` — both now archivable, not just `review`), or from `inbox` (decline).
+- **Archive policy: any ticket that is not actively running can be archived.** `POST /api/v1/tickets/{tid}/archive` works from `inbox`, `draft`, `queued`, and `review` — `running` is the ONLY status that returns `409` (cancel or finish the run to `review` first). `inbox → archived` is identical to decline. `transition status=archived` reaches the same place from any non-running source. Archiving is idempotent (an already-`archived` ticket is a no-op `200`), and archiving a `queued` ticket clears its `run_now` flag so it cleanly leaves the scheduler queue.
 
 ### Send to inbox
 
@@ -394,9 +394,13 @@ curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
 
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/cancel"     # running → review
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/requeue"    # review|archived → queued
-curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/archive"    # review → archived
-curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/unarchive"  # archived → queued
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/archive"    # inbox|draft|queued|review → archived (NOT running — 409)
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/unarchive"  # archived → queued (complete) | inbox (incomplete)
 ```
+
+`/archive` accepts **any status except `running`** — you do not need to move a ticket to `review` (or anywhere else) before archiving it. A stale draft, a queued ticket, and an inbox triage item can all be archived directly.
+
+`/unarchive` routes by completeness (it does **not** always land in `queued`): a *complete* ticket (title + profile + primary workspace) returns to `queued` and is staged for the scheduler; an *incomplete* one — e.g. an under-specified inbox item you archived — returns to `inbox` so the scheduler never picks a ticket missing the fields a run needs. (The `archived → inbox` hop is domain-only; it is still not a valid `POST /transition` target.)
 
 ## Delete
 
