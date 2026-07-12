@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Bot, Mail, MailOpen, Plus, Trash2 } from "lucide-react";
 import { Page } from "@/components/Page";
+import { ExperimentalBanner } from "@/components/ExperimentalBanner";
 import { Button } from "@/ui/Button";
 import { Dialog } from "@/ui/Dialog";
 import { Field, Input } from "@/ui/Input";
@@ -73,6 +74,7 @@ export function AgentsPage() {
         </Button>
       }
     >
+      <ExperimentalBanner feature="Agent sessions" storageKey="agents" className="mb-4" />
       {agentsQ.isError ? (
         <ErrorState
           title="Could not load agents"

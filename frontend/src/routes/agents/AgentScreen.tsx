@@ -13,6 +13,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/ui/Button";
+import { ExperimentalBanner } from "@/components/ExperimentalBanner";
 import { IconButton } from "@/ui/IconButton";
 import { Input } from "@/ui/Input";
 import { Dialog } from "@/ui/Dialog";
@@ -475,6 +476,12 @@ export function AgentScreen() {
           </Button>
         )}
       </header>
+
+      <ExperimentalBanner
+        feature="Agent sessions"
+        storageKey="agents"
+        className="mx-4 mt-3 sm:mx-6"
+      />
 
       {/* Body: transcript stage + right rail */}
       <div

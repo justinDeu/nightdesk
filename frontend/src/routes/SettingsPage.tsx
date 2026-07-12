@@ -19,6 +19,7 @@ import {
   Terminal,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { ExperimentalBanner } from "@/components/ExperimentalBanner";
 import { SchedulingSection } from "@/routes/settings/SchedulingSection";
 import { ClaudeSection } from "@/routes/settings/ClaudeSection";
 import { AgentsSection } from "@/routes/settings/AgentsSection";
@@ -39,17 +40,18 @@ interface SectionMeta {
   label: string;
   icon: ComponentType<{ size?: number | string; className?: string }>;
   component: ComponentType;
+  experimental?: boolean;
 }
 
 const SECTIONS: SectionMeta[] = [
   { slug: "scheduling", label: "Scheduling", icon: CalendarClock, component: SchedulingSection },
   // Slug stays "claude" for URL stability even though the section now covers
   // every harness (Claude Code + opencode) — see ClaudeSection.tsx.
-  { slug: "claude", label: "Harnesses", icon: Terminal, component: ClaudeSection },
-  { slug: "agents", label: "Agents", icon: Bot, component: AgentsSection },
-  { slug: "providers", label: "Providers", icon: Cable, component: ProvidersSection },
-  { slug: "connections", label: "Connections", icon: GitMerge, component: ConnectionsSection },
-  { slug: "cloud-sandbox", label: "Cloud sandbox", icon: Cloud, component: CloudSandboxSection },
+  { slug: "claude", label: "Harnesses", icon: Terminal, component: ClaudeSection, experimental: true },
+  { slug: "agents", label: "Agents", icon: Bot, component: AgentsSection, experimental: true },
+  { slug: "providers", label: "Providers", icon: Cable, component: ProvidersSection, experimental: true },
+  { slug: "connections", label: "Connections", icon: GitMerge, component: ConnectionsSection, experimental: true },
+  { slug: "cloud-sandbox", label: "Cloud sandbox", icon: Cloud, component: CloudSandboxSection, experimental: true },
   { slug: "worktrees", label: "Worktrees", icon: FolderGit2, component: WorktreesSection },
   { slug: "notifications", label: "Notifications", icon: Bell, component: NotificationsSection },
   { slug: "labels", label: "Labels", icon: Tag, component: LabelsSection },
@@ -58,7 +60,7 @@ const SECTIONS: SectionMeta[] = [
   { slug: "toolsets", label: "Toolsets", icon: Sparkles, component: ToolsetsSection },
   // Slug "tokens" matches the API surface (/api/v1/tokens) and the deep link
   // users reach for (/settings/tokens).
-  { slug: "tokens", label: "Access tokens", icon: KeyRound, component: AccessTokensSection },
+  { slug: "tokens", label: "Access tokens", icon: KeyRound, component: AccessTokensSection, experimental: true },
   { slug: "diagnostics", label: "Diagnostics", icon: Stethoscope, component: DiagnosticsSection },
 ];
 
@@ -133,6 +135,13 @@ export function SettingsPage() {
         >
           <ChevronLeft size={15} /> Settings
         </Link>
+        {active.experimental && (
+          <ExperimentalBanner
+            feature={active.label}
+            storageKey={`settings-${active.slug}`}
+            className="mb-4"
+          />
+        )}
         <ActiveComponent />
       </div>
     </div>
