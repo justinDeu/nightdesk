@@ -167,6 +167,30 @@ export interface SpendResponse {
   price_as_of: string;
 }
 
+/** One model's current effective per-1M-token rates + provenance, from
+ *  GET /analytics/prices. Rates are null / source "none" when the model is
+ *  unpriceable. `repriced_since` flags a model whose in-range run snapshots
+ *  disagree with the current rates. */
+export interface PriceRow {
+  model: string;
+  vendor: string;
+  input: number | null;
+  output: number | null;
+  cache_write: number | null;
+  cache_read: number | null;
+  source: "live" | "cache" | "bundled" | "none";
+  as_of: string | null;
+  repriced_since: boolean;
+}
+
+export interface PricesResponse {
+  range: string;
+  project_id: string | null;
+  source: string;
+  as_of: string;
+  prices: PriceRow[];
+}
+
 const BASE = "/api/v1/analytics";
 
 // Analytics API v2 ships server-side project scoping (project_id on all four
@@ -189,6 +213,8 @@ export const analyticsApi = {
     api.get<TokensResponse>(`${BASE}/tokens`, { query: scopeQuery(range, projectId) }),
   latency: (range: AnalyticsRange, projectId?: string | null) =>
     api.get<LatencyResponse>(`${BASE}/latency`, { query: scopeQuery(range, projectId) }),
+  prices: (range: AnalyticsRange, projectId?: string | null) =>
+    api.get<PricesResponse>(`${BASE}/prices`, { query: scopeQuery(range, projectId) }),
 };
 
 /**
@@ -237,5 +263,15 @@ export function useAnalyticsLatency(range: AnalyticsRange, projectId?: string | 
     queryKey: ["analytics", "latency", range, projectId ?? null],
     queryFn: () => analyticsApi.latency(range, projectId),
     refetchInterval: SPEND_POLL,
+  });
+}
+
+// Prices move slowly (and the panel is on-demand), so this does not poll on the
+// spend cadence — it refetches when range/project change, which is enough for a
+// rates reference.
+export function useAnalyticsPrices(range: AnalyticsRange, projectId?: string | null) {
+  return useQuery({
+    queryKey: ["analytics", "prices", range, projectId ?? null],
+    queryFn: () => analyticsApi.prices(range, projectId),
   });
 }

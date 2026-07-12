@@ -13,6 +13,7 @@ import { formatTokens, formatUsd } from "@/lib/status";
 import {
   isUnpriced,
   useAnalyticsLatency,
+  useAnalyticsPrices,
   useAnalyticsSpend,
   useAnalyticsSummary,
   type AnalyticsRange,
@@ -31,6 +32,7 @@ import {
   TokensBars,
   type BreakdownRow,
 } from "./charts";
+import { ModelPricing } from "./ModelPricing";
 
 const RANGES: { key: AnalyticsRange; label: string }[] = [
   { key: "today", label: "Today" },
@@ -43,6 +45,13 @@ const ALL_PROJECTS = "__all__";
 function pct(v: number | null | undefined): string {
   if (v == null) return "—";
   return `${Math.round(v * 100)}%`;
+}
+
+/** Provenance label for the Model pricing header (overall source · as-of). */
+function priceProvenanceLabel(source: string, asOf: string): string {
+  if (source === "live") return `live · ${asOf}`;
+  if (source === "cache") return `cached · ${asOf}`;
+  return `bundled · ${asOf}`;
 }
 
 export function AnalyticsPage() {
@@ -66,6 +75,7 @@ export function AnalyticsPage() {
   const summaryQ = useAnalyticsSummary();
   const spendQ = useAnalyticsSpend(range, activeProject);
   const latencyQ = useAnalyticsLatency(range, activeProject);
+  const pricesQ = useAnalyticsPrices(range, activeProject);
   const projectsQ = useProjects();
 
   const summary = summaryQ.data;
@@ -383,6 +393,16 @@ export function AnalyticsPage() {
                 />
               </ChartCard>
             </div>
+            <ModelPricing
+              models={visibleModels}
+              prices={pricesQ.data?.prices}
+              loading={pricesQ.isLoading}
+              sourceLabel={
+                pricesQ.data
+                  ? priceProvenanceLabel(pricesQ.data.source, pricesQ.data.as_of)
+                  : ""
+              }
+            />
           </Section>
 
           {/* ── Token usage ──────────────────────────────────────── */}

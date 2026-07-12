@@ -23,7 +23,7 @@ import math
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Mapping, Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import case, func, select
@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from nightdesk.db.models import Profile, Project, Run, RunLatency, Ticket
 from nightdesk.domain import pricing
+from nightdesk.domain.cost import PRICES_AS_OF
 from nightdesk.domain.pricing import PriceInfo
 
 
@@ -835,6 +836,167 @@ def project_rollups(
             "estimated": a["estimated_runs"] > 0,
         })
     rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return rows
+
+
+# --------------------------------------------------------------------------
+# Current effective price set (the per-model rates behind the cost numbers).
+# --------------------------------------------------------------------------
+# The four rate components in the column order the UI displays them.
+_PRICE_COMPONENTS = ("input", "output", "cache_write", "cache_read")
+
+
+def _infer_vendor(model: str) -> str:
+    """Best-effort vendor for a model id with no run-time vendor on record.
+
+    Covers the vendors the bundled table knows (anthropic, zai, openai). A
+    model that doesn't match falls back to ``"anthropic"`` — the historical
+    default (the bundled table is anthropic-centric, and
+    :func:`nightdesk.domain.pricing.resolve_vendor_price`'s explicit anthropic
+    branch then resolves it through live-then-bundled the way legacy analytics
+    repricing always has). Used only when no in-range run carried a vendor in
+    its ``pricing_snapshot``.
+    """
+    m = model.lower()
+    if m.startswith("glm"):
+        return "zai"
+    if m.startswith(("gpt-", "o1", "o3", "o4")) or "openai/" in m:
+        return "openai"
+    return "anthropic"
+
+
+def _snapshot_entry(snapshot: object, model: str) -> Optional[dict]:
+    """The ``model``'s entry in a run ``pricing_snapshot``, or None.
+
+    ``pricing_snapshot`` is ``{model_id: {vendor?, input, output, cache_read,
+    cache_write, ...}}`` (see
+    :func:`nightdesk.domain.pricing.build_pricing_snapshot`). A missing or
+    malformed snapshot yields None so callers degrade gracefully.
+    """
+    if not isinstance(snapshot, dict):
+        return None
+    entry = snapshot.get(model)
+    return entry if isinstance(entry, dict) else None
+
+
+def _entry_rates(entry: Optional[dict]) -> Optional[dict[str, float]]:
+    """The four rate components off a snapshot entry, or None if incomplete.
+
+    None (rather than a partial dict) so a caller comparing against current
+    rates can tell "this snapshot has no cleanly comparable rates" apart from
+    "rates present" — a partially-stamped entry must not drive a false
+    ``repriced_since`` flag.
+    """
+    if entry is None:
+        return None
+    out: dict[str, float] = {}
+    for c in ("input", "output", "cache_read", "cache_write"):
+        v = entry.get(c)
+        if isinstance(v, (int, float)):
+            out[c] = float(v)
+        else:
+            return None
+    return out
+
+
+def effective_prices(
+    session: Session, *,
+    live_all: Optional[Mapping[str, tuple[Optional[str], dict[str, float]]]] = None,
+    live_source: str = "bundled",
+    live_as_of: str = "",
+    start: datetime,
+    end: Optional[datetime] = None,
+    project_id: Optional[str] = None,
+) -> list[dict]:
+    """The current effective per-model price set for runs in ``[start, end)``.
+
+    For every distinct ``model_used`` in the window: resolve its vendor (from a
+    recent run's ``pricing_snapshot`` when one carried a vendor tag, else
+    inferred from the model id), then resolve the current per-1M-token rates
+    through the same live -> cache -> bundled chain run-time snapshots use
+    (:func:`nightdesk.domain.pricing.resolve_vendor_price`).
+
+    This is the vendor-aware resolution analytics' cost numbers are built on.
+    Unlike the legacy Anthropic-only repricing path it also prices non-Anthropic
+    models (e.g. GLM via the bundled z.ai rows), so a "GLM: $27" total can
+    finally show the rates behind it.
+
+    Each row::
+
+        {model, vendor, input, output, cache_write, cache_read, source, as_of,
+         repriced_since}
+
+    ``source`` is ``"live"``/``"cache"``/``"bundled"``, or ``"none"`` when
+    nothing resolves (the four rates are then ``None`` — "no pricing", the same
+    contract :func:`nightdesk.domain.pricing.build_pricing_snapshot` uses).
+    ``as_of`` is the date the rates are current as of. ``repriced_since`` is
+    True when some in-range run's stamped snapshot rates for this model differ
+    from the current effective rates — the "prices changed since these runs"
+    hint, computed from the same single windowed query that resolves vendors
+    (not a separate per-run scan). Ordered by model name for stable output.
+    """
+    # One windowed query: every run's model + its (optional) pricing snapshot,
+    # deduped in Python to one record per model. Bounded by the window the same
+    # way the other breakdowns are; the JSON blob is small per row.
+    stmt = select(Run.model_used, Run.pricing_snapshot).where(
+        Run.started_at >= start, Run.model_used.is_not(None),
+    )
+    if end is not None:
+        stmt = stmt.where(Run.started_at < end)
+    stmt = _scope_to_project(stmt, project_id=project_id)
+
+    per_model: dict[str, dict] = {}
+    for model, snapshot in session.execute(stmt).all():
+        if not model:
+            continue
+        slot = per_model.setdefault(
+            model, {"vendor": None, "snapshot_rates": []})
+        entry = _snapshot_entry(snapshot, model)
+        if entry is not None:
+            v = entry.get("vendor")
+            if isinstance(v, str) and v and not slot["vendor"]:
+                slot["vendor"] = v
+            rates = _entry_rates(entry)
+            if rates is not None:
+                slot["snapshot_rates"].append(rates)
+
+    rows: list[dict] = []
+    for model in sorted(per_model):
+        data = per_model[model]
+        vendor = data["vendor"] or _infer_vendor(model)
+        prices, source = pricing.resolve_vendor_price(
+            vendor, model, live_all=live_all, live_source=live_source,
+        )
+        if prices is None:
+            row_rates: dict = {c: None for c in _PRICE_COMPONENTS}
+            as_of: Optional[str] = None
+            src = "none"
+        else:
+            row_rates = prices
+            src = source
+            as_of = live_as_of if source in ("live", "cache") else PRICES_AS_OF
+        # "repriced since": any in-range snapshot for this model whose stored
+        # rates differ from the current effective rates (cheap — gathered
+        # above in the same pass). Only meaningful when we have current rates
+        # to compare against; a model unpriceable now is surfaced via source
+        # "none" instead.
+        repriced_since = False
+        if prices is not None:
+            for snap in data["snapshot_rates"]:
+                if any(abs(snap[c] - prices[c]) > 1e-9 for c in prices):
+                    repriced_since = True
+                    break
+        rows.append({
+            "model": model,
+            "vendor": vendor,
+            "input": row_rates.get("input"),
+            "output": row_rates.get("output"),
+            "cache_write": row_rates.get("cache_write"),
+            "cache_read": row_rates.get("cache_read"),
+            "source": src,
+            "as_of": as_of,
+            "repriced_since": repriced_since,
+        })
     return rows
 
 

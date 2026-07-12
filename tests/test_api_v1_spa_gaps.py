@@ -355,6 +355,65 @@ class TestAnalyticsApi:
         assert r.status_code == 200
         assert "latency_by_model" in r.json()
 
+    async def test_prices(self, client, session):
+        p = _make_profile(session)
+        t = _review_ticket(session, profile_id=p.id)
+        # A GLM model resolves vendor-aware via the bundled z.ai rows (always
+        # "bundled", regardless of any live fetch the box may have cached).
+        run = session.query(Run).filter(Run.ticket_id == t.id).one()
+        run.model_used = "glm-5.2-air"
+        session.commit()
+
+        r = await client.get("/api/v1/analytics/prices")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["range"] == "30d"
+        assert "source" in body and "as_of" in body
+        glm = next(row for row in body["prices"] if row["model"] == "glm-5.2-air")
+        assert glm["vendor"] == "zai"
+        assert glm["source"] == "bundled"
+        assert glm["input"] == pytest.approx(1.40)
+        assert glm["output"] == pytest.approx(4.40)
+        assert glm["cache_read"] == pytest.approx(0.26)
+        assert glm["repriced_since"] is False
+
+    async def test_prices_repriced_since_flag(self, client, session):
+        p = _make_profile(session)
+        t = _review_ticket(session, profile_id=p.id)
+        run = session.query(Run).filter(Run.ticket_id == t.id).one()
+        run.model_used = "glm-5.2"
+        run.pricing_snapshot = {"glm-5.2": {"vendor": "zai", "input": 99.0,
+                                            "output": 4.4, "cache_read": 0.26,
+                                            "cache_write": 0.0}}
+        session.commit()
+
+        r = await client.get("/api/v1/analytics/prices")
+        assert r.status_code == 200
+        glm = next(row for row in r.json()["prices"] if row["model"] == "glm-5.2")
+        assert glm["repriced_since"] is True
+
+    async def test_prices_unknown_project_404(self, client):
+        r = await client.get("/api/v1/analytics/prices", params={"project_id": "nope"})
+        assert r.status_code == 404
+
+    async def test_prices_project_filter_scopes_models(self, client, session):
+        proj_a = create_project(session, name="proj-a", slug="proj-a", source_path="/tmp")
+        proj_b = create_project(session, name="proj-b", slug="proj-b", source_path="/tmp")
+        p = _make_profile(session)
+        ta = _review_ticket(session, profile_id=p.id)
+        ta.project_id = proj_a.id
+        tb = _review_ticket(session, profile_id=p.id)
+        tb.project_id = proj_b.id
+        session.commit()
+        session.query(Run).filter(Run.ticket_id == ta.id).one().model_used = "glm-5.2"
+        session.query(Run).filter(Run.ticket_id == tb.id).one().model_used = "claude-opus-4-7"
+        session.commit()
+
+        r = await client.get("/api/v1/analytics/prices", params={"project_id": proj_a.id})
+        assert r.status_code == 200
+        models = {row["model"] for row in r.json()["prices"]}
+        assert models == {"glm-5.2"}
+
     async def test_summary_includes_by_project_rollup(self, client, session):
         proj = create_project(session, name="proj-a", slug="proj-a", source_path="/tmp")
         p = _make_profile(session)

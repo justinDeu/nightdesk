@@ -19,7 +19,8 @@ from starlette.concurrency import run_in_threadpool
 
 from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
-    AnalyticsLatencyOut, AnalyticsSpendOut, AnalyticsSummaryOut, AnalyticsTokensOut,
+    AnalyticsLatencyOut, AnalyticsPricesOut, AnalyticsSpendOut, AnalyticsSummaryOut,
+    AnalyticsTokensOut,
 )
 from nightdesk.db.models import ConfigRow
 from nightdesk.domain import analytics, pricing
@@ -159,6 +160,52 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
             latency_model_legend=data["latency_model_legend"],
             max_daily_latency=max_lat,
             model_vs_tool_time=data["model_vs_tool_time"],
+        )
+
+    @router.get("/prices", response_model=AnalyticsPricesOut, dependencies=[auth])
+    async def prices(
+        request: Request,
+        range: str = Query(default="30d"),
+        project_id: str | None = Query(default=None),
+        session: Session = Depends(get_session),
+    ):
+        """Current effective per-model price set for runs in the range.
+
+        Surfaces the rates behind the cost numbers on the analytics page: for
+        each model with a run in the window, the four USD-per-1M-token rates
+        the system resolves right now (vendor-aware live -> cache -> bundled,
+        the same chain run-time snapshots use — so non-Anthropic models like
+        GLM price correctly too), the source + as-of date, and whether the
+        model's in-range run snapshots disagree with current rates. See
+        :func:`nightdesk.domain.analytics.effective_prices`.
+        """
+        _check_project(session, project_id)
+        rng = range if range in _RANGE_DAYS else "30d"
+        now = datetime.now(timezone.utc)
+        tz = _resolve_tz(session)
+        # Live/cache/bundled resolution runs in a threadpool (file + network IO);
+        # the per-model resolve against it is pure and stays in-line.
+        live_all, live_source, live_as_of = await run_in_threadpool(
+            pricing.resolve_live_all,
+            getattr(request.app.state, "data_dir", None),
+            url=getattr(request.app.state, "pricing_url", None),
+            now=now,
+        )
+        start = analytics.resolve_range_start(now, rng, tz)
+        rows = analytics.effective_prices(
+            session,
+            live_all=live_all or None,
+            live_source=live_source,
+            live_as_of=live_as_of,
+            start=start,
+            project_id=project_id,
+        )
+        return AnalyticsPricesOut(
+            range=rng,
+            project_id=project_id,
+            source=live_source,
+            as_of=live_as_of,
+            prices=rows,
         )
 
     return router

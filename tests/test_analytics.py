@@ -6,6 +6,7 @@ import pytest
 
 from nightdesk.db.models import Profile, Run, RunLatency, Ticket
 from nightdesk.domain import analytics
+from nightdesk.domain.cost import PRICES_AS_OF
 from nightdesk.domain.pricing import PriceInfo
 from nightdesk.domain.projects import create_project
 
@@ -765,4 +766,132 @@ def test_build_dashboard_latency_empty_without_rows(session):
     assert all(d["by_model"] == {} for d in data["latency_series"])
     # Existing fields still populate normally.
     assert data["last_30d"]["run_count"] == 1
+
+
+# --- effective_prices: the current per-model price set behind cost numbers ---
+def _model_run(session, ticket, model, *, snapshot=None, started_at=NOW):
+    r = _run(session, ticket, started_at=started_at, input_tokens=100)
+    r.model_used = model
+    if snapshot is not None:
+        r.pricing_snapshot = snapshot
+    session.commit()
+    return r
+
+
+def test_effective_prices_bundled_rates_for_claude_and_glm(session):
+    # The motivating case: a GLM model prices (vendor-aware), not just Claude.
+    p = _profile(session)
+    t = _ticket(session, p)
+    _model_run(session, t, "claude-opus-4-7")
+    _model_run(session, t, "glm-5.2-air")
+
+    rows = analytics.effective_prices(
+        session, live_all=None, live_source="bundled", live_as_of="",
+        start=analytics.start_of_day(NOW) - timedelta(days=29))
+    by_model = {r["model"]: r for r in rows}
+
+    opus = by_model["claude-opus-4-7"]
+    assert opus["vendor"] == "anthropic"
+    assert opus["input"] == pytest.approx(15.0)
+    assert opus["output"] == pytest.approx(75.0)
+    assert opus["cache_write"] == pytest.approx(18.75)
+    assert opus["cache_read"] == pytest.approx(1.50)
+    assert opus["source"] == "bundled"
+    assert opus["as_of"] == PRICES_AS_OF
+    assert opus["repriced_since"] is False
+
+    glm = by_model["glm-5.2-air"]
+    assert glm["vendor"] == "zai"  # inferred from the "glm" prefix
+    assert glm["input"] == pytest.approx(1.40)
+    assert glm["output"] == pytest.approx(4.40)
+    assert glm["cache_read"] == pytest.approx(0.26)
+    assert glm["cache_write"] == pytest.approx(0.0)
+    assert glm["source"] == "bundled"
+
+
+def test_effective_prices_repriced_since_when_snapshot_disagrees(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    # GLM run stamped with a snapshot whose input rate differs from current
+    # (1.40) -> repriced_since True.
+    _model_run(session, t, "glm-5.2", snapshot={
+        "glm-5.2": {"vendor": "zai", "input": 99.0, "output": 4.4,
+                    "cache_read": 0.26, "cache_write": 0.0}})
+    # Claude run stamped with a snapshot matching the current bundled rates.
+    _model_run(session, t, "claude-opus-4-7", snapshot={
+        "claude-opus-4-7": {"vendor": "anthropic", "input": 15.0, "output": 75.0,
+                            "cache_read": 1.50, "cache_write": 18.75}})
+
+    rows = analytics.effective_prices(
+        session, live_all=None, live_source="bundled", live_as_of="",
+        start=analytics.start_of_day(NOW) - timedelta(days=29))
+    by_model = {r["model"]: r for r in rows}
+    assert by_model["glm-5.2"]["repriced_since"] is True
+    assert by_model["claude-opus-4-7"]["repriced_since"] is False
+
+
+def test_effective_prices_source_none_for_unpriceable_model(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    _model_run(session, t, "totally-unknown-model-xyz")
+
+    rows = analytics.effective_prices(
+        session, live_all=None, live_source="bundled", live_as_of="",
+        start=analytics.start_of_day(NOW) - timedelta(days=29))
+    row = next(r for r in rows if r["model"] == "totally-unknown-model-xyz")
+    assert row["source"] == "none"
+    assert row["input"] is None
+    assert row["output"] is None
+    assert row["as_of"] is None
+
+
+def test_effective_prices_prefers_snapshot_vendor_over_inference(session):
+    # "claude-opus-4-7" would infer anthropic, but a run snapshot tags it zai.
+    # The snapshot vendor wins (and claude doesn't resolve under zai -> none).
+    p = _profile(session)
+    t = _ticket(session, p)
+    _model_run(session, t, "claude-opus-4-7", snapshot={
+        "claude-opus-4-7": {"vendor": "zai", "input": 1.0, "output": 2.0,
+                            "cache_read": 0.1, "cache_write": 0.0}})
+
+    rows = analytics.effective_prices(
+        session, live_all=None, live_source="bundled", live_as_of="",
+        start=analytics.start_of_day(NOW) - timedelta(days=29))
+    row = next(r for r in rows if r["model"] == "claude-opus-4-7")
+    assert row["vendor"] == "zai"
+    assert row["source"] == "none"
+
+
+def test_effective_prices_live_source_uses_live_rates_and_as_of(session):
+    # Live anthropic row for sonnet overrides the bundled table; as_of comes
+    # from the live resolution, not PRICES_AS_OF.
+    p = _profile(session)
+    t = _ticket(session, p)
+    _model_run(session, t, "claude-sonnet-4-5")
+    live_all = {"claude-sonnet-4": ("anthropic", {
+        "input": 9.0, "output": 45.0, "cache_read": 0.9, "cache_write": 11.25})}
+
+    rows = analytics.effective_prices(
+        session, live_all=live_all, live_source="live", live_as_of="2026-06-30",
+        start=analytics.start_of_day(NOW) - timedelta(days=29))
+    row = next(r for r in rows if r["model"] == "claude-sonnet-4-5")
+    assert row["source"] == "live"
+    assert row["input"] == pytest.approx(9.0)
+    assert row["as_of"] == "2026-06-30"
+
+
+def test_effective_prices_scopes_to_range_window(session):
+    # A model run backdated outside the 30-day window must not appear.
+    p = _profile(session)
+    t = _ticket(session, p)
+    _model_run(session, t, "claude-opus-4-7")
+    _model_run(session, t, "claude-sonnet-4-6",
+               started_at=NOW - timedelta(days=40))
+
+    rows = analytics.effective_prices(
+        session, live_all=None, live_source="bundled", live_as_of="",
+        start=analytics.start_of_day(NOW) - timedelta(days=29))
+    models = {r["model"] for r in rows}
+    assert "claude-opus-4-7" in models
+    assert "claude-sonnet-4-6" not in models
 

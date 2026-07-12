@@ -1133,8 +1133,10 @@ async def run_one(
             pricing_live_all: dict = {}
             pricing_live_source = "bundled"
             try:
-                pricing_live_all, pricing_live_source = pricing.resolve_live_all(
-                    cfg.data_dir, url=cfg.pricing_url, now=datetime.now(timezone.utc),
+                pricing_live_all, pricing_live_source, _pricing_live_as_of = (
+                    pricing.resolve_live_all(
+                        cfg.data_dir, url=cfg.pricing_url, now=datetime.now(timezone.utc),
+                    )
                 )
             except Exception:
                 log.exception(
