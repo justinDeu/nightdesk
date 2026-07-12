@@ -845,9 +845,12 @@ def test_effective_prices_source_none_for_unpriceable_model(session):
     assert row["as_of"] is None
 
 
-def test_effective_prices_prefers_snapshot_vendor_over_inference(session):
+def test_effective_prices_falls_back_to_inference_on_dead_snapshot_vendor(session):
     # "claude-opus-4-7" would infer anthropic, but a run snapshot tags it zai.
-    # The snapshot vendor wins (and claude doesn't resolve under zai -> none).
+    # The snapshot vendor is tried first; since claude resolves to nothing
+    # under zai, resolution retries with the inferred vendor so the model's
+    # current rates still display (mirrors the live bug where GLM runs were
+    # stamped vendor="anthropic" pre-fix and showed source="none").
     p = _profile(session)
     t = _ticket(session, p)
     _model_run(session, t, "claude-opus-4-7", snapshot={
@@ -858,8 +861,9 @@ def test_effective_prices_prefers_snapshot_vendor_over_inference(session):
         session, live_all=None, live_source="bundled", live_as_of="",
         start=analytics.start_of_day(NOW) - timedelta(days=29))
     row = next(r for r in rows if r["model"] == "claude-opus-4-7")
-    assert row["vendor"] == "zai"
-    assert row["source"] == "none"
+    assert row["vendor"] == "anthropic"
+    assert row["source"] == "bundled"
+    assert row["input"] is not None
 
 
 def test_effective_prices_live_source_uses_live_rates_and_as_of(session):
