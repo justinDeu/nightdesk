@@ -6,15 +6,22 @@ import type { ProjectCreate, ProjectOut, ProjectUpdate } from "./types";
 const BASE = "/api/v1/projects";
 
 export const projectsApi = {
-  list: () => api.get<ProjectOut[]>(BASE),
+  list: (archived?: boolean) =>
+    api.get<ProjectOut[]>(BASE, { query: archived ? { archived: "true" } : undefined }),
   get: (id: string) => api.get<ProjectOut>(`${BASE}/${id}`),
   create: (body: ProjectCreate) => api.post<ProjectOut>(BASE, { body }),
   update: (id: string, body: ProjectUpdate) => api.patch<ProjectOut>(`${BASE}/${id}`, { body }),
   remove: (id: string) => api.delete<void>(`${BASE}/${id}`),
 };
 
-export function useProjects() {
-  return useQuery({ queryKey: qk.projects.all, queryFn: projectsApi.list });
+/** Active projects by default. Pass `{ archived: true }` for the archived set
+ *  (the projects index collapses those under a separate group). */
+export function useProjects(opts?: { archived?: boolean }) {
+  const archived = opts?.archived;
+  return useQuery({
+    queryKey: archived ? (["projects", "archived"] as const) : qk.projects.all,
+    queryFn: () => projectsApi.list(archived),
+  });
 }
 
 /** Id → project map for resolving project chips on cards/rows without a
