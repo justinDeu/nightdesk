@@ -5,6 +5,11 @@ description: Use when watching a batch of nightdesk tickets through to completio
 
 # nightdesk ticket monitoring
 
+> **nightdesk skill** · package v0.0.1 · updated 2026-07-12. A user-global copy
+> (installed by `nightdesk-install-skills`) can drift from the code; if anything
+> below disagrees with `GET /openapi.json`, re-run `nightdesk-install-skills --force`
+> (or `--all --force`) to refresh.
+
 Watch a set of tickets to completion and emit one event per line on stdout — the contract the Monitor tool consumes. This is the "is it done yet / did it blow up" watch you stand up after queueing a batch, so you can merge or review each ticket as its run lands.
 
 Auth and base-URL depth live in `nightdesk-api`; this skill assumes you know the JSON `/api/v1/*` surface and only covers what's specific to *monitoring*. The whole skill is: **the gotchas below + the reference script + the Monitor invocation.**
