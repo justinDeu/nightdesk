@@ -7,6 +7,7 @@ import pytest
 from nightdesk.db.models import Profile, Run, RunLatency, Ticket
 from nightdesk.domain import analytics
 from nightdesk.domain.pricing import PriceInfo
+from nightdesk.domain.projects import create_project
 
 
 NOW = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
@@ -628,6 +629,126 @@ def test_build_dashboard_returns_latency_fields(session):
     lat_color = next(m["color"] for m in data["latency_model_legend"]
                      if m["model"] == "claude-opus-4-7")
     assert tok_color == lat_color
+
+
+# --- range-scoped breakdowns (regression: breakdowns must track the
+# resolved `range`, not a fixed 30-day window, the way `totals` already did)
+def test_resolve_range_start_matches_named_windows():
+    assert analytics.resolve_range_start(NOW, "today") == analytics.start_of_day(NOW)
+    assert (analytics.resolve_range_start(NOW, "7d")
+            == analytics.start_of_day(NOW) - timedelta(days=6))
+    assert (analytics.resolve_range_start(NOW, "30d")
+            == analytics.start_of_day(NOW) - timedelta(days=29))
+    # Unknown range values fall back to the 30-day window (matches the API
+    # route's own fallback for an invalid `range` query param).
+    assert (analytics.resolve_range_start(NOW, "bogus")
+            == analytics.start_of_day(NOW) - timedelta(days=29))
+
+
+def _snapshot(run, model):
+    """Stamp a (dummy) pricing snapshot so ``cost_usd`` is used as-is instead
+    of being repriced from current/live prices (see ``_split_cost``)."""
+    run.model_used = model
+    run.pricing_snapshot = {model: {"input": 0.0, "output": 0.0,
+                                     "cache_read": 0.0, "cache_write": 0.0}}
+
+
+def test_build_dashboard_breakdowns_exclude_out_of_window_run_for_today(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    in_run = _run(session, t, started_at=NOW, cost=5.0, input_tokens=100)
+    _snapshot(in_run, "claude-opus-4-7")
+    # 2 days old: outside "today" but inside "7d"/"30d".
+    out_run = _run(session, t, started_at=NOW - timedelta(days=2), cost=30.0,
+                   input_tokens=900)
+    _snapshot(out_run, "claude-sonnet-4-6")
+    session.commit()
+
+    data = analytics.build_dashboard(session, now=NOW, range_key="today")
+    assert data["today"]["cost"] == pytest.approx(5.0)
+    # Every breakdown must match "today", not the fixed 30-day window.
+    assert [r["model"] for r in data["by_model"]] == ["claude-opus-4-7"]
+    assert sum(r["cost"] for r in data["by_model"]) == pytest.approx(5.0)
+    assert sum(r["cost"] for r in data["by_profile"]) == pytest.approx(5.0)
+    assert sum(r["cost"] for r in data["by_ticket"]) == pytest.approx(5.0)
+    assert sum(r["cost"] for r in data["by_project"]) == pytest.approx(5.0)
+    assert data["run_stats"]["completed"] == 1
+    assert data["duration"]["count"] == 1
+
+
+def test_build_dashboard_breakdowns_widen_with_range(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    in_run = _run(session, t, started_at=NOW, cost=5.0)
+    _snapshot(in_run, "claude-opus-4-7")
+    out_run = _run(session, t, started_at=NOW - timedelta(days=2), cost=30.0)
+    _snapshot(out_run, "claude-sonnet-4-6")
+    session.commit()
+
+    data = analytics.build_dashboard(session, now=NOW, range_key="7d")
+    models = {r["model"] for r in data["by_model"]}
+    assert models == {"claude-opus-4-7", "claude-sonnet-4-6"}
+    assert sum(r["cost"] for r in data["by_project"]) == pytest.approx(35.0)
+    assert data["run_stats"]["completed"] == 2
+
+
+def test_build_dashboard_range_key_defaults_to_30d(session):
+    # No range_key given -> unchanged legacy behavior (fixed 30-day window).
+    p = _profile(session)
+    t = _ticket(session, p)
+    out_run = _run(session, t, started_at=NOW - timedelta(days=2), cost=30.0)
+    _snapshot(out_run, "claude-sonnet-4-6")
+    session.commit()
+
+    data = analytics.build_dashboard(session, now=NOW)
+    assert sum(r["cost"] for r in data["by_model"]) == pytest.approx(30.0)
+
+
+def test_build_dashboard_latency_breakdowns_respect_range(session):
+    p = _profile(session)
+    t = _ticket(session, p)
+    in_run = _run(session, t, started_at=NOW)
+    _run_latency(session, in_run, model="claude-opus-4-7", turn_latencies=[4.0])
+    out_run = _run(session, t, started_at=NOW - timedelta(days=2))
+    _run_latency(session, out_run, model="claude-sonnet-4-6", turn_latencies=[8.0])
+
+    data = analytics.build_dashboard(session, now=NOW, range_key="today")
+    assert {r["model"] for r in data["latency_by_model"]} == {"claude-opus-4-7"}
+    assert {r["model"] for r in data["model_vs_tool_time"]} == {"claude-opus-4-7"}
+
+    data_7d = analytics.build_dashboard(session, now=NOW, range_key="7d")
+    assert {r["model"] for r in data_7d["latency_by_model"]} == {
+        "claude-opus-4-7", "claude-sonnet-4-6",
+    }
+
+
+def test_build_dashboard_project_id_filter_scopes_range_breakdowns(session):
+    p = _profile(session)
+    ta = _ticket(session, p, "ta")
+    tb = _ticket(session, p, "tb")
+    proj_a = create_project(session, name="proj-a", slug="proj-a", source_path="/tmp")
+    proj_b = create_project(session, name="proj-b", slug="proj-b", source_path="/tmp")
+    ta.project_id = proj_a.id
+    tb.project_id = proj_b.id
+    session.commit()
+
+    _snapshot(_run(session, ta, started_at=NOW, cost=2.0), "m")
+    _snapshot(_run(session, tb, started_at=NOW, cost=9.0), "m")
+    # Out-of-window (for "today") run on proj_a: must not leak into the
+    # project_id-scoped "today" breakdown.
+    _snapshot(_run(session, ta, started_at=NOW - timedelta(days=2), cost=40.0), "m")
+    session.commit()
+
+    data = analytics.build_dashboard(
+        session, now=NOW, project_id=proj_a.id, range_key="today")
+    assert len(data["by_project"]) == 1
+    assert data["by_project"][0]["project_id"] == proj_a.id
+    assert data["by_project"][0]["cost"] == pytest.approx(2.0)
+    assert data["today"]["cost"] == pytest.approx(2.0)
+
+    data_7d = analytics.build_dashboard(
+        session, now=NOW, project_id=proj_a.id, range_key="7d")
+    assert data_7d["by_project"][0]["cost"] == pytest.approx(42.0)
 
 
 def test_build_dashboard_latency_empty_without_rows(session):
