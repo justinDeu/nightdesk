@@ -38,7 +38,7 @@ import { useTicketActions } from "@/lib/ticketActions";
 import { useKeybinds } from "@/lib/keymap";
 import { getLastVisit, setLastVisit } from "@/lib/lastVisit";
 import { parseTs, relativeTime, durationBetween } from "@/lib/time";
-import { formatUsd, runStatusKind } from "@/lib/status";
+import { formatUsd, formatTokens, runStatusKind } from "@/lib/status";
 import { humanizeRunError } from "@/lib/runError";
 import { Tooltip } from "@/ui/Tooltip";
 import { ticketHref } from "@/lib/routes";
@@ -52,16 +52,27 @@ function DeskBand({
   title,
   accent,
   count,
+  className,
+  bodyClassName,
   children,
 }: {
   icon: ReactNode;
   title: string;
   accent?: boolean;
   count?: number;
+  /** Extra classes for the <section>, merged after the default mb-7 so a
+   *  passed lg:mb-0 (etc.) wins at that breakpoint while mb-7 still applies
+   *  on mobile. */
+  className?: string;
+  /** When set, children are wrapped in a <div> with these classes. The
+   *  awareness rail uses this to give a band its own bounded,
+   *  internally-scrolling region instead of letting one band grow the whole
+   *  rail and bury the other. */
+  bodyClassName?: string;
   children: ReactNode;
 }) {
   return (
-    <section className="mb-7">
+    <section className={cn("mb-7", className)}>
       <div className="mb-3 flex items-center gap-2">
         <span className={cn("text-moon-400", accent && "dawn-text")}>{icon}</span>
         <h2 className="font-display text-xs font-semibold uppercase tracking-wide text-moon-400">
@@ -73,7 +84,7 @@ function DeskBand({
           </span>
         )}
       </div>
-      {children}
+      {bodyClassName ? <div className={bodyClassName}>{children}</div> : children}
     </section>
   );
 }
@@ -117,6 +128,37 @@ interface NeedsItem {
   ticket: TicketOut;
   reason: "failed" | "review";
   run?: RunOut;
+}
+
+/** Shared surface + elevation classes for a pulse tile. Mirrors the pattern in
+ *  ProjectPage so the dashboard stat row reads as one system. */
+const tileCls =
+  "flex flex-col gap-1 rounded-card border border-ink-700 bg-ink-900 px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors hover:bg-ink-800";
+
+/** Tile contents: the number leads, the label is a quiet caption. `accent`
+ *  lights up a non-zero count so the eye lands on what needs attention. */
+function TileInner({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: number | string;
+  accent?: boolean;
+}) {
+  return (
+    <>
+      <span
+        className={cn(
+          "font-display text-2xl font-semibold leading-none tabular-nums",
+          accent ? "text-lamp" : "text-moon-100",
+        )}
+      >
+        {value}
+      </span>
+      <span className="text-[11px] font-medium uppercase tracking-wide text-moon-600">{label}</span>
+    </>
+  );
 }
 
 export function DeskPage() {
@@ -204,6 +246,19 @@ export function DeskPage() {
   ]);
 
   const inboxCount = inbox.data?.length ?? 0;
+  const runningCount = running.data?.length ?? 0;
+
+  // Spend today: cost of runs that started today (the stat-tile summary).
+  const spendToday = useMemo(() => {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    let sum = 0;
+    for (const r of runsList) {
+      const ts = parseTs(r.started_at);
+      if (ts != null && ts >= startOfDay) sum += r.cost_usd ?? 0;
+    }
+    return sum;
+  }, [runsList]);
 
   // WHILE YOU WERE AWAY: deltas since the visit watermark.
   const away = useMemo(() => {
@@ -227,22 +282,55 @@ export function DeskPage() {
     <Page
       title="Desk"
       subtitle="What needs you, what's running, and what changed while you were away."
-      width="xwide"
+      bleed
       actions={
         <Button variant="primary" leadingIcon={<Plus size={15} />} onClick={() => openComposer()}>
           New ticket
         </Button>
       }
     >
+      {/* Pulse strip — the dashboard archetype's stat row. One tile per live
+          signal, each linking to its surface. Sits above the two-column area. */}
+      <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        <Link to="/tickets" search={{ f: "status:running" }} className={tileCls}>
+          <TileInner label="Running" value={runningCount} accent={runningCount > 0} />
+        </Link>
+        <Link to="/tickets" search={{ f: "status:review" }} className={tileCls}>
+          <TileInner label="Needs you" value={needs.length} accent={needs.length > 0} />
+        </Link>
+        <Link to="/inbox" className={tileCls}>
+          <TileInner label="Inbox" value={inboxCount} accent={inboxCount > 0} />
+        </Link>
+        <Link to="/agents" className={tileCls}>
+          <TileInner label="Agents waiting" value={attentionTotal} accent={attentionTotal > 0} />
+        </Link>
+        <Link to="/analytics" className={tileCls}>
+          <TileInner label="Spend today" value={formatUsd(spendToday)} />
+        </Link>
+      </div>
+
       {/* Two-column dashboard. The two most important signals — "Running now"
-          and "While you were away" — live in a persistent awareness rail.
-          The rail is first in the DOM so on mobile (single column) those
-          signals land at the top; explicit grid placement parks it on the
-          right at lg+ and keeps it pinned (sticky) so it never scrolls out of
-          view while you work the action center. */}
+          and "While you were away" — live in a persistent awareness rail. The
+          rail is first in the DOM, but on mobile the main column carries
+          order-first so Needs-you leads the phone (the rail no longer buries
+          the action center); explicit grid placement parks the rail on the
+          right at lg+. At lg+ the rail is a full-viewport-height flex column
+          split between the two bands — each gets a bounded share whose LIST
+          scrolls internally, so both band headers (and their first items) stay
+          on screen at first paint even with many running tickets. No part of
+          the rail can push a whole band below the fold. The height offset
+          (16.5rem) accounts for the top strip, page header, the pulse row, and
+          a bottom gutter. */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)] lg:gap-x-6">
-        <aside className="min-w-0 lg:sticky lg:top-4 lg:col-start-2 lg:row-start-1 lg:max-h-[calc(100vh-5rem)] lg:self-start lg:overflow-y-auto lg:overscroll-y-contain lg:border-l lg:border-ink-700/60 lg:pl-6">
-          <DeskBand icon={<Zap size={15} />} title="Running now" accent count={running.data?.length}>
+        <aside className="min-w-0 lg:sticky lg:top-4 lg:col-start-2 lg:row-start-1 lg:flex lg:h-[calc(100vh-16.5rem)] lg:flex-col lg:gap-5 lg:self-start lg:border-l lg:border-ink-700/60 lg:pl-6">
+          <DeskBand
+            icon={<Zap size={15} />}
+            title="Running now"
+            accent
+            count={running.data?.length}
+            className="lg:mb-0 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col"
+            bodyClassName="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-y-contain lg:pr-1"
+          >
             {running.data && running.data.length > 0 ? (
               <div className="grid grid-cols-1 gap-3">
                 {running.data.map((t) => (
@@ -257,17 +345,32 @@ export function DeskPage() {
             ) : (
               <DeskEmptyStrip
                 icon={<Zap size={14} />}
-                text="No live runs — active runs surface here with elapsed time, ticking cost, model, and the latest transcript line."
+                text="No live runs — start one and it surfaces here live."
+                action={
+                  <Button
+                    size="sm"
+                    variant="subtle"
+                    leadingIcon={<Plus size={13} />}
+                    onClick={() => openComposer()}
+                  >
+                    New ticket
+                  </Button>
+                }
               />
             )}
           </DeskBand>
 
-          <DeskBand icon={<Moon size={15} />} title="While you were away">
+          <DeskBand
+            icon={<Moon size={15} />}
+            title="While you were away"
+            className="lg:mb-0 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col"
+            bodyClassName="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-y-contain lg:pr-1"
+          >
             <AwayFeed away={away} projects={projects} />
           </DeskBand>
         </aside>
 
-        <div className="min-w-0 lg:col-start-1 lg:row-start-1">
+        <div className="order-first min-w-0 lg:order-none lg:col-start-1 lg:row-start-1">
           <DeskBand icon={<Sun size={15} />} title="Needs you" count={needs.length}>
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <Link
@@ -449,23 +552,39 @@ const NeedsRow = forwardRef<
           }}
           className="min-w-0 flex-1 rounded-[4px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
         >
-          <span className="block text-sm font-medium text-moon-100 group-hover:text-lamp line-clamp-2 md:truncate">
-            {ticket.description?.trim() || ticket.title}
-          </span>
-          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-moon-600 md:flex-nowrap">
-            <ProjectTag project={project} showNone />
-            {run?.cost_usd != null && (
-              <span className="font-mono tabular-nums">{formatUsd(run.cost_usd)}</span>
-            )}
-            {run?.finished_at && <span>{relativeTime(run.finished_at)}</span>}
-            {reason === "failed" && run?.error_summary && (
-              <Tooltip content={run.error_summary} mono>
-                <span className="min-w-0 truncate text-failed">
-                  {humanizeRunError(run.error_summary)}
-                </span>
-              </Tooltip>
-            )}
-          </span>
+          {/* Title + meta stack on narrow screens; on wide screens they share
+              one row — title bounded, meta filling the dead middle a truncated
+              title otherwise leaves next to the actions. Telemetry (duration,
+              tokens) is xl-only since it only earns its place once inline. */}
+          <div className="flex flex-col gap-0.5 xl:flex-row xl:items-center xl:gap-3">
+            <span className="block min-w-0 text-sm font-medium text-moon-100 group-hover:text-lamp line-clamp-2 md:truncate xl:max-w-[40%]">
+              {ticket.description?.trim() || ticket.title}
+            </span>
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-moon-600 md:flex-nowrap xl:min-w-0 xl:flex-1 xl:flex-nowrap">
+              <ProjectTag project={project} showNone />
+              {run && (
+                <>
+                  <span className="hidden font-mono text-[11px] tabular-nums xl:inline">
+                    {durationBetween(run.started_at, run.finished_at)}
+                  </span>
+                  <span className="hidden font-mono text-[11px] tabular-nums xl:inline">
+                    {formatTokens((run.input_tokens ?? 0) + (run.output_tokens ?? 0))} tok
+                  </span>
+                </>
+              )}
+              {run?.cost_usd != null && (
+                <span className="font-mono tabular-nums">{formatUsd(run.cost_usd)}</span>
+              )}
+              {run?.finished_at && <span>{relativeTime(run.finished_at)}</span>}
+              {reason === "failed" && run?.error_summary && (
+                <Tooltip content={run.error_summary} mono>
+                  <span className="min-w-0 truncate text-failed">
+                    {humanizeRunError(run.error_summary)}
+                  </span>
+                </Tooltip>
+              )}
+            </span>
+          </div>
         </a>
       </div>
       <div className="flex shrink-0 items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
@@ -695,6 +814,11 @@ function AwayFeed({
       <DeskEmptyStrip
         icon={<Moon size={14} />}
         text="First visit — after some runs finish, this band shows everything that changed since you were last here."
+        action={
+          <Button asChild size="sm" variant="ghost">
+            <Link to="/tickets">Go to Tickets</Link>
+          </Button>
+        }
       />
     );
   }
@@ -704,6 +828,11 @@ function AwayFeed({
       <DeskEmptyStrip
         icon={<CheckCircle2 size={14} />}
         text="You're all caught up — nothing finished, entered review, or landed in the inbox since your last visit."
+        action={
+          <Button asChild size="sm" variant="ghost">
+            <Link to="/tickets">Go to Tickets</Link>
+          </Button>
+        }
       />
     );
   }
