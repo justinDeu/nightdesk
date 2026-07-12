@@ -67,6 +67,25 @@ def start_of_month(now: datetime, tz: ZoneInfo = _UTC) -> datetime:
     ).astimezone(timezone.utc)
 
 
+# Maps a ``range`` query-param value to the inclusive number of local calendar
+# days its window spans (today itself counts as day 1).
+_RANGE_WINDOW_DAYS = {"today": 1, "7d": 7, "30d": 30}
+
+
+def resolve_range_start(now: datetime, range_key: str, tz: ZoneInfo = _UTC) -> datetime:
+    """Start of the ``[start, now)`` window for a ``range`` query-param value.
+
+    Mirrors the ``today``/``last_7d``/``last_30d`` boundaries used throughout
+    this module: ``today`` is local midnight, ``7d``/``30d`` are that midnight
+    minus 6/29 days, so each window covers exactly 1/7/30 local calendar days
+    inclusive of today. Unknown ``range_key`` values fall back to 30 days (the
+    same default the API routes use).
+    """
+    today_start = start_of_day(now, tz)
+    days = _RANGE_WINDOW_DAYS.get(range_key, 30)
+    return today_start - timedelta(days=days - 1)
+
+
 # --------------------------------------------------------------------------
 # Spend sums (cheap SQL aggregates).
 # --------------------------------------------------------------------------
@@ -824,11 +843,18 @@ def build_dashboard(
     price_info: Optional[PriceInfo] = None,
     tz: ZoneInfo = _UTC,
     project_id: Optional[str] = None,
+    range_key: str = "30d",
 ) -> dict:
     """Assemble the full context for the ``/analytics`` page.
 
-    Breakdowns and stats use a rolling 30-day window; the headline chips use
-    today / 7-day / 30-day windows. Token-focused: cost is a secondary figure.
+    Every breakdown (``by_model``, ``by_profile``, ``by_ticket``, ``by_project``,
+    ``daily_series``, the latency rollups, ``run_stats``, ``duration``) is
+    computed over the window resolved from ``range_key`` (``"today"``, ``"7d"``,
+    or ``"30d"``; unknown values fall back to 30 days — see
+    ``resolve_range_start``). The headline chips (``today`` / ``last_7d`` /
+    ``last_30d``) always report all three windows regardless of ``range_key``,
+    so callers that need one selected window's breakdowns alongside the fixed
+    three-window totals (e.g. the ``/analytics/spend`` route) get both.
 
     ``tz`` localizes every day/week/month boundary (default UTC = original
     behavior); ``now`` stays an aware UTC instant internally. ``price_info``
@@ -845,9 +871,10 @@ def build_dashboard(
     today_start = start_of_day(now, tz)
     last_7d_start = today_start - timedelta(days=6)
     last_30d_start = today_start - timedelta(days=29)
+    breakdown_start = resolve_range_start(now, range_key, tz)
 
     by_model = tokens_by_model(
-        session, start=last_30d_start, prices=price_info, project_id=project_id,
+        session, start=breakdown_start, prices=price_info, project_id=project_id,
     )
     # Assign each model a stable color by token rank; reuse it in the legend,
     # the per-model table, and the stacked daily bars.
@@ -860,17 +887,17 @@ def build_dashboard(
     model_legend = [{"model": m, "color": c} for m, c in model_colors.items()]
 
     series = daily_usage_by_model_series(
-        session, start=last_30d_start, now=now, prices=price_info, tz=tz,
+        session, start=breakdown_start, now=now, prices=price_info, tz=tz,
         project_id=project_id,
     )
     max_daily_tokens = max((d["total_tokens"] for d in series), default=0)
 
     # Latency rollups (read cached run_latency rows, never transcript files).
-    latency_rows = latency_by_model(session, start=last_30d_start, project_id=project_id)
+    latency_rows = latency_by_model(session, start=breakdown_start, project_id=project_id)
     latency_series = daily_latency_by_model_series(
-        session, start=last_30d_start, now=now, tz=tz, project_id=project_id,
+        session, start=breakdown_start, now=now, tz=tz, project_id=project_id,
     )
-    model_tool = model_vs_tool_time(session, start=last_30d_start, project_id=project_id)
+    model_tool = model_vs_tool_time(session, start=breakdown_start, project_id=project_id)
     max_daily_latency = max(
         (med for d in latency_series for med in d["by_model"].values()),
         default=0.0,
@@ -901,16 +928,16 @@ def build_dashboard(
         "by_model": by_model,
         "model_legend": model_legend,
         "by_profile": usage_by_profile(
-            session, start=last_30d_start, prices=price_info, project_id=project_id,
+            session, start=breakdown_start, prices=price_info, project_id=project_id,
         ),
         "by_ticket": usage_by_ticket(
-            session, start=last_30d_start, prices=price_info, project_id=project_id,
+            session, start=breakdown_start, prices=price_info, project_id=project_id,
         ),
         "by_project": project_rollups(
-            session, start=last_30d_start, prices=price_info, project_id=project_id,
+            session, start=breakdown_start, prices=price_info, project_id=project_id,
         ),
-        "run_stats": run_stats(session, start=last_30d_start, project_id=project_id),
-        "duration": duration_percentiles(session, start=last_30d_start, project_id=project_id),
+        "run_stats": run_stats(session, start=breakdown_start, project_id=project_id),
+        "duration": duration_percentiles(session, start=breakdown_start, project_id=project_id),
         "daily_series": series,
         "max_daily_tokens": max_daily_tokens,
         "latency_by_model": latency_rows,

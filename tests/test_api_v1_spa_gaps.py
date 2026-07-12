@@ -16,12 +16,14 @@ Covers:
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from nightdesk.api.app import create_app
+from nightdesk.db.models import Run, RunLatency
 from nightdesk.domain.labels import create_label
 from nightdesk.domain.profiles import create_profile
 from nightdesk.domain.projects import create_project
@@ -418,6 +420,136 @@ class TestAnalyticsApi:
         body = r.json()
         assert "daily_series" in body
         assert "by_project" in body
+
+    async def _seed_today_and_old_run(self, session, p):
+        """One project with a run today, one with a run backdated 2 days.
+
+        Mirrors the bug report: a run 2 days old is outside "today" but
+        inside "7d"/"30d".
+        """
+        proj_today = create_project(
+            session, name="today-proj", slug="today-proj", source_path="/tmp")
+        proj_old = create_project(
+            session, name="old-proj", slug="old-proj", source_path="/tmp")
+
+        t_today = _review_ticket(session, profile_id=p.id)
+        t_today.project_id = proj_today.id
+        t_old = _review_ticket(session, profile_id=p.id)
+        t_old.project_id = proj_old.id
+        session.commit()
+
+        # Stamp a (dummy) pricing snapshot on each run so its stored `cost_usd`
+        # is used as-is instead of being repriced from current token counts
+        # (which are 0 here, since `_review_ticket` doesn't record usage).
+        run_today = session.query(Run).filter(Run.ticket_id == t_today.id).one()
+        run_today.cost_usd = 5.0
+        run_today.pricing_snapshot = {"m": {"input": 0.0, "output": 0.0,
+                                             "cache_read": 0.0, "cache_write": 0.0}}
+        run_old = session.query(Run).filter(Run.ticket_id == t_old.id).one()
+        run_old.started_at = run_old.started_at - timedelta(days=2)
+        run_old.cost_usd = 30.0
+        run_old.pricing_snapshot = {"m": {"input": 0.0, "output": 0.0,
+                                           "cache_read": 0.0, "cache_write": 0.0}}
+        session.commit()
+        return proj_today, proj_old
+
+    async def test_spend_breakdowns_respect_range_today(self, client, session):
+        # Regression: by_project/by_model/by_profile/by_ticket used a fixed
+        # 30-day window regardless of `range`, so switching the picker from
+        # 7d -> today never changed the breakdowns even though `totals` did.
+        p = _make_profile(session)
+        proj_today, proj_old = await self._seed_today_and_old_run(session, p)
+
+        r = await client.get("/api/v1/analytics/spend", params={"range": "today"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["totals"]["cost"] == pytest.approx(5.0)
+
+        project_names = {row["project_name"] for row in body["by_project"]}
+        assert project_names == {"today-proj"}
+        assert sum(row["cost"] for row in body["by_project"]) == pytest.approx(5.0)
+        assert sum(row["cost"] for row in body["by_model"]) == pytest.approx(5.0)
+        assert sum(row["cost"] for row in body["by_profile"]) == pytest.approx(5.0)
+        assert sum(row["cost"] for row in body["by_ticket"]) == pytest.approx(5.0)
+
+    async def test_spend_breakdowns_respect_range_7d(self, client, session):
+        p = _make_profile(session)
+        await self._seed_today_and_old_run(session, p)
+
+        r = await client.get("/api/v1/analytics/spend", params={"range": "7d"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["totals"]["cost"] == pytest.approx(35.0)
+
+        project_names = {row["project_name"] for row in body["by_project"]}
+        assert project_names == {"today-proj", "old-proj"}
+        assert sum(row["cost"] for row in body["by_project"]) == pytest.approx(35.0)
+
+    async def test_tokens_by_model_respects_range(self, client, session):
+        p = _make_profile(session)
+        await self._seed_today_and_old_run(session, p)
+
+        r_today = await client.get("/api/v1/analytics/tokens", params={"range": "today"})
+        r_7d = await client.get("/api/v1/analytics/tokens", params={"range": "7d"})
+        cost_today = sum(row["cost"] for row in r_today.json()["by_model"])
+        cost_7d = sum(row["cost"] for row in r_7d.json()["by_model"])
+        assert cost_today == pytest.approx(5.0)
+        assert cost_7d == pytest.approx(35.0)
+
+    async def test_latency_breakdowns_respect_range(self, client, session):
+        p = _make_profile(session)
+        t_today = _review_ticket(session, profile_id=p.id)
+        t_old = _review_ticket(session, profile_id=p.id)
+
+        run_today = session.query(Run).filter(Run.ticket_id == t_today.id).one()
+        run_today.model_used = "claude-opus-4-7"
+        run_old = session.query(Run).filter(Run.ticket_id == t_old.id).one()
+        run_old.model_used = "claude-sonnet-4-6"
+        run_old.started_at = run_old.started_at - timedelta(days=2)
+        session.commit()
+
+        session.add(RunLatency(
+            run_id=run_today.id, model="claude-opus-4-7",
+            total_model_seconds=4.0, total_tool_seconds=0.0,
+            turn_count=1, turn_latencies=[4.0],
+        ))
+        session.add(RunLatency(
+            run_id=run_old.id, model="claude-sonnet-4-6",
+            total_model_seconds=8.0, total_tool_seconds=0.0,
+            turn_count=1, turn_latencies=[8.0],
+        ))
+        session.commit()
+
+        r_today = await client.get("/api/v1/analytics/latency", params={"range": "today"})
+        models_today = {row["model"] for row in r_today.json()["latency_by_model"]}
+        assert models_today == {"claude-opus-4-7"}
+
+        r_7d = await client.get("/api/v1/analytics/latency", params={"range": "7d"})
+        models_7d = {row["model"] for row in r_7d.json()["latency_by_model"]}
+        assert models_7d == {"claude-opus-4-7", "claude-sonnet-4-6"}
+
+    async def test_spend_project_id_filter_respects_range(self, client, session):
+        p = _make_profile(session)
+        proj_today, proj_old = await self._seed_today_and_old_run(session, p)
+
+        # proj_old has no activity "today" -> filtering to it for range=today
+        # yields an empty (or zero-cost) breakdown, not its 30-day total.
+        r = await client.get(
+            "/api/v1/analytics/spend",
+            params={"range": "today", "project_id": proj_old.id},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["totals"]["cost"] == pytest.approx(0.0)
+        assert all(row["cost"] == pytest.approx(0.0) for row in body["by_project"])
+
+        r = await client.get(
+            "/api/v1/analytics/spend",
+            params={"range": "7d", "project_id": proj_old.id},
+        )
+        body_7d = r.json()
+        assert body_7d["totals"]["cost"] == pytest.approx(30.0)
+        assert sum(row["cost"] for row in body_7d["by_project"]) == pytest.approx(30.0)
 
 
 # --- Conversation / run actions -------------------------------------------------

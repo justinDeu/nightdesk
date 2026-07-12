@@ -49,7 +49,10 @@ def _check_project(session: Session, project_id: str | None) -> None:
         raise HTTPException(404, "project not found")
 
 
-async def _dashboard(request: Request, session: Session, *, project_id: str | None) -> dict:
+async def _dashboard(
+    request: Request, session: Session, *, project_id: str | None,
+    range_key: str = "30d",
+) -> dict:
     _check_project(session, project_id)
     now = datetime.now(timezone.utc)
     tz = _resolve_tz(session)
@@ -61,6 +64,7 @@ async def _dashboard(request: Request, session: Session, *, project_id: str | No
     )
     return analytics.build_dashboard(
         session, now=now, price_info=price_info, tz=tz, project_id=project_id,
+        range_key=range_key,
     )
 
 
@@ -100,7 +104,7 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
         session: Session = Depends(get_session),
     ):
         rng = range if range in _RANGE_DAYS else "30d"
-        data = await _dashboard(request, session, project_id=project_id)
+        data = await _dashboard(request, session, project_id=project_id, range_key=rng)
         series = _tail(data["daily_series"], _RANGE_DAYS[rng])
         return AnalyticsSpendOut(
             range=rng,
@@ -123,7 +127,7 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
         session: Session = Depends(get_session),
     ):
         rng = range if range in _RANGE_DAYS else "30d"
-        data = await _dashboard(request, session, project_id=project_id)
+        data = await _dashboard(request, session, project_id=project_id, range_key=rng)
         series = _tail(data["daily_series"], _RANGE_DAYS[rng])
         return AnalyticsTokensOut(
             range=rng,
@@ -142,7 +146,7 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
         session: Session = Depends(get_session),
     ):
         rng = range if range in _RANGE_DAYS else "30d"
-        data = await _dashboard(request, session, project_id=project_id)
+        data = await _dashboard(request, session, project_id=project_id, range_key=rng)
         series = _tail(data["latency_series"], _RANGE_DAYS[rng])
         max_lat = max(
             (med for d in series for med in d["by_model"].values()), default=0.0,
