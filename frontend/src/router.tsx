@@ -84,6 +84,9 @@ const agentScreenRoute = createRoute({
   getParentRoute: () => agentsRoute,
   path: "$id",
   component: AgentScreen,
+  // Remount on agent switch: the rail swaps $id without unmounting, which
+  // would otherwise leak per-agent UI state (title draft, composer, dialogs).
+  remountDeps: ({ params }) => params.id,
 });
 
 const inboxRoute = createRoute({
