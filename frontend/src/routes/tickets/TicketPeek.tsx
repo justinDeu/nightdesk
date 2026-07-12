@@ -23,6 +23,7 @@ import { ticketHref, inAppNav } from "@/lib/routes";
 import { cn } from "@/lib/cn";
 import { ticketStatusKind, runStatusKind, formatUsd } from "@/lib/status";
 import { durationBetween, relativeTime } from "@/lib/time";
+import { peekRailClasses } from "./peekLayout";
 
 /**
  * Right-rail peek: a fast, dismissible summary of the selected ticket that does
@@ -66,16 +67,7 @@ export function TicketPeek({
   const needsProfile = !ticket.profile_id;
 
   return (
-    <aside
-      className={cn(
-        "fade-in fixed z-40 flex flex-col overflow-hidden border-ink-700 bg-ink-900 shadow-[var(--shadow-pop)]",
-        // Phone: a full-screen overlay so the panel is readable instead of a
-        // squeezed side rail. md+: the original bottom-right rail.
-        "inset-0 w-full",
-        "md:inset-auto md:bottom-3 md:right-0 md:top-14 md:w-[440px] md:max-w-[92vw] md:rounded-bl-card md:border-b md:border-l",
-      )}
-      aria-label="Ticket preview"
-    >
+    <aside className={cn(peekRailClasses)} aria-label="Ticket preview">
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-ink-700 px-4 py-3">
         {ticket.status === "running" ? (
