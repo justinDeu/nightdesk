@@ -31,8 +31,6 @@ export interface ListProps {
   latestRun: Map<string, RunOut>;
   /** Plain click — open the side peek. */
   onSelect: (id: string) => void;
-  /** Explicit open — full navigation. */
-  onOpen: (id: string) => void;
   /** Checkbox / x — toggle single selection. */
   onToggleSelect: (id: string) => void;
   /** Shift-click — extend selection to a range. */
@@ -48,7 +46,6 @@ export function List({
   labels,
   latestRun,
   onSelect,
-  onOpen,
   onToggleSelect,
   onRangeSelect,
   focusedId,
@@ -91,15 +88,8 @@ export function List({
               return (
                 <div
                   key={t.id}
-                  onClick={(e) =>
-                    e.metaKey || e.ctrlKey
-                      ? onOpen(t.id)
-                      : e.shiftKey
-                        ? onRangeSelect(t.id)
-                        : onSelect(t.id)
-                  }
                   className={cn(
-                    "cv-row group flex items-center gap-2 border-t border-ink-700/60 px-3 py-2 text-sm md:gap-2.5",
+                    "cv-row group relative flex items-center gap-2 border-t border-ink-700/60 px-3 py-2 text-sm md:gap-2.5",
                     "cursor-pointer transition-colors",
                     isSel
                       ? "wash-selected"
@@ -111,6 +101,24 @@ export function List({
                       : focusedId === t.id && "ring-1 ring-inset ring-lamp/40",
                   )}
                 >
+                  {/* Stretched link: the whole row is one anchor so middle-click,
+                      cmd/ctrl-click, and right-click copy-link work anywhere on
+                      the row. Plain click opens the peek; shift-click extends the
+                      selection; other activations fall through to the browser.
+                      Interactive controls below sit above this (z-10). */}
+                  <a
+                    href={ticketHref(t.id)}
+                    draggable={false}
+                    aria-label={t.title}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (e.button !== 0 || e.metaKey || e.ctrlKey) return;
+                      e.preventDefault();
+                      if (e.shiftKey) onRangeSelect(t.id);
+                      else onSelect(t.id);
+                    }}
+                    className="absolute inset-0 z-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lamp"
+                  />
                   {/* Padded label = ≥24px tap target without widening the row
                       (the negative margin cancels the pad in layout). Low-emphasis
                       at rest so touch users can always select; full once anything
@@ -118,7 +126,7 @@ export function List({
                   <label
                     onClick={(e) => e.stopPropagation()}
                     className={cn(
-                      "-m-1.5 grid shrink-0 cursor-pointer place-items-center p-1.5 transition-opacity",
+                      "-m-1.5 relative z-10 grid shrink-0 cursor-pointer place-items-center p-1.5 transition-opacity",
                       isSel || anySelected
                         ? "opacity-100"
                         : "opacity-60 group-hover:opacity-100 group-focus-within:opacity-100",
@@ -144,25 +152,15 @@ export function List({
                   ) : (
                     <span className="hidden w-1.5 md:block" />
                   )}
-                  <div onClick={(e) => e.stopPropagation()}>
+                  <div className="relative z-10" onClick={(e) => e.stopPropagation()}>
                     <PriorityPicker
                       value={t.priority}
                       onChange={(v) => actions.setPriority(t, v)}
                     />
                   </div>
-                  <a
-                    href={ticketHref(t.id)}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (e.metaKey || e.ctrlKey) return;
-                      e.preventDefault();
-                      if (e.shiftKey) onRangeSelect(t.id);
-                      else onSelect(t.id);
-                    }}
-                    className="min-w-0 flex-1 truncate rounded-[4px] text-moon-100 hover:text-lamp focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp group-hover:text-lamp"
-                  >
+                  <span className="min-w-0 flex-1 truncate rounded-[4px] text-moon-100 group-hover:text-lamp">
                     {t.title}
-                  </a>
+                  </span>
                   {t.labels.length > 0 && (
                     <div className="hidden shrink-0 gap-1 md:flex" onClick={(e) => e.stopPropagation()}>
                       {t.labels.slice(0, 3).map((l) => (
@@ -181,7 +179,7 @@ export function List({
                       lone dangling icon, so reveal it only on hover/selection. */}
                   <div
                     className={cn(
-                      "shrink-0 transition-opacity",
+                      "relative z-10 shrink-0 transition-opacity",
                       t.labels.length > 0
                         ? "opacity-100"
                         : isSel
@@ -198,7 +196,7 @@ export function List({
                       <Tag size={13} className="text-moon-600 hover:text-moon-100" />
                     </LabelPicker>
                   </div>
-                  <div className="hidden w-32 shrink-0 md:block" onClick={(e) => e.stopPropagation()}>
+                  <div className="relative z-10 hidden w-32 shrink-0 md:block" onClick={(e) => e.stopPropagation()}>
                     <ProjectPicker
                       value={t.project_id}
                       projects={projects}

@@ -463,7 +463,6 @@ export function TicketsPage() {
                 latestRun={latestRun}
                 orderBy={orderBy}
                 onSelect={select}
-                onOpen={open}
                 onRangeSelect={rangeSelect}
                 onToggleSelect={toggleSelect}
                 selected={selected}
@@ -478,7 +477,6 @@ export function TicketsPage() {
                 projects={projectMap}
                 latestRun={latestRun}
                 onSelect={select}
-                onOpen={open}
                 onRangeSelect={rangeSelect}
                 onToggleSelect={toggleSelect}
                 selected={selected}
@@ -497,7 +495,6 @@ export function TicketsPage() {
               labels={labelsQ.data ?? []}
               latestRun={latestRun}
               onSelect={select}
-              onOpen={open}
               onToggleSelect={toggleSelect}
               onRangeSelect={rangeSelect}
               focusedId={cursorActive ? focused?.id : undefined}
