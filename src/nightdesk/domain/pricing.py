@@ -59,6 +59,7 @@ from typing import Callable, Mapping, Optional
 
 from nightdesk.domain.cost import (
     PRICES_AS_OF,
+    _model_candidates,
     apply_prices,
     bundled_prices_all,
     bundled_prices_by_vendor,
@@ -413,31 +414,6 @@ def normalize_endpoint_json_all(
         return {prefix: ("openrouter", prices) for prefix, (_v, prices) in parsed.items()}
 
     return _normalize_keyed_all(data)
-
-
-def _strip_variant_suffix(model: str) -> str:
-    """Drop a trailing context-variant suffix: ``"glm-5.2[1m]"`` -> ``"glm-5.2"``."""
-    idx = model.find("[")
-    return model[:idx] if idx != -1 else model
-
-
-def _strip_vendor_prefix(model: str) -> str:
-    """Drop a leading ``"vendor/"`` segment: ``"anthropic/glm-5.2"`` -> ``"glm-5.2"``."""
-    return model.split("/", 1)[-1] if "/" in model else model
-
-
-def _model_candidates(model: str) -> list[str]:
-    """Lookup candidates in order: exact id, suffix-stripped, then also
-    vendor-prefix-stripped. Never mutates the id that gets recorded -- this
-    is a read-time lookup aid only."""
-    candidates = [model]
-    stripped = _strip_variant_suffix(model)
-    if stripped != model:
-        candidates.append(stripped)
-    no_prefix = _strip_vendor_prefix(stripped)
-    if no_prefix != stripped:
-        candidates.append(no_prefix)
-    return candidates
 
 
 def _prefix_lookup(

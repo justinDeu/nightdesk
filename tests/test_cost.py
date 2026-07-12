@@ -60,6 +60,49 @@ def test_compute_cost_glm_is_no_longer_discarded():
     assert cost == pytest.approx(1.40)
 
 
+def test_compute_cost_glm_variant_suffix_is_normalized():
+    # z.ai reports context-variant ids like "glm-5.2[1m]" for the long-context
+    # tier. compute_cost must resolve these to the same bundled row as the
+    # bare "glm-5.2" id (mirrors the normalization domain.pricing already
+    # applies for the live/cached vendor-aware chain -- see
+    # domain.pricing._model_candidates).
+    cost = compute_cost(
+        model="glm-5.2[1m]",
+        input_tokens=1_000_000,
+        output_tokens=0,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+    )
+    assert cost == pytest.approx(1.40)
+
+
+def test_compute_cost_vendor_prefixed_model_is_normalized():
+    # A registry-style "vendor/model" id (e.g. surfaced by some compat
+    # endpoints/routers) must still resolve against the bundled table.
+    cost = compute_cost(
+        model="zai/glm-5.2",
+        input_tokens=1_000_000,
+        output_tokens=0,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+    )
+    assert cost == pytest.approx(1.40)
+
+
+def test_compute_cost_longest_prefix_wins_regardless_of_table_order():
+    # glm-5-code and glm-5 both prefix-match "glm-5-code-preview"; the
+    # longer, more specific row must win even though the table lists
+    # "glm-5-code" after "glm-5.2"/"glm-5.1" (see _prices_for's docstring).
+    cost = compute_cost(
+        model="glm-5-code-preview",
+        input_tokens=1_000_000,
+        output_tokens=0,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+    )
+    assert cost == pytest.approx(1.20)  # glm-5-code's input rate, not glm-5's
+
+
 def test_extract_usage_from_direct_usage_field():
     evt = {
         "type": "result",

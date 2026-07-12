@@ -1405,6 +1405,38 @@ async def test_run_one_legacy_run_gets_finish_time_snapshot_vendor_anthropic(
 
 
 @pytest.mark.anyio
+async def test_run_one_legacy_run_prices_glm_instead_of_guessing_anthropic(
+    session, sample_profile, tmp_path,
+):
+    """Regression guard (token/cost tracking broken for GLM runs on legacy
+    profiles): a legacy profile with no endpoint at all -- e.g. one wired to
+    z.ai/GLM the old way, via raw ``profile.env``/``claude_credentials``
+    rather than a Provider/ProviderEndpoint -- must NOT have its finish-time
+    snapshot mislabeled ``vendor="anthropic"`` just because that's the only
+    guess available. A wrong ``"anthropic"`` guess can never resolve a GLM
+    id (that branch only checks Anthropic rows) and permanently freezes the
+    run's cost at null once the snapshot is stamped. The model id alone is a
+    strong enough signal to skip the wrong guess and let the vendor-agnostic
+    bundled-table fallback (which does carry z.ai rows) price it correctly.
+    """
+    usage = RunUsage(
+        model="glm-5.2", input_tokens=1_000_000, output_tokens=500_000,
+        cache_read_tokens=0, cache_write_tokens=0,
+        cost_usd=999.0,  # deliberately wrong "harness assumed Claude prices"
+    )
+    executor = UsageExecutor(usage=usage)
+    result, run = await _run_ticket_with_profile(session, sample_profile, tmp_path, executor)
+
+    assert result.exit_status == "success"
+    ext = run.pricing_snapshot["glm-5.2"]
+    assert ext["vendor"] != "anthropic"
+    assert ext["input"] == pytest.approx(1.40)
+    expected = (1_000_000 * 1.40 + 500_000 * 4.40) / 1_000_000.0
+    assert run.cost_usd == pytest.approx(expected)
+    assert run.cost_usd != pytest.approx(999.0)
+
+
+@pytest.mark.anyio
 async def test_run_one_pricing_failure_never_fails_launch_or_finish(
     session, tmp_path, monkeypatch,
 ):
