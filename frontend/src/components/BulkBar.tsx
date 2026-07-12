@@ -177,14 +177,14 @@ export function BulkBar({
                     applyLabels(on ? pendingLabels.filter((x) => x !== l.id) : [...pendingLabels, l.id])
                   }
                 >
-                  <span className="flex flex-1 items-center gap-2">
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
                     <span
-                      className={cn("h-2.5 w-2.5 rounded-full", !on && "opacity-40")}
+                      className={cn("h-2.5 w-2.5 shrink-0 rounded-full", !on && "opacity-40")}
                       style={{ backgroundColor: l.color }}
                     />
-                    {l.name}
+                    <span className="truncate">{l.name}</span>
                   </span>
-                  {on && <Check size={14} className="text-lamp" />}
+                  {on && <Check size={14} className="shrink-0 text-lamp" />}
                 </DropdownMenuItem>
               );
             })}
