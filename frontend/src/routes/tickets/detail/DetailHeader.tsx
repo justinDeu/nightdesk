@@ -25,7 +25,7 @@ import { Dialog } from "@/ui/Dialog";
 import { toast } from "@/ui/Toast";
 import { CloneDialog } from "./ConversationDialogs";
 import { useTicketActions } from "@/lib/ticketActions";
-import { ticketStatusKind, runStatusKind, formatUsd, formatTokens } from "@/lib/status";
+import { ticketStatusKind, formatUsd, formatTokens } from "@/lib/status";
 import { durationBetween } from "@/lib/time";
 
 export function DetailHeader({
@@ -57,55 +57,56 @@ export function DetailHeader({
   }
 
   return (
-    <header className="relative shrink-0 border-b border-ink-700 bg-ink-950/70 px-5 py-3 backdrop-blur">
+    <header className="relative shrink-0 border-b border-ink-700 bg-ink-950/70 px-5 py-2.5 backdrop-blur">
       {running && <span aria-hidden className="dawn-edge absolute inset-x-0 top-0 h-[2px]" />}
 
-      <div className="mb-2 flex items-center gap-2 text-sm">
+      {/* Row 1 — identity: back · hash · title (truncates so it never wraps). */}
+      <div className="flex items-center gap-2 text-sm">
         <Link
           to="/tickets"
-          className="inline-flex items-center gap-1 text-moon-400 hover:text-moon-100"
+          className="inline-flex shrink-0 items-center gap-1 text-moon-400 hover:text-moon-100"
         >
           <ArrowLeft size={14} /> Tickets
         </Link>
-        <span className="font-mono text-xs text-moon-600">{ticket.id.slice(0, 8)}</span>
-      </div>
-
-      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+        <span className="shrink-0 font-mono text-xs text-moon-600">{ticket.id.slice(0, 8)}</span>
         <div className="min-w-0 flex-1">
           <TitleEditor ticket={ticket} onSave={onSaveTitle} />
         </div>
-
-        {/* Latest run strip */}
-        {latestRun && (
-          <Link
-            to="/tickets/$id/runs/$rid"
-            params={{ id: ticket.id, rid: latestRun.id }}
-            className="flex shrink-0 items-center gap-3 rounded-control border border-ink-700 bg-ink-900 px-3 py-1.5 font-mono text-[11px] text-moon-400 hover:bg-ink-800"
-          >
-            <StatusPill status={runStatusKind(latestRun.exit_status)} />
-            {latestRun.model_used && (
-              <span className="inline-flex items-center gap-1">
-                <Cpu size={11} /> {latestRun.model_used}
-              </span>
-            )}
-            <span>{durationBetween(latestRun.started_at, latestRun.finished_at)}</span>
-            {latestRun.cost_usd != null && (
-              <span className="tabular-nums text-lamp">{formatUsd(latestRun.cost_usd)}</span>
-            )}
-            {(latestRun.input_tokens != null || latestRun.output_tokens != null) && (
-              <span>
-                {formatTokens((latestRun.input_tokens ?? 0) + (latestRun.output_tokens ?? 0))} tok
-              </span>
-            )}
-          </Link>
-        )}
       </div>
 
-      <div className="mt-2.5 flex flex-wrap items-center gap-2">
-        {running ? <StatusPill status="running" /> : <StatusPill status={ticketStatusKind(ticket.status)} />}
+      {/* Row 2 — state + actions: one status pill, the state transitions, the
+          latest-run strip, and the overflow menu share a single line. */}
+      <div className="mt-1.5 flex items-center gap-2">
+        {running ? (
+          <StatusPill status="running" />
+        ) : (
+          <StatusPill status={ticketStatusKind(ticket.status)} />
+        )}
         <Transitions ticket={ticket} actions={actions} />
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          {latestRun && (
+            <Link
+              to="/tickets/$id/runs/$rid"
+              params={{ id: ticket.id, rid: latestRun.id }}
+              className="hidden shrink-0 items-center gap-2 rounded-control border border-ink-700 bg-ink-900 px-2.5 py-1 font-mono text-[11px] text-moon-400 hover:bg-ink-800 sm:flex"
+            >
+              {latestRun.model_used && (
+                <span className="inline-flex items-center gap-1">
+                  <Cpu size={11} /> {latestRun.model_used}
+                </span>
+              )}
+              <span>{durationBetween(latestRun.started_at, latestRun.finished_at)}</span>
+              {latestRun.cost_usd != null && (
+                <span className="tabular-nums text-lamp">{formatUsd(latestRun.cost_usd)}</span>
+              )}
+              {(latestRun.input_tokens != null || latestRun.output_tokens != null) && (
+                <span>
+                  {formatTokens((latestRun.input_tokens ?? 0) + (latestRun.output_tokens ?? 0))} tok
+                </span>
+              )}
+            </Link>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="ghost" aria-label="More actions">
@@ -186,7 +187,7 @@ function TitleEditor({ ticket, onSave }: { ticket: TicketOut; onSave: (v: string
               setEditing(false);
             }
           }}
-          className="!text-lg font-display font-semibold"
+          className="min-w-0 flex-1 !text-base font-display font-semibold"
         />
         <Button
           size="sm"
@@ -202,11 +203,11 @@ function TitleEditor({ ticket, onSave }: { ticket: TicketOut; onSave: (v: string
     );
   }
   return (
-    <button onClick={() => setEditing(true)} className="group flex items-start gap-2 text-left">
-      <h1 className="font-display text-xl font-semibold leading-tight tracking-tight text-moon-100">
+    <button onClick={() => setEditing(true)} className="group flex min-w-0 items-center gap-2 text-left">
+      <h1 className="min-w-0 truncate font-display text-base font-semibold leading-tight tracking-tight text-moon-100">
         {ticket.title}
       </h1>
-      <Pencil size={14} className="mt-1.5 shrink-0 text-moon-600 opacity-0 group-hover:opacity-100" />
+      <Pencil size={13} className="shrink-0 text-moon-600 opacity-0 group-hover:opacity-100" />
     </button>
   );
 }

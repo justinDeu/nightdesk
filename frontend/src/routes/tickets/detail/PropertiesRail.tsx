@@ -30,8 +30,18 @@ import { relativeTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 
 /** Compact, always-visible metadata rail. Every property is editable in place;
- *  nothing here requires scrolling past content to reach. */
-export function PropertiesRail({ ticket, className }: { ticket: TicketOut; className?: string }) {
+ *  nothing here requires scrolling past content to reach. The optional `brief`
+ *  slot drops the ticket's description/prompt at the top — used once a ticket has
+ *  runs, so the center stage can be transcript-only. */
+export function PropertiesRail({
+  ticket,
+  brief,
+  className,
+}: {
+  ticket: TicketOut;
+  brief?: ReactNode;
+  className?: string;
+}) {
   const qc = useQueryClient();
   const actions = useTicketActions();
   const projects = useProjects();
@@ -46,6 +56,7 @@ export function PropertiesRail({ ticket, className }: { ticket: TicketOut; class
 
   return (
     <div className={cn("space-y-4", className)}>
+      {brief && <div className="space-y-2">{brief}</div>}
       <EffectiveConfigCard ticketId={ticket.id} />
 
       <Row label="Priority">
