@@ -677,13 +677,17 @@ def resolve_live_all(
     ttl: timedelta = DEFAULT_TTL,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     fetcher: Optional[Callable[[str], Optional[dict]]] = None,
-) -> tuple[dict[str, tuple[Optional[str], dict[str, float]]], str]:
+) -> tuple[dict[str, tuple[Optional[str], dict[str, float]]], str, str]:
     """Resolve vendor-tagged live prices via live -> cache -> nothing.
 
-    Returns ``(live_all, source)`` where ``source`` is ``"live"``, ``"cache"``,
-    or ``"bundled"`` (meaning neither live nor cache produced anything —
-    callers pass ``live_all={}`` on to :func:`resolve_vendor_price`, which
-    falls through to the bundled table on its own). Never raises.
+    Returns ``(live_all, source, as_of)`` where ``source`` is ``"live"``,
+    ``"cache"``, or ``"bundled"`` (meaning neither live nor cache produced
+    anything — callers pass ``live_all={}`` on to
+    :func:`resolve_vendor_price`, which falls through to the bundled table on
+    its own), and ``as_of`` is the human date (``YYYY-MM-DD``) the resolved
+    prices are current as of: the fetch date for live, the cache's
+    ``fetched_at`` date for cache, and :data:`nightdesk.domain.cost.PRICES_AS_OF`
+    for the bundled fallback. Never raises.
     """
     now = now or datetime.now(timezone.utc)
     path = cache_path_all(data_dir)
@@ -692,8 +696,8 @@ def resolve_live_all(
     if cache_fresh(path, now=now, ttl=ttl):
         cached = _read_cache_all(path)
         if cached is not None:
-            entries, _fetched_at = cached
-            return entries, "cache"
+            entries, fetched_at = cached
+            return entries, "cache", _as_date(fetched_at)
 
     if url:
         live = fetch(url)
@@ -704,14 +708,14 @@ def resolve_live_all(
                     _write_cache_all(path, live, source=url, fetched_at=fetched_at)
                 except OSError as exc:
                     log.debug("vendor-tagged price cache write to %s failed: %s", path, exc)
-            return live, "live"
+            return live, "live", _as_date(fetched_at)
 
     cached = _read_cache_all(path)
     if cached is not None:
-        entries, _fetched_at = cached
-        return entries, "cache"
+        entries, fetched_at = cached
+        return entries, "cache", _as_date(fetched_at)
 
-    return {}, "bundled"
+    return {}, "bundled", PRICES_AS_OF
 
 
 # --------------------------------------------------------------------------

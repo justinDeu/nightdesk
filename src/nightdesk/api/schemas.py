@@ -1663,6 +1663,39 @@ class AnalyticsLatencyOut(BaseModel):
     model_vs_tool_time: list[dict]
 
 
+class AnalyticsPriceRowOut(BaseModel):
+    """One model's current effective per-1M-token rates + provenance.
+
+    The rates the system resolves *right now* (live -> cache -> bundled, the
+    same chain run-time snapshots use), not the rates any particular historical
+    run was priced at. ``source`` is ``"live"``/``"cache"``/``"bundled"``, or
+    ``"none"`` when the model is unpriceable (the four rates are then ``None``).
+    ``repriced_since`` flags a model whose in-range run snapshots disagree with
+    the current rates, so the UI can hint that historical spend was priced on a
+    different table.
+    """
+
+    model: str
+    vendor: str
+    input: Optional[float] = None
+    output: Optional[float] = None
+    cache_write: Optional[float] = None
+    cache_read: Optional[float] = None
+    source: str
+    as_of: Optional[str] = None
+    repriced_since: bool = False
+
+
+class AnalyticsPricesOut(BaseModel):
+    range: Literal["today", "7d", "30d"]
+    project_id: Optional[str] = None
+    # Overall provenance for the header label (each row carries its own, since
+    # e.g. a GLM row resolves "bundled" while a Claude row resolves "live").
+    source: str
+    as_of: str
+    prices: list[AnalyticsPriceRowOut]
+
+
 class DiagnosticsOut(BaseModel):
     nightdesk_version: str
     python_version: str

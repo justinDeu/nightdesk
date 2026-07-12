@@ -245,9 +245,11 @@ def _fetcher_all_failing():
 
 def test_resolve_live_all_live_wins_and_persists_cache(tmp_path):
     fetch, calls = _fetcher_all_returning(GLM_LIVE_ALL)
-    entries, source = pricing.resolve_live_all(tmp_path, url="http://x", now=NOW, fetcher=fetch)
+    entries, source, as_of = pricing.resolve_live_all(
+        tmp_path, url="http://x", now=NOW, fetcher=fetch)
     assert source == "live"
     assert entries == GLM_LIVE_ALL
+    assert as_of == "2026-06-30"  # NOW's date
     assert calls == ["http://x"]
     cached = pricing._read_cache_all(pricing.cache_path_all(tmp_path))
     assert cached is not None and cached[0] == GLM_LIVE_ALL
@@ -258,22 +260,27 @@ def test_resolve_live_all_fresh_cache_skips_network(tmp_path):
                               source="http://x", fetched_at=NOW.isoformat())
     fetch, calls = _fetcher_all_returning({"glm-5.2": ("zai", {
         "input": 999.0, "output": 1.0, "cache_read": 1.0, "cache_write": 1.0})})
-    entries, source = pricing.resolve_live_all(tmp_path, url="http://x", now=NOW, fetcher=fetch)
+    entries, source, as_of = pricing.resolve_live_all(
+        tmp_path, url="http://x", now=NOW, fetcher=fetch)
     assert source == "cache"
+    assert as_of == "2026-06-30"  # cache's fetched_at date
     assert calls == []
     assert entries == GLM_LIVE_ALL
 
 
 def test_resolve_live_all_no_cache_live_fails_falls_back_to_bundled(tmp_path):
     fetch, calls = _fetcher_all_failing()
-    entries, source = pricing.resolve_live_all(tmp_path, url="http://x", now=NOW, fetcher=fetch)
+    entries, source, as_of = pricing.resolve_live_all(
+        tmp_path, url="http://x", now=NOW, fetcher=fetch)
     assert source == "bundled"
+    assert as_of == pricing.PRICES_AS_OF
     assert entries == {}
 
 
 def test_resolve_live_all_no_data_dir_no_url_uses_bundled():
-    entries, source = pricing.resolve_live_all(None, url=None, now=NOW)
+    entries, source, as_of = pricing.resolve_live_all(None, url=None, now=NOW)
     assert source == "bundled"
+    assert as_of == pricing.PRICES_AS_OF
     assert entries == {}
 
 
