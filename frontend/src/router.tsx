@@ -12,6 +12,8 @@ import { DeskPage } from "@/routes/desk/DeskPage";
 import { TicketsPage } from "@/routes/tickets/TicketsPage";
 import { TicketDetailPage } from "@/routes/tickets/TicketDetailPage";
 import { RunTheater } from "@/routes/tickets/RunTheater";
+import { ProjectsIndexPage } from "@/routes/projects/ProjectsIndexPage";
+import { ProjectPage } from "@/routes/projects/ProjectPage";
 import { AgentsPage } from "@/routes/agents/AgentsPage";
 import { AgentScreen } from "@/routes/agents/AgentScreen";
 import { InboxPage } from "@/routes/InboxPage";
@@ -56,6 +58,18 @@ const ticketDetailRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/tickets/$id",
   component: TicketDetailPage,
+});
+
+const projectsIndexRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects",
+  component: ProjectsIndexPage,
+});
+
+const projectDetailRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/$id",
+  component: ProjectPage,
 });
 
 const runTheaterRoute = createRoute({
@@ -190,6 +204,8 @@ const routeTree = rootRoute.addChildren([
     ticketsRoute,
     ticketDetailRoute,
     runTheaterRoute,
+    projectsIndexRoute,
+    projectDetailRoute,
     agentsRoute.addChildren([agentScreenRoute]),
     inboxRoute,
     archiveRoute,

@@ -3,6 +3,7 @@ import {
   BarChart3,
   Bot,
   CalendarClock,
+  FolderKanban,
   Inbox,
   LayoutDashboard,
   ListTodo,
@@ -28,6 +29,7 @@ export interface NavEntry {
 export const ENTRIES: NavEntry[] = [
   { to: "/", label: "Desk", icon: LayoutDashboard, exact: true },
   { to: "/tickets", label: "Tickets", icon: ListTodo },
+  { to: "/projects", label: "Projects", icon: FolderKanban },
   { to: "/agents", label: "Agents", icon: Bot, badgeKey: "agents-pending" },
   { to: "/inbox", label: "Inbox", icon: Inbox },
   { to: "/scheduled", label: "Scheduled", icon: CalendarClock },
