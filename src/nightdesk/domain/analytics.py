@@ -967,6 +967,14 @@ def effective_prices(
         prices, source = pricing.resolve_vendor_price(
             vendor, model, live_all=live_all, live_source=live_source,
         )
+        if prices is None and data["vendor"]:
+            # Snapshots stamped before the vendor-guess fix carry a wrong
+            # vendor tag (GLM runs tagged "anthropic"); retry with the
+            # inferred vendor so current rates still resolve for display.
+            vendor = _infer_vendor(model)
+            prices, source = pricing.resolve_vendor_price(
+                vendor, model, live_all=live_all, live_source=live_source,
+            )
         if prices is None:
             row_rates: dict = {c: None for c in _PRICE_COMPONENTS}
             as_of: Optional[str] = None
