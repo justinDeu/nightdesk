@@ -227,7 +227,8 @@ function PromptDialog({
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
 
-  useUnsavedGuard(editing && draft !== value);
+  const dirty = editing && draft !== value;
+  useUnsavedGuard(dirty);
 
   const save = () => {
     onSave(draft);
@@ -237,8 +238,14 @@ function PromptDialog({
     setDraft(value);
     setEditing(false);
   };
+  // Route blocker + beforeunload don't cover Radix's own close triggers
+  // (Escape, overlay, X); confirm those here, same as TicketPeek's dialog.
+  const requestClose = (next: boolean) => {
+    if (!next && dirty && !window.confirm("Discard your unsaved prompt changes?")) return;
+    onOpenChange(next);
+  };
   const close = () => {
-    onOpenChange(false);
+    requestClose(false);
   };
 
   const hasText = value.trim().length > 0;
@@ -246,7 +253,7 @@ function PromptDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={requestClose}
       title="Agent prompt"
       description="The instructions the agent actually runs."
       size="xl"
