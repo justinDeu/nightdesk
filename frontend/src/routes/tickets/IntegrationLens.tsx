@@ -15,6 +15,7 @@ import { toast } from "@/ui/Toast";
 import { relativeTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import { externalStateTone } from "@/components/ExternalItemChips";
+import { peekRailClasses } from "./peekLayout";
 
 export type Lens = "issues" | "mrs";
 
@@ -188,14 +189,7 @@ function ExternalItemPeek({
   const [importing, setImporting] = useState(false);
 
   return (
-    <aside
-      className={cn(
-        "fade-in fixed z-40 flex flex-col overflow-hidden border-ink-700 bg-ink-900 shadow-[var(--shadow-pop)]",
-        "inset-0 w-full",
-        "md:inset-auto md:bottom-3 md:right-0 md:top-14 md:w-[440px] md:max-w-[92vw] md:rounded-bl-card md:border-b md:border-l",
-      )}
-      aria-label="Issue preview"
-    >
+    <aside className={cn(peekRailClasses)} aria-label="Issue preview">
       <div className="flex items-start justify-between gap-2 border-b border-ink-700 px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
