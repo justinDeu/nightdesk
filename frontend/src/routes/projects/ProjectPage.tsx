@@ -12,12 +12,13 @@ import { useInbox } from "@/api/inbox";
 import { useProjectActivity } from "@/api/projectActivity";
 import { useAnalyticsSpend } from "@/api/analytics";
 import { useLabels } from "@/api/labels";
+import { useProjectRepoLinks } from "@/api/integrations";
 import { useKeybinds } from "@/lib/keymap";
 import { formatUsd } from "@/lib/status";
 import { openComposer } from "@/components/composerBus";
 import { cn } from "@/lib/cn";
 import { ManagementQueue } from "./ManagementQueue";
-import { ProjectInbox, ActivityLedger, ModelsProfiles } from "./ProjectPanels";
+import { ProjectInbox, ActivityLedger, ModelsProfiles, GitIntegrationsPanel } from "./ProjectPanels";
 import { countByStatus, defaultsFragments, projectFilterToken } from "./shared";
 
 const POLL = 5000;
@@ -39,6 +40,7 @@ export function ProjectPage() {
   const inboxQ = useInbox(id, { refetchInterval: POLL });
   const activityQ = useProjectActivity(id);
   const spendQ = useAnalyticsSpend("30d", id);
+  const repoLinksQ = useProjectRepoLinks(id);
 
   const [peekId, setPeekId] = useState<string | null>(null);
 
@@ -89,6 +91,7 @@ export function ProjectPage() {
   const fragments = defaultsFragments(project);
   const totals = spendQ.data?.totals;
   const inboxCount = inboxItems.length;
+  const repoLinks = repoLinksQ.data ?? [];
   const projectMap = new Map((projectsQ.data ?? []).map((p) => [p.id, p]));
 
   const open = (tid: string) => navigate({ to: "/tickets/$id", params: { id: tid } });
@@ -216,6 +219,9 @@ export function ProjectPage() {
           </div>
 
           <div className="flex min-w-0 flex-col gap-4">
+            {repoLinks.length > 0 && (
+              <GitIntegrationsPanel projectId={project.id} repos={repoLinks} filterToken={token} />
+            )}
             <ProjectInbox items={inboxItems} />
             <ActivityLedger rows={activityQ.data ?? []} />
             <ModelsProfiles
