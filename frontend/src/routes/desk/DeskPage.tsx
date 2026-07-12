@@ -234,145 +234,158 @@ export function DeskPage() {
         </Button>
       }
     >
-      <DeskBand icon={<Sun size={15} />} title="Needs you" count={needs.length}>
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <Link
-            to="/inbox"
-            className="inline-flex items-center gap-2 rounded-control border border-ink-700 bg-ink-900 px-3 py-1.5 text-sm text-moon-100 hover:bg-ink-800"
-          >
-            <InboxIcon size={14} className="text-moon-400" />
-            Inbox
-            <span className="rounded-full bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-moon-400">
-              {inboxCount}
-            </span>
-          </Link>
-          {needs.length > 0 && (
-            <span className="hidden items-center gap-1.5 text-xs text-moon-600 md:flex">
-              <Kbd>j</Kbd>
-              <Kbd>k</Kbd> move
-              <Kbd>o</Kbd> open
-              <Kbd>r</Kbd> requeue
-              <Kbd>a</Kbd> archive
-            </span>
+      {/* Two-column dashboard. The two most important signals — "Running now"
+          and "While you were away" — live in a persistent awareness rail.
+          The rail is first in the DOM so on mobile (single column) those
+          signals land at the top; explicit grid placement parks it on the
+          right at lg+ and keeps it pinned (sticky) so it never scrolls out of
+          view while you work the action center. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)] lg:gap-x-6">
+        <aside className="min-w-0 lg:sticky lg:top-4 lg:col-start-2 lg:row-start-1 lg:max-h-[calc(100vh-5rem)] lg:self-start lg:overflow-y-auto lg:overscroll-y-contain lg:border-l lg:border-ink-700/60 lg:pl-6">
+          <DeskBand icon={<Zap size={15} />} title="Running now" accent count={running.data?.length}>
+            {running.data && running.data.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3">
+                {running.data.map((t) => (
+                  <RunningCard
+                    key={t.id}
+                    ticket={t}
+                    run={latest.get(t.id)}
+                    project={t.project_id ? projects.get(t.project_id) : undefined}
+                  />
+                ))}
+              </div>
+            ) : (
+              <DeskEmptyStrip
+                icon={<Zap size={14} />}
+                text="No live runs — active runs surface here with elapsed time, ticking cost, model, and the latest transcript line."
+              />
+            )}
+          </DeskBand>
+
+          <DeskBand icon={<Moon size={15} />} title="While you were away">
+            <AwayFeed away={away} projects={projects} />
+          </DeskBand>
+        </aside>
+
+        <div className="min-w-0 lg:col-start-1 lg:row-start-1">
+          <DeskBand icon={<Sun size={15} />} title="Needs you" count={needs.length}>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <Link
+                to="/inbox"
+                className="inline-flex items-center gap-2 rounded-control border border-ink-700 bg-ink-900 px-3 py-1.5 text-sm text-moon-100 hover:bg-ink-800"
+              >
+                <InboxIcon size={14} className="text-moon-400" />
+                Inbox
+                <span className="rounded-full bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-moon-400">
+                  {inboxCount}
+                </span>
+              </Link>
+              {needs.length > 0 && (
+                <span className="hidden items-center gap-1.5 text-xs text-moon-600 md:flex">
+                  <Kbd>j</Kbd>
+                  <Kbd>k</Kbd> move
+                  <Kbd>o</Kbd> open
+                  <Kbd>r</Kbd> requeue
+                  <Kbd>a</Kbd> archive
+                </span>
+              )}
+            </div>
+
+            {needs.length === 0 ? (
+              <EmptyState
+                icon={<Sparkles size={18} />}
+                title="Nothing waiting on you"
+                description="Review-state tickets and failed runs land here with one-key actions."
+                action={
+                  inboxCount > 0 ? (
+                    <Button asChild variant="ghost">
+                      <Link to="/inbox">Triage {inboxCount} inbox items</Link>
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <div className="space-y-1.5">
+                {needs.map((item, i) => (
+                  <NeedsRow
+                    key={item.ticket.id}
+                    ref={(el) => (rowRefs.current[i] = el)}
+                    item={item}
+                    project={item.ticket.project_id ? projects.get(item.ticket.project_id) : undefined}
+                    focused={i === cursor}
+                    onFocus={() => setCursor(i)}
+                    onOpen={() => navigate({ to: "/tickets/$id", params: { id: item.ticket.id } })}
+                    onRequeue={() => actions.requeue(item.ticket)}
+                    onArchive={() => actions.archive(item.ticket)}
+                  />
+                ))}
+              </div>
+            )}
+          </DeskBand>
+
+          {/* Seam E order in the action center: blocking agents first, then
+              acknowledgement debt. The live-runs band moved to the right
+              rail above. */}
+          {attentionTotal > 0 && (
+            <DeskBand
+              icon={<HelpCircle size={15} />}
+              title="Agents waiting on you"
+              accent
+              count={attentionTotal}
+            >
+              <div className="space-y-1.5">
+                {/* Structured asks first — a blocked agent outranks an unread reply. */}
+                {attentionPending.map((p) => (
+                  <Link
+                    key={p.id}
+                    to="/agents/$id"
+                    params={{ id: p.session_id }}
+                    className="group flex items-center gap-3 rounded-control border border-lamp/30 bg-lamp/[0.05] px-3 py-2.5 transition-colors hover:bg-lamp/[0.09]"
+                  >
+                    <Bot size={15} className="shrink-0 text-lamp" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
+                        {p.session_title}
+                      </span>
+                      <span className="text-xs text-moon-500">{pendingLabel(p.kind, p.tool)}</span>
+                    </span>
+                    <span className="rounded-full bg-lamp/15 px-2 py-0.5 text-[11px] font-medium text-lamp">
+                      Answer
+                    </span>
+                  </Link>
+                ))}
+                {/* Unread replies: the agent finished and idled — dimmer accent
+                    than a hard ask, click opens the conversation (which marks it
+                    seen). */}
+                {attentionUnread.map((u) => (
+                  <Link
+                    key={u.session_id}
+                    to="/agents/$id"
+                    params={{ id: u.session_id }}
+                    className="group flex items-center gap-3 rounded-control border border-ink-600 bg-ink-900/60 px-3 py-2.5 transition-colors hover:bg-ink-800/70"
+                  >
+                    <Bot size={15} className="shrink-0 text-moon-400" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
+                        {u.session_title}
+                      </span>
+                      <span className="block truncate text-xs text-moon-500">
+                        replied · waiting on you
+                        {u.preview ? <span className="text-moon-600"> — {u.preview}</span> : null}
+                      </span>
+                    </span>
+                    <span className="rounded-full bg-ink-800 px-2 py-0.5 text-[11px] font-medium text-moon-400">
+                      Read
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </DeskBand>
           )}
+
+          <ToAcknowledgeBand projects={projects} onPeek={setPeekId} />
         </div>
-
-        {needs.length === 0 ? (
-          <EmptyState
-            icon={<Sparkles size={18} />}
-            title="Nothing waiting on you"
-            description="Review-state tickets and failed runs land here with one-key actions."
-            action={
-              inboxCount > 0 ? (
-                <Button asChild variant="ghost">
-                  <Link to="/inbox">Triage {inboxCount} inbox items</Link>
-                </Button>
-              ) : undefined
-            }
-          />
-        ) : (
-          <div className="space-y-1.5">
-            {needs.map((item, i) => (
-              <NeedsRow
-                key={item.ticket.id}
-                ref={(el) => (rowRefs.current[i] = el)}
-                item={item}
-                project={item.ticket.project_id ? projects.get(item.ticket.project_id) : undefined}
-                focused={i === cursor}
-                onFocus={() => setCursor(i)}
-                onOpen={() => navigate({ to: "/tickets/$id", params: { id: item.ticket.id } })}
-                onRequeue={() => actions.requeue(item.ticket)}
-                onArchive={() => actions.archive(item.ticket)}
-              />
-            ))}
-          </div>
-        )}
-      </DeskBand>
-
-      {/* Seam E order: blocking agents first, then acknowledgement debt, then
-          the live-runs band. */}
-      {attentionTotal > 0 && (
-        <DeskBand
-          icon={<HelpCircle size={15} />}
-          title="Agents waiting on you"
-          accent
-          count={attentionTotal}
-        >
-          <div className="space-y-1.5">
-            {/* Structured asks first — a blocked agent outranks an unread reply. */}
-            {attentionPending.map((p) => (
-              <Link
-                key={p.id}
-                to="/agents/$id"
-                params={{ id: p.session_id }}
-                className="group flex items-center gap-3 rounded-control border border-lamp/30 bg-lamp/[0.05] px-3 py-2.5 transition-colors hover:bg-lamp/[0.09]"
-              >
-                <Bot size={15} className="shrink-0 text-lamp" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
-                    {p.session_title}
-                  </span>
-                  <span className="text-xs text-moon-500">{pendingLabel(p.kind, p.tool)}</span>
-                </span>
-                <span className="rounded-full bg-lamp/15 px-2 py-0.5 text-[11px] font-medium text-lamp">
-                  Answer
-                </span>
-              </Link>
-            ))}
-            {/* Unread replies: the agent finished and idled — dimmer accent
-                than a hard ask, click opens the conversation (which marks it
-                seen). */}
-            {attentionUnread.map((u) => (
-              <Link
-                key={u.session_id}
-                to="/agents/$id"
-                params={{ id: u.session_id }}
-                className="group flex items-center gap-3 rounded-control border border-ink-600 bg-ink-900/60 px-3 py-2.5 transition-colors hover:bg-ink-800/70"
-              >
-                <Bot size={15} className="shrink-0 text-moon-400" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-moon-100 group-hover:text-lamp">
-                    {u.session_title}
-                  </span>
-                  <span className="block truncate text-xs text-moon-500">
-                    replied · waiting on you
-                    {u.preview ? <span className="text-moon-600"> — {u.preview}</span> : null}
-                  </span>
-                </span>
-                <span className="rounded-full bg-ink-800 px-2 py-0.5 text-[11px] font-medium text-moon-400">
-                  Read
-                </span>
-              </Link>
-            ))}
-          </div>
-        </DeskBand>
-      )}
-
-      <ToAcknowledgeBand projects={projects} onPeek={setPeekId} />
-
-      <DeskBand icon={<Zap size={15} />} title="Running now" accent count={running.data?.length}>
-        {running.data && running.data.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {running.data.map((t) => (
-              <RunningCard
-                key={t.id}
-                ticket={t}
-                run={latest.get(t.id)}
-                project={t.project_id ? projects.get(t.project_id) : undefined}
-              />
-            ))}
-          </div>
-        ) : (
-          <DeskEmptyStrip
-            icon={<Zap size={14} />}
-            text="No live runs — active runs surface here with elapsed time, ticking cost, model, and the latest transcript line."
-          />
-        )}
-      </DeskBand>
-
-      <DeskBand icon={<Moon size={15} />} title="While you were away">
-        <AwayFeed away={away} projects={projects} />
-      </DeskBand>
+      </div>
 
       {peekTicket && (
         <TicketPeek
@@ -698,7 +711,7 @@ function AwayFeed({
   const projName = (id: string | null) => (id ? projects.get(id)?.name ?? "No project" : "No project");
 
   return (
-    <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+    <div className="grid grid-cols-1 items-start gap-3">
       {away.finished.length > 0 && (
         <div className="rounded-card border border-ink-700 bg-ink-900 p-3 shadow-[var(--shadow-raised)]">
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-moon-600">
