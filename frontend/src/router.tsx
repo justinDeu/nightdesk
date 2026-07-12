@@ -46,10 +46,11 @@ const ticketsRoute = createRoute({
   path: "/tickets",
   validateSearch: (
     search: Record<string, unknown>,
-  ): { view?: "board" | "list"; f?: string; viewId?: string } => ({
+  ): { view?: "board" | "list"; f?: string; viewId?: string; lens?: "issues" | "mrs" } => ({
     view: search.view === "list" ? "list" : search.view === "board" ? "board" : undefined,
     f: typeof search.f === "string" ? search.f : undefined,
     viewId: typeof search.viewId === "string" ? search.viewId : undefined,
+    lens: search.lens === "issues" || search.lens === "mrs" ? search.lens : undefined,
   }),
   component: TicketsPage,
 });
