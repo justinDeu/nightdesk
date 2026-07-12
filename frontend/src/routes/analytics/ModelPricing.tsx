@@ -45,7 +45,7 @@ export function ModelPricing({
   }));
 
   return (
-    <div className="rounded-card border border-ink-700/50 bg-ink-900 shadow-[var(--shadow-raised)]">
+    <div className="mt-4 rounded-card border border-ink-700/50 bg-ink-900 shadow-[var(--shadow-raised)]">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
