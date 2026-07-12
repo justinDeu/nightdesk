@@ -5,6 +5,11 @@ description: Use when calling the nightdesk HTTP API from scripts, curl, tests, 
 
 # nightdesk API access
 
+> **nightdesk skill** · package v0.0.1 · updated 2026-07-12. A user-global copy
+> (installed by `nightdesk-install-skills`) can drift from the code; if anything
+> below disagrees with `GET /openapi.json`, re-run `nightdesk-install-skills --force`
+> (or `--all --force`) to refresh.
+
 `/api/v1/*` is the entire HTTP API — JSON in, JSON out. There is no separate HTMX/HTML API surface anymore: the old server-rendered UI (`/board/*`, `/tickets/{tid}/*` HTML page, `/archive/*`, `/header/*`, `/settings/*`, `/profiles/*` HTML editor, `/diagnostics` page, `/cron/*` page, `/fs/suggest` HTML partial) was removed and replaced by a React SPA that talks exclusively to `/api/v1`. The SPA itself is served at `/` (see "SPA / static serving" below) — everything under `/` that isn't `/api/v1/*`, `/auth/*`, or `/healthz` is the SPA's own client-side routing, not a server route.
 
 `/api/v1/*` admin routes accept `Authorization: Bearer <token>` **or** the signed `nightdesk_session` browser cookie — the cookie support exists so the browser SPA can call the JSON API directly without also sending a bearer header; scripts should keep using the bearer header. `ndr_`-prefixed run-scoped tokens (issued to sandboxed agent runs) are unaffected — they still only work via the bearer header and only on the scopes granted to that run.
@@ -71,6 +76,7 @@ The built frontend (`frontend/dist`, a Vite/React app) is mounted at `/` when pr
 | `label` | all | label **name** (case-insensitive) or label id; matches tickets carrying that label |
 | `outcome` | all | latest-run terminal state: `succeeded` (last run `exit_status == success`) or `failed` (any other finished status). Any other value is a `422`. |
 | `q` | all | free-text substring (case-insensitive) over ticket `title` + `prompt` |
+| `acknowledged` | all | `true` = only tickets with `acknowledged_at` set (post-review ack); `false` = only unacknowledged |
 | `limit` | `200` | honored up to a hard max of `1000`; **above the max is a `422`, not a clamp** |
 | `offset` | `0` | page past the limit / the hard max |
 | `sort` | `board` | `board` = position-stable board order (unchanged default); `recent` = `updated_at`, `created` = `created_at`, `priority` = the 0-4 band, `cost` = latest run `cost_usd` (runless tickets sort as NULL). Any other value is a `422`. The Archive page uses `sort=recent` so page 1 is the most recently archived. |
@@ -117,8 +123,13 @@ All under `/api/v1`, same cookie-or-bearer auth as everything else in this table
 - **Bulk**: `PATCH /tickets/bulk/labels` (replaces, not merges, each ticket's label set), `POST /tickets/bulk/archive`, `POST /tickets/bulk/unarchive`.
 - **Profiles**: `POST /profiles/{pid}/copy`, `GET /profiles/{pid}/export` (secrets redacted), `POST /profiles/import` (JSON body `{"payload": {...}}`, not multipart), `POST /profiles/import-from-cc` (`{"settings": {...}, "name"?}`).
 - **Helpers**: `POST /preview/worktree-name`, `POST /preview/cron` (`{"schedule", "timezone", "count"}` → next N fire times), `POST /notifications/test` (`{"url"}`), `GET /projects/{id}/activity` (recent runs feed), `GET /diagnostics` (CC install check, no log tails).
+- **Labels & projects** (resolve filter/create values): `GET /labels`, `POST /labels`, `GET/PATCH/DELETE /labels/{label_id}`, `PUT /labels/tickets/{ticket_id}` (replace a ticket's label set); `GET /projects`, `POST /projects`, `GET/PATCH/DELETE /projects/{project_id}`. The `label` list filter and bulk/labels take a label id (or name); `project_id` comes from here.
+- **API tokens** (durable `ndk_` agent tokens — script-relevant): `GET /tokens` (metadata + `prefix_hint` only, never the secret), `POST /tokens` to mint (body `{"name", "bundle"?: "observer"|"reviewer"|"pm-agent"|"operator", "scopes"?: [...], "profile_allowlist"?, "project_allowlist"?, "expires_in_days"?}` — explicit `scopes` wins over `bundle`; the response is the ONLY time the cleartext token is returned), `GET /tokens/catalog` (scope + bundle vocabulary), `POST /tokens/{id}/revoke`, `DELETE /tokens/{id}`. Human-only scopes (`profiles.write`, `providers.write`, `cron.write`, `config.write`, `integrations.write`, `agents.message`, `agents.admin`, `tickets.delete`, `tokens.admin`) can never be minted — `422`. Minting gates on the admin session, not a token.
+- **Integrations (GitLab v1)**: `GET/POST /connections` (a connection = a forge credential + endpoint URL), `GET/POST /repo-links`, `POST /repo-links/{rid}/import-ticket` (import an issue/MR as a draft ticket), `GET/POST /tickets/{tid}/external-links`. `integrations.write` (connection/repo-link CRUD) is human-only.
+- **Ack (post-review)**: `POST /tickets/{tid}/ack`, `POST /tickets/ack` (bulk), `GET /tickets/ack/count`, `GET /tickets/ack/digest`. Records that a human reviewed a run's outcome; pairs with the `acknowledged` list filter.
+- **Review diff comments**: comments are line-anchored on a **run's diff**, never the ticket — `GET/POST /runs/{rid}/comments`, `PATCH /diff-comments/{cid}`, `POST /diff-comments/{cid}/resolve|unresolve`, `DELETE /diff-comments/{cid}`. **There is no `/tickets/{tid}/comments` endpoint** — ticket-level comments were removed and are not coming back. See `nightdesk-ticket-ops` for the recipe.
 
-See `nightdesk-ticket-ops` for the per-ticket conversation/run-action recipes (resume/retry/restart/clone/next-run-context/additional-dirs) and lifecycle recipes (`POST /tickets/{tid}/send-to-inbox` — the only JSON path back into the inbox; `draft` only, `409` otherwise).
+See `nightdesk-ticket-ops` for the per-ticket conversation/run-action recipes (resume/retry/restart/clone/next-run-context/additional-dirs/steer) and lifecycle recipes (`POST /tickets/{tid}/send-to-inbox` — the only JSON path back into the inbox; `draft` only, `409` otherwise).
 
 ## Conversations
 
@@ -170,5 +181,5 @@ are tracked per agent.
 
 For concrete ticket recipes (create, transition, run-now, archive, transcript stream), use `nightdesk-ticket-ops`. That skill also covers:
 
-- **Dependency edges** — `GET`/`POST`/`DELETE /api/v1/tickets/{tid}/dependencies` (gate execution order so a dependent ticket waits for its prerequisite).
+- **Dependency edges** — `GET`/`POST /api/v1/tickets/{tid}/dependencies` and `DELETE /api/v1/tickets/{tid}/dependencies/{dep_on_id}` (gate execution order so a dependent ticket waits for its prerequisite).
 - **Stacked / dependent tickets** — set a workspace's `base_ref` (a field on `TicketWorkspaceIn`, see `src/nightdesk/api/schemas.py`) to a prerequisite's branch so the dependent's git_worktree is cut from that branch instead of HEAD, building directly on the prerequisite's commits.

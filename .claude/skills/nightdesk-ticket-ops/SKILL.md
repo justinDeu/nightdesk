@@ -5,6 +5,11 @@ description: Use when performing ticket lifecycle operations against the nightde
 
 # nightdesk ticket operations
 
+> **nightdesk skill** · package v0.0.1 · updated 2026-07-12. A user-global copy
+> (installed by `nightdesk-install-skills`) can drift from the code; if anything
+> below disagrees with `GET /openapi.json`, re-run `nightdesk-install-skills --force`
+> (or `--all --force`) to refresh.
+
 Concrete recipes for the JSON API. Assumes `$BASE` and `${AUTH[@]}` are set (see `nightdesk-api`).
 
 ## Status lifecycle
@@ -83,6 +88,8 @@ Before sending the POST, confirm:
 ## Create a ticket
 
 Required: `title`, `profile_id`. New tickets default to `status="draft"`.
+
+**`description` is the human-facing what/why** (shown on the board/review/ack digest), distinct from `prompt` and never injected into the agent's context. Agents SHOULD set it alongside `prompt` so a human can scan the outcome — it's optional but expected. Update it alone with `PATCH /tickets/{tid}/description`.
 
 **`profile_id` is optional only for `status="inbox"`** — a captured-but-under-specified inbox item can be created with no profile at all (`profile_id: null` in the response). Any other status still requires it: `422 "profile_id is required"` if omitted. This is the same completeness boundary `ticket_completeness` enforces at promotion time (see "Promote/decline" below) — an inbox item missing a profile just can't be promoted yet, not that it can't exist.
 
@@ -376,6 +383,8 @@ curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
 
 Only fields in the body are touched. Multi-line prompts: write the JSON to a temp file and pass `--data @file.json` so quoting stays sane.
 
+Single-field convenience routes (same sparse semantics, sparser payload): `PATCH /tickets/{tid}/status` (`{"status"}` — guard-respecting, `409` on an invalid transition just like `/transition`, but does NOT flip `run_now`), `/priority` (`{"priority"}` 0-4), `/profile` (`{"profile_id"}`), `/project` (`{"project_id"}` — `null` clears), `/description` (`{"description"}` — `null` clears).
+
 ## Run now
 
 ```bash
@@ -419,6 +428,33 @@ curl -s "${AUTH[@]}" "$BASE/api/v1/runs/$RID"          | jq .
 
 A run's `started_as_run_now` flag is run-level history; it survives even after the ticket's transient `run_now` flag clears.
 
+## Review diff comments
+
+Line-anchored review comments live on a **run's diff**, not the ticket. The old ticket-level `/tickets/{tid}/comments` endpoint was removed; this run-scoped surface is its replacement. `GET /runs/{rid}/diff` is the diff itself; the comment endpoints annotate it:
+
+```bash
+# List a run's comment threads.
+curl -s "${AUTH[@]}" "$BASE/api/v1/runs/$RID/comments" | jq .
+
+# Post a top-level comment anchored to a line, or a reply (parent_id set).
+# Omit file_path/line/side/anchor_* for an unanchored (whole-file) thread.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/runs/$RID/comments" \
+  -H 'Content-Type: application/json' \
+  -d '{"file_path":"src/app.py","side":"new","line":42,"anchor_head_sha":"<sha>","body":"wrap this in a helper"}' | jq .
+
+# Edit / resolve / unresolve / delete a comment by id.
+curl -s "${AUTH[@]}" -X PATCH  "$BASE/api/v1/diff-comments/$CID" \
+  -H 'Content-Type: application/json' -d '{"body":"nit: renamed"}' | jq .
+curl -s "${AUTH[@]}" -X POST   "$BASE/api/v1/diff-comments/$CID/resolve" | jq .
+curl -s "${AUTH[@]}" -X POST   "$BASE/api/v1/diff-comments/$CID/unresolve" | jq .
+curl -s "${AUTH[@]}" -X DELETE "$BASE/api/v1/diff-comments/$CID"   # 204
+
+# "Request changes": stamps the run's next_run_context and parks the ticket for another turn.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/runs/$RID/comments/request-changes" | jq '{ticket_id, next_run_context}'
+```
+
+A `DiffCommentOut` with `outdated: true` means its stored line number no longer lines up with the live diff head (the diff shifted under it) — render against its captured `anchor_text`, not the line number.
+
 ## Conversations and continuing a run
 
 Runs are grouped into **conversations**. A ticket has many conversations (1:N) with exactly one active at a time; each run is one turn within its conversation. The conversation is the continuous thread of work and holds the Claude/OpenCode session id used to resume.
@@ -454,9 +490,9 @@ curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/clone" \
   -d '{"title":"retry with a tweak","carry_context":true}' | jq '{id, title}'
 ```
 
-### Steering: next-run-context
+### Steering notes (`next-run-context`)
 
-Stage (or clear) a note that either rides along on the next `continue`/`resume`/etc., or gets folded permanently into the prompt:
+Stage (or clear) a single note that either rides along on the next `continue`/`resume`/etc., or gets folded permanently into the prompt:
 
 ```bash
 # Stage a steering note (empty body clears it).
@@ -466,6 +502,32 @@ curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/next-run-context" \
 # Fold the staged note into the prompt permanently and clear it. 422 if nothing is staged.
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/merge-next-run-context" | jq '{prompt, next_run_context}'
 ```
+
+### Steering queue (mid-run follow-ups)
+
+Distinct from `next-run-context` (one staged note for the *next* run): `/steer` is an ordered queue of follow-up messages delivered to a **live** run — use it to nudge an agent mid-flight ("also cover the empty-input case") without starting a new turn.
+
+```bash
+# List the queue + delivery capability for the active conversation.
+curl -s "${AUTH[@]}" "$BASE/api/v1/tickets/$TID/steer" | jq .
+
+# Queue a follow-up. delivery_mode defaults to "at_turn" (delivered on the next
+# agent turn); "inject" pushes it into the SAME live run (opencode only — the
+# claude_sdk runtime can't inject). `capability.inject` in the GET response
+# tells you which modes the active conversation's backend supports.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/steer" \
+  -H 'Content-Type: application/json' \
+  -d '{"body":"also cover the empty-input case","delivery_mode":"at_turn"}' | jq .
+
+# Reorder (full ordered id list) / edit one / remove one.
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/steer/reorder" \
+  -H 'Content-Type: application/json' -d '{"ordered_ids":["<id-a>","<id-b>"]}' | jq .
+curl -s "${AUTH[@]}" -X PATCH "$BASE/api/v1/tickets/$TID/steer/$MID" \
+  -H 'Content-Type: application/json' -d '{"body":"edited nudge"}' | jq .
+curl -s "${AUTH[@]}" -X DELETE "$BASE/api/v1/tickets/$TID/steer/$MID"   # 204
+```
+
+Each queued message is a `SteerMessageOut` (`id`, `body`, `position`, `state`, `delivery_mode`, `delivered_run_id`, `created_at`, `delivered_at`).
 
 ### Additional directories
 
@@ -553,6 +615,7 @@ curl -s "${AUTH[@]}" "$BASE/api/v1/fs/suggest?path=~/f" | jq .
 
 ## Common mistakes
 
+- **Calling `/api/v1/tickets/{tid}/comments`.** That endpoint was removed (ticket-level comments are gone for good). Review comments are line-anchored on a **run's diff** — `POST /runs/{rid}/comments` and `/diff-comments/{cid}`. See "Review diff comments".
 - **Stacking without `commit_on_finish` on the prerequisite.** A dependency edge + `base_ref` is not enough: runs leave work *uncommitted* by default, so the prerequisite's branch never advances and the dependent provisions an empty tree (then improvises a duplicate implementation). Set `commit_on_finish: true` on the prerequisite, or commit its worktree manually, before the dependent provisions. If you forget, watch for the `provision_warning` transcript event at the dependent's provision time. See "Dependent / stacked tickets".
 - Sending a sparse PATCH and expecting omitted fields to clear. They don't — see `nightdesk-api`.
 - Trying to transition `draft → review`. Not allowed; go through `running` or use `archive`/`requeue` paths.
