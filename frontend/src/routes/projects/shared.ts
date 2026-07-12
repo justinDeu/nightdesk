@@ -65,6 +65,35 @@ export function projectFilterToken(p: ProjectOut): string {
   return `project:${p.slug}`;
 }
 
+/** The three "needs attention" lifecycle buckets the projects-index rail shows
+ *  per project. Counts come from a single cross-project ticket fetch (see
+ *  tallyRailCounts) — never one query per card. */
+export interface RailCounts {
+  running: number;
+  review: number;
+  inbox: number;
+}
+
+/** Tally ONE flat ticket list (every project, fetched in a single
+ *  GET /api/v1/tickets call) into per-project running/review/inbox counts.
+ *  This is the projects index's grouped query: O(tickets) once, not O(per
+ *  project). Only the three attention buckets are counted; queued/draft/
+ *  archived are ignored. */
+export function tallyRailCounts(tickets: TicketOut[]): Map<string, RailCounts> {
+  const m = new Map<string, RailCounts>();
+  for (const t of tickets) {
+    if (!t.project_id) continue;
+    if (t.status !== "running" && t.status !== "review" && t.status !== "inbox") continue;
+    let c = m.get(t.project_id);
+    if (!c) {
+      c = { running: 0, review: 0, inbox: 0 };
+      m.set(t.project_id, c);
+    }
+    c[t.status as "running" | "review" | "inbox"]++;
+  }
+  return m;
+}
+
 export interface StatusCounts {
   review: number;
   running: number;
