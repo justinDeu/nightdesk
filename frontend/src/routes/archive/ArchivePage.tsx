@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ArchiveSearch } from "@/router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Archive, ArchiveRestore, ArrowDownWideNarrow, ArrowUpWideNarrow, Trash2, X } from "lucide-react";
@@ -10,12 +10,13 @@ import { Select } from "@/ui/Select";
 import { IconButton } from "@/ui/IconButton";
 import { Dialog } from "@/ui/Dialog";
 import { EmptyState } from "@/ui/EmptyState";
+import { ErrorState } from "@/ui/ErrorState";
 import { StatusPill } from "@/ui/StatusPill";
 import { Tooltip } from "@/ui/Tooltip";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
 import { UnackedDot, ticketNeedsAck } from "@/components/UnackedDot";
-import { useTicketPages, ticketsApi } from "@/api/tickets";
+import { useTicket, useTicketPages, ticketsApi } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
 import { useProjectMap, useProjects } from "@/api/projects";
 import { useLabels } from "@/api/labels";
@@ -27,7 +28,9 @@ import { formatUsd, runStatusKind } from "@/lib/status";
 import { absoluteTime, relativeTime } from "@/lib/time";
 import { useKeybinds } from "@/lib/keymap";
 import { cn } from "@/lib/cn";
+import { ticketHref } from "@/lib/routes";
 import { FilterBar } from "@/routes/tickets/FilterBar";
+import { TicketPeek } from "@/routes/tickets/TicketPeek";
 import {
   ARCHIVE_FILTER_KEYS,
   filterToQuery,
@@ -86,6 +89,13 @@ export function ArchivePage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState<TicketOut | null>(null);
 
+  // Side-peek for a ticket opened from a row — inspection happens in the same
+  // panel the Desk and Tickets board use, without leaving the archive. Plain
+  // click on a title opens the peek; cmd/ctrl/middle-click open detail natively.
+  const [peekId, setPeekId] = useState<string | null>(null);
+  const peekQ = useTicket(peekId ?? undefined);
+  const peekTicket = peekId ? peekQ.data : undefined;
+
   const storedSort = useMemo(() => loadSort(), []);
   const filter = search.f ?? "";
   const sort = {
@@ -109,6 +119,9 @@ export function ArchivePage() {
 
   // "/" focuses the filter, mirroring the Tickets board so muscle memory
   // carries over. The FilterBar listens for this event.
+  // j/k move the row cursor, Enter/o open full detail, space peeks, r restores
+  // the focused row, Escape closes the peek — all route-scoped so they shadow
+  // global binds while the Archive is mounted.
   useKeybinds([
     {
       combo: "/",
@@ -117,6 +130,13 @@ export function ArchivePage() {
       scope: "route",
       handler: () => window.dispatchEvent(new CustomEvent("nightdesk:focus-filter")),
     },
+    { combo: "j", label: "Cursor down", group: "Archive", scope: "route", handler: () => setCursor((c) => Math.min(rows.length - 1, c + 1)) },
+    { combo: "k", label: "Cursor up", group: "Archive", scope: "route", handler: () => setCursor((c) => Math.max(0, c - 1)) },
+    { combo: "Enter", label: "Open ticket", group: "Archive", scope: "route", handler: () => focused && navigate({ to: "/tickets/$id", params: { id: focused.id } }) },
+    { combo: "o", label: "Open ticket", group: "Archive", scope: "route", handler: () => focused && navigate({ to: "/tickets/$id", params: { id: focused.id } }) },
+    { combo: "space", label: "Peek ticket", group: "Archive", scope: "route", handler: () => focused && setPeekId(focused.id) },
+    { combo: "r", label: "Restore", group: "Archive", scope: "route", handler: () => focused && unarchiveOne(focused) },
+    { combo: "Escape", label: "Close peek", group: "Archive", scope: "route", handler: () => setPeekId(null) },
   ]);
 
   const ctx: FilterContext = {
@@ -157,6 +177,19 @@ export function ArchivePage() {
     [ticketsQ.data],
   );
   const total = ticketsQ.data?.pages[0]?.total ?? 0;
+
+  // Keyboard cursor over the rows (cloned from Inbox/Desk): j/k move a focus
+  // ring with scroll-into-view; the focused row drives the peek/restore/open
+  // keybinds above. Clamp when the list shrinks below the cursor.
+  const [cursor, setCursor] = useState(0);
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  useEffect(() => {
+    if (cursor >= rows.length) setCursor(Math.max(0, rows.length - 1));
+  }, [rows.length, cursor]);
+  useEffect(() => {
+    rowRefs.current[cursor]?.scrollIntoView({ block: "nearest" });
+  }, [cursor]);
+  const focused = rows[cursor];
 
   const allSelected = rows.length > 0 && rows.every((t) => selected.has(t.id));
   const toggleAll = () =>
@@ -232,7 +265,17 @@ export function ArchivePage() {
         <SortControl sort={sort} onChange={setSort} />
       </div>
 
-      {isLoading ? (
+      {ticketsQ.isError ? (
+        <ErrorState
+          title="Could not load archive"
+          description="The archive list failed to load. Try again."
+          action={
+            <Button variant="ghost" size="sm" onClick={() => ticketsQ.refetch()}>
+              Retry
+            </Button>
+          }
+        />
+      ) : isLoading ? (
         <div className="py-20 text-center text-sm text-moon-600">Loading archive…</div>
       ) : empty ? (
         <div className="mx-auto max-w-2xl">
@@ -274,16 +317,19 @@ export function ArchivePage() {
             <span className="w-16 shrink-0" />
           </div>
 
-          {rows.map((t) => {
+          {rows.map((t, i) => {
             const run = latest.get(t.id);
             const isSel = selected.has(t.id);
             const project = t.project_id ? projects.get(t.project_id) : undefined;
             return (
               <div
                 key={t.id}
+                ref={(el) => (rowRefs.current[i] = el)}
+                onMouseEnter={() => setCursor(i)}
                 className={cn(
                   "group flex items-center gap-3 border-t border-ink-700/60 px-3 py-2.5 text-sm transition-colors hover:bg-ink-800",
                   isSel && "wash-selected",
+                  i === cursor && "bg-ink-800 ring-1 ring-inset ring-lamp/40",
                 )}
               >
                 <input
@@ -294,13 +340,17 @@ export function ArchivePage() {
                   aria-label={`Select ${t.title}`}
                 />
                 <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <Link
-                    to="/tickets/$id"
-                    params={{ id: t.id }}
+                  <a
+                    href={ticketHref(t.id)}
+                    onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey) return;
+                      e.preventDefault();
+                      setPeekId(t.id);
+                    }}
                     className="min-w-0 truncate text-moon-100 hover:text-lamp"
                   >
                     {t.title}
-                  </Link>
+                  </a>
                   {ticketNeedsAck(t) && <UnackedDot />}
                 </span>
                 <span className="hidden w-32 shrink-0 md:block">
@@ -394,6 +444,19 @@ export function ArchivePage() {
       />
 
       <DeleteDialog ticket={deleting} onCancel={() => setDeleting(null)} onConfirm={confirmDelete} />
+
+      {peekTicket && (
+        <TicketPeek
+          key={peekTicket.id}
+          ticket={peekTicket}
+          project={peekTicket.project_id ? projects.get(peekTicket.project_id) : undefined}
+          latestRun={latest.get(peekTicket.id)}
+          projects={projectsQ.data ?? []}
+          labels={labelsQ.data ?? []}
+          onClose={() => setPeekId(null)}
+          onOpenFull={() => navigate({ to: "/tickets/$id", params: { id: peekTicket.id } })}
+        />
+      )}
     </Page>
   );
 }
