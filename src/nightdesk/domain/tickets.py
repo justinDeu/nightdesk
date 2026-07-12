@@ -643,21 +643,29 @@ def reorder_in_column(
     return out
 
 
-_ARCHIVABLE_SOURCES = {"draft", "queued", "review"}
-
-
 def archive(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
-    """Convenience: draft|queued|review -> archived.
+    """Archive any ticket that is not actively running.
 
-    ``draft``/``queued`` archiving is the non-destructive way to discard a
-    ticket that will never run (abandoned triage, or finished out of band) —
-    the alternative is a destructive ``delete_ticket``. ``running`` is
-    deliberately excluded: a live run must go through ``review`` first
-    (cancel or finish) before it can be archived.
+    Policy: ``inbox``, ``draft``, ``queued``, and ``review`` are ALL
+    archivable — archiving is the non-destructive way to discard a ticket that
+    will never run (stale triage, an abandoned draft, work finished out of
+    band); the destructive alternative is ``delete_ticket``. ``running`` is the
+    ONE exception: a live run must reach ``review`` first (cancel or finish)
+    before it can be archived. An already-``archived`` ticket is a no-op
+    (idempotent) so callers can archive without first checking current state.
+
+    A queued ticket is cleanly removed from the queue: its ``run_now`` flag is
+    cleared so the scheduler can never pick it and a later ``unarchive`` does
+    not surprise the caller with an immediate run.
     """
     t = get_ticket(session, ticket_id)
-    if t.status not in _ARCHIVABLE_SOURCES:
-        raise InvalidTransition(f"cannot archive from {t.status}")
+    if t.status == "running":
+        raise InvalidTransition("cannot archive a running ticket")
+    if t.status == "archived":
+        return t
+    # Clear run_now so a queued ticket leaves the scheduler's radar and a later
+    # unarchive does not auto-run. transition_status (below) commits this.
+    t.run_now = False
     return transition_status(session, ticket_id, "archived", actor=actor)
 
 
@@ -1308,11 +1316,12 @@ def bulk_archive(
     session: Session,
     ticket_ids: list[str],
 ) -> tuple[list[Ticket], list[dict]]:
-    """Bulk archive.  Archives each ticket that is in ``draft``, ``queued``, or
-    ``review`` (see ``_ARCHIVABLE_SOURCES``); every other ticket (e.g.
-    ``running``, already ``archived``) is skipped with a reason rather than
-    failing the whole batch.  Returns ``(updated, skipped)`` where each
-    skipped entry is ``{"ticket_id": ..., "reason": ...}``."""
+    """Bulk archive.  Archives every ticket that is not actively running (see
+    ``archive``): ``inbox``/``draft``/``queued``/``review`` all move to
+    ``archived`` and an already-``archived`` ticket is a no-op success; a
+    ``running`` ticket is skipped with a reason rather than failing the whole
+    batch.  Returns ``(updated, skipped)`` where each skipped entry is
+    ``{"ticket_id": ..., "reason": ...}``."""
     updated: list[Ticket] = []
     skipped: list[dict] = []
     for tid in ticket_ids:

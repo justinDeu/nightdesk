@@ -121,11 +121,11 @@ export function DetailHeader({
                   Send to inbox
                 </DropdownMenuItem>
               )}
-              {ticket.status !== "archived" ? (
-                <DropdownMenuItem onSelect={() => actions.archive(ticket)}>Archive</DropdownMenuItem>
-              ) : (
+              {ticket.status === "archived" ? (
                 <DropdownMenuItem onSelect={() => actions.unarchive(ticket)}>Restore</DropdownMenuItem>
-              )}
+              ) : ticket.status !== "running" ? (
+                <DropdownMenuItem onSelect={() => actions.archive(ticket)}>Archive</DropdownMenuItem>
+              ) : null}
               <DropdownMenuSeparator />
               <DropdownMenuItem icon={<Trash2 size={14} />} danger onSelect={() => setConfirmDelete(true)}>
                 Delete permanently

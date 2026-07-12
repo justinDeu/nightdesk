@@ -24,6 +24,12 @@ async def _create_ticket(client, pid, **kw):
     return r.json()
 
 
+async def _get(client, tid):
+    r = await client.get(f"/api/v1/tickets/{tid}")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 async def test_create_defaults_to_draft(client):
     pid = await _create_profile(client)
     t = await _create_ticket(client, pid)
@@ -334,6 +340,64 @@ async def test_archive_rejects_running_409(client):
                        json={"status": "running"})
     r = await client.post(f"/api/v1/tickets/{t['id']}/archive")
     assert r.status_code == 409
+
+
+async def test_archive_from_inbox(client):
+    """inbox -> archived: a triage item is archivable directly via /archive,
+    not only via decline or after promotion to the board."""
+    pid = await _create_profile(client)
+    t = await _create_ticket(client, pid)  # draft
+    r = await client.post(f"/api/v1/tickets/{t['id']}/send-to-inbox")
+    assert r.status_code == 200
+    assert r.json()["status"] == "inbox"
+    r = await client.post(f"/api/v1/tickets/{t['id']}/archive")
+    assert r.status_code == 200
+    assert r.json()["status"] == "archived"
+
+
+async def test_archive_idempotent_when_already_archived(client):
+    """Archiving an already-archived ticket is a no-op 200, not a 409."""
+    pid = await _create_profile(client)
+    t = await _create_ticket(client, pid)
+    r = await client.post(f"/api/v1/tickets/{t['id']}/archive")
+    assert r.status_code == 200
+    r2 = await client.post(f"/api/v1/tickets/{t['id']}/archive")
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "archived"
+
+
+async def test_archive_clears_run_now(client):
+    """Archiving a queued+run_now ticket clears the scheduler-bypass flag so it
+    cleanly leaves the queue and does not auto-run on a later unarchive."""
+    pid = await _create_profile(client)
+    t = await _create_ticket(client, pid, status="queued")
+    await client.post(f"/api/v1/tickets/{t['id']}/run-now")
+    assert (await _get(client, t["id"]))["run_now"] is True
+    r = await client.post(f"/api/v1/tickets/{t['id']}/archive")
+    assert r.status_code == 200
+    assert r.json()["run_now"] is False
+
+
+async def test_bulk_archive_skips_running_archives_rest(client):
+    """Bulk archive moves every non-running ticket to archived and skips
+    running ones with a reason instead of failing the batch."""
+    pid = await _create_profile(client)
+    draft = await _create_ticket(client, pid)
+    queued = await _create_ticket(client, pid, status="queued")
+    running = await _create_ticket(client, pid, status="queued")
+    await client.post(f"/api/v1/tickets/{running['id']}/transition",
+                      json={"status": "running"})
+    r = await client.post("/api/v1/tickets/bulk/archive",
+                          json={"ticket_ids": [draft["id"], queued["id"], running["id"]]})
+    assert r.status_code == 200
+    body = r.json()
+    updated_ids = {t["id"] for t in body["updated"]}
+    skipped_ids = {s["ticket_id"] for s in body["skipped"]}
+    assert {draft["id"], queued["id"]} <= updated_ids
+    assert running["id"] in skipped_ids
+    assert (await _get(client, draft["id"]))["status"] == "archived"
+    assert (await _get(client, queued["id"]))["status"] == "archived"
+    assert (await _get(client, running["id"]))["status"] == "running"
 
 
 async def test_cancel_moves_running_to_review(client):

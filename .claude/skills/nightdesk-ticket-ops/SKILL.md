@@ -32,7 +32,7 @@ Anything else returns `409 invalid transition`. Dropping into `running` from `dr
 
 **API surface caveats — the state machine and the JSON API don't fully line up:**
 - `POST /api/v1/tickets/{tid}/transition` only accepts targets `draft|queued|running|review|archived`. **`inbox` is NOT a valid `/transition` target** even though `draft → inbox` is state-machine-legal. There is a dedicated endpoint for that one hop instead — `POST /api/v1/tickets/{tid}/send-to-inbox`, valid ONLY from `draft` (`409` from any other status; see "Send to inbox" below). Tickets otherwise move *into* `inbox` by being captured there directly at creation (`status: "inbox"`).
-- `archived` is reachable from `review` (`/archive` or `transition status=archived`), from `draft`/`queued` directly (`/archive` or `transition status=archived` — both now archivable, not just `review`), or from `inbox` (decline).
+- **Archive policy: any ticket that is not actively running can be archived.** `POST /api/v1/tickets/{tid}/archive` works from `inbox`, `draft`, `queued`, and `review` — `running` is the ONLY status that returns `409` (cancel or finish the run to `review` first). `inbox → archived` is identical to decline. `transition status=archived` reaches the same place from any non-running source. Archiving is idempotent (an already-`archived` ticket is a no-op `200`), and archiving a `queued` ticket clears its `run_now` flag so it cleanly leaves the scheduler queue.
 
 ### Send to inbox
 
@@ -394,9 +394,11 @@ curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
 
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/cancel"     # running → review
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/requeue"    # review|archived → queued
-curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/archive"    # review → archived
+curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/archive"    # inbox|draft|queued|review → archived (NOT running — 409)
 curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/unarchive"  # archived → queued
 ```
+
+`/archive` accepts **any status except `running`** — you do not need to move a ticket to `review` (or anywhere else) before archiving it. A stale draft, a queued ticket, and an inbox triage item can all be archived directly.
 
 ## Delete
 

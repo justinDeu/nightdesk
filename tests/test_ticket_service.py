@@ -183,6 +183,44 @@ def test_unarchive_only_from_archived(session, sample_profile):
         unarchive(session, t.id)
 
 
+def test_archive_from_inbox(session, sample_profile):
+    """inbox -> archived: a triage item can be cleared directly via archive
+    (the same move `decline_ticket` makes), not only from review."""
+    t = make_ticket(session, sample_profile)
+    transition_status(session, t.id, "inbox")
+    out = archive(session, t.id)
+    assert out.status == "archived"
+
+
+def test_archive_from_review(session, sample_profile):
+    t = make_ticket(session, sample_profile, status="queued")
+    transition_status(session, t.id, "running")
+    transition_status(session, t.id, "review")
+    out = archive(session, t.id)
+    assert out.status == "archived"
+
+
+def test_archive_is_idempotent_when_already_archived(session, sample_profile):
+    """Archiving an already-archived ticket is a no-op success, not an error —
+    the policy is 'any non-running ticket can be archived', and archived is
+    not running. Lets callers archive without first checking status."""
+    t = make_ticket(session, sample_profile)
+    archive(session, t.id)
+    out = archive(session, t.id)
+    assert out.status == "archived"
+
+
+def test_archive_clears_run_now_on_queued(session, sample_profile):
+    """Archiving a queued ticket cleanly removes it from the scheduler queue:
+    run_now is cleared so the worker can never pick it and a later unarchive
+    does not surprise the caller with an immediate run."""
+    t = make_ticket(session, sample_profile, status="queued", run_now=True)
+    assert get_ticket(session, t.id).run_now is True
+    out = archive(session, t.id)
+    assert out.status == "archived"
+    assert out.run_now is False
+
+
 def test_set_next_run_context(session, sample_profile):
     t = make_ticket(session, sample_profile, status="review")
     out = set_next_run_context(session, t.id, "Use polling")
