@@ -13,6 +13,7 @@ import {
   Plus,
   RotateCcw,
   Sparkles,
+  Square,
   Sun,
   Zap,
 } from "lucide-react";
@@ -23,7 +24,6 @@ import { Kbd } from "@/ui/Kbd";
 import { StatusPill } from "@/ui/StatusPill";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
-import { RunningCard } from "./RunningCard";
 import { TicketPeek } from "@/routes/tickets/TicketPeek";
 import { useTicket, useTickets } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
@@ -38,10 +38,11 @@ import { useTicketActions } from "@/lib/ticketActions";
 import { useKeybinds } from "@/lib/keymap";
 import { getLastVisit, setLastVisit } from "@/lib/lastVisit";
 import { parseTs, relativeTime, durationBetween } from "@/lib/time";
-import { formatUsd, formatTokens, runStatusKind } from "@/lib/status";
+import { formatUsd, formatTokens } from "@/lib/status";
 import { humanizeRunError } from "@/lib/runError";
 import { Tooltip } from "@/ui/Tooltip";
 import { ticketHref } from "@/lib/routes";
+import { useNow } from "@/lib/useNow";
 import { cn } from "@/lib/cn";
 import { openComposer } from "@/components/composerBus";
 
@@ -53,27 +54,19 @@ function DeskBand({
   accent,
   count,
   className,
-  bodyClassName,
   children,
 }: {
   icon: ReactNode;
   title: string;
   accent?: boolean;
   count?: number;
-  /** Extra classes for the <section>, merged after the default mb-7 so a
-   *  passed lg:mb-0 (etc.) wins at that breakpoint while mb-7 still applies
-   *  on mobile. */
+  /** Extra classes for the <section>, merged after the default mb-4. */
   className?: string;
-  /** When set, children are wrapped in a <div> with these classes. The
-   *  awareness rail uses this to give a band its own bounded,
-   *  internally-scrolling region instead of letting one band grow the whole
-   *  rail and bury the other. */
-  bodyClassName?: string;
   children: ReactNode;
 }) {
   return (
-    <section className={cn("mb-7", className)}>
-      <div className="mb-3 flex items-center gap-2">
+    <section className={cn("mb-4", className)}>
+      <div className="mb-2 flex items-center gap-2">
         <span className={cn("text-moon-400", accent && "dawn-text")}>{icon}</span>
         <h2 className="font-display text-xs font-semibold uppercase tracking-wide text-moon-400">
           {title}
@@ -84,7 +77,7 @@ function DeskBand({
           </span>
         )}
       </div>
-      {bodyClassName ? <div className={bodyClassName}>{children}</div> : children}
+      {children}
     </section>
   );
 }
@@ -130,14 +123,16 @@ interface NeedsItem {
   run?: RunOut;
 }
 
-/** Shared surface + elevation classes for a pulse tile. Mirrors the pattern in
- *  ProjectPage so the dashboard stat row reads as one system. */
-const tileCls =
-  "flex flex-col gap-1 rounded-card border border-ink-700 bg-ink-900 px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors hover:bg-ink-800";
+/** Shared classes for a pulse-strip stat chip — a flat, borderless inline
+ *  link that sits in one compact row separated from its neighbors by the
+ *  strip's divide-x hairlines. */
+const chipCls =
+  "flex h-full items-center gap-1.5 px-3 first:pl-0 text-moon-100 hover:bg-ink-800/60";
 
-/** Tile contents: the number leads, the label is a quiet caption. `accent`
- *  lights up a non-zero count so the eye lands on what needs attention. */
-function TileInner({
+/** One stat chip's content: a big-ish mono number with a tiny uppercase
+ *  label to its right. `accent` lights a non-zero count so the eye lands on
+ *  what needs attention. */
+function StatValue({
   label,
   value,
   accent,
@@ -150,13 +145,13 @@ function TileInner({
     <>
       <span
         className={cn(
-          "font-display text-2xl font-semibold leading-none tabular-nums",
+          "font-mono text-lg font-semibold leading-none tabular-nums",
           accent ? "text-lamp" : "text-moon-100",
         )}
       >
         {value}
       </span>
-      <span className="text-[11px] font-medium uppercase tracking-wide text-moon-600">{label}</span>
+      <span className="text-[10px] font-medium uppercase tracking-wide text-moon-600">{label}</span>
     </>
   );
 }
@@ -260,23 +255,16 @@ export function DeskPage() {
     return sum;
   }, [runsList]);
 
-  // WHILE YOU WERE AWAY: deltas since the visit watermark.
+  // WHILE YOU WERE AWAY: runs that finished since the visit watermark. Review
+  //  and inbox deltas are surfaced by the Needs-you band and the Inbox chip,
+  //  so the away feed is runs-only — one compact line each.
   const away = useMemo(() => {
     if (visitAt == null) return null;
-    const finished = runsList.filter((r) => {
+    return runsList.filter((r) => {
       const ts = parseTs(r.finished_at);
       return ts != null && ts > visitAt;
     });
-    const enteredReview = (review.data ?? []).filter((t) => {
-      const ts = parseTs(t.updated_at);
-      return ts != null && ts > visitAt;
-    });
-    const newInbox = (inbox.data ?? []).filter((it) => {
-      const ts = parseTs(it.ticket.created_at);
-      return ts != null && ts > visitAt;
-    });
-    return { finished, enteredReview, newInbox };
-  }, [visitAt, runsList, review.data, inbox.data]);
+  }, [visitAt, runsList]);
 
   return (
     <Page
@@ -289,58 +277,53 @@ export function DeskPage() {
         </Button>
       }
     >
-      {/* Pulse strip — the dashboard archetype's stat row. One tile per live
-          signal, each linking to its surface. Sits above the two-column area. */}
-      <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-        <Link to="/tickets" search={{ f: "status:running" }} className={tileCls}>
-          <TileInner label="Running" value={runningCount} accent={runningCount > 0} />
+      {/* Pulse strip — one flat row of stat chips (≤44px), each a real link,
+          separated by hairline dividers with a bottom hairline. The dashboard
+          archetype's stat row, compacted. */}
+      <div className="mb-4 flex h-11 items-stretch divide-x divide-ink-700/60 border-b border-ink-700/60">
+        <Link to="/tickets" search={{ f: "status:running" }} className={chipCls}>
+          <StatValue label="Running" value={runningCount} accent={runningCount > 0} />
         </Link>
-        <Link to="/tickets" search={{ f: "status:review" }} className={tileCls}>
-          <TileInner label="Needs you" value={needs.length} accent={needs.length > 0} />
+        <Link to="/tickets" search={{ f: "status:review" }} className={chipCls}>
+          <StatValue label="Needs you" value={needs.length} accent={needs.length > 0} />
         </Link>
-        <Link to="/inbox" className={tileCls}>
-          <TileInner label="Inbox" value={inboxCount} accent={inboxCount > 0} />
+        <Link to="/inbox" className={chipCls}>
+          <StatValue label="Inbox" value={inboxCount} accent={inboxCount > 0} />
         </Link>
-        <Link to="/agents" className={tileCls}>
-          <TileInner label="Agents waiting" value={attentionTotal} accent={attentionTotal > 0} />
+        <Link to="/agents" className={chipCls}>
+          <StatValue label="Agents" value={attentionTotal} accent={attentionTotal > 0} />
         </Link>
-        <Link to="/analytics" className={tileCls}>
-          <TileInner label="Spend today" value={formatUsd(spendToday)} />
+        <Link to="/analytics" className={chipCls}>
+          <StatValue label="Today" value={formatUsd(spendToday)} />
         </Link>
       </div>
 
       {/* Two-column dashboard. The two most important signals — "Running now"
           and "While you were away" — live in a persistent awareness rail. The
           rail is first in the DOM, but on mobile the main column carries
-          order-first so Needs-you leads the phone (the rail no longer buries
-          the action center); explicit grid placement parks the rail on the
-          right at lg+. At lg+ the rail is a full-viewport-height flex column
-          split between the two bands — each gets a bounded share whose LIST
-          scrolls internally, so both band headers (and their first items) stay
-          on screen at first paint even with many running tickets. No part of
-          the rail can push a whole band below the fold. The height offset
-          (16.5rem) accounts for the top strip, page header, the pulse row, and
-          a bottom gutter. */}
+          order-first so Needs-you leads the phone; explicit grid placement
+          parks the rail on the right at lg+. The rail NEVER scrolls itself:
+          it is content-sized and sticky, and every list inside it is capped by
+          count (Running ≤6, Away ≤8) with a "+N more" link — so both band
+          headers and their items stay visible with zero nested scrollbars. */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)] lg:gap-x-6">
-        <aside className="min-w-0 lg:sticky lg:top-4 lg:col-start-2 lg:row-start-1 lg:flex lg:h-[calc(100vh-16.5rem)] lg:flex-col lg:gap-5 lg:self-start lg:border-l lg:border-ink-700/60 lg:pl-6">
-          <DeskBand
-            icon={<Zap size={15} />}
-            title="Running now"
-            accent
-            count={running.data?.length}
-            className="lg:mb-0 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col"
-            bodyClassName="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-y-contain lg:pr-1"
-          >
-            {running.data && running.data.length > 0 ? (
-              <div className="grid grid-cols-1 gap-3">
-                {running.data.map((t) => (
-                  <RunningCard
-                    key={t.id}
-                    ticket={t}
-                    run={latest.get(t.id)}
-                    project={t.project_id ? projects.get(t.project_id) : undefined}
-                  />
+        <aside className="min-w-0 lg:sticky lg:top-4 lg:col-start-2 lg:row-start-1 lg:self-start lg:border-l lg:border-ink-700/60 lg:pl-6">
+          <DeskBand icon={<Zap size={15} />} title="Running now" accent count={runningCount}>
+            {runningCount > 0 ? (
+              <div className="space-y-0.5">
+                {(running.data ?? []).slice(0, 6).map((t) => (
+                  <RunningRow key={t.id} ticket={t} run={latest.get(t.id)} />
                 ))}
+                {runningCount > 6 && (
+                  <Link
+                    to="/tickets"
+                    search={{ f: "status:running" }}
+                    className="flex h-7 items-center gap-1.5 rounded-control px-2 text-xs text-moon-500 hover:bg-ink-800 hover:text-moon-200"
+                  >
+                    +{runningCount - 6} more running
+                    <ArrowRight size={12} />
+                  </Link>
+                )}
               </div>
             ) : (
               <DeskEmptyStrip
@@ -360,13 +343,8 @@ export function DeskPage() {
             )}
           </DeskBand>
 
-          <DeskBand
-            icon={<Moon size={15} />}
-            title="While you were away"
-            className="lg:mb-0 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col"
-            bodyClassName="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-y-contain lg:pr-1"
-          >
-            <AwayFeed away={away} projects={projects} />
+          <DeskBand icon={<Moon size={15} />} title="While you were away">
+            <AwayFeed away={away} />
           </DeskBand>
         </aside>
 
@@ -503,6 +481,55 @@ export function DeskPage() {
         />
       )}
     </Page>
+  );
+}
+
+// --- Running row ---------------------------------------------------------------
+
+/** One running ticket as a single 32px row: [lamp dot][title, truncate][elapsed,
+ *  mono][cost, mono]. The whole row is a real anchor to the ticket — click
+ *  opens the detail (where Watch/Cancel live), middle/cmd-click opens a new
+ *  tab — exactly the NeedsRow pattern. No transcript box, no buttons at rest;
+ *  hover reveals a single cancel icon-button. The rail never hosts a scroll,
+ *  so the caller caps how many of these it renders. */
+function RunningRow({ ticket, run }: { ticket: TicketOut; run: RunOut | undefined }) {
+  const navigate = useNavigate();
+  const actions = useTicketActions();
+  const now = useNow(true);
+  const elapsed = run ? durationBetween(run.started_at, run.finished_at, now) : "";
+  const cost = run?.cost_usd ?? null;
+  return (
+    <div className="group flex h-8 items-center gap-2 rounded-control px-2 hover:bg-ink-800/70">
+      <a
+        href={ticketHref(ticket.id)}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey) return;
+          e.preventDefault();
+          navigate({ to: "/tickets/$id", params: { id: ticket.id } });
+        }}
+        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[4px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
+      >
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-lamp" aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-sm text-moon-100 group-hover:text-lamp">
+          {ticket.title}
+        </span>
+        <span className="shrink-0 font-mono text-xs tabular-nums text-lamp">{elapsed}</span>
+        {cost != null && (
+          <span className="shrink-0 font-mono text-xs tabular-nums text-moon-400">{formatUsd(cost)}</span>
+        )}
+      </a>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          actions.cancel(ticket);
+        }}
+        aria-label="Cancel run"
+        className="hidden shrink-0 items-center justify-center rounded-control p-1 text-moon-500 hover:bg-ink-700 hover:text-failed group-hover:flex focus-visible:flex"
+      >
+        <Square size={13} />
+      </button>
+    </div>
   );
 }
 
@@ -798,22 +825,12 @@ function AckTicketRow({
 
 // --- While you were away -------------------------------------------------------
 
-function AwayFeed({
-  away,
-  projects,
-}: {
-  away: {
-    finished: RunOut[];
-    enteredReview: TicketOut[];
-    newInbox: { ticket: TicketOut }[];
-  } | null;
-  projects: Map<string, ProjectOut>;
-}) {
+function AwayFeed({ away }: { away: RunOut[] | null }) {
   if (!away) {
     return (
       <DeskEmptyStrip
         icon={<Moon size={14} />}
-        text="First visit — after some runs finish, this band shows everything that changed since you were last here."
+        text="First visit — after some runs finish, this band shows what changed since you were last here."
         action={
           <Button asChild size="sm" variant="ghost">
             <Link to="/tickets">Go to Tickets</Link>
@@ -822,12 +839,11 @@ function AwayFeed({
       />
     );
   }
-  const total = away.finished.length + away.enteredReview.length + away.newInbox.length;
-  if (total === 0) {
+  if (away.length === 0) {
     return (
       <DeskEmptyStrip
         icon={<CheckCircle2 size={14} />}
-        text="You're all caught up — nothing finished, entered review, or landed in the inbox since your last visit."
+        text="You're all caught up — nothing finished since your last visit."
         action={
           <Button asChild size="sm" variant="ghost">
             <Link to="/tickets">Go to Tickets</Link>
@@ -837,81 +853,47 @@ function AwayFeed({
     );
   }
 
-  const projName = (id: string | null) => (id ? projects.get(id)?.name ?? "No project" : "No project");
-
+  // Flat, one-line, capped by count — the rail never scrolls internally.
+  const CAP = 8;
+  const shown = away.slice(0, CAP);
+  const more = away.length - shown.length;
   return (
-    <div className="grid grid-cols-1 items-start gap-3">
-      {away.finished.length > 0 && (
-        <div className="rounded-card border border-ink-700 bg-ink-900 p-3 shadow-[var(--shadow-raised)]">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-moon-600">
-            {away.finished.length} run{away.finished.length === 1 ? "" : "s"} finished
-          </div>
-          <div className="space-y-1">
-            {away.finished.slice(0, 12).map((r) => (
-              <Link
-                key={r.id}
-                to="/tickets/$id/runs/$rid"
-                params={{ id: r.ticket_id, rid: r.id }}
-                className="flex items-center gap-3 rounded-control px-2 py-1.5 text-sm hover:bg-ink-800"
-              >
-                <StatusPill status={runStatusKind(r.exit_status)} />
-                <span className="flex-1 truncate font-mono text-xs text-moon-400">
-                  {r.model_used ?? "run"} · {durationBetween(r.started_at, r.finished_at)}
-                </span>
-                {r.cost_usd != null && (
-                  <span className="font-mono text-xs tabular-nums text-moon-400">
-                    {formatUsd(r.cost_usd)}
-                  </span>
-                )}
-                <span className="text-xs text-moon-600">{relativeTime(r.finished_at)}</span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {away.enteredReview.length > 0 && (
-        <div className="rounded-card border border-ink-700 bg-ink-900 p-3 shadow-[var(--shadow-raised)]">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-moon-600">
-            {away.enteredReview.length} entered review
-          </div>
-          <div className="space-y-1">
-            {away.enteredReview.slice(0, 8).map((t) => (
-              <Link
-                key={t.id}
-                to="/tickets/$id"
-                params={{ id: t.id }}
-                className="flex items-center gap-2 rounded-control px-2 py-1.5 text-sm hover:bg-ink-800"
-              >
-                <ArrowRight size={13} className="text-review" />
-                <span className="flex-1 truncate text-moon-100">{t.title}</span>
-                <span className="text-xs text-moon-600">{projName(t.project_id)}</span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {away.newInbox.length > 0 && (
-        <div className="rounded-card border border-ink-700 bg-ink-900 p-3 shadow-[var(--shadow-raised)]">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-moon-600">
-            {away.newInbox.length} new in inbox
-          </div>
-          <div className="space-y-1">
-            {away.newInbox.slice(0, 8).map(({ ticket: t }) => (
-              <Link
-                key={t.id}
-                to="/inbox"
-                className="flex items-center gap-2 rounded-control px-2 py-1.5 text-sm hover:bg-ink-800"
-              >
-                <InboxIcon size={13} className="text-moon-400" />
-                <span className="flex-1 truncate text-moon-100">{t.title}</span>
-                <span className="text-xs text-moon-600">{relativeTime(t.created_at)}</span>
-              </Link>
-            ))}
-          </div>
-        </div>
+    <div className="space-y-0.5">
+      {shown.map((r) => (
+        <AwayRunRow key={r.id} run={r} />
+      ))}
+      {more > 0 && (
+        <Link
+          to="/tickets"
+          className="flex h-7 items-center gap-1.5 rounded-control px-2 text-xs text-moon-500 hover:bg-ink-800 hover:text-moon-200"
+        >
+          +{more} more
+          <ArrowRight size={12} />
+        </Link>
       )}
     </div>
+  );
+}
+
+/** One finished run since your last visit: outcome dot, model, cost, when. The
+ *  whole row links to the run (middle-click opens a new tab). */
+function AwayRunRow({ run }: { run: RunOut }) {
+  const ok = run.exit_status === "success";
+  return (
+    <Link
+      to="/tickets/$id/runs/$rid"
+      params={{ id: run.ticket_id, rid: run.id }}
+      className="flex h-7 items-center gap-2 rounded-control px-2 text-xs hover:bg-ink-800"
+    >
+      <span
+        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ok ? "bg-success" : "bg-failed")}
+        aria-hidden
+      />
+      <span className="min-w-0 flex-1 truncate font-mono text-moon-400">{run.model_used ?? "run"}</span>
+      {run.cost_usd != null && (
+        <span className="shrink-0 font-mono tabular-nums text-moon-400">{formatUsd(run.cost_usd)}</span>
+      )}
+      <span className="shrink-0 text-moon-600">{relativeTime(run.finished_at)}</span>
+    </Link>
   );
 }
