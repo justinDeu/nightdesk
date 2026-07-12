@@ -11,7 +11,7 @@ export interface DialogProps {
   children: ReactNode;
   footer?: ReactNode;
   /** width preset */
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "xl";
   className?: string;
 }
 
@@ -19,6 +19,9 @@ const sizes = {
   sm: "max-w-sm",
   md: "max-w-lg",
   lg: "max-w-2xl",
+  // Wide body for long-form content (prompts, transcripts) that still leaves a
+  // gutters on each side and caps on very large monitors.
+  xl: "max-w-[min(80vw,900px)]",
 };
 
 export function Dialog({

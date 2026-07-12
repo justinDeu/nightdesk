@@ -4,15 +4,15 @@ import {
   ArrowLeft,
   Check,
   Copy,
-  Cpu,
+  Maximize2,
   MoreHorizontal,
   Pencil,
   Trash2,
 } from "lucide-react";
-import type { RunOut, TicketOut } from "@/api/types";
+import type { TicketOut } from "@/api/types";
 import { ticketsApi } from "@/api/tickets";
 import { Button } from "@/ui/Button";
-import { Input } from "@/ui/Input";
+import { Input, Textarea } from "@/ui/Input";
 import { StatusPill } from "@/ui/StatusPill";
 import {
   DropdownMenu,
@@ -25,17 +25,17 @@ import { Dialog } from "@/ui/Dialog";
 import { toast } from "@/ui/Toast";
 import { CloneDialog } from "./ConversationDialogs";
 import { useTicketActions } from "@/lib/ticketActions";
-import { ticketStatusKind, formatUsd, formatTokens } from "@/lib/status";
-import { durationBetween } from "@/lib/time";
+import { useUnsavedGuard } from "@/lib/useUnsavedGuard";
+import { ticketStatusKind } from "@/lib/status";
 
 export function DetailHeader({
   ticket,
-  latestRun,
   onSaveTitle,
+  onSaveDescription,
 }: {
   ticket: TicketOut;
-  latestRun?: RunOut;
   onSaveTitle: (title: string) => void;
+  onSaveDescription: (description: string) => void;
 }) {
   const navigate = useNavigate();
   const actions = useTicketActions();
@@ -74,8 +74,10 @@ export function DetailHeader({
         </div>
       </div>
 
-      {/* Row 2 — state + actions: one status pill, the state transitions, the
-          latest-run strip, and the overflow menu share a single line. */}
+      {/* Row 2 — one action cluster on the left: status pill, the state
+          transitions, and the overflow menu (clone/archive/delete) sit
+          together so every ticket action is in one place. The description
+          fills the header gap to the right as grayed, truncated text. */}
       <div className="mt-1.5 flex items-center gap-2">
         {running ? (
           <StatusPill status="running" />
@@ -84,56 +86,34 @@ export function DetailHeader({
         )}
         <Transitions ticket={ticket} actions={actions} />
 
-        <div className="ml-auto flex items-center gap-2">
-          {latestRun && (
-            <Link
-              to="/tickets/$id/runs/$rid"
-              params={{ id: ticket.id, rid: latestRun.id }}
-              className="hidden shrink-0 items-center gap-2 rounded-control border border-ink-700 bg-ink-900 px-2.5 py-1 font-mono text-[11px] text-moon-400 hover:bg-ink-800 sm:flex"
-            >
-              {latestRun.model_used && (
-                <span className="inline-flex items-center gap-1">
-                  <Cpu size={11} /> {latestRun.model_used}
-                </span>
-              )}
-              <span>{durationBetween(latestRun.started_at, latestRun.finished_at)}</span>
-              {latestRun.cost_usd != null && (
-                <span className="tabular-nums text-lamp">{formatUsd(latestRun.cost_usd)}</span>
-              )}
-              {(latestRun.input_tokens != null || latestRun.output_tokens != null) && (
-                <span>
-                  {formatTokens((latestRun.input_tokens ?? 0) + (latestRun.output_tokens ?? 0))} tok
-                </span>
-              )}
-            </Link>
-          )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="ghost" aria-label="More actions">
-                <MoreHorizontal size={15} />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem icon={<Copy size={14} />} onSelect={() => setClone(true)}>
-                Clone ticket…
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm" variant="ghost" aria-label="More actions">
+              <MoreHorizontal size={15} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem icon={<Copy size={14} />} onSelect={() => setClone(true)}>
+              Clone ticket…
+            </DropdownMenuItem>
+            {ticket.status === "draft" && (
+              <DropdownMenuItem onSelect={() => actions.sendToInbox(ticket)}>
+                Send to inbox
               </DropdownMenuItem>
-              {ticket.status === "draft" && (
-                <DropdownMenuItem onSelect={() => actions.sendToInbox(ticket)}>
-                  Send to inbox
-                </DropdownMenuItem>
-              )}
-              {ticket.status === "archived" ? (
-                <DropdownMenuItem onSelect={() => actions.unarchive(ticket)}>Restore</DropdownMenuItem>
-              ) : ticket.status !== "running" ? (
-                <DropdownMenuItem onSelect={() => actions.archive(ticket)}>Archive</DropdownMenuItem>
-              ) : null}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem icon={<Trash2 size={14} />} danger onSelect={() => setConfirmDelete(true)}>
-                Delete permanently
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+            )}
+            {ticket.status === "archived" ? (
+              <DropdownMenuItem onSelect={() => actions.unarchive(ticket)}>Restore</DropdownMenuItem>
+            ) : ticket.status !== "running" ? (
+              <DropdownMenuItem onSelect={() => actions.archive(ticket)}>Archive</DropdownMenuItem>
+            ) : null}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem icon={<Trash2 size={14} />} danger onSelect={() => setConfirmDelete(true)}>
+              Delete permanently
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <DescriptionHeaderGap ticket={ticket} onSave={onSaveDescription} />
       </div>
 
       <CloneDialog
@@ -263,4 +243,129 @@ function Transitions({
     default:
       return null;
   }
+}
+
+/**
+ * The ticket description, relocated out of the rail into the header gap between
+ * the left action cluster and the right edge. Rendered as grayed, truncated
+ * (max two lines) text; clicking opens an editable dialog. Empty description
+ * renders nothing — no placeholder. Editing lives in the expand dialog.
+ */
+function DescriptionHeaderGap({
+  ticket,
+  onSave,
+}: {
+  ticket: TicketOut;
+  onSave: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const desc = ticket.description ?? "";
+  if (!desc.trim()) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="group ml-auto flex min-w-0 max-w-[600px] items-start gap-1.5 py-0.5 text-left"
+        aria-label="View and edit description"
+      >
+        <span className="min-w-0 flex-1 line-clamp-2 text-[12px] leading-snug text-moon-400 group-hover:text-moon-100">
+          {desc}
+        </span>
+        <Maximize2
+          size={11}
+          className="mt-0.5 shrink-0 text-moon-600 opacity-0 group-hover:opacity-100"
+        />
+      </button>
+      <DescriptionDialog
+        open={open}
+        onOpenChange={setOpen}
+        value={desc}
+        onSave={onSave}
+      />
+    </>
+  );
+}
+
+function DescriptionDialog({
+  open,
+  onOpenChange,
+  value,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  value: string;
+  onSave: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+
+  useUnsavedGuard(editing && draft !== value);
+
+  const save = () => {
+    onSave(draft.trim());
+    setEditing(false);
+  };
+  const cancel = () => {
+    setDraft(value);
+    setEditing(false);
+  };
+  const close = () => {
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Description"
+      description="What is this ticket, and why? Written for a human scanning the board and review."
+      size="lg"
+      footer={
+        editing ? (
+          <>
+            <Button size="sm" variant="ghost" onClick={cancel}>
+              Cancel
+            </Button>
+            <Button size="sm" variant="primary" onClick={save}>
+              Save description
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button size="sm" variant="ghost" onClick={close}>
+              Close
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              leadingIcon={<Pencil size={13} />}
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </Button>
+          </>
+        )
+      }
+    >
+      {editing ? (
+        <Textarea
+          autoFocus
+          className="h-[36vh] max-h-[55dvh]"
+          placeholder="What is this ticket, and why? Written for a human scanning the board and review."
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      ) : (
+        // Body scrolls internally so the title + footer stay fixed and the
+        // dialog never grows past the viewport.
+        <div className="max-h-[55dvh] overflow-y-auto overscroll-contain rounded-control border border-ink-700/60 bg-ink-950/60 p-3">
+          <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-moon-100">{value}</p>
+        </div>
+      )}
+    </Dialog>
+  );
 }
