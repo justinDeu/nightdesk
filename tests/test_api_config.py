@@ -253,6 +253,99 @@ async def test_worker_status_reports_day_spend(client, session):
     assert body["day_spend_usd"] == 7.5
 
 
+async def test_worker_status_server_now_is_recent(client):
+    """server_now is the backend's own clock as an aware UTC instant."""
+    from datetime import datetime, timezone
+
+    before = datetime.now(timezone.utc)
+    body = (await client.get("/api/v1/worker/status")).json()
+    after = datetime.now(timezone.utc)
+    assert "server_now" in body
+    parsed = datetime.fromisoformat(body["server_now"])
+    # The instant should sit between the two samples (tolerant of tz suffix).
+    assert before - timedelta(seconds=1) <= parsed <= after + timedelta(seconds=1)
+
+
+async def test_worker_status_lists_running_tickets(client, session):
+    """Each in-flight run surfaces its ticket as a popover link target."""
+    from datetime import datetime, timezone
+    from nightdesk.db.models import ConfigRow, Profile, Run, Ticket
+
+    cfg = session.get(ConfigRow, 1)
+    if cfg is None:
+        cfg = ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t")
+        session.add(cfg)
+    session.commit()
+
+    p = Profile(name="rp", fs_read=[], fs_write=[], allowed_tools=[],
+                denied_tools=[], network_mode="off", network_allowlist=[],
+                secret_keys=[])
+    session.add(p); session.commit()
+
+    def _add(idx, *, title, run_now):
+        tid = f"rk{idx}"
+        t = Ticket(id=tid, title=title, prompt="", status="running", priority=0,
+                   position=idx, profile_id=p.id)
+        session.add(t); session.commit()
+        r = Run(id=f"rrk{idx}", ticket_id=tid,
+                started_at=datetime.now(timezone.utc) - timedelta(minutes=idx),
+                worktree_path=f"/tmp/w/{idx}", transcript_path=f"/tmp/t/{idx}.log",
+                host="thorpad", started_as_run_now=run_now)
+        session.add(r); session.commit()
+
+    _add(0, title="normal job", run_now=False)
+    _add(1, title="run-now job", run_now=True)
+    # A finished run must NOT appear.
+    t2 = Ticket(id="rk-done", title="done job", prompt="", status="review",
+                priority=0, profile_id=p.id)
+    session.add(t2); session.commit()
+    session.add(Run(id="rrk-done", ticket_id="rk-done",
+                    started_at=datetime.now(timezone.utc),
+                    finished_at=datetime.now(timezone.utc), exit_status="success",
+                    worktree_path="/w", transcript_path="/x", host="h"))
+    session.commit()
+
+    body = (await client.get("/api/v1/worker/status")).json()
+    items = body["running_tickets"]
+    # Newest first: rk0 (0 min ago) before rk1 (1 min ago); finished run absent.
+    assert [i["id"] for i in items] == ["rk0", "rk1"]
+    by_id = {i["id"]: i for i in items}
+    assert by_id["rk0"]["title"] == "normal job"
+    assert by_id["rk0"]["run_now"] is False
+    assert by_id["rk1"]["run_now"] is True
+    assert all("started_at" in i for i in items)
+
+
+async def test_worker_status_day_tokens(client, session):
+    """day_tokens rolls up every token column for runs started today."""
+    from datetime import datetime, timezone
+    from nightdesk.db.models import ConfigRow, Profile, Run, Ticket
+
+    cfg = session.get(ConfigRow, 1)
+    if cfg is None:
+        cfg = ConfigRow(id=1, worktree_root="/tmp/w", transcript_root="/tmp/t")
+        session.add(cfg)
+    session.commit()
+
+    p = Profile(name="tp", fs_read=[], fs_write=[], allowed_tools=[],
+                denied_tools=[], network_mode="off", network_allowlist=[],
+                secret_keys=[])
+    session.add(p); session.commit()
+    t = Ticket(id="tt", title="t", prompt="", status="review", priority=0,
+               profile_id=p.id)
+    session.add(t); session.commit()
+    session.add(Run(id="rt", ticket_id="tt", started_at=datetime.now(timezone.utc),
+                    finished_at=datetime.now(timezone.utc), exit_status="success",
+                    worktree_path="/w", transcript_path="/x", host="h",
+                    input_tokens=100, output_tokens=40, cache_read_tokens=10,
+                    cache_write_tokens=5))
+    session.commit()
+
+    body = (await client.get("/api/v1/worker/status")).json()
+    # 100 + 40 + 10 + 5 = 155
+    assert body["day_tokens"] == 155
+
+
 async def test_patch_config_sets_and_clears_worktree_base_ref(client):
     r = await client.patch("/api/v1/config", json={"worktree_base_ref": "develop"})
     assert r.status_code == 200
