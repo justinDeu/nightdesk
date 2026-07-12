@@ -34,7 +34,7 @@ _VALID_TRANSITIONS: dict[str, set[str]] = {
     "queued":   {"draft", "running", "archived"},
     "running":  {"review"},
     "review":   {"queued", "archived"},
-    "archived": {"queued"},
+    "archived": {"queued", "inbox"},  # unarchive: complete->queued, incomplete->inbox
 }
 
 _ALL_STATUSES = ("inbox", "draft", "queued", "running", "review", "archived")
@@ -670,11 +670,27 @@ def archive(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket
 
 
 def unarchive(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
-    """Convenience: archived -> queued."""
+    """Reverse an archive, routing the ticket to a status it can actually use.
+
+    A *complete* ticket (title + profile + primary workspace — everything a run
+    needs, per ``ticket_completeness``) goes back to ``queued`` and is staged
+    for the scheduler. An *incomplete* one goes back to ``inbox`` instead.
+
+    The inbox routing matters because archiving is allowed from any non-running
+    status: an under-specified inbox item (no profile/workspace, even no title)
+    can be archived, and sending it straight to ``queued`` on unarchive would
+    let the scheduler pick it (the completeness gate in
+    ``transition_with_position`` only fires when the SOURCE is ``inbox``, and
+    here the source is ``archived``) — the run would then fail on missing
+    fields. Triage items come back to triage, finished work comes back to the
+    queue. ``archived → inbox`` is a domain-only hop: like ``draft → inbox`` it
+    is NOT a valid ``POST /transition`` target (the API enum excludes inbox).
+    """
     t = get_ticket(session, ticket_id)
     if t.status != "archived":
         raise InvalidTransition(f"cannot unarchive from {t.status}")
-    return transition_status(session, ticket_id, "queued", actor=actor)
+    target = "inbox" if ticket_completeness(t) else "queued"
+    return transition_status(session, ticket_id, target, actor=actor)
 
 
 def send_to_inbox(session: Session, ticket_id: str) -> Ticket:
@@ -1339,9 +1355,10 @@ def bulk_unarchive(
     session: Session,
     ticket_ids: list[str],
 ) -> tuple[list[Ticket], list[dict]]:
-    """Bulk unarchive.  Returns each archived ticket to ``queued`` (the
-    supported reverse of archiving) and is the undo path for ``bulk_archive``.
-    Tickets that are not archived are skipped.  Returns ``(updated, skipped)``."""
+    """Bulk unarchive.  Returns each archived ticket to ``queued`` if complete
+    or ``inbox`` if incomplete (the supported reverse of archiving — see
+    ``unarchive``) and is the undo path for ``bulk_archive``.  Tickets that are
+    not archived are skipped.  Returns ``(updated, skipped)``."""
     updated: list[Ticket] = []
     skipped: list[dict] = []
     for tid in ticket_ids:

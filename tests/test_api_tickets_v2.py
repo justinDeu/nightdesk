@@ -315,6 +315,27 @@ async def test_archive_and_unarchive(client):
     assert r.json()["status"] == "queued"
 
 
+async def test_unarchive_incomplete_inbox_ticket_returns_to_inbox(client):
+    """Regression: an incomplete inbox item (no profile/workspace) is archivable
+    (archive allows any non-running status). Unarchive must send it back to
+    inbox, NOT queued — otherwise the scheduler picks it and the run fails on
+    the missing fields."""
+    # No profile_id, no source_path/workspaces: a captured-but-incomplete
+    # inbox item. (profile_id and workspaces are optional for status=inbox.)
+    r = await client.post("/api/v1/tickets", json={"title": "stale triage", "status": "inbox"})
+    assert r.status_code == 201, r.text
+    tid = r.json()["id"]
+    assert r.json()["status"] == "inbox"
+
+    ar = await client.post(f"/api/v1/tickets/{tid}/archive")
+    assert ar.status_code == 200
+    assert ar.json()["status"] == "archived"
+
+    ur = await client.post(f"/api/v1/tickets/{tid}/unarchive")
+    assert ur.status_code == 200
+    assert ur.json()["status"] == "inbox"  # not queued
+
+
 async def test_archive_from_draft(client):
     """draft -> archived is the non-destructive discard path for a ticket
     that will never run."""

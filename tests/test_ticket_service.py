@@ -7,7 +7,8 @@ from nightdesk.domain.tickets import (
     clone_ticket, continue_ticket, create_ticket, get_ticket, list_tickets, merge_next_run_context_into_prompt,
     request_run_now, requeue, resume_ticket, restart_ticket, retry_ticket, set_next_run_context,
     set_run_now, transition_status, transition_with_position, reorder_in_column,
-    archive, unarchive, update_ticket, delete_ticket, TicketNotFound, InvalidTransition,
+    archive, unarchive, update_ticket, delete_ticket, ticket_completeness,
+    TicketNotFound, InvalidTransition,
 )
 
 
@@ -219,6 +220,31 @@ def test_archive_clears_run_now_on_queued(session, sample_profile):
     out = archive(session, t.id)
     assert out.status == "archived"
     assert out.run_now is False
+
+
+def test_unarchive_incomplete_ticket_returns_to_inbox(session, sample_profile):
+    """Regression: an incomplete inbox item (no profile/workspace) can be
+    archived — archive allows any non-running status — and unarchive must route
+    it back to ``inbox``, NOT ``queued``. Sending it to queued would let the
+    scheduler pick it (the completeness gate in transition_with_position only
+    fires when the SOURCE is inbox; here the source is archived) and the run
+    would fail on the missing fields. Triage items come back to triage."""
+    t = create_ticket(session, title="stale triage", status="inbox")
+    assert ticket_completeness(t)  # genuinely incomplete
+    archive(session, t.id)
+    assert get_ticket(session, t.id).status == "archived"
+    out = unarchive(session, t.id)
+    assert out.status == "inbox"
+
+
+def test_unarchive_complete_ticket_returns_to_queued(session, sample_profile):
+    """A complete ticket (title + profile + primary workspace) unarchives back
+    to ``queued`` so it is staged for the scheduler."""
+    t = make_ticket(session, sample_profile)  # complete
+    assert not ticket_completeness(t)
+    archive(session, t.id)
+    out = unarchive(session, t.id)
+    assert out.status == "queued"
 
 
 def test_set_next_run_context(session, sample_profile):
