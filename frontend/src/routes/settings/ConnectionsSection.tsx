@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { GitMerge, Plus, RefreshCw, Trash2, ExternalLink as ExternalLinkIcon } from "lucide-react";
+import { Check, GitMerge, Plus, RefreshCw, Trash2, ExternalLink as ExternalLinkIcon } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { Input, Field } from "@/ui/Input";
 import { Dialog } from "@/ui/Dialog";
@@ -7,6 +7,13 @@ import { Badge } from "@/ui/Badge";
 import { Spinner } from "@/ui/Spinner";
 import { EmptyState } from "@/ui/EmptyState";
 import { Tooltip } from "@/ui/Tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/ui/DropdownMenu";
 import { toast } from "@/ui/Toast";
 import { ApiError } from "@/api/client";
 import {
@@ -19,7 +26,9 @@ import {
   useRepoLinks,
   useCreateRepoLink,
   useDeleteRepoLink,
+  useToggleProjectRepoLink,
 } from "@/api/integrations";
+import { useProjects } from "@/api/projects";
 import type {
   ConnectionOut,
   ConnectionStatus,
@@ -28,6 +37,7 @@ import type {
 } from "@/api/types";
 import { relativeTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
+import { ProjectDot } from "@/components/ProjectDot";
 import { SectionHeader } from "./parts/SettingsSection";
 import { ConfirmDialog } from "./parts/ConfirmDialog";
 
@@ -298,9 +308,7 @@ function RepoLinkRow({ repo }: { repo: RepoLinkOut }) {
         <div className="truncate text-sm font-medium text-moon-100">{repo.display_name || repo.external_path}</div>
         <div className="truncate font-mono text-[11px] text-moon-600">{repo.external_path}</div>
       </div>
-      <span className="shrink-0 text-[11px] text-moon-600">
-        {repo.project_ids.length} project{repo.project_ids.length === 1 ? "" : "s"}
-      </span>
+      <AttachToProjectMenu repo={repo} />
       {repo.web_url && (
         <Tooltip content="Open in GitLab">
           <a
@@ -328,6 +336,66 @@ function RepoLinkRow({ repo }: { repo: RepoLinkOut }) {
         onConfirm={doDelete}
       />
     </div>
+  );
+}
+
+/** Passive "N projects" count made actionable: a multi-select of every project,
+ *  checked state reflects `repo.project_ids`. Each toggle attaches/detaches this
+ *  one repo link for that one project — `useToggleProjectRepoLink` merges with
+ *  the project's existing repo links so other attachments survive the PUT. */
+function AttachToProjectMenu({ repo }: { repo: RepoLinkOut }) {
+  const projects = useProjects();
+  const toggle = useToggleProjectRepoLink();
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const list = projects.data ?? [];
+
+  async function onToggle(projectId: string, attach: boolean) {
+    setPendingId(projectId);
+    try {
+      await toggle.mutateAsync({ projectId, repoLinkId: repo.id, attach });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Could not update project attachment");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="shrink-0 rounded-control px-1.5 py-0.5 text-[11px] text-moon-600 transition-colors hover:bg-ink-800 hover:text-moon-100"
+        >
+          {repo.project_ids.length} project{repo.project_ids.length === 1 ? "" : "s"}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>Attach to project</DropdownMenuLabel>
+        {list.length === 0 ? (
+          <div className="px-2 py-1.5 text-xs text-moon-600">No projects yet</div>
+        ) : (
+          list.map((p) => {
+            const on = repo.project_ids.includes(p.id);
+            return (
+              // keepOpen: attaching several projects in one visit shouldn't close the menu.
+              <DropdownMenuItem
+                key={p.id}
+                keepOpen
+                disabled={pendingId === p.id}
+                onSelect={() => onToggle(p.id, !on)}
+              >
+                <span className="flex flex-1 items-center gap-2 min-w-0">
+                  <ProjectDot color={p.color} className={!on ? "opacity-40" : undefined} />
+                  <span className="truncate">{p.name}</span>
+                </span>
+                {pendingId === p.id ? <Spinner size={12} /> : on && <Check size={14} className="text-lamp" />}
+              </DropdownMenuItem>
+            );
+          })
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

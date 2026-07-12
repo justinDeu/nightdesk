@@ -147,6 +147,46 @@ export function useProjectRepoLinks(projectId: string) {
   });
 }
 
+export function useRepoSuggest(projectId: string) {
+  return useQuery({
+    queryKey: qk.integrations.repoSuggest(projectId),
+    queryFn: () => integrationsApi.repoSuggest(projectId),
+    enabled: !!projectId,
+  });
+}
+
+/** Attach/detach one repo link for one project. `setProjectRepoLinks` is a PUT
+ *  that replaces the *entire* repo_link_ids list for the project, so a single
+ *  toggle first re-fetches the project's current links and merges — otherwise
+ *  toggling one repo off would clobber every other repo already attached. */
+export function useToggleProjectRepoLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      projectId,
+      repoLinkId,
+      attach,
+    }: {
+      projectId: string;
+      repoLinkId: string;
+      attach: boolean;
+    }) => {
+      const current = await integrationsApi.listProjectRepoLinks(projectId);
+      const ids = new Set(current.map((rl) => rl.id));
+      if (attach) ids.add(repoLinkId);
+      else ids.delete(repoLinkId);
+      return integrationsApi.setProjectRepoLinks(projectId, Array.from(ids));
+    },
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: qk.integrations.projectRepoLinks(vars.projectId) });
+      qc.invalidateQueries({ queryKey: qk.integrations.repoSuggest(vars.projectId) });
+      // Unscoped prefix: covers both the per-connection and all-connections
+      // repo-link list caches (ConnectionsSection's "N projects" counts).
+      qc.invalidateQueries({ queryKey: ["integrations", "repo-links"] });
+    },
+  });
+}
+
 export function useTicketExternalLinks(ticketId: string) {
   return useQuery({
     queryKey: qk.integrations.ticketLinks(ticketId),
