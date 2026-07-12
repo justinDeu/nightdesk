@@ -60,11 +60,11 @@ export function PriorityPicker({
         <DropdownMenuLabel>Priority</DropdownMenuLabel>
         {[...PRIORITY_SCALE].reverse().map((p) => (
           <DropdownMenuItem key={p.value} onSelect={() => onChange(p.value)}>
-            <span className="flex flex-1 items-center gap-2">
+            <span className="flex min-w-0 flex-1 items-center gap-2">
               <PriorityChip value={p.value} />
-              {p.label}
+              <span className="truncate">{p.label}</span>
             </span>
-            {value === p.value && <Check size={14} className="text-lamp" />}
+            {value === p.value && <Check size={14} className="shrink-0 text-lamp" />}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -93,18 +93,18 @@ export function ProjectPicker({
       <DropdownMenuContent align="start">
         <DropdownMenuLabel>Project</DropdownMenuLabel>
         <DropdownMenuItem onSelect={() => onChange(null)}>
-          <span className="flex flex-1 items-center gap-2">
-            <ProjectDot color={null} /> No project
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <ProjectDot color={null} /> <span className="truncate">No project</span>
           </span>
-          {value === null && <Check size={14} className="text-lamp" />}
+          {value === null && <Check size={14} className="shrink-0 text-lamp" />}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {projects.map((p) => (
           <DropdownMenuItem key={p.id} onSelect={() => onChange(p.id)}>
-            <span className="flex flex-1 items-center gap-2">
-              <ProjectDot color={p.color} /> {p.name}
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              <ProjectDot color={p.color} /> <span className="truncate">{p.name}</span>
             </span>
-            {value === p.id && <Check size={14} className="text-lamp" />}
+            {value === p.id && <Check size={14} className="shrink-0 text-lamp" />}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -133,8 +133,8 @@ export function ProfilePicker({
         <DropdownMenuLabel>Profile</DropdownMenuLabel>
         {profiles.map((p) => (
           <DropdownMenuItem key={p.id} onSelect={() => onChange(p.id)}>
-            <span className="flex-1">{p.name}</span>
-            {value === p.id && <Check size={14} className="text-lamp" />}
+            <span className="min-w-0 flex-1 truncate">{p.name}</span>
+            {value === p.id && <Check size={14} className="shrink-0 text-lamp" />}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -171,14 +171,14 @@ export function LabelPicker({
           return (
             // keepOpen: toggling several labels in one visit shouldn't close the menu.
             <DropdownMenuItem key={l.id} keepOpen onSelect={() => toggle(l.id)}>
-              <span className="flex flex-1 items-center gap-2">
+              <span className="flex min-w-0 flex-1 items-center gap-2">
                 <span
-                  className={cn("h-2.5 w-2.5 rounded-full", !on && "opacity-40")}
+                  className={cn("h-2.5 w-2.5 shrink-0 rounded-full", !on && "opacity-40")}
                   style={{ backgroundColor: l.color }}
                 />
-                {l.name}
+                <span className="truncate">{l.name}</span>
               </span>
-              {on && <Check size={14} className="text-lamp" />}
+              {on && <Check size={14} className="shrink-0 text-lamp" />}
             </DropdownMenuItem>
           );
         })}

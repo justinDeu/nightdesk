@@ -28,7 +28,7 @@ export function DropdownMenuContent({
         sideOffset={6}
         collisionPadding={8}
         className={cn(
-          "pop-in z-50 min-w-[200px] rounded-card border border-ink-700 bg-ink-800 p-1",
+          "pop-in z-50 min-w-[200px] max-w-[280px] rounded-card border border-ink-700 bg-ink-800 p-1",
           "max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overscroll-contain",
           "shadow-[var(--shadow-pop)] focus:outline-none",
           className,
@@ -78,7 +78,7 @@ export function DropdownMenuItem({
       className={cn(itemBase, danger && "text-failed data-[highlighted]:bg-failed/15")}
     >
       {icon && <span className="text-moon-400">{icon}</span>}
-      <span className="flex-1">{children}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-2">{children}</span>
       {shortcut && <Kbd>{shortcut}</Kbd>}
     </RDropdown.Item>
   );
