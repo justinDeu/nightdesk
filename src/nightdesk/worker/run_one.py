@@ -166,8 +166,25 @@ def _resolve_extension_vendor(
     primary: Optional[ResolvedEndpoint],
 ) -> str:
     """Vendor to stamp a snapshot extension for ``model`` under: the endpoint
-    it was assigned to, else the primary endpoint's, else ``"anthropic"``
-    (ambient Claude runs with no endpoint at all)."""
+    it was assigned to, else the primary endpoint's, else a best-effort guess
+    from the model id itself.
+
+    A profile with literally no endpoint at all (legacy, pre-providers/
+    endpoints) gives us no vendor signal beyond the model id. Guessing
+    ``"anthropic"`` unconditionally used to be fine when every such profile
+    was an ambient Claude run, but a legacy profile can just as well point at
+    a non-Anthropic compat endpoint via raw ``profile.env``/
+    ``claude_credentials`` (e.g. z.ai/GLM) with no endpoint row to say so. A
+    wrong ``"anthropic"`` guess is worse than no guess: ``resolve_vendor_price``'s
+    ``"anthropic"`` branch only checks Anthropic-tagged live rows and the
+    Anthropic bundled table, so it can never resolve a GLM id and the
+    snapshot entry freezes at null rates forever (pricing_snapshot is stamped
+    once and never re-derived). Only guess ``"anthropic"`` for an id that
+    actually looks like a Claude model (``"claude-*"``); anything else is
+    left as ``"unknown"`` so ``resolve_vendor_price``'s vendor-agnostic
+    fallback -- which already searches the full bundled table, GLM rows
+    included -- gets a chance instead of being shut out by a wrong guess.
+    """
     vendor = next(
         (endpoints[a.endpoint_id].vendor for a in model_assignments.values()
          if a.model == model and a.endpoint_id in endpoints),
@@ -175,7 +192,9 @@ def _resolve_extension_vendor(
     )
     if vendor is None and primary is not None:
         vendor = primary.vendor
-    return vendor or "anthropic"
+    if vendor:
+        return vendor
+    return "anthropic" if model.startswith("claude-") else "unknown"
 
 
 def _extend_and_price_from_snapshot(

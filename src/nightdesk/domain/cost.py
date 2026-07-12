@@ -146,12 +146,54 @@ class RunUsage:
     cost_usd: Optional[float]
 
 
+def _strip_variant_suffix(model: str) -> str:
+    """Drop a trailing context-variant suffix: ``"glm-5.2[1m]"`` -> ``"glm-5.2"``.
+
+    Shared with :mod:`nightdesk.domain.pricing`, which imports this (and the
+    two helpers below) rather than duplicating them -- keeps the harness-side
+    lookup here and the live/cached vendor-aware lookup there resolving the
+    same normalized ids.
+    """
+    idx = model.find("[")
+    return model[:idx] if idx != -1 else model
+
+
+def _strip_vendor_prefix(model: str) -> str:
+    """Drop a leading ``"vendor/"`` segment: ``"anthropic/glm-5.2"`` -> ``"glm-5.2"``."""
+    return model.split("/", 1)[-1] if "/" in model else model
+
+
+def _model_candidates(model: str) -> list[str]:
+    """Lookup candidates in order: exact id, suffix-stripped, then also
+    vendor-prefix-stripped. Never mutates the id that gets recorded -- this
+    is a read-time lookup aid only."""
+    candidates = [model]
+    stripped = _strip_variant_suffix(model)
+    if stripped != model:
+        candidates.append(stripped)
+    no_prefix = _strip_vendor_prefix(stripped)
+    if no_prefix != stripped:
+        candidates.append(no_prefix)
+    return candidates
+
+
 def _prices_for(model: Optional[str]) -> Optional[dict[str, float]]:
+    """Longest-prefix match against the bundled table, trying normalized
+    candidates in order (exact id first, then suffix-stripped, then
+    vendor-prefix-stripped) -- see :func:`_model_candidates`. Longest-prefix
+    (not first-list-match) so a more specific row (``"glm-5-code"``) always
+    wins over a shorter one (``"glm-5"``) regardless of table order.
+    """
     if not model:
         return None
-    for prefix, prices in _PRICE_TABLE:
-        if model.startswith(prefix):
-            return prices
+    for candidate in _model_candidates(model):
+        best_prefix: Optional[str] = None
+        best_prices: Optional[dict[str, float]] = None
+        for prefix, prices in _PRICE_TABLE:
+            if candidate.startswith(prefix) and (best_prefix is None or len(prefix) > len(best_prefix)):
+                best_prefix, best_prices = prefix, prices
+        if best_prices is not None:
+            return best_prices
     return None
 
 
