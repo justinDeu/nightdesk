@@ -53,7 +53,9 @@ export function TicketsPage() {
   const filter = search.f ?? "";
   const activeViewId = search.viewId ?? null;
 
-  const setSearch = (next: Partial<{ view: "board" | "list"; f: string; viewId?: string }>) => {
+  const setSearch = (
+    next: Partial<{ view: "board" | "list"; f: string; viewId?: string; lens?: "issues" | "mrs" }>,
+  ) => {
     navigate({
       to: "/tickets",
       search: (prev) => ({ ...prev, ...next }),
@@ -146,10 +148,19 @@ export function TicketsPage() {
   const lensResolving =
     repoLinksQ.isLoading || (resolvedProjects.length === 1 && projectReposQ.isLoading);
 
-  const [lens, setLens] = useState<"tickets" | Lens>("tickets");
+  // Lens (Issues / MRs) is URL-driven so it survives refresh, deep links, and
+  // middle-click. Absent param = the default Tickets lens. Toggle writes the
+  // param with replace (same pattern as view / f / viewId), so it never pollutes
+  // history. Falling back to Tickets when the lens is *genuinely* unavailable is
+  // handled by the effect below — but only once repo links have resolved, so a
+  // deep-linked Issues lens isn't bounced during the loading window.
+  const lens: "tickets" | Lens = search.lens ?? "tickets";
+  const setLens = (next: "tickets" | Lens) =>
+    setSearch({ lens: next === "tickets" ? undefined : next });
   useEffect(() => {
-    if (!lensAvailable && lens !== "tickets") setLens("tickets");
-  }, [lensAvailable, lens]);
+    if (!repoLinksQ.isLoading && !lensAvailable && lens !== "tickets") setLens("tickets");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repoLinksQ.isLoading, lensAvailable]);
   const lensActive = lens !== "tickets" && lensAvailable;
   const latestRun = useMemo(() => latestRunMap(runsQ.data ?? []), [runsQ.data]);
 
@@ -397,6 +408,17 @@ export function TicketsPage() {
     if (peekId && !visible.some((t) => t.id === peekId)) setPeekId(null);
   }, [peekId, visible]);
 
+  // One shared signal that *either* side-peek (ticket or issue/MR) is open, so a
+  // single right-padding rule keeps the header controls and the work surface out
+  // from under the rail. The issue/MR peek state lives inside IntegrationLensPanel
+  // and is mirrored here; when the lens switches off the panel unmounts and takes
+  // its peek with it, so clear the mirror rather than keep reserving the width.
+  const [lensPeekOpen, setLensPeekOpen] = useState(false);
+  useEffect(() => {
+    if (!lensActive) setLensPeekOpen(false);
+  }, [lensActive]);
+  const anyPeekOpen = !!peekTicket || lensPeekOpen;
+
   const currentViewState: ViewState = { filter, view };
 
   return (
@@ -404,7 +426,15 @@ export function TicketsPage() {
       {/* Control bar — title, saved views, filter, view, new. Below md it wraps
           to two rows: title + controls on top, the full-width filter beneath
           (order-last), so a narrow phone never overlaps the filter and header. */}
-      <header className="relative z-40 flex shrink-0 flex-wrap items-center gap-2.5 border-b border-ink-700 bg-ink-950 px-4 py-2 md:h-12 md:flex-nowrap md:py-0">
+      <header
+        className={cn(
+          "relative z-40 flex shrink-0 flex-wrap items-center gap-2.5 border-b border-ink-700 bg-ink-950 px-4 py-2 transition-[padding] duration-150 md:h-12 md:flex-nowrap md:py-0",
+          // With the rail open the controls can exceed the padded width on
+          // mid-size screens; let the bar wrap back to two rows instead of
+          // letting the trailing buttons slide under the peek.
+          anyPeekOpen && "lg:h-auto lg:flex-wrap lg:py-2 lg:pr-[440px]",
+        )}
+      >
         <span className="shrink-0 font-display text-sm font-semibold tracking-tight text-moon-100">
           Tickets
         </span>
@@ -456,7 +486,7 @@ export function TicketsPage() {
       <div
         className={cn(
           "min-h-0 flex-1 transition-[padding] duration-150",
-          peekTicket && "lg:pr-[420px]",
+          anyPeekOpen && "lg:pr-[440px]",
         )}
       >
         {lensActive ? (
@@ -466,6 +496,7 @@ export function TicketsPage() {
             repos={lensRepos}
             projects={projectsQ.data ?? []}
             loading={lensResolving}
+            onPeekActiveChange={setLensPeekOpen}
           />
         ) : ticketsQ.isLoading ? (
           <div className="grid h-full place-items-center text-sm text-moon-600">Loading tickets…</div>

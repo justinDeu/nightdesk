@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleDot, GitMerge, Link2, Plug } from "lucide-react";
@@ -50,12 +50,17 @@ export function IntegrationLensPanel({
   repos,
   projects,
   loading,
+  onPeekActiveChange,
 }: {
   scope: LensScope;
   lens: Lens;
   repos: RepoLinkOut[];
   projects: ProjectOut[];
   loading: boolean;
+  /** Reports whether this panel's issue/MR peek is open so the parent page can
+   *  reserve the rail width alongside the ticket peek. Fired on open, close, and
+   *  initial mount (with `false`). */
+  onPeekActiveChange?: (active: boolean) => void;
 }) {
   const projectMap = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
   const persistSelection = scope.kind === "global";
@@ -65,6 +70,9 @@ export function IntegrationLensPanel({
   const [state, setState] = useState<string>("opened");
   const [search, setSearch] = useState("");
   const [peek, setPeek] = useState<{ repo: RepoLinkOut; iid: string } | null>(null);
+  useEffect(() => {
+    onPeekActiveChange?.(peek !== null);
+  }, [peek, onPeekActiveChange]);
 
   const activeRepo = repos.find((r) => r.id === repoId) ?? repos[0];
   const selectRepo = (id: string) => {
