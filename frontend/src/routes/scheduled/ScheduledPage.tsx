@@ -6,6 +6,7 @@ import { Page } from "@/components/Page";
 import { Button } from "@/ui/Button";
 import { Dialog } from "@/ui/Dialog";
 import { EmptyState } from "@/ui/EmptyState";
+import { ErrorState } from "@/ui/ErrorState";
 import { Switch } from "@/ui/Switch";
 import { Tooltip } from "@/ui/Tooltip";
 import {
@@ -97,7 +98,17 @@ export function ScheduledPage() {
         </Button>
       }
     >
-      {jobsQ.isLoading ? (
+      {jobsQ.isError ? (
+        <ErrorState
+          title="Could not load schedules"
+          description="The schedule list failed to load. Try again."
+          action={
+            <Button variant="ghost" size="sm" onClick={() => jobsQ.refetch()}>
+              Retry
+            </Button>
+          }
+        />
+      ) : jobsQ.isLoading ? (
         <div className="py-20 text-center text-sm text-moon-600">Loading schedules…</div>
       ) : jobs.length === 0 ? (
         <div className="mx-auto max-w-2xl">

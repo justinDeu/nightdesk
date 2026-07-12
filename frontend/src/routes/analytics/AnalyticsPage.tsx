@@ -4,6 +4,8 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { AlertTriangle, BarChart3, Clock, Coins, Database, ListChecks, Zap } from "lucide-react";
 import type { AnalyticsSearch } from "@/router";
 import { Page } from "@/components/Page";
+import { Button } from "@/ui/Button";
+import { ErrorState } from "@/ui/ErrorState";
 import { Select } from "@/ui/Select";
 import { Tooltip } from "@/ui/Tooltip";
 import { cn } from "@/lib/cn";
@@ -283,7 +285,24 @@ export function AnalyticsPage() {
         )}
       </div>
 
-      {isLoading ? (
+      {summaryQ.isError || spendQ.isError ? (
+        <ErrorState
+          title="Could not load analytics"
+          description="Spend and summary data failed to load. Try again."
+          action={
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                summaryQ.refetch();
+                spendQ.refetch();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        />
+      ) : isLoading ? (
         <div className="py-20 text-center text-sm text-moon-600">Loading analytics…</div>
       ) : (
         <div className="space-y-9">
