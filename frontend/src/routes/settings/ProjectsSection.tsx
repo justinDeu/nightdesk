@@ -177,17 +177,17 @@ function ActivityStrip({ projectId }: { projectId: string }) {
     <div className="mt-2 flex items-center gap-1.5">
       {rows.slice(0, 16).map((r) => (
         <Tooltip
-          key={r.run_id}
+          key={r.id}
           content={
             <span className="font-mono text-[11px]">
-              {r.ticket_title} · {r.outcome}
+              {r.title} · {r.outcome}
               {r.duration_seconds != null ? ` · ${formatDuration(r.duration_seconds * 1000)}` : ""}
               {r.tokens != null ? ` · ${r.tokens.toLocaleString()} tok` : ""}
-              {r.started_at ? ` · ${relativeTime(r.started_at)}` : ""}
+              {r.ts ? ` · ${relativeTime(r.ts)}` : ""}
             </span>
           }
         >
-          <span className={cn("h-2 w-2 rounded-full", outcomeColor(r.outcome))} />
+          <span className={cn("h-2 w-2 rounded-full", outcomeColor(r.outcome ?? ""))} />
         </Tooltip>
       ))}
       <span className="ml-1 text-[11px] text-moon-600">last {Math.min(rows.length, 16)} runs</span>

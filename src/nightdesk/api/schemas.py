@@ -1628,14 +1628,55 @@ class WebhookTestRequest(BaseModel):
     url: str
 
 
-class ProjectActivityRow(BaseModel):
-    run_id: str
-    ticket_id: str
-    ticket_title: str
-    outcome: str
+class ProjectActivityItem(BaseModel):
+    """One row in the merged project activity feed
+    (GET /api/v1/projects/{id}/activity). ``kind`` selects which optional
+    fields are populated; see domain.activity.ActivityItem."""
+
+    id: str
+    kind: str  # run | lifecycle | repo | cron
+    ts: datetime
+    title: str
+    # run-specific
+    outcome: Optional[str] = None  # success | failed | running | unknown
     duration_seconds: Optional[float] = None
     tokens: Optional[int] = None
-    started_at: Optional[datetime] = None
+    cost_usd: Optional[float] = None
+    # deep-links back into the app
+    run_id: Optional[str] = None
+    ticket_id: Optional[str] = None
+    # lifecycle-specific
+    to_status: Optional[str] = None
+    # repo-specific
+    repo_kind: Optional[str] = None  # merge_request | issue
+    repo_link_id: Optional[str] = None
+    external_iid: Optional[str] = None
+    external_url: Optional[str] = None
+    state: Optional[str] = None  # opened | merged | closed
+    diff_add: Optional[int] = None
+    diff_del: Optional[int] = None
+    # cron-specific
+    skipped_reason: Optional[str] = None
+
+
+class ProjectActivityWeekRollup(BaseModel):
+    """Numbers-only week-boundary rollup (Mon–Sun, UTC). No prose digest."""
+
+    week_start: date  # the Monday that starts the week
+    runs: int
+    failures: int
+    shipped: int
+    cost_usd: float
+    success_rate: float  # 0..1 of completed runs
+
+
+class ProjectActivityFeed(BaseModel):
+    """Envelope for the unified, cursor-paginated project activity feed."""
+
+    items: list[ProjectActivityItem]
+    rollups: list[ProjectActivityWeekRollup] = []
+    next_cursor: Optional[str] = None
+    has_more: bool = False
 
 
 class AnalyticsSummaryOut(BaseModel):

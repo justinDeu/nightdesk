@@ -3,6 +3,10 @@ import { Link } from "@tanstack/react-router";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/cn";
 
+// The real History tab lives in its own module; re-exported here so ProjectPage
+// keeps one import for every horizon tab.
+export { HistoryTab } from "./history/HistoryTab";
+
 /** The four project-space horizon tabs (docs/design/project-control-plane.md). */
 export type ProjectTab = "overview" | "plan" | "history" | "settings";
 
@@ -83,11 +87,6 @@ export function PlanTab() {
       §Plan.
     </ProjectStub>
   );
-}
-
-/** History tab — plain placeholder (a later ticket builds the day-grouped ledger). */
-export function HistoryTab() {
-  return <ProjectStub title="History" />;
 }
 
 /** Settings tab — plain placeholder (a later ticket lifts project settings here). */
