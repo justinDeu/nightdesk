@@ -400,14 +400,16 @@ def _fetch_cron(
     if cursor is not None:
         stmt = stmt.where(_before_clause(CronJobFire.fire_at, CronJobFire.id, cursor))
     stmt = stmt.order_by(CronJobFire.fire_at.desc(), CronJobFire.id.desc()).limit(limit)
+    # Read CronJob.title in the parent query — the .join(CronJob) above only
+    # filters (for source_path / q); it does NOT hydrate ``fire.cron_job``, so
+    # touching it per row would N+1 (one cron_jobs SELECT per fire).
     out: list[ActivityItem] = []
-    for fire in session.scalars(stmt):
-        job = fire.cron_job
+    for fire, title in session.execute(stmt.add_columns(CronJob.title)):
         out.append(ActivityItem(
             id=fire.id,
             kind=KIND_CRON,
             ts=_aware(fire.fire_at) or datetime.now(timezone.utc),
-            title=(job.title if job is not None else "cron") or "cron",
+            title=title or "cron",
             ticket_id=fire.ticket_id,
             skipped_reason=fire.skipped_reason,
         ))

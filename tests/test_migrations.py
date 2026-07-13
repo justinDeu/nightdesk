@@ -170,6 +170,32 @@ def test_0023_steer_messages_upgrade_downgrade_and_guard(tmp_path):
     assert inspect(engine).has_table("steer_messages")
 
 
+def test_0032_runs_ticket_id_index(tmp_path):
+    """0032 adds ix_runs_ticket_id (the project activity feed's runs->tickets
+    join was full-scanning). Created on upgrade, dropped on downgrade, and the
+    inspector guard makes a re-upgrade over an existing index a no-op."""
+    db_path = tmp_path / "nd.db"
+    cfg = _alembic_config(db_path)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    insp = inspect(engine)
+    ix = {i["name"] for i in insp.get_indexes("runs")}
+    assert "ix_runs_ticket_id" in ix
+
+    command.downgrade(cfg, "0031_runs_backend_nullable")
+    insp = inspect(create_engine(f"sqlite+pysqlite:///{db_path}", future=True))
+    ix = {i["name"] for i in insp.get_indexes("runs")}
+    assert "ix_runs_ticket_id" not in ix
+
+    # Re-upgrade is idempotent under the inspector guard (no "index already
+    # exists" crash).
+    command.upgrade(cfg, "head")
+    insp = inspect(create_engine(f"sqlite+pysqlite:///{db_path}", future=True))
+    ix = {i["name"] for i in insp.get_indexes("runs")}
+    assert "ix_runs_ticket_id" in ix
+
+
 def test_0026_sessions_upgrade_downgrade_and_shape(tmp_path):
     """0026 creates the three agent tables (with the partial unique index) and
     the session config knobs on a clean DB; downgrade drops them; re-upgrade

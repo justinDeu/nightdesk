@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { GitMerge, CircleDot, Repeat, Hourglass, Search, X } from "lucide-react";
 import {
   useProjectActivityFeed,
@@ -11,6 +11,8 @@ import { useProjectRepoLinks } from "@/api/integrations";
 import type { ProjectOut, RepoLinkOut } from "@/api/types";
 import { ExternalItemPeek } from "@/components/ExternalItemPeek";
 import { Tooltip } from "@/ui/Tooltip";
+import { Button } from "@/ui/Button";
+import { ErrorState } from "@/ui/ErrorState";
 import { Spinner } from "@/ui/Spinner";
 import { parseTs, formatDuration } from "@/lib/time";
 import { formatUsd } from "@/lib/status";
@@ -83,7 +85,6 @@ export function HistoryTab({ project }: { project: ProjectOut }) {
   const [kind, setKind] = useState<ActivityFilter>("all");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
-  const navigate = useNavigate();
 
   // Debounce the search box so typing doesn't fire a request per keystroke.
   useEffect(() => {
@@ -127,20 +128,14 @@ export function HistoryTab({ project }: { project: ProjectOut }) {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const openRow = (it: ActivityItem) => {
-    if (it.kind === "repo") {
-      const repo = (repoLinksQ.data ?? []).find((r) => r.id === it.repo_link_id);
-      if (repo && it.repo_kind && it.external_iid) {
-        setPeek({ repo, kind: it.repo_kind === "issue" ? "issue" : "merge_request", iid: it.external_iid });
-      }
-      return;
-    }
-    if (it.kind === "run" && it.ticket_id && it.run_id) {
-      navigate({ to: "/tickets/$id/runs/$rid", params: { id: it.ticket_id, rid: it.run_id } });
-      return;
-    }
-    if (it.ticket_id) {
-      navigate({ to: "/tickets/$id", params: { id: it.ticket_id } });
+  // Repo rows open the side peek (a panel, not a route) — handled here.
+  // Ticket/run/cron rows navigate and are rendered as real <Link> anchors in
+  // ActivityRow so middle-click / cmd-click open a new tab natively.
+  const openRepoPeek = (it: ActivityItem) => {
+    if (it.kind !== "repo") return;
+    const repo = (repoLinksQ.data ?? []).find((r) => r.id === it.repo_link_id);
+    if (repo && it.repo_kind && it.external_iid) {
+      setPeek({ repo, kind: it.repo_kind === "issue" ? "issue" : "merge_request", iid: it.external_iid });
     }
   };
 
@@ -163,13 +158,23 @@ export function HistoryTab({ project }: { project: ProjectOut }) {
           <div className="flex items-center gap-2 py-10 text-sm text-moon-600">
             <Spinner size={14} /> Loading history…
           </div>
+        ) : feed.isError ? (
+          <ErrorState
+            title="Could not load history"
+            description="The activity feed failed to load. Try again."
+            action={
+              <Button variant="ghost" size="sm" onClick={() => feed.refetch()}>
+                Retry
+              </Button>
+            }
+          />
         ) : !hasContent ? (
           <EmptyHistory kind={kind} hasQuery={debouncedQ.trim().length > 0} />
         ) : (
           <Ledger
             days={days}
             rollupByWeek={rollupByWeek}
-            onOpen={openRow}
+            onOpen={openRepoPeek}
             onLoadMore={feed.hasNextPage ? () => feed.fetchNextPage() : undefined}
             loadingMore={isFetchingMore}
           />
@@ -373,23 +378,57 @@ function TodayBadge({ dayKey: dk }: { dayKey: string }) {
 function ActivityRow({ item, onOpen }: { item: ActivityItem; onOpen: (it: ActivityItem) => void }) {
   const time = shortTime(item.ts);
   const { label, tone, glyph } = pillFor(item);
-  return (
-    <button
-      onClick={() => onOpen(item)}
-      className={cn(
-        "flex w-full items-center gap-2.5 rounded-[6px] px-2 py-1.5 text-left text-[12.5px] transition-colors",
-        "hover:bg-ink-900 focus-visible:bg-ink-900 focus-visible:outline-none",
-        item.outcome === "failed" && "opacity-90 hover:opacity-100",
-      )}
-    >
+  const ariaLabel = rowTitle(item);
+
+  const className = cn(
+    "flex w-full items-center gap-2.5 rounded-[6px] px-2 py-1.5 text-left text-[12.5px] transition-colors",
+    "hover:bg-ink-900 focus-visible:bg-ink-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-lamp",
+    item.outcome === "failed" && "opacity-90 hover:opacity-100",
+  );
+  const content = (
+    <>
       <span className="w-11 shrink-0 font-mono text-[11px] text-moon-600">{time}</span>
       <Pill tone={tone} glyph={glyph}>{label}</Pill>
       <span className="min-w-0 flex-1 truncate text-moon-100">{rowTitle(item)}</span>
       <span className="flex shrink-0 items-center gap-2.5 font-mono text-[11px] text-moon-600">
         <RowMeta item={item} />
       </span>
-    </button>
+    </>
   );
+
+  // Real anchors for route targets: a plain click navigates in-app, but
+  // middle-click / cmd-click / shift-click fall through to the browser (open in
+  // a new tab / window / copy link) — the app-wide real-anchor convention, not
+  // a plain onClick that silently deadens those activations. Repo rows open a
+  // side peek (a panel, not a route) so they stay a button. A skipped cron fire
+  // with no generated ticket has nowhere to go and renders as a plain row.
+  if (item.kind === "run" && item.ticket_id && item.run_id) {
+    return (
+      <Link
+        to="/tickets/$id/runs/$rid"
+        params={{ id: item.ticket_id, rid: item.run_id }}
+        aria-label={ariaLabel}
+        className={className}
+      >
+        {content}
+      </Link>
+    );
+  }
+  if (item.kind !== "repo" && item.ticket_id) {
+    return (
+      <Link to="/tickets/$id" params={{ id: item.ticket_id }} aria-label={ariaLabel} className={className}>
+        {content}
+      </Link>
+    );
+  }
+  if (item.kind === "repo") {
+    return (
+      <button type="button" onClick={() => onOpen(item)} aria-label={ariaLabel} className={className}>
+        {content}
+      </button>
+    );
+  }
+  return <div className={className}>{content}</div>;
 }
 
 function RowMeta({ item }: { item: ActivityItem }) {
