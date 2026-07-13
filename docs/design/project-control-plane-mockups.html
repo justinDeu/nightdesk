@@ -1,0 +1,1938 @@
+<title>nightdesk — projects redesign, three concepts</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --ink-950:#0a0a0b; --ink-900:#171719; --ink-800:#232327; --ink-700:#42424b;
+    --moon-100:#f4f5f7; --moon-400:#b7bbc4; --moon-600:#7e828c;
+    --lamp:#45c084; --dawn:#7fe0ad; --review:#9c93f0; --failed:#e06b64; --warn:#d9a13d;
+    --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+  }
+  html { background: var(--ink-950); }
+  body { background: var(--ink-950); color: var(--moon-400); font-family: var(--font-sans); line-height: 1.55; }
+  .rv-wrap { max-width: 900px; margin: 0 auto; padding: 48px 24px 16px; }
+  .rv-eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--lamp); }
+  .rv-wrap h1 { font-size: 30px; font-weight: 650; letter-spacing: -.02em; color: var(--moon-100); margin: 10px 0 8px; text-wrap: balance; }
+  .rv-lede { font-size: 15px; max-width: 62ch; }
+  .rv-wrap h2 { font-size: 13px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--moon-100); margin: 40px 0 12px; }
+  .rv-decisions { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13.5px; }
+  .rv-decisions li { padding-left: 18px; position: relative; }
+  .rv-decisions li::before { content: ""; position: absolute; left: 2px; top: .55em; width: 7px; height: 7px; border-radius: 2px; background: var(--lamp); opacity: .8; }
+  .rv-tabs { position: sticky; top: 0; z-index: 40; background: color-mix(in srgb, var(--ink-950) 88%, transparent); backdrop-filter: blur(8px); border-block: 1px solid var(--ink-800); margin-top: 44px; }
+  .rv-tabs-inner { max-width: 900px; margin: 0 auto; padding: 10px 24px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .rv-tab { appearance: none; border: 1px solid var(--ink-700); background: var(--ink-900); color: var(--moon-400); border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 550; font-family: inherit; cursor: pointer; }
+  .rv-tab:hover { background: var(--ink-800); color: var(--moon-100); }
+  .rv-tab[aria-selected="true"] { background: var(--lamp); border-color: var(--lamp); color: #06130c; }
+  .rv-tab:focus-visible { outline: 2px solid var(--dawn); outline-offset: 2px; }
+  .rv-tab .n { font-family: var(--font-mono); font-size: 11px; opacity: .75; margin-right: 6px; }
+  .rv-tab-note { margin-left: auto; font-size: 12px; color: var(--moon-600); }
+  .rv-stage { display: none; padding: 20px 12px 8px; }
+  .rv-stage.rv-on { display: block; }
+  .rv-stage-thesis { max-width: 900px; margin: 0 auto 14px; padding: 0 12px; font-size: 14px; color: var(--moon-400); }
+  .rv-stage-thesis b { color: var(--moon-100); }
+  .rv-tension { border-left: 3px solid var(--warn); background: var(--ink-900); border-radius: 0 10px 10px 0; padding: 12px 16px; font-size: 13.5px; margin: 10px 0; }
+  .rv-tension b { color: var(--moon-100); }
+  .rv-reco { border: 1px solid color-mix(in srgb, var(--lamp) 45%, var(--ink-700)); background: color-mix(in srgb, var(--lamp) 6%, var(--ink-900)); border-radius: 12px; padding: 16px 18px; font-size: 14px; }
+  .rv-reco b { color: var(--moon-100); }
+  .rv-foot { max-width: 900px; margin: 0 auto; padding: 8px 24px 56px; }
+  .rv-be { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .rv-be th, .rv-be td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--ink-800); }
+  .rv-be thead th { background: var(--ink-900); color: var(--moon-100); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+  .rv-be-scroll { overflow-x: auto; border: 1px solid var(--ink-700); border-radius: 12px; }
+  .rv-pill { font-family: var(--font-mono); font-size: 10.5px; border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+  .rv-pill.real { background: color-mix(in srgb, var(--lamp) 16%, transparent); color: var(--dawn); }
+  .rv-pill.new { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+  @media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+</style>
+
+<div class="rv-wrap">
+  <span class="rv-eyebrow">nightdesk · design review · round 4 · 2026-07-12</span>
+  <h1>The project control plane</h1>
+  <p class="rv-lede">Round 4 locks the frame: a project is the control plane for its work — Desk stays untouched as the cross-everything signal. Four tabs: Overview (state), Plan (roadmap), History (record), Settings (config, lifted home). No timelines, no cost forecasts, no cards.</p>
+
+  <h2>Rulings applied this round</h2>
+  <ul class="rv-decisions">
+    <li><b style="color:var(--moon-100)">Desk is out of scope.</b> It stays the whole-of-nightdesk overview and the "which project needs me" signal. Project pages are the scoped depth behind it; overlap is deliberate.</li>
+    <li><b style="color:var(--moon-100)">Settings is a full tab.</b> Every project-scoped setting lifts out of global Settings (identity, execution defaults, repo links, label defaults, crons, danger zone). Global Settings→Projects becomes a thin deep-link list. All backend-real; pure frontend lift.</li>
+    <li><b style="color:var(--moon-100)">Plan is a roadmap, not a schedule.</b> No "tonight", no times, no cost forecasts. The backlog groups into <b style="color:var(--moon-100)">workstreams</b> — each connected component of the dependency graph is its own lane, nodes laid left→right by depth with edges that branch and merge (n levels, any number of parallel streams); unlinked tickets pool as singles. Badges answer only "will this ever run and why" (queued / after ↑ / cron / blocked / no path ⚠ / on hold). Breakdown workbench: prose intent → proposed decomposition → edit → batch-create with deps wired; agentic generation ships in the later agentic-workflows pass.</li>
+    <li><b style="color:var(--moon-100)">Inbox stays inbox.</b> The issues/ideas reframe and the flesh-out agent are parked for the agentic pass.</li>
+    <li><b style="color:var(--moon-100)">No duplicated workflows.</b> Overview's running section is plain rows (title, elapsed, cost) — inspect and steer live on the ticket page. History carries forward unchanged. Settings gets a sticky section rail (with unsaved-change dots) and collapsible sections instead of scroll-hunting.</li>
+  </ul>
+</div>
+
+<div class="rv-tabs" role="tablist" aria-label="Sub-pages">
+  <div class="rv-tabs-inner">
+    <button class="rv-tab" role="tab" aria-selected="true" data-stage="rv-stage-po2"><span class="n">STATE</span>Overview</button>
+    <button class="rv-tab" role="tab" aria-selected="false" data-stage="rv-stage-pp3"><span class="n">ROADMAP</span>Plan</button>
+    <button class="rv-tab" role="tab" aria-selected="false" data-stage="rv-stage-ph"><span class="n">RECORD</span>History</button>
+    <button class="rv-tab" role="tab" aria-selected="false" data-stage="rv-stage-ps"><span class="n">CONFIG</span>Settings</button>
+    <span class="rv-tab-note">Trends → Analytics + project filter</span>
+  </div>
+</div>
+
+<div id="rv-stage-po2" class="rv-stage rv-on" role="tabpanel">
+  <p class="rv-stage-thesis"><b>Overview — the state of everything, one ledger, zero cards.</b> Running is plain rows now — inspect/steer on the ticket page, no duplicated workflows.</p>
+<section id="po2-root">
+  <style>
+    #po2-root {
+      --po2-ink-950:#0a0a0b; --po2-ink-900:#171719; --po2-ink-800:#232327; --po2-ink-700:#42424b;
+      --po2-moon-100:#f4f5f7; --po2-moon-400:#b7bbc4; --po2-moon-600:#7e828c;
+      --po2-lamp:#45c084; --po2-lamp-soft:#6fd3a1; --po2-dawn:#7fe0ad;
+      --po2-review:#9c93f0; --po2-queued:#8b99ae; --po2-success:#56b89a; --po2-failed:#e06b64; --po2-warn:#d9a13d; --po2-azure:#6aabdf;
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      background: var(--po2-ink-950);
+      color: var(--po2-moon-100);
+      display: block;
+    }
+    #po2-root .po2-stage-wrap { overflow-x: auto; }
+    #po2-root .po2-stage { width: 1440px; min-height: 900px; display: flex; }
+    #po2-root .po2-mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+    #po2-root .po2-display { font-family: "Space Grotesk", "Inter", sans-serif; }
+    #po2-root * { box-sizing: border-box; }
+    #po2-root button { font-family: inherit; cursor: pointer; }
+
+    /* ---- nav rail ---- */
+    #po2-root .po2-rail { width: 240px; flex: 0 0 240px; background: var(--po2-ink-900); border-right: 1px solid var(--po2-ink-700); display: flex; flex-direction: column; padding: 16px 12px; box-sizing: border-box; }
+    #po2-root .po2-rail-logo { font-size: 15px; font-weight: 700; color: var(--po2-moon-100); padding: 4px 8px 16px; letter-spacing: -.01em; }
+    #po2-root .po2-rail-group { margin-top: 4px; }
+    #po2-root .po2-rail-item { display: flex; align-items: center; justify-content: space-between; padding: 7px 8px; border-radius: 8px; font-size: 13px; color: var(--po2-moon-400); }
+    #po2-root .po2-rail-item.po2-active { background: var(--po2-ink-800); color: var(--po2-moon-100); }
+    #po2-root .po2-rail-sub { padding-left: 20px; }
+    #po2-root .po2-rail-badge { font-size: 10px; background: var(--po2-ink-700); color: var(--po2-moon-100); border-radius: 999px; padding: 1px 6px; }
+    #po2-root .po2-rail-badge.po2-active-badge { background: var(--po2-lamp); color: #06231a; font-weight: 700; }
+    #po2-root .po2-rail-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--po2-lamp); display: inline-block; margin-right: 8px; }
+    #po2-root .po2-rail-dot.po2-quiet { background: var(--po2-ink-700); }
+    #po2-root .po2-rail-spacer { flex: 1; }
+    #po2-root .po2-rail-foot { border-top: 1px solid var(--po2-ink-700); padding-top: 10px; font-size: 12px; color: var(--po2-moon-600); display: flex; flex-direction: column; gap: 6px; }
+
+    /* ---- main column ---- */
+    #po2-root .po2-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+    #po2-root .po2-topstrip { height: 52px; border-bottom: 1px solid var(--po2-ink-700); display: flex; align-items: center; gap: 16px; padding: 0 20px; background: var(--po2-ink-950); }
+    #po2-root .po2-search { flex: 1; max-width: 420px; background: var(--po2-ink-900); border: 1px solid var(--po2-ink-700); border-radius: 8px; padding: 7px 12px; font-size: 12.5px; color: var(--po2-moon-600); }
+    #po2-root .po2-worker-pill { margin-left: auto; font-size: 12px; background: var(--po2-ink-900); border: 1px solid var(--po2-ink-700); border-radius: 999px; padding: 5px 12px; color: var(--po2-moon-400); display: flex; align-items: center; gap: 6px; }
+    #po2-root .po2-worker-pill .po2-live-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--po2-lamp); box-shadow: 0 0 0 3px rgba(69,192,132,.18); }
+
+    #po2-root .po2-projstrip { display: flex; align-items: center; gap: 6px; padding: 8px 20px; border-bottom: 1px solid var(--po2-ink-700); }
+    #po2-root .po2-projtab { font-size: 12px; color: var(--po2-moon-600); padding: 5px 10px; border-radius: 999px; display: flex; align-items: center; gap: 6px; }
+    #po2-root .po2-projtab .po2-pdot { width: 6px; height: 6px; border-radius: 999px; background: var(--po2-ink-700); }
+    #po2-root .po2-projtab.po2-active { background: var(--po2-ink-800); color: var(--po2-moon-100); }
+    #po2-root .po2-projtab.po2-active .po2-pdot { background: var(--po2-lamp); }
+    #po2-root .po2-projtab .po2-pbadge { font-size: 10px; background: var(--po2-ink-700); border-radius: 999px; padding: 0 5px; }
+    #po2-root .po2-hophint { margin-left: auto; font-size: 11px; color: var(--po2-moon-600); }
+    #po2-root .po2-hophint kbd { background: var(--po2-ink-800); border: 1px solid var(--po2-ink-700); border-radius: 4px; padding: 1px 5px; font-family: inherit; }
+
+    #po2-root .po2-header { padding: 18px 20px 0; }
+    #po2-root .po2-header-top { display: flex; align-items: center; gap: 20px; }
+    #po2-root .po2-header-title { display: flex; align-items: center; gap: 8px; font-size: 19px; font-weight: 600; }
+    #po2-root .po2-header-title .po2-jdot { width: 9px; height: 9px; border-radius: 999px; background: var(--po2-lamp); box-shadow: 0 0 8px rgba(69,192,132,.5); }
+    #po2-root .po2-header-path { font-size: 12px; color: var(--po2-moon-600); }
+    #po2-root .po2-header-actions { margin-left: auto; display: flex; gap: 8px; }
+    #po2-root .po2-btn { font-size: 12.5px; padding: 7px 13px; border-radius: 8px; border: 1px solid var(--po2-ink-700); background: var(--po2-ink-900); color: var(--po2-moon-100); }
+    #po2-root .po2-btn.po2-primary { background: var(--po2-lamp); color: #06231a; border-color: var(--po2-lamp); font-weight: 600; }
+    #po2-root .po2-statline { margin-top: 6px; font-size: 12px; color: var(--po2-moon-600); }
+    #po2-root .po2-statline b { color: var(--po2-moon-400); font-weight: 500; }
+
+    #po2-root .po2-tabs { display: flex; align-items: center; gap: 22px; margin-top: 16px; border-bottom: 1px solid var(--po2-ink-700); padding: 0 20px; }
+    #po2-root .po2-tab { padding: 10px 2px 12px; font-size: 13.5px; color: var(--po2-moon-600); border-bottom: 2px solid transparent; }
+    #po2-root .po2-tab.po2-tab-active { color: var(--po2-moon-100); border-bottom-color: var(--po2-lamp); font-weight: 600; }
+    #po2-root .po2-tabs-analytics { margin-left: auto; font-size: 12px; color: var(--po2-moon-600); padding: 10px 0; }
+    #po2-root .po2-tabs-analytics:hover { color: var(--po2-moon-400); }
+
+    /* ---- page body: the ledger ---- */
+    #po2-root .po2-body { flex: 1; padding: 16px 20px 28px; position: relative; }
+
+    /* signal strip */
+    #po2-root .po2-signal { display: flex; flex-wrap: wrap; align-items: center; gap: 0; font-size: 12.5px; color: var(--po2-moon-600); padding: 10px 14px; background: var(--po2-ink-900); border: 1px solid var(--po2-ink-800); border-radius: 8px; margin-bottom: 22px; position: relative; }
+    #po2-root .po2-signal-item { padding: 0 10px; border-right: 1px solid var(--po2-ink-800); }
+    #po2-root .po2-signal-item:last-child { border-right: none; }
+    #po2-root .po2-signal-item:first-child { padding-left: 0; }
+    #po2-root .po2-signal-item b { font-weight: 600; }
+    #po2-root .po2-signal-item.po2-sig-running b { color: var(--po2-dawn); }
+    #po2-root .po2-signal-item.po2-sig-review b { color: var(--po2-review); }
+    #po2-root .po2-signal-item.po2-sig-warn b { color: var(--po2-warn); }
+    #po2-root .po2-signal-item.po2-sig-ok b { color: var(--po2-success); }
+
+    #po2-root .po2-callout { position: absolute; width: 20px; height: 20px; border-radius: 999px; background: var(--po2-warn); color: #241a04; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px var(--po2-ink-950); z-index: 5; }
+
+    /* section group headers */
+    #po2-root .po2-section { margin-bottom: 26px; position: relative; }
+    #po2-root .po2-sechead { display: flex; align-items: baseline; gap: 8px; padding-bottom: 7px; border-bottom: 1px solid var(--po2-ink-800); margin-bottom: 4px; }
+    #po2-root .po2-sechead-label { font-family: "Space Grotesk", sans-serif; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--po2-moon-400); }
+    #po2-root .po2-sechead-count { font-size: 11px; color: var(--po2-moon-600); }
+    #po2-root .po2-sechead-legend { margin-left: auto; font-size: 10.5px; color: var(--po2-moon-600); }
+    #po2-root .po2-sechead-legend kbd { background: var(--po2-ink-800); border: 1px solid var(--po2-ink-700); border-radius: 4px; padding: 0 5px; font-family: "IBM Plex Mono", monospace; }
+
+    /* generic row */
+    #po2-root .po2-row { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-bottom: 1px solid var(--po2-ink-900); font-size: 12.5px; }
+    #po2-root .po2-row:hover { background: var(--po2-ink-900); }
+    #po2-root .po2-row:last-child { border-bottom: none; }
+    #po2-root .po2-row-glyph { width: 16px; flex: 0 0 16px; text-align: center; font-size: 12px; color: var(--po2-moon-600); }
+    #po2-root .po2-row-title { flex: 1; min-width: 0; color: var(--po2-moon-100); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #po2-root .po2-row-priority { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--po2-moon-600); border: 1px solid var(--po2-ink-700); border-radius: 4px; padding: 1px 5px; flex: 0 0 auto; }
+    #po2-root .po2-row-meta { flex: 0 0 auto; color: var(--po2-moon-600); font-size: 11px; display: flex; gap: 10px; font-family: "IBM Plex Mono", monospace; align-items: center; }
+    #po2-root .po2-diffstat-add { color: var(--po2-success); }
+    #po2-root .po2-diffstat-del { color: var(--po2-failed); margin-left: 2px; }
+    #po2-root .po2-tag { font-size: 10px; padding: 1px 7px; border-radius: 5px; font-weight: 600; font-family: "Inter", sans-serif; }
+    #po2-root .po2-tag-warn { background: rgba(217,161,61,.16); color: var(--po2-warn); }
+    #po2-root .po2-tag-review { background: rgba(156,147,240,.16); color: var(--po2-review); }
+    #po2-root .po2-tag-blocked { background: rgba(224,107,100,.16); color: var(--po2-failed); }
+    #po2-root .po2-tag-stale { background: rgba(224,107,100,.16); color: var(--po2-failed); }
+    #po2-root .po2-row-verbs { display: flex; gap: 6px; flex: 0 0 auto; }
+    #po2-root .po2-vbtn { font-size: 11px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--po2-ink-700); background: var(--po2-ink-800); color: var(--po2-moon-100); }
+    #po2-root .po2-vbtn.po2-vbtn-sage { background: rgba(86,184,154,.16); border-color: var(--po2-success); color: var(--po2-lamp-soft); }
+    #po2-root .po2-vbtn.po2-vbtn-ghost { background: transparent; color: var(--po2-moon-400); }
+    #po2-root .po2-vbtn.po2-vbtn-warn { background: rgba(217,161,61,.16); border-color: var(--po2-warn); color: var(--po2-warn); }
+
+    /* running row */
+    #po2-root .po2-row-running:hover { cursor: pointer; }
+    #po2-root .po2-lamp-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--po2-lamp); box-shadow: 0 0 0 3px rgba(69,192,132,.16); animation: po2-pulse 2.4s ease-in-out infinite; flex: 0 0 8px; margin: 0 4px 0 2px; }
+    @keyframes po2-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+    #po2-root .po2-row-hint { font-size: 10.5px; color: var(--po2-moon-600); font-style: italic; flex: 0 0 auto; }
+
+    /* review rows expanded */
+    #po2-root .po2-evidence-expanded { flex-direction: column; align-items: stretch; background: rgba(217,161,61,.05); border-radius: 8px; padding: 10px 12px; border-bottom: none; margin-bottom: 2px; }
+    #po2-root .po2-evidence-top { display: flex; align-items: center; gap: 10px; }
+    #po2-root .po2-evidence-detail { margin: 9px 0; padding: 9px 10px; background: var(--po2-ink-950); border-radius: 6px; display: flex; flex-direction: column; gap: 5px; }
+    #po2-root .po2-evidence-detail-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--po2-moon-400); }
+    #po2-root .po2-evidence-detail-row span:last-child { font-family: "IBM Plex Mono", monospace; color: var(--po2-moon-600); }
+    #po2-root .po2-evidence-verbs { display: flex; gap: 6px; align-items: center; }
+    #po2-root .po2-evidence-verbs input { flex: 1; background: var(--po2-ink-900); border: 1px solid var(--po2-ink-700); border-radius: 6px; color: var(--po2-moon-100); font-size: 11.5px; padding: 6px 9px; }
+    #po2-root .po2-evidence-verbs input::placeholder { color: var(--po2-moon-600); }
+
+    /* waiting-on-you section */
+    #po2-root .po2-wait-item { padding: 10px 6px; border-bottom: 1px solid var(--po2-ink-900); }
+    #po2-root .po2-wait-item:last-child { border-bottom: none; }
+    #po2-root .po2-wait-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    #po2-root .po2-wait-name { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--po2-moon-100); }
+    #po2-root .po2-wait-question { font-size: 12.5px; color: var(--po2-moon-400); line-height: 1.5; margin: 0 0 8px 24px; }
+    #po2-root .po2-wait-question code { color: var(--po2-moon-100); font-size: 11px; }
+    #po2-root .po2-wait-reply { display: flex; gap: 6px; margin-left: 24px; }
+    #po2-root .po2-wait-reply input { flex: 1; background: var(--po2-ink-950); border: 1px solid var(--po2-ink-700); border-radius: 6px; color: var(--po2-moon-100); font-size: 12px; padding: 6px 9px; }
+    #po2-root .po2-wait-reply input::placeholder { color: var(--po2-moon-600); }
+    #po2-root .po2-wait-reply button { background: var(--po2-warn); border: 1px solid var(--po2-warn); color: #241a06; font-weight: 600; border-radius: 6px; padding: 6px 12px; font-size: 11.5px; }
+    #po2-root .po2-mr-row { display: flex; align-items: center; gap: 10px; }
+    #po2-root .po2-mr-id { font-family: "IBM Plex Mono", monospace; color: var(--po2-moon-600); font-size: 11.5px; flex: 0 0 auto; }
+
+    /* footer */
+    #po2-root .po2-footer { margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--po2-ink-800); font-size: 11.5px; color: var(--po2-moon-600); display: flex; align-items: center; gap: 6px; }
+    #po2-root .po2-footer a { color: var(--po2-moon-400); }
+
+    /* legend */
+    #po2-root .po2-legend { width: 1440px; margin-top: 22px; background: var(--po2-ink-900); border: 1px solid var(--po2-ink-700); border-radius: 12px; padding: 16px 20px; }
+    #po2-root .po2-legend h3 { margin: 0 0 10px; font-size: 13px; font-family: "Space Grotesk", sans-serif; color: var(--po2-moon-100); }
+    #po2-root .po2-legend-item { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--po2-ink-800); font-size: 12px; color: var(--po2-moon-400); }
+    #po2-root .po2-legend-item:first-of-type { border-top: none; }
+    #po2-root .po2-legend-num { flex: 0 0 20px; height: 20px; border-radius: 999px; background: var(--po2-warn); color: #241a04; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+    #po2-root .po2-legend-body b { color: var(--po2-moon-100); }
+    #po2-root .po2-legend-tag { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--po2-moon-600); background: var(--po2-ink-800); border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+    #po2-root .po2-legend-need { color: var(--po2-warn); }
+  </style>
+
+  <div class="po2-stage-wrap">
+    <div class="po2-stage">
+      <nav class="po2-rail">
+        <div class="po2-rail-logo">nightdesk</div>
+        <div class="po2-rail-item">Desk</div>
+        <div class="po2-rail-item">Tickets</div>
+        <div class="po2-rail-item po2-active">Projects</div>
+        <div class="po2-rail-group">
+          <div class="po2-rail-item po2-rail-sub po2-active"><span><span class="po2-rail-dot"></span>nightdesk</span><span class="po2-rail-badge po2-active-badge">5</span></div>
+          <div class="po2-rail-item po2-rail-sub"><span><span class="po2-rail-dot"></span>CREAM</span><span class="po2-rail-badge">1</span></div>
+          <div class="po2-rail-item po2-rail-sub"><span><span class="po2-rail-dot"></span>blubblub</span><span class="po2-rail-badge">1</span></div>
+          <div class="po2-rail-item po2-rail-sub"><span><span class="po2-rail-dot po2-quiet"></span>Vibeslop</span></div>
+          <div class="po2-rail-item po2-rail-sub"><span><span class="po2-rail-dot po2-quiet"></span>reaper</span></div>
+        </div>
+        <div class="po2-rail-item">Agents</div>
+        <div class="po2-rail-item">Inbox</div>
+        <div class="po2-rail-item">Scheduled</div>
+        <div class="po2-rail-item">Analytics</div>
+        <div class="po2-rail-item">Archive</div>
+        <div class="po2-rail-item">Settings</div>
+        <div class="po2-rail-spacer"></div>
+        <div class="po2-rail-foot"><span>Sign out</span><span>Collapse «</span></div>
+      </nav>
+
+      <div class="po2-main">
+        <div class="po2-topstrip">
+          <div class="po2-search">Search tickets, runs, projects… (/)</div>
+          <div class="po2-worker-pill"><span class="po2-live-dot"></span>Running · 2/5 · $60.31 today</div>
+        </div>
+
+        <div class="po2-projstrip">
+          <div class="po2-projtab po2-active"><span class="po2-pdot"></span>nightdesk<span class="po2-pbadge">5</span></div>
+          <div class="po2-projtab"><span class="po2-pdot"></span>CREAM<span class="po2-pbadge">1</span></div>
+          <div class="po2-projtab"><span class="po2-pdot"></span>blubblub<span class="po2-pbadge">1</span></div>
+          <div class="po2-projtab"><span class="po2-pdot"></span>Vibeslop</div>
+          <div class="po2-projtab"><span class="po2-pdot"></span>reaper</div>
+          <div class="po2-hophint"><kbd>[</kbd> prev · next <kbd>]</kbd></div>
+        </div>
+
+        <div class="po2-header">
+          <div class="po2-header-top">
+            <div class="po2-header-title"><span class="po2-jdot"></span>nightdesk <span class="po2-header-path po2-mono">/home/thor/fun/nightdesk</span></div>
+            <div class="po2-header-actions">
+              <button class="po2-btn">Edit</button>
+              <button class="po2-btn po2-primary">New ticket</button>
+            </div>
+          </div>
+          <div class="po2-statline">profile <b>overnight-default</b> · <b>2</b> toolsets · <b>30d $37.73</b> · <b>42 runs</b> · <b>5% failed</b></div>
+        </div>
+
+        <div class="po2-tabs">
+          <div class="po2-tab po2-tab-active">Overview</div>
+          <div class="po2-tab">Plan</div>
+          <div class="po2-tab">History</div>
+          <a class="po2-tabs-analytics" href="#">Trends ↗ Analytics</a>
+        </div>
+
+        <div class="po2-body">
+
+          <!-- signal strip -->
+          <div class="po2-signal">
+            <div class="po2-callout" style="top:-10px; left:-28px;">①</div>
+            <span class="po2-signal-item po2-sig-running"><b>1 running</b></span>
+            <span class="po2-signal-item po2-sig-review"><b>4 review</b></span>
+            <span class="po2-signal-item">0 queued</span>
+            <span class="po2-signal-item">3 draft</span>
+            <span class="po2-signal-item">4 inbox</span>
+            <span class="po2-signal-item po2-sig-warn"><b>!412 awaiting your review</b></span>
+            <span class="po2-signal-item po2-sig-warn"><b>1 agent waiting</b></span>
+            <span class="po2-signal-item po2-sig-ok">repo ok</span>
+            <span class="po2-signal-item">30d $37.73</span>
+          </div>
+
+          <!-- RUNNING -->
+          <div class="po2-section">
+            <div class="po2-callout" style="top:-10px; left:-28px; background:var(--po2-lamp); color:#06170e;">②</div>
+            <div class="po2-sechead">
+              <span class="po2-sechead-label">Running</span>
+              <span class="po2-sechead-count">(1)</span>
+            </div>
+            <div class="po2-row po2-row-running">
+              <span class="po2-row-glyph po2-lamp-dot"></span>
+              <span class="po2-row-priority">P4</span>
+              <span class="po2-row-title">Tickets lens: survive refresh via URL param…</span>
+              <span class="po2-row-meta">31m · $1.84</span>
+              <span class="po2-row-hint">→ ticket page for inspect/steer</span>
+            </div>
+          </div>
+
+          <!-- NEEDS YOUR VERDICT -->
+          <div class="po2-section">
+            <div class="po2-callout" style="top:-10px; left:-28px; background:var(--po2-review); color:#100c2e;">③</div>
+            <div class="po2-sechead">
+              <span class="po2-sechead-label">Needs your verdict</span>
+              <span class="po2-sechead-count">(4)</span>
+              <span class="po2-sechead-legend"><kbd>j</kbd>/<kbd>k</kbd> move · <kbd>e</kbd> expand · <kbd>a</kbd> approve · <kbd>r</kbd> requeue</span>
+            </div>
+
+            <div class="po2-row">
+              <span class="po2-row-glyph">◧</span>
+              <span class="po2-row-priority">P3</span>
+              <span class="po2-row-title">Ticket sidebar: profile picker check mark wraps…</span>
+              <span class="po2-row-meta">run 14m · $0.61 · 3f <span class="po2-diffstat-add">+41</span><span class="po2-diffstat-del">−12</span></span>
+              <div class="po2-row-verbs">
+                <button class="po2-vbtn po2-vbtn-sage">Approve</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Requeue</button>
+              </div>
+            </div>
+
+            <div class="po2-row">
+              <span class="po2-row-glyph">◧</span>
+              <span class="po2-row-priority">P3</span>
+              <span class="po2-row-title">Connections: no UI to attach a repo link…</span>
+              <span class="po2-row-meta">run 22m · $1.12 · 6f <span class="po2-diffstat-add">+214</span><span class="po2-diffstat-del">−38</span></span>
+              <div class="po2-row-verbs">
+                <button class="po2-vbtn po2-vbtn-sage">Approve</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Requeue</button>
+              </div>
+            </div>
+
+            <!-- expanded row -->
+            <div class="po2-row po2-evidence-expanded">
+              <div class="po2-evidence-top">
+                <span class="po2-row-glyph">◨</span>
+                <span class="po2-row-priority">P?</span>
+                <span class="po2-row-title" style="white-space:normal;">Harden runs against transient upstream errors…</span>
+                <span class="po2-tag po2-tag-warn">unacked</span>
+                <span class="po2-row-meta">run 57m · $2.31 · 9f <span class="po2-diffstat-add">+388</span><span class="po2-diffstat-del">−71</span></span>
+              </div>
+              <div class="po2-evidence-detail">
+                <div class="po2-evidence-detail-row"><span>Retried after upstream 503</span><span>1 failed attempt · 2 total</span></div>
+                <div class="po2-evidence-detail-row"><span>Diff summary</span><span>retry classification + backoff schedule in run executor</span></div>
+                <div class="po2-evidence-detail-row"><span>Linked MR</span><span>!412 · awaiting your review</span></div>
+              </div>
+              <div class="po2-evidence-verbs">
+                <button class="po2-vbtn po2-vbtn-sage">Approve</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Requeue</button>
+                <input type="text" placeholder="Add a note…" />
+              </div>
+            </div>
+
+            <div class="po2-row">
+              <span class="po2-row-glyph">◧</span>
+              <span class="po2-row-priority">P2</span>
+              <span class="po2-row-title">Worker double-dispatches a ticket…</span>
+              <span class="po2-row-meta">run 41m · $1.95 · 4f <span class="po2-diffstat-add">+96</span><span class="po2-diffstat-del">−22</span></span>
+              <div class="po2-row-verbs">
+                <button class="po2-vbtn po2-vbtn-sage">Approve</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Requeue</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- WAITING ON YOUR REPLY -->
+          <div class="po2-section">
+            <div class="po2-callout" style="top:-10px; left:-28px; background:var(--po2-azure); color:#071d2e;">④</div>
+            <div class="po2-sechead">
+              <span class="po2-sechead-label">Waiting on your reply</span>
+              <span class="po2-sechead-count">(2)</span>
+            </div>
+
+            <div class="po2-wait-item">
+              <div class="po2-wait-top">
+                <span class="po2-row-glyph">◔</span>
+                <span class="po2-wait-name">nightdesk-helper</span>
+                <span class="po2-tag po2-tag-warn">needs reply · 2h</span>
+              </div>
+              <div class="po2-wait-question">&ldquo;Should retention GC also prune orphaned workspaces under <code>~/.local/share/nightdesk-worktrees</code>?&rdquo;</div>
+              <form class="po2-wait-reply" onsubmit="return false;">
+                <input type="text" placeholder="Quick reply…" />
+                <button type="submit">Send</button>
+              </form>
+            </div>
+
+            <div class="po2-wait-item">
+              <div class="po2-mr-row">
+                <span class="po2-row-glyph">⑃</span>
+                <span class="po2-mr-id">!412</span>
+                <span class="po2-row-title">Retry with backoff for upstream 5xx</span>
+                <span class="po2-tag po2-tag-review">awaiting your review</span>
+                <span class="po2-row-meta"><span class="po2-diffstat-add">+388</span><span class="po2-diffstat-del">−71</span></span>
+                <button class="po2-vbtn po2-vbtn-ghost">Open peek</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- INBOX -->
+          <div class="po2-section">
+            <div class="po2-callout" style="top:-10px; left:-28px; background:var(--po2-queued); color:#0e1114;">⑤</div>
+            <div class="po2-sechead">
+              <span class="po2-sechead-label">Inbox</span>
+              <span class="po2-sechead-count">(4)</span>
+            </div>
+
+            <div class="po2-row">
+              <span class="po2-row-glyph">◌</span>
+              <span class="po2-row-title">mobile shouldn&rsquo;t be able to drag tickets</span>
+              <span class="po2-tag po2-tag-blocked">blocked: no profile · stale 2w</span>
+              <div class="po2-row-verbs">
+                <button class="po2-vbtn po2-vbtn-warn">Triage</button>
+              </div>
+            </div>
+            <div class="po2-row">
+              <span class="po2-row-glyph">◌</span>
+              <span class="po2-row-title">metrics observability</span>
+              <span class="po2-row-meta">ready 2mo</span>
+              <div class="po2-row-verbs">
+                <button class="po2-vbtn po2-vbtn-ghost">Draft</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Queue</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Decline</button>
+              </div>
+            </div>
+            <div class="po2-row">
+              <span class="po2-row-glyph">◌</span>
+              <span class="po2-row-title">retention GC</span>
+              <span class="po2-row-meta">ready 2mo</span>
+              <div class="po2-row-verbs">
+                <button class="po2-vbtn po2-vbtn-ghost">Draft</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Queue</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Decline</button>
+              </div>
+            </div>
+            <div class="po2-row">
+              <span class="po2-row-glyph">◌</span>
+              <span class="po2-row-title">wall-clock timeout</span>
+              <span class="po2-row-meta">ready 2mo</span>
+              <div class="po2-row-verbs">
+                <button class="po2-vbtn po2-vbtn-ghost">Draft</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Queue</button>
+                <button class="po2-vbtn po2-vbtn-ghost">Decline</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- FOOTER -->
+          <div class="po2-footer po2-mono">
+            queued 0 · draft 3 · repo gitlab.local/thor/nightdesk ok · 7 issues · defaults overnight-default · <a href="#">Edit</a>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="po2-legend">
+    <h3>Callouts</h3>
+    <div class="po2-legend-item">
+      <div class="po2-legend-num">①</div>
+      <div class="po2-legend-body"><b>Signal strip</b><span class="po2-legend-tag">horizon: now, 30-second read</span> — one line of inline stats, each a jump-anchor to its section below; color carries meaning (jade = running, violet = review, amber = waiting-on-you). Replaces the round-2 card grid entirely — this is the only "summary" surface on the page, and it's text, not tiles. <span class="po2-legend-need">Backend need: none — every figure is a count already derivable from existing ticket/agent/repo queries; the strip is a single aggregate read.</span></div>
+    </div>
+    <div class="po2-legend-item">
+      <div class="po2-legend-num" style="background:var(--po2-lamp); color:#06170e;">②</div>
+      <div class="po2-legend-body"><b>Running</b><span class="po2-legend-tag">horizon: now, seconds</span> — a plain ledger row like every other section: pulsing lamp dot, priority, title, right-aligned elapsed/cost. Job here is only to state what's running, not to inspect or steer it — that workflow already lives on the ticket page and isn't duplicated here. Click the row to open it. <span class="po2-legend-need">Backend need: none new — same run status/elapsed/cost fields as before, just no tail stream or steer composer fetched for this view.</span></div>
+    </div>
+    <div class="po2-legend-item">
+      <div class="po2-legend-num" style="background:var(--po2-review); color:#100c2e;">③</div>
+      <div class="po2-legend-body"><b>Needs your verdict</b><span class="po2-legend-tag">horizon: now → recent past</span> — one line per review ticket; row 3 shown expanded in place (no modal) with an indented evidence block: diffstat, 1-line summary, retry note, linked MR, and a verb row with an inline note field. Keyboard model: j/k to move, e to expand, a/r to act without a mouse. <span class="po2-legend-need">Backend need: real today — transition + diffstat + retry count exist. The "linked MR" line needs the ticket↔MR association surfaced here (already read in Waiting-on-your-reply, see ④).</span></div>
+    </div>
+    <div class="po2-legend-item">
+      <div class="po2-legend-num" style="background:var(--po2-azure); color:#071d2e;">④</div>
+      <div class="po2-legend-body"><b>Waiting on your reply — unified feed</b><span class="po2-legend-tag">horizon: now</span> — the page's novel move: agent questions, MRs awaiting review, and (future) approval gates all live in ONE section regardless of source, because from the human's seat they're the same interruption — "something needs my word before it moves." Agent row shows the real question inline with a quick-reply composer; MR row shows diffstat + an Open peek affordance. No navigating away for either. <span class="po2-legend-need">Backend need: mostly real (pending-input/answer endpoints 0026, GitLab MR reads 0029) but there's no unified query today — this section needs a small aggregator that merges "agent needs reply" + "MR awaiting review" + future approval-gate sources into one feed, sorted by wait time.</span></div>
+    </div>
+    <div class="po2-legend-item">
+      <div class="po2-legend-num" style="background:var(--po2-queued); color:#0e1114;">⑤</div>
+      <div class="po2-legend-body"><b>Inbox</b><span class="po2-legend-tag">horizon: now, unresolved backlog</span> — one line each, verbs inline (Draft/Queue/Decline); the stale, blocked item sorts first and gets a single amber Triage verb instead of the three-way choice, since it can't be queued as-is. <span class="po2-legend-need">Backend need: real today — inbox status + the computed "blocked: no profile" / "stale 2w" fields already exist per the round-2 audit.</span></div>
+    </div>
+    <div class="po2-legend-item">
+      <div class="po2-legend-num" style="background:var(--po2-ink-700); color:var(--po2-moon-100);">·</div>
+      <div class="po2-legend-body"><b>Footer handoff line</b><span class="po2-legend-tag">horizon: now, quiet</span> — counts only; draft titles are intentionally NOT listed here — they moved to Plan v2's backlog workbench, which is where you'd act on them (queue, estimate, sequence). Overview says "3 draft exist," Plan is where you touch them. <span class="po2-legend-need">Backend need: none — same counts as the signal strip, restated at the bottom as a closing line.</span></div>
+    </div>
+  </div>
+</section>
+</div>
+<div id="rv-stage-pp3" class="rv-stage" role="tabpanel">
+<p class="rv-stage-thesis"><b>Plan — the roadmap workbench.</b> Workstream lanes: each connected component of the dependency graph gets its own band, nodes left→right by depth, edges branching and merging; a singles pool below; drag-to-wire; the breakdown workbench mid-session; two crons and one honest sentence. No times, no costs.</p>
+<section id="pp3-root">
+<style>
+#pp3-root{
+  --ink-950:#0a0a0b;--ink-900:#171719;--ink-800:#232327;--ink-700:#42424b;
+  --moon-100:#f4f5f7;--moon-400:#b7bbc4;--moon-600:#7e828c;
+  --lamp:#45c084;--lamp-soft:#6fd3a1;--dawn:#7fe0ad;
+  --review:#9c93f0;--queued:#8b99ae;--success:#56b89a;--failed:#e06b64;--warn:#d9a13d;--azure:#6aabdf;
+  --moon-700:#5b5f68;
+  --el1:0 1px 2px rgb(0 0 0/.55);--el2:0 6px 16px -4px rgb(0 0 0/.5);--elin:inset 0 1px 0 rgb(255 255 255/.045);
+  font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;
+  color:var(--moon-100);
+  background:var(--ink-950);
+  font-variant-numeric:tabular-nums;
+}
+#pp3-root .pp3-stage-wrap{overflow-x:auto;}
+#pp3-root .pp3-stage{width:1440px;display:grid;grid-template-columns:240px 1fr;min-height:900px;background:var(--ink-950);}
+
+/* ---- nav rail ---- */
+#pp3-root .pp3-rail{background:var(--ink-900);border-right:1px solid var(--ink-700);display:flex;flex-direction:column;padding:16px 12px;box-sizing:border-box;}
+#pp3-root .pp3-logo{font-family:"Space Grotesk",Inter,sans-serif;font-weight:700;font-size:15px;color:var(--moon-100);padding:6px 8px 18px;letter-spacing:.2px;}
+#pp3-root .pp3-nav-item{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:8px;font-size:13px;color:var(--moon-400);cursor:pointer;margin-bottom:1px;}
+#pp3-root .pp3-nav-item:hover{background:var(--ink-800);color:var(--moon-100);}
+#pp3-root .pp3-nav-item.pp3-active{background:var(--ink-800);color:var(--moon-100);box-shadow:var(--elin);}
+#pp3-root .pp3-nav-badge{background:var(--ink-700);color:var(--moon-100);font-size:10px;padding:1px 6px;border-radius:99px;}
+#pp3-root .pp3-proj-sub{display:flex;align-items:center;gap:7px;padding:5px 10px 5px 22px;font-size:12.5px;color:var(--moon-400);border-radius:8px;}
+#pp3-root .pp3-proj-sub.pp3-active{color:var(--moon-100);background:var(--ink-800);}
+#pp3-root .pp3-proj-sub .pp3-dot{width:6px;height:6px;border-radius:50%;background:var(--lamp);flex-shrink:0;}
+#pp3-root .pp3-proj-sub.pp3-quiet .pp3-dot{background:var(--ink-700);}
+#pp3-root .pp3-proj-sub .pp3-b{margin-left:auto;font-size:10px;background:var(--ink-700);color:var(--moon-100);padding:1px 6px;border-radius:99px;}
+#pp3-root .pp3-rail-bottom{margin-top:auto;display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--ink-700);padding-top:10px;}
+
+/* ---- main column ---- */
+#pp3-root .pp3-main{display:flex;flex-direction:column;min-width:0;}
+
+#pp3-root .pp3-topstrip{display:flex;align-items:center;gap:14px;padding:11px 24px;border-bottom:1px solid var(--ink-700);background:var(--ink-950);}
+#pp3-root .pp3-search{flex:1;max-width:420px;background:var(--ink-900);border:1px solid var(--ink-700);border-radius:8px;padding:7px 12px;font-size:12.5px;color:var(--moon-600);}
+#pp3-root .pp3-worker-pill{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--moon-400);background:var(--ink-900);border:1px solid var(--ink-700);border-radius:99px;padding:5px 12px;}
+#pp3-root .pp3-worker-pill .pp3-livedot{width:6px;height:6px;border-radius:50%;background:var(--lamp);box-shadow:0 0 0 3px rgb(69 192 132/.18);}
+
+#pp3-root .pp3-projstrip{display:flex;align-items:center;gap:6px;padding:9px 24px;border-bottom:1px solid var(--ink-700);background:var(--ink-950);}
+#pp3-root .pp3-ptab{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--moon-400);padding:5px 11px;border-radius:99px;border:1px solid transparent;}
+#pp3-root .pp3-ptab .pp3-dot{width:6px;height:6px;border-radius:50%;background:var(--ink-700);}
+#pp3-root .pp3-ptab.pp3-live .pp3-dot{background:var(--lamp);}
+#pp3-root .pp3-ptab.pp3-projactive{background:var(--ink-800);color:var(--moon-100);border-color:var(--ink-700);box-shadow:var(--elin);}
+#pp3-root .pp3-ptab .pp3-b{font-size:10px;background:var(--ink-700);padding:0 5px;border-radius:99px;color:var(--moon-100);}
+#pp3-root .pp3-hop{margin-left:auto;font-size:11px;color:var(--moon-600);font-family:"IBM Plex Mono",monospace;}
+
+#pp3-root .pp3-header{display:flex;align-items:center;gap:12px;padding:16px 24px;border-bottom:1px solid var(--ink-700);}
+#pp3-root .pp3-hdot{width:9px;height:9px;border-radius:50%;background:var(--lamp);box-shadow:0 0 0 4px rgb(69 192 132/.15);}
+#pp3-root .pp3-hname{font-family:"Space Grotesk",Inter,sans-serif;font-weight:600;font-size:17px;}
+#pp3-root .pp3-hpath{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--moon-600);}
+#pp3-root .pp3-hstats{margin-left:14px;font-size:12px;color:var(--moon-600);border-left:1px solid var(--ink-700);padding-left:14px;}
+#pp3-root .pp3-hactions{margin-left:auto;display:flex;gap:8px;}
+#pp3-root .pp3-btn{font-size:12.5px;padding:7px 14px;border-radius:8px;border:1px solid var(--ink-700);background:var(--ink-800);color:var(--moon-100);cursor:pointer;}
+#pp3-root .pp3-btn.pp3-primary{background:var(--lamp);border-color:var(--lamp);color:#08211a;font-weight:600;}
+
+#pp3-root .pp3-horizon{display:flex;align-items:center;gap:22px;padding:0 24px;border-bottom:1px solid var(--ink-700);background:var(--ink-950);}
+#pp3-root .pp3-htab{padding:11px 2px;font-size:13px;color:var(--moon-600);border-bottom:2px solid transparent;cursor:pointer;}
+#pp3-root .pp3-htab.pp3-hactive{color:var(--moon-100);border-color:var(--lamp);font-weight:600;}
+#pp3-root .pp3-hlink{margin-left:auto;font-size:11.5px;color:var(--moon-600);}
+#pp3-root .pp3-hlink:hover{color:var(--moon-400);}
+
+/* ---- single column workbench ---- */
+#pp3-root .pp3-body{padding:20px 24px 40px;max-width:1160px;}
+
+#pp3-root .pp3-zonehead{display:flex;align-items:baseline;gap:10px;margin-bottom:4px;}
+#pp3-root .pp3-zonetitle{font-family:"Space Grotesk",Inter,sans-serif;font-size:14px;font-weight:600;}
+#pp3-root .pp3-zonemeta{font-size:11.5px;color:var(--moon-600);margin-left:auto;}
+#pp3-root .pp3-callout{width:17px;height:17px;border-radius:50%;background:var(--ink-800);border:1px solid var(--ink-700);color:var(--moon-400);font-size:10px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;}
+
+#pp3-root .pp3-section{margin-top:34px;}
+#pp3-root .pp3-section:first-child{margin-top:0;}
+#pp3-root .pp3-sechead{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--moon-600);padding-bottom:8px;border-bottom:1px solid var(--ink-700);margin-bottom:2px;}
+
+/* rollup line */
+#pp3-root .pp3-rollup{font-size:12.5px;color:var(--moon-400);padding:10px 4px 12px;}
+#pp3-root .pp3-rollup b{color:var(--moon-100);font-weight:600;}
+#pp3-root .pp3-rollup .pp3-warnct{color:var(--warn);font-weight:600;}
+#pp3-root .pp3-rollup .pp3-blockct{color:var(--warn);font-weight:600;}
+
+/* ---- composer row (active typing) ---- */
+#pp3-root .pp3-composer{display:flex;align-items:center;gap:10px;padding:11px 8px;border:1px solid var(--lamp);border-radius:8px;background:rgb(69 192 132/.06);box-shadow:0 0 0 3px rgb(69 192 132/.08);margin-bottom:2px;}
+#pp3-root .pp3-composer-icon{color:var(--lamp-soft);font-size:13px;flex-shrink:0;}
+#pp3-root .pp3-composer-text{font-size:13px;color:var(--moon-100);flex:1;}
+#pp3-root .pp3-caret{display:inline-block;width:1.5px;height:14px;background:var(--lamp-soft);margin-left:1px;vertical-align:-2px;animation:pp3-blink 1.05s steps(1) infinite;}
+@keyframes pp3-blink{0%,49%{opacity:1;}50%,100%{opacity:0;}}
+#pp3-root .pp3-composer-hint{margin-top:5px;padding-left:33px;font-size:10.5px;color:var(--moon-600);margin-bottom:10px;}
+#pp3-root .pp3-composer-hint b{color:var(--moon-400);font-weight:600;}
+
+/* just-created flash row */
+#pp3-root .pp3-just-created{animation:pp3-flash 2.4s ease-out 1;}
+@keyframes pp3-flash{0%{background:rgb(217 161 61/.22);}100%{background:transparent;}}
+#pp3-root .pp3-newchip{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--warn);background:rgb(217 161 61/.14);border:1px solid rgb(217 161 61/.35);border-radius:99px;padding:1px 7px;}
+
+/* ---- roadmap: workstreams (connected components) + singles pool ---- */
+#pp3-root .pp3-roadmap{position:relative;margin-top:6px;}
+
+#pp3-root .pp3-stream{margin-top:28px;}
+#pp3-root .pp3-stream:first-child{margin-top:0;}
+#pp3-root .pp3-streamhead{height:32px;box-sizing:border-box;display:flex;align-items:baseline;gap:7px;padding:0 4px;border-bottom:1px solid var(--ink-700);}
+#pp3-root .pp3-streamlabel{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--moon-600);font-weight:700;}
+#pp3-root .pp3-streamname{font-size:12px;color:var(--moon-100);font-weight:600;}
+#pp3-root .pp3-streamcount{margin-left:auto;font-size:10.5px;color:var(--moon-600);font-family:"IBM Plex Mono",monospace;}
+#pp3-root .pp3-streamgraph{position:relative;padding:20px 20px 20px 4px;box-sizing:content-box;overflow-x:auto;}
+#pp3-root .pp3-streamedge-svg{position:absolute;left:4px;top:20px;overflow:visible;pointer-events:none;}
+
+#pp3-root .pp3-nodechip{position:absolute;width:220px;box-sizing:border-box;border:1px solid var(--ink-700);border-radius:8px;background:var(--ink-900);padding:8px 10px 9px;box-shadow:var(--el1);}
+#pp3-root .pp3-nodechip-title{font-size:12px;color:var(--moon-100);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;margin:5px 0 7px;}
+#pp3-root .pp3-nodechip .pp3-path{margin:0;}
+
+/* singletons pool: plain ledger rows */
+#pp3-root .pp3-singleshead{height:32px;box-sizing:border-box;display:flex;align-items:baseline;gap:7px;padding:0 4px;border-bottom:1px solid var(--ink-700);}
+#pp3-root .pp3-singles-list{position:relative;}
+
+#pp3-root .pp3-node{min-height:44px;box-sizing:border-box;display:grid;grid-template-columns:28px 68px 22px 1fr 190px 100px;align-items:center;gap:9px;padding:9px 6px 9px 0;border-top:1px solid var(--ink-800);font-size:12.5px;position:relative;}
+#pp3-root .pp3-singles-list .pp3-node:first-of-type{border-top:none;}
+#pp3-root .pp3-node.pp3-selected{background:rgb(106 171 223/.06);}
+#pp3-root .pp3-nodegut{position:relative;height:100%;}
+#pp3-root .pp3-nodedot{position:absolute;left:10px;top:50%;transform:translate(-50%,-50%);width:7px;height:7px;border-radius:50%;background:var(--ink-700);border:1px solid var(--ink-700);}
+#pp3-root .pp3-nodedot.pp3-dot-source{background:var(--queued);border-color:var(--queued);}
+#pp3-root .pp3-nodedot.pp3-dot-target{background:var(--ink-900);border-color:var(--queued);}
+#pp3-root .pp3-prio{font-family:"IBM Plex Mono",monospace;font-size:10.5px;padding:2px 6px;border-radius:6px;text-align:center;width:fit-content;}
+#pp3-root .pp3-prio.pp3-p2{background:rgb(224 107 100/.14);color:var(--failed);}
+#pp3-root .pp3-prio.pp3-p3{background:rgb(217 161 61/.14);color:var(--warn);}
+#pp3-root .pp3-prio.pp3-p4{background:rgb(139 153 174/.14);color:var(--queued);}
+#pp3-root .pp3-prio.pp3-draft{background:var(--ink-800);color:var(--moon-600);border:1px dashed var(--ink-700);}
+#pp3-root .pp3-prio.pp3-inbox{background:rgb(106 171 223/.14);color:var(--azure);}
+#pp3-root .pp3-kind{font-size:9.5px;font-weight:700;width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;background:var(--ink-800);color:var(--moon-400);}
+#pp3-root .pp3-kind.pp3-bug{color:var(--failed);}
+#pp3-root .pp3-kind.pp3-feature{color:var(--lamp-soft);}
+#pp3-root .pp3-kind.pp3-chore{color:var(--moon-600);}
+#pp3-root .pp3-titlewrap{min-width:0;}
+#pp3-root .pp3-bltitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--moon-100);display:block;}
+#pp3-root .pp3-blsub{margin-top:3px;display:flex;gap:6px;align-items:center;}
+#pp3-root .pp3-blverbs{display:flex;gap:6px;justify-content:flex-end;}
+#pp3-root .pp3-vbtn{font-size:11px;padding:4px 9px;border-radius:6px;border:1px solid var(--ink-700);background:var(--ink-800);color:var(--moon-400);cursor:pointer;white-space:nowrap;}
+#pp3-root .pp3-vbtn.pp3-run{color:var(--lamp-soft);border-color:rgb(69 192 132/.3);}
+#pp3-root .pp3-vbtn.pp3-promote{color:var(--azure);border-color:rgb(106 171 223/.3);}
+#pp3-root .pp3-newchip{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--warn);background:rgb(217 161 61/.14);border:1px solid rgb(217 161 61/.35);border-radius:99px;padding:1px 7px;}
+
+/* drag-to-wire preview (singleton dragged toward a workstream node) */
+#pp3-root .pp3-dragwire-svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none;}
+#pp3-root .pp3-dragwire-label{position:absolute;display:flex;align-items:center;gap:5px;padding:4px 9px;border-radius:6px;background:var(--ink-800);border:1px solid var(--azure);box-shadow:var(--el2);font-size:10.5px;color:var(--azure);white-space:nowrap;pointer-events:none;}
+#pp3-root .pp3-dragwire-label .pp3-dragicon{font-size:10px;}
+
+/* status badges (renamed from "path") */
+#pp3-root .pp3-path{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;padding:3px 9px;border-radius:99px;width:fit-content;white-space:nowrap;}
+#pp3-root .pp3-path.pp3-queued{color:var(--queued);border:1px solid rgb(139 153 174/.4);background:rgb(139 153 174/.1);}
+#pp3-root .pp3-path.pp3-after{color:var(--queued);border:1px solid rgb(139 153 174/.4);background:rgb(139 153 174/.08);}
+#pp3-root .pp3-path.pp3-cron{color:var(--queued);border:1px solid rgb(139 153 174/.4);background:rgb(139 153 174/.08);}
+#pp3-root .pp3-path.pp3-blocked{color:var(--warn);border:1px solid rgb(217 161 61/.4);background:rgb(217 161 61/.08);}
+#pp3-root .pp3-path.pp3-nopath{color:var(--warn);border:1px solid var(--warn);background:rgb(217 161 61/.16);font-weight:600;}
+#pp3-root .pp3-path.pp3-onhold{color:var(--moon-600);border:1px solid var(--ink-700);background:transparent;}
+#pp3-root .pp3-pathfix{font-size:10px;color:var(--warn);text-decoration:underline;text-underline-offset:2px;cursor:pointer;margin-left:2px;}
+
+#pp3-root .pp3-grouphead{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--moon-600);padding:14px 4px 6px;}
+
+/* legend/keys under backlog */
+#pp3-root .pp3-kbdlegend{font-size:10.5px;color:var(--moon-600);font-family:"IBM Plex Mono",monospace;padding:8px 4px 0;}
+#pp3-root .pp3-kbdlegend b{color:var(--moon-400);font-family:Inter,sans-serif;font-weight:600;}
+
+/* ---- breakdown workbench (region 2) ---- */
+#pp3-root .pp3-intent{display:flex;gap:10px;align-items:flex-start;padding:12px 4px 16px;}
+#pp3-root .pp3-intent-icon{color:var(--azure);font-size:13px;margin-top:2px;}
+#pp3-root .pp3-intent-text{font-size:13.5px;color:var(--moon-100);line-height:1.5;}
+#pp3-root .pp3-intent-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--moon-600);margin-bottom:4px;}
+
+#pp3-root .pp3-proprow{display:grid;grid-template-columns:20px 68px 1fr 96px;align-items:center;gap:9px;padding:9px 8px;border-top:1px solid var(--ink-800);border-left:2px solid var(--azure);background:rgb(106 171 223/.05);font-size:12.5px;position:relative;}
+#pp3-root .pp3-proprow:first-of-type{border-top:none;}
+#pp3-root .pp3-propnum{color:var(--azure);font-family:"IBM Plex Mono",monospace;font-size:11px;text-align:center;}
+#pp3-root .pp3-propprio{font-family:"IBM Plex Mono",monospace;font-size:10.5px;padding:2px 6px;border-radius:6px;text-align:center;width:fit-content;background:var(--ink-800);color:var(--moon-400);border:1px dashed var(--ink-700);}
+#pp3-root .pp3-proptitle-wrap{min-width:0;}
+#pp3-root .pp3-proptitle{color:var(--moon-100);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;}
+#pp3-root .pp3-propelbow{color:var(--azure);font-family:"IBM Plex Mono",monospace;font-size:11px;margin-right:4px;}
+#pp3-root .pp3-propverbs{display:flex;gap:6px;justify-content:flex-end;}
+#pp3-root .pp3-keepbtn{font-size:10.5px;padding:3px 8px;border-radius:6px;border:1px solid rgb(69 192 132/.35);background:rgb(69 192 132/.1);color:var(--lamp-soft);cursor:pointer;}
+#pp3-root .pp3-dropbtn{font-size:10.5px;padding:3px 8px;border-radius:6px;border:1px solid var(--ink-700);background:var(--ink-800);color:var(--moon-600);cursor:pointer;}
+#pp3-root .pp3-proprow.pp3-editing .pp3-proptitle{color:var(--moon-100);}
+#pp3-root .pp3-editcaret{display:inline-block;width:1.5px;height:12px;background:var(--azure);margin-left:1px;vertical-align:-2px;animation:pp3-blink 1.05s steps(1) infinite;}
+#pp3-root .pp3-proprow.pp3-dropped{opacity:.42;border-left-color:var(--ink-700);background:transparent;}
+#pp3-root .pp3-proprow.pp3-dropped .pp3-proptitle{text-decoration:line-through;}
+#pp3-root .pp3-proprow.pp3-dropped .pp3-keepbtn{opacity:.35;}
+#pp3-root .pp3-proprow.pp3-dropped .pp3-dropbtn{color:var(--warn);border-color:rgb(217 161 61/.4);opacity:1;}
+
+#pp3-root .pp3-propverbrow{display:flex;align-items:center;gap:8px;padding:14px 8px 4px;}
+#pp3-root .pp3-propcreate{font-size:12px;padding:7px 14px;border-radius:8px;border:1px solid var(--azure);background:rgb(106 171 223/.12);color:var(--azure);font-weight:600;cursor:pointer;}
+#pp3-root .pp3-propghost{font-size:12px;padding:7px 12px;border-radius:8px;border:1px solid var(--ink-700);background:var(--ink-800);color:var(--moon-400);cursor:pointer;}
+
+#pp3-root .pp3-attribution{margin:12px 4px 0;padding:10px 12px;border-radius:8px;background:var(--ink-900);border:1px solid var(--ink-700);font-size:11.5px;color:var(--moon-600);}
+#pp3-root .pp3-attribution b{color:var(--moon-400);font-weight:600;}
+#pp3-root .pp3-soon{font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--review);background:rgb(156 147 240/.12);border:1px solid rgb(156 147 240/.35);border-radius:99px;padding:1px 7px;margin-left:6px;}
+
+/* ---- schedule assurance (region 3) ---- */
+#pp3-root .pp3-cronrow{display:flex;align-items:center;gap:9px;padding:9px 4px;border-top:1px solid var(--ink-800);font-size:12.5px;color:var(--moon-400);}
+#pp3-root .pp3-cronrow:first-of-type{border-top:none;}
+#pp3-root .pp3-cronrow .pp3-clock{color:var(--moon-600);font-size:11px;}
+#pp3-root .pp3-cronrow b{color:var(--moon-100);font-weight:600;}
+#pp3-root .pp3-cronrow .pp3-ok{color:var(--success);margin-left:auto;font-size:11.5px;}
+#pp3-root .pp3-cronrow .pp3-next{color:var(--moon-600);margin-left:auto;font-size:11.5px;}
+#pp3-root .pp3-croneditbtn{font-size:10.5px;padding:3px 8px;border-radius:6px;border:1px solid var(--ink-700);background:var(--ink-800);color:var(--moon-400);cursor:pointer;margin-left:12px;}
+#pp3-root .pp3-toggle{width:30px;height:17px;border-radius:99px;background:var(--lamp);position:relative;flex-shrink:0;}
+#pp3-root .pp3-toggle::after{content:"";position:absolute;top:2px;right:2px;width:13px;height:13px;border-radius:50%;background:#08211a;}
+#pp3-root .pp3-windowline{padding:11px 4px;border-top:1px solid var(--ink-800);font-size:12.5px;color:var(--moon-400);}
+#pp3-root .pp3-windowline b{color:var(--moon-100);font-weight:600;}
+
+/* legend */
+#pp3-root .pp3-legend{margin:36px 4px 0;border:1px solid var(--ink-700);border-radius:12px;background:var(--ink-900);padding:16px 20px;}
+#pp3-root .pp3-legend h4{margin:0 0 10px;font-size:12px;color:var(--moon-100);font-family:"Space Grotesk",Inter,sans-serif;}
+#pp3-root .pp3-legrow{display:grid;grid-template-columns:22px 150px 1fr;gap:10px;padding:7px 0;border-top:1px solid var(--ink-800);font-size:11.5px;color:var(--moon-400);align-items:baseline;}
+#pp3-root .pp3-legrow:first-of-type{border-top:none;}
+#pp3-root .pp3-legrow b{color:var(--moon-100);}
+#pp3-root .pp3-legtag{font-size:10px;padding:1px 6px;border-radius:5px;width:fit-content;}
+#pp3-root .pp3-legtag.pp3-real{color:var(--success);background:rgb(86 184 154/.12);}
+#pp3-root .pp3-legtag.pp3-new{color:var(--warn);background:rgb(217 161 61/.12);}
+#pp3-root .pp3-legkeys{margin-top:8px;padding-top:10px;border-top:1px solid var(--ink-800);font-size:11px;color:var(--moon-600);font-family:"IBM Plex Mono",monospace;}
+#pp3-root .pp3-legkeys b{color:var(--moon-400);font-family:Inter,sans-serif;font-weight:600;}
+</style>
+
+<div class="pp3-stage-wrap"><div class="pp3-stage">
+
+  <nav class="pp3-rail">
+    <div class="pp3-logo">nightdesk</div>
+    <div class="pp3-nav-item">Desk</div>
+    <div class="pp3-nav-item">Tickets</div>
+    <div class="pp3-nav-item pp3-active">Projects</div>
+    <div class="pp3-proj-sub pp3-active"><span class="pp3-dot"></span>nightdesk<span class="pp3-b">5</span></div>
+    <div class="pp3-proj-sub"><span class="pp3-dot"></span>CREAM<span class="pp3-b">1</span></div>
+    <div class="pp3-proj-sub"><span class="pp3-dot"></span>blubblub<span class="pp3-b">1</span></div>
+    <div class="pp3-proj-sub pp3-quiet"><span class="pp3-dot"></span>Vibeslop</div>
+    <div class="pp3-proj-sub pp3-quiet"><span class="pp3-dot"></span>reaper</div>
+    <div class="pp3-nav-item">Agents</div>
+    <div class="pp3-nav-item">Inbox</div>
+    <div class="pp3-nav-item">Scheduled</div>
+    <div class="pp3-nav-item">Analytics</div>
+    <div class="pp3-nav-item">Archive</div>
+    <div class="pp3-nav-item">Settings</div>
+    <div class="pp3-rail-bottom">
+      <div class="pp3-nav-item">Sign out</div>
+      <div class="pp3-nav-item">Collapse «</div>
+    </div>
+  </nav>
+
+  <div class="pp3-main">
+    <div class="pp3-topstrip">
+      <div class="pp3-search">Search tickets, runs, projects… (/)</div>
+      <div class="pp3-worker-pill"><span class="pp3-livedot"></span>Running · 2/5 · $60.31 today</div>
+    </div>
+
+    <div class="pp3-projstrip">
+      <div class="pp3-ptab pp3-live pp3-projactive"><span class="pp3-dot"></span>nightdesk<span class="pp3-b">5</span></div>
+      <div class="pp3-ptab pp3-live"><span class="pp3-dot"></span>CREAM<span class="pp3-b">1</span></div>
+      <div class="pp3-ptab pp3-live"><span class="pp3-dot"></span>blubblub<span class="pp3-b">1</span></div>
+      <div class="pp3-ptab"><span class="pp3-dot"></span>Vibeslop</div>
+      <div class="pp3-ptab"><span class="pp3-dot"></span>reaper</div>
+      <div class="pp3-hop">[ prev · next ]</div>
+    </div>
+
+    <div class="pp3-header">
+      <span class="pp3-hdot"></span>
+      <span class="pp3-hname">nightdesk</span>
+      <span class="pp3-hpath">/home/thor/fun/nightdesk</span>
+      <span class="pp3-hstats">profile overnight-default · 2 toolsets · 30d $37.73 · 42 runs · 5% failed</span>
+      <div class="pp3-hactions">
+        <button class="pp3-btn">Edit</button>
+        <button class="pp3-btn pp3-primary">New ticket</button>
+      </div>
+    </div>
+
+    <div class="pp3-horizon">
+      <div class="pp3-htab">Overview</div>
+      <div class="pp3-htab pp3-hactive">Plan</div>
+      <div class="pp3-htab">History</div>
+      <div class="pp3-htab">Settings</div>
+      <a class="pp3-hlink">Trends ↗ Analytics</a>
+    </div>
+
+    <div class="pp3-body">
+
+      <!-- ============ REGION 1: BACKLOG WITH COVERAGE ============ -->
+      <div class="pp3-section">
+        <div class="pp3-zonehead">
+          <span class="pp3-callout">1</span>
+          <span class="pp3-zonetitle">Backlog — coverage</span>
+          <span class="pp3-zonemeta">queued + draft + ready inbox, grouped by dependency graph</span>
+        </div>
+
+        <div class="pp3-rollup"><b>11 outstanding</b> — 2 workstreams · 7 single · <span class="pp3-warnct">2 no path</span> · <span class="pp3-blockct">1 blocked</span> · 1 on hold</div>
+
+        <!-- composer: active typing -->
+        <div class="pp3-composer">
+          <span class="pp3-composer-icon">✎</span>
+          <span class="pp3-composer-text">Split transcript virtualization spike<span class="pp3-caret"></span></span>
+        </div>
+        <div class="pp3-composer-hint"><b>Enter</b> create · <b>Tab</b> priority · <b>@</b> profile · keep typing to add more</div>
+
+        <div class="pp3-roadmap">
+
+          <!-- ============ WORKSTREAM: GitLab write-back (branch + merge diamond) ============ -->
+          <div class="pp3-stream">
+            <div class="pp3-streamhead">
+              <span class="pp3-streamlabel">Workstream</span>
+              <span class="pp3-streamname">— GitLab write-back</span>
+              <span class="pp3-streamcount">4 tickets</span>
+            </div>
+            <div class="pp3-streamgraph" style="height:182px;">
+              <svg class="pp3-streamedge-svg" width="820" height="182" viewBox="0 0 820 182" aria-hidden="true">
+                <path d="M220,95 C260,95 260,40 300,40" fill="none" stroke="#8b99ae" stroke-width="1.5"/>
+                <path d="M220,95 C260,95 260,150 300,150" fill="none" stroke="#8b99ae" stroke-width="1.5"/>
+                <path d="M520,40 C560,40 560,95 600,95" fill="none" stroke="#8b99ae" stroke-width="1.5"/>
+                <path d="M520,150 C560,150 560,95 600,95" fill="none" stroke="#8b99ae" stroke-width="1.5"/>
+                <circle cx="220" cy="95" r="3.5" fill="#8b99ae"/>
+                <circle cx="300" cy="40" r="3.5" fill="#171719" stroke="#8b99ae" stroke-width="1.5"/>
+                <circle cx="300" cy="150" r="3.5" fill="#171719" stroke="#8b99ae" stroke-width="1.5"/>
+                <circle cx="520" cy="40" r="3.5" fill="#8b99ae"/>
+                <circle cx="520" cy="150" r="3.5" fill="#8b99ae"/>
+                <circle cx="600" cy="95" r="4" fill="#171719" stroke="#8b99ae" stroke-width="1.5"/>
+              </svg>
+              <div class="pp3-nodechip" style="left:0;top:63px;">
+                <span class="pp3-prio pp3-p4">P4</span>
+                <span class="pp3-nodechip-title">Add repo-link write scope to profile</span>
+                <span class="pp3-path pp3-queued">queued</span>
+              </div>
+              <div class="pp3-nodechip" style="left:300px;top:8px;">
+                <span class="pp3-prio pp3-p3">P3</span>
+                <span class="pp3-nodechip-title">Post MR comment from review note</span>
+                <span class="pp3-path pp3-after">after ↑</span>
+              </div>
+              <div class="pp3-nodechip" style="left:300px;top:118px;">
+                <span class="pp3-prio pp3-p3">P3</span>
+                <span class="pp3-nodechip-title">Transition linked issue on archive</span>
+                <span class="pp3-path pp3-after">after ↑</span>
+              </div>
+              <div class="pp3-nodechip" style="left:600px;top:63px;">
+                <span class="pp3-prio pp3-p3">P3</span>
+                <span class="pp3-nodechip-title">Set MR status on merge</span>
+                <span class="pp3-path pp3-after">after ↑↑</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ============ WORKSTREAM: Toolchain capacity (simple chain) ============ -->
+          <div class="pp3-stream">
+            <div class="pp3-streamhead">
+              <span class="pp3-streamlabel">Workstream</span>
+              <span class="pp3-streamname">— Toolchain capacity</span>
+              <span class="pp3-streamcount">2 tickets</span>
+            </div>
+            <div class="pp3-streamgraph" style="height:80px;">
+              <svg class="pp3-streamedge-svg" width="520" height="80" viewBox="0 0 520 80" aria-hidden="true">
+                <path d="M220,40 C255,40 265,40 300,40" fill="none" stroke="#8b99ae" stroke-width="1.5"/>
+                <circle cx="220" cy="40" r="3.5" fill="#8b99ae"/>
+                <circle cx="300" cy="40" r="4" fill="#171719" stroke="#8b99ae" stroke-width="1.5"/>
+              </svg>
+              <div class="pp3-nodechip" style="left:0;top:8px;">
+                <span class="pp3-prio pp3-draft">Draft</span>
+                <span class="pp3-nodechip-title">Per-backend capacity limits</span>
+                <span class="pp3-path pp3-queued">queued</span>
+              </div>
+              <div class="pp3-nodechip" style="left:300px;top:8px;">
+                <span class="pp3-prio pp3-draft">Draft</span>
+                <span class="pp3-nodechip-title">Toolchains: rust preset</span>
+                <span class="pp3-path pp3-after">after ↑</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ============ SINGLE TICKETS: unlinked, pooled ============ -->
+          <div class="pp3-stream">
+            <div class="pp3-singleshead">
+              <span class="pp3-streamlabel">Single tickets</span>
+              <span class="pp3-streamname" style="color:var(--moon-600);font-weight:500;">not part of a dependency graph</span>
+              <span class="pp3-streamcount">7</span>
+            </div>
+
+            <div class="pp3-singles-list">
+              <svg class="pp3-dragwire-svg" width="28" height="88" viewBox="0 0 28 88" aria-hidden="true">
+                <path d="M14,66 C20,55 20,48 14,44" fill="none" stroke="#6aabdf" stroke-width="1.5" stroke-dasharray="4 3"/>
+                <circle cx="14" cy="66" r="3" fill="#6aabdf"/>
+                <circle cx="14" cy="44" r="3.5" fill="none" stroke="#6aabdf" stroke-width="1.5" stroke-dasharray="2 2"/>
+              </svg>
+              <div class="pp3-dragwire-label" style="top:33px;left:360px;"><span class="pp3-dragicon">⤷</span>release to wire: blocked by → rust preset</div>
+
+              <div class="pp3-node pp3-selected">
+                <span class="pp3-nodegut"></span>
+                <span class="pp3-prio pp3-p2">P2</span>
+                <span class="pp3-kind pp3-bug">B</span>
+                <span class="pp3-titlewrap"><span class="pp3-bltitle">Worker double-dispatches a ticket…</span></span>
+                <span class="pp3-path pp3-queued">queued</span>
+                <div class="pp3-blverbs"><button class="pp3-vbtn pp3-run">Requeue</button></div>
+              </div>
+
+              <div class="pp3-node">
+                <span class="pp3-nodegut"><span class="pp3-nodedot pp3-dot-source"></span></span>
+                <span class="pp3-prio pp3-draft">Draft</span>
+                <span class="pp3-kind pp3-chore">C</span>
+                <span class="pp3-titlewrap"><span class="pp3-bltitle">archive-obsolete-drafts</span></span>
+                <span class="pp3-path pp3-nopath">no path ⚠</span>
+                <div class="pp3-blverbs"><button class="pp3-vbtn">Queue</button></div>
+              </div>
+
+              <div class="pp3-node">
+                <span class="pp3-nodegut"></span>
+                <span class="pp3-prio pp3-inbox">Inbox</span>
+                <span class="pp3-kind pp3-feature">F</span>
+                <span class="pp3-titlewrap"><span class="pp3-bltitle">metrics observability</span></span>
+                <span class="pp3-path pp3-nopath">no path ⚠</span>
+                <div class="pp3-blverbs"><button class="pp3-vbtn pp3-promote">Promote</button></div>
+              </div>
+
+              <div class="pp3-node">
+                <span class="pp3-nodegut"></span>
+                <span class="pp3-prio pp3-inbox">Inbox</span>
+                <span class="pp3-kind pp3-feature">F</span>
+                <span class="pp3-titlewrap"><span class="pp3-bltitle">retention GC</span></span>
+                <span class="pp3-path pp3-cron">cron · nightly triage</span>
+                <div class="pp3-blverbs"><button class="pp3-vbtn pp3-promote">Promote</button></div>
+              </div>
+
+              <div class="pp3-node">
+                <span class="pp3-nodegut"></span>
+                <span class="pp3-prio pp3-inbox">Inbox</span>
+                <span class="pp3-kind pp3-feature">F</span>
+                <span class="pp3-titlewrap"><span class="pp3-bltitle">wall-clock timeout</span></span>
+                <span class="pp3-path pp3-onhold">on hold</span>
+                <div class="pp3-blverbs"><button class="pp3-vbtn">Take off hold</button></div>
+              </div>
+
+              <div class="pp3-node">
+                <span class="pp3-nodegut"></span>
+                <span class="pp3-prio pp3-inbox">Inbox</span>
+                <span class="pp3-kind pp3-bug">B</span>
+                <span class="pp3-titlewrap"><span class="pp3-bltitle">mobile shouldn't be able to drag tickets</span></span>
+                <span class="pp3-path pp3-blocked">blocked: no profile <span class="pp3-pathfix">[fix ▾]</span></span>
+                <div class="pp3-blverbs"><button class="pp3-vbtn">Triage</button></div>
+              </div>
+
+              <div class="pp3-node pp3-just-created">
+                <span class="pp3-nodegut"></span>
+                <span class="pp3-prio pp3-draft">Draft</span>
+                <span class="pp3-kind pp3-feature">F</span>
+                <span class="pp3-titlewrap">
+                  <span class="pp3-bltitle">Transcript: collapse tool-result blocks by default</span>
+                  <div class="pp3-blsub"><span class="pp3-newchip">draft · just now</span></div>
+                </span>
+                <span class="pp3-path pp3-queued">queued</span>
+                <div class="pp3-blverbs"><button class="pp3-vbtn">Queue</button></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="pp3-kbdlegend"><b>Keys:</b> j/k move · x select · q queue · s schedule-after (opens picker) · b drag-to-wire · p hold</div>
+      </div>
+
+      <!-- ============ REGION 2: BREAK DOWN A FEATURE ============ -->
+      <div class="pp3-section">
+        <div class="pp3-zonehead">
+          <span class="pp3-callout">2</span>
+          <span class="pp3-zonetitle">Break down a feature</span>
+          <span class="pp3-zonemeta">mid-session breakdown workbench</span>
+        </div>
+
+        <div class="pp3-intent">
+          <span class="pp3-intent-icon">✎</span>
+          <div>
+            <div class="pp3-intent-label">Intent</div>
+            <div class="pp3-intent-text">Transcript virtualization: virtualize long transcripts, collapse tool-result blocks, lazy-load earlier events.</div>
+          </div>
+        </div>
+
+        <div class="pp3-grouphead">Proposed decomposition <span class="pp3-soon">agent-proposed</span></div>
+
+        <div class="pp3-proprow">
+          <span class="pp3-propnum">1</span>
+          <span class="pp3-propprio">P3</span>
+          <span class="pp3-proptitle-wrap"><span class="pp3-proptitle">Virtualize transcript rendering for long runs</span></span>
+          <div class="pp3-propverbs"><button class="pp3-keepbtn">keep ✓</button><button class="pp3-dropbtn">drop ×</button></div>
+        </div>
+        <div class="pp3-proprow pp3-editing">
+          <span class="pp3-propnum">2</span>
+          <span class="pp3-propprio">P3</span>
+          <span class="pp3-proptitle-wrap"><span class="pp3-proptitle">Lazy-load earlier transcript events on scroll<span class="pp3-editcaret"></span></span></span>
+          <div class="pp3-propverbs"><button class="pp3-keepbtn">keep ✓</button><button class="pp3-dropbtn">drop ×</button></div>
+        </div>
+        <div class="pp3-proprow">
+          <span class="pp3-propnum">3</span>
+          <span class="pp3-propprio">P4</span>
+          <span class="pp3-proptitle-wrap"><span class="pp3-proptitle">Add transcript density toggle (compact/comfortable)</span></span>
+          <div class="pp3-propverbs"><button class="pp3-keepbtn">keep ✓</button><button class="pp3-dropbtn">drop ×</button></div>
+        </div>
+        <div class="pp3-proprow pp3-dropped">
+          <span class="pp3-propnum">4</span>
+          <span class="pp3-propprio">P4</span>
+          <span class="pp3-proptitle-wrap"><span class="pp3-proptitle">Prefetch next page of transcript events</span></span>
+          <div class="pp3-propverbs"><button class="pp3-keepbtn">keep ✓</button><button class="pp3-dropbtn">dropped</button></div>
+        </div>
+
+        <div class="pp3-propverbrow">
+          <button class="pp3-propcreate">Create 3 tickets</button>
+          <button class="pp3-propghost">+ add row</button>
+          <button class="pp3-propghost">Discard proposal</button>
+        </div>
+
+        <div class="pp3-attribution"><b>Proposed by agent</b> — agentic generation ships in the agentic-workflows pass; manual breakdown (add rows by hand, wire deps) works identically today.</div>
+      </div>
+
+      <!-- ============ REGION 3: SCHEDULE ASSURANCE ============ -->
+      <div class="pp3-section">
+        <div class="pp3-zonehead">
+          <span class="pp3-callout">3</span>
+          <span class="pp3-zonetitle">Schedule assurance</span>
+          <span class="pp3-zonemeta">what covers this project, quietly</span>
+        </div>
+
+        <div class="pp3-cronrow">
+          <span class="pp3-clock">◷</span>
+          <span><b>02:00</b> daily — nightly inbox triage</span>
+          <span class="pp3-ok">✓ last fired 20h ago</span>
+          <button class="pp3-croneditbtn">Edit</button>
+          <span class="pp3-toggle"></span>
+        </div>
+        <div class="pp3-cronrow">
+          <span class="pp3-clock">◷</span>
+          <span>Mon <b>03:00</b> — weekly dep-upgrade sweep</span>
+          <span class="pp3-next">next in 2d</span>
+          <button class="pp3-croneditbtn">Edit</button>
+          <span class="pp3-toggle"></span>
+        </div>
+        <div class="pp3-windowline"><b>window 22:00–07:00</b> · 5 slots · queue depth tonight: <b>3</b></div>
+      </div>
+
+      <!-- legend -->
+      <div class="pp3-legend">
+        <h4>Region legend — job · interaction · backend</h4>
+        <div class="pp3-legrow">
+          <span class="pp3-callout">1</span>
+          <span><b>Workstreams</b></span>
+          <span>Each connected component of the dependency graph gets its own full-width lane, auto-named from its root ticket — "Workstream — GitLab write-back · 4 tickets". Nodes lay out left→right by topological depth; SVG edges show real branches and merges (the GitLab write-back diamond: one root branches into two parallel tickets, both merge into "Set MR status on merge"). Arbitrary depth and width are supported — this isn't limited to 3 buckets or single chains. <span class="pp3-legtag pp3-new">new</span> — connected-component grouping + depth-column layout is a client-side read over the existing TicketDependency DAG; no schema change. Merges are simply two-or-more TicketDependency edges pointing at one ticket, already representable today.</span>
+        </div>
+        <div class="pp3-legrow">
+          <span class="pp3-callout">—</span>
+          <span><b>Single tickets</b></span>
+          <span>Anything with no dependency edges pools below the workstreams as plain ledger rows — same row anatomy as before (priority chip, kind glyph, title, path badge, verb), no graph chrome needed since there's nothing to draw. <span class="pp3-legtag pp3-real">backend-real</span> — same ticket fields as everywhere else on this page.</span>
+        </div>
+        <div class="pp3-legrow">
+          <span class="pp3-callout">—</span>
+          <span><b>Rollup line</b></span>
+          <span>Header sentence counts workstreams and singles separately, then the same attention badges as before. No time claim anywhere — "queued" means the scheduler will place it, not when. <span class="pp3-legtag pp3-new">new</span> — same connected-component read, aggregated.</span>
+        </div>
+        <div class="pp3-legrow">
+          <span class="pp3-callout">—</span>
+          <span><b>Drag-to-wire</b></span>
+          <span>Dragging from a singleton's gutter dot opens a live dashed edge that follows the cursor; releasing over a workstream node wires a "blocked by" dependency and folds the singleton into that stream — same write as the <b>b</b> picker, a faster gesture for adjacent rows. Shown mid-drag from "archive-obsolete-drafts" toward "rust preset" (Toolchain capacity), unattached. <span class="pp3-legtag pp3-new">new UI</span> — writes the same real TicketDependency edge; only the drag gesture is new.</span>
+        </div>
+        <div class="pp3-legrow">
+          <span class="pp3-callout">—</span>
+          <span><b>blocked / no-path fix affordance</b></span>
+          <span>Inline "[fix ▾]" resolves the blocker (assign profile) without leaving the row; "no path" rows get a queue/schedule verb directly, not a link elsewhere. <span class="pp3-legtag pp3-real">backend-real</span> — profile assignment and queue are existing ticket operations.</span>
+        </div>
+        <div class="pp3-legrow">
+          <span class="pp3-callout">2</span>
+          <span><b>Breakdown workbench</b></span>
+          <span>A prose intent turns into 5 proposed ticket rows with pre-wired dependency elbows; per-row keep/drop before commit, one row shown mid-edit. Verb row batch-creates only the kept rows and wires TicketDependency edges in one call. <span class="pp3-legtag pp3-real">backend-real</span> — batch ticket create + TicketDependency wiring both exist today; this page composes existing single-ticket endpoints.</span>
+        </div>
+        <div class="pp3-legrow">
+          <span class="pp3-callout">—</span>
+          <span><b>Attribution line</b></span>
+          <span>Explicit and honest: the agent-authored proposal shown here is a design preview — agentic generation of decompositions ships in a later pass. Manual breakdown (typing 5 rows by hand, wiring deps with the same picker as the backlog) is fully real today and produces the identical UI. <span class="pp3-legtag pp3-new">new</span> — the LLM call that drafts a decomposition from prose intent does not exist yet.</span>
+        </div>
+        <div class="pp3-legrow">
+          <span class="pp3-callout">3</span>
+          <span><b>Schedule assurance</b></span>
+          <span>Two real crons plus one honest sentence about tonight's window — no projection, no bar chart, no minute-precision claim. <span class="pp3-legtag pp3-real">backend-real</span> — cron cadence/last-fire/next-fire and the schedule window/slot-count are live scheduler fields.</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div></div>
+</section>
+</div>
+<div id="rv-stage-ph" class="rv-stage" role="tabpanel">
+<p class="rv-stage-thesis"><b>History — unchanged (approved round 2).</b> One dense ledger, numbers-only rollups, scrubbable time rail.</p>
+<section id="ph-root">
+  <style>
+    #ph-root {
+      --ph-ink-950:#0a0a0b; --ph-ink-900:#171719; --ph-ink-800:#232327; --ph-ink-700:#42424b;
+      --ph-moon-100:#f4f5f7; --ph-moon-400:#b7bbc4; --ph-moon-600:#7e828c;
+      --ph-lamp:#45c084; --ph-lamp-soft:#6fd3a1; --ph-dawn:#7fe0ad;
+      --ph-review:#9c93f0; --ph-queued:#8b99ae; --ph-success:#56b89a; --ph-failed:#e06b64; --ph-warn:#d9a13d; --ph-azure:#6aabdf;
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      background: var(--ph-ink-950);
+      color: var(--ph-moon-100);
+      display: block;
+    }
+    #ph-root .ph-stage-wrap { overflow-x: auto; }
+    #ph-root .ph-stage { width: 1440px; min-height: 900px; display: flex; }
+    #ph-root .ph-mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+    #ph-root .ph-display { font-family: "Space Grotesk", "Inter", sans-serif; }
+
+    /* ---- nav rail ---- */
+    #ph-root .ph-rail { width: 240px; flex: 0 0 240px; background: var(--ph-ink-900); border-right: 1px solid var(--ph-ink-700); display: flex; flex-direction: column; padding: 16px 12px; box-sizing: border-box; }
+    #ph-root .ph-rail-logo { font-size: 15px; font-weight: 700; color: var(--ph-moon-100); padding: 4px 8px 16px; letter-spacing: -.01em; }
+    #ph-root .ph-rail-group { margin-top: 4px; }
+    #ph-root .ph-rail-item { display: flex; align-items: center; justify-content: space-between; padding: 7px 8px; border-radius: 8px; font-size: 13px; color: var(--ph-moon-400); cursor: default; }
+    #ph-root .ph-rail-item.ph-active { background: var(--ph-ink-800); color: var(--ph-moon-100); }
+    #ph-root .ph-rail-sub { padding-left: 20px; }
+    #ph-root .ph-rail-badge { font-size: 10px; background: var(--ph-ink-700); color: var(--ph-moon-100); border-radius: 999px; padding: 1px 6px; }
+    #ph-root .ph-rail-badge.ph-active-badge { background: var(--ph-lamp); color: #06231a; font-weight: 700; }
+    #ph-root .ph-rail-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--ph-lamp); display: inline-block; margin-right: 8px; }
+    #ph-root .ph-rail-dot.ph-quiet { background: var(--ph-ink-700); }
+    #ph-root .ph-rail-spacer { flex: 1; }
+    #ph-root .ph-rail-foot { border-top: 1px solid var(--ph-ink-700); padding-top: 10px; font-size: 12px; color: var(--ph-moon-600); display: flex; flex-direction: column; gap: 6px; }
+
+    /* ---- main column ---- */
+    #ph-root .ph-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+    #ph-root .ph-topstrip { height: 52px; border-bottom: 1px solid var(--ph-ink-700); display: flex; align-items: center; gap: 16px; padding: 0 20px; background: var(--ph-ink-950); }
+    #ph-root .ph-search { flex: 1; max-width: 420px; background: var(--ph-ink-900); border: 1px solid var(--ph-ink-700); border-radius: 8px; padding: 7px 12px; font-size: 12.5px; color: var(--ph-moon-600); }
+    #ph-root .ph-worker-pill { margin-left: auto; font-size: 12px; background: var(--ph-ink-900); border: 1px solid var(--ph-ink-700); border-radius: 999px; padding: 5px 12px; color: var(--ph-moon-400); display: flex; align-items: center; gap: 6px; }
+    #ph-root .ph-worker-pill .ph-live-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--ph-lamp); box-shadow: 0 0 0 3px rgba(69,192,132,.18); }
+
+    #ph-root .ph-projstrip { display: flex; align-items: center; gap: 6px; padding: 8px 20px; border-bottom: 1px solid var(--ph-ink-700); }
+    #ph-root .ph-projtab { font-size: 12px; color: var(--ph-moon-600); padding: 5px 10px; border-radius: 999px; display: flex; align-items: center; gap: 6px; }
+    #ph-root .ph-projtab .ph-pdot { width: 6px; height: 6px; border-radius: 999px; background: var(--ph-ink-700); }
+    #ph-root .ph-projtab.ph-active { background: var(--ph-ink-800); color: var(--ph-moon-100); }
+    #ph-root .ph-projtab.ph-active .ph-pdot { background: var(--ph-lamp); }
+    #ph-root .ph-projtab .ph-pbadge { font-size: 10px; background: var(--ph-ink-700); border-radius: 999px; padding: 0 5px; }
+    #ph-root .ph-hophint { margin-left: auto; font-size: 11px; color: var(--ph-moon-600); }
+    #ph-root .ph-hophint kbd { background: var(--ph-ink-800); border: 1px solid var(--ph-ink-700); border-radius: 4px; padding: 1px 5px; font-family: inherit; }
+
+    #ph-root .ph-header { padding: 18px 20px 0; }
+    #ph-root .ph-header-top { display: flex; align-items: center; gap: 20px; }
+    #ph-root .ph-header-title { display: flex; align-items: center; gap: 8px; font-size: 19px; font-weight: 600; }
+    #ph-root .ph-header-title .ph-jdot { width: 9px; height: 9px; border-radius: 999px; background: var(--ph-lamp); box-shadow: 0 0 8px rgba(69,192,132,.5); }
+    #ph-root .ph-header-path { font-size: 12px; color: var(--ph-moon-600); }
+    #ph-root .ph-header-actions { margin-left: auto; display: flex; gap: 8px; }
+    #ph-root .ph-btn { font-size: 12.5px; padding: 7px 13px; border-radius: 8px; border: 1px solid var(--ph-ink-700); background: var(--ph-ink-900); color: var(--ph-moon-100); }
+    #ph-root .ph-btn.ph-primary { background: var(--ph-lamp); color: #06231a; border-color: var(--ph-lamp); font-weight: 600; }
+    #ph-root .ph-statline { margin-top: 6px; font-size: 12px; color: var(--ph-moon-600); }
+    #ph-root .ph-statline b { color: var(--ph-moon-400); font-weight: 500; }
+
+    #ph-root .ph-tabs { display: flex; gap: 22px; margin-top: 16px; border-bottom: 1px solid var(--ph-ink-700); padding: 0 20px; }
+    #ph-root .ph-tab { padding: 10px 2px 12px; font-size: 13.5px; color: var(--ph-moon-600); border-bottom: 2px solid transparent; }
+    #ph-root .ph-tab.ph-tab-active { color: var(--ph-moon-100); border-bottom-color: var(--ph-lamp); font-weight: 600; }
+
+    /* ---- page body ---- */
+    #ph-root .ph-body { flex: 1; display: flex; padding: 18px 20px 28px; gap: 0; position: relative; }
+    #ph-root .ph-ledger-col { flex: 1; min-width: 0; }
+
+    #ph-root .ph-toolrow { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; position: relative; }
+    #ph-root .ph-chip { font-size: 12px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--ph-ink-700); background: var(--ph-ink-900); color: var(--ph-moon-400); cursor: pointer; }
+    #ph-root .ph-chip.ph-chip-active { background: var(--ph-ink-800); color: var(--ph-moon-100); border-color: var(--ph-moon-600); }
+    #ph-root .ph-hsearch { margin-left: auto; width: 240px; background: var(--ph-ink-900); border: 1px solid var(--ph-ink-700); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--ph-moon-600); }
+    #ph-root .ph-callout { position: absolute; width: 20px; height: 20px; border-radius: 999px; background: var(--ph-warn); color: #241a04; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px var(--ph-ink-950); z-index: 5; }
+
+    #ph-root .ph-daygroup { margin-bottom: 4px; }
+    #ph-root .ph-dayhead { position: sticky; top: 0; z-index: 3; background: var(--ph-ink-950); padding: 14px 0 8px; display: flex; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--ph-ink-800); margin-bottom: 4px; }
+    #ph-root .ph-dayhead-date { font-size: 14px; font-weight: 700; font-family: "Space Grotesk", sans-serif; }
+    #ph-root .ph-dayhead-sub { font-size: 11.5px; color: var(--ph-moon-600); }
+    #ph-root .ph-dayhead-today { font-size: 10px; background: var(--ph-lamp); color: #06231a; border-radius: 4px; padding: 1px 6px; font-weight: 700; }
+
+    #ph-root .ph-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; font-size: 12.5px; }
+    #ph-root .ph-row:hover { background: var(--ph-ink-900); }
+    #ph-root .ph-row-time { width: 44px; flex: 0 0 44px; color: var(--ph-moon-600); font-size: 11px; }
+    #ph-root .ph-pill { flex: 0 0 auto; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; border-radius: 5px; padding: 2px 6px; width: 62px; text-align: center; box-sizing: border-box; }
+    #ph-root .ph-pill-success { background: rgba(86,184,154,.15); color: var(--ph-success); }
+    #ph-root .ph-pill-failed { background: rgba(224,107,100,.15); color: var(--ph-failed); }
+    #ph-root .ph-pill-running { background: rgba(69,192,132,.18); color: var(--ph-dawn); background-image: linear-gradient(90deg, rgba(69,192,132,.25), rgba(127,224,173,.25)); }
+    #ph-root .ph-pill-review { background: rgba(156,147,240,.15); color: var(--ph-review); }
+    #ph-root .ph-pill-archived { background: rgba(139,153,174,.15); color: var(--ph-queued); }
+    #ph-root .ph-pill-repo { background: rgba(106,171,223,.15); color: var(--ph-azure); }
+    #ph-root .ph-pill-cron { background: var(--ph-ink-800); color: var(--ph-moon-600); }
+    #ph-root .ph-row-title { flex: 1; min-width: 0; color: var(--ph-moon-100); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #ph-root .ph-row-meta { flex: 0 0 auto; color: var(--ph-moon-600); font-size: 11px; display: flex; gap: 10px; }
+    #ph-root .ph-row.ph-dim { opacity: .55; }
+    #ph-root .ph-row.ph-dim:hover { opacity: 1; }
+
+    #ph-root .ph-rollup { display: flex; align-items: center; gap: 14px; margin: 10px 0 16px; padding: 9px 12px; background: var(--ph-ink-900); border: 1px dashed var(--ph-ink-700); border-radius: 8px; font-size: 11.5px; color: var(--ph-moon-600); }
+    #ph-root .ph-rollup b { color: var(--ph-moon-400); font-weight: 600; }
+    #ph-root .ph-rollup-label { font-family: "Space Grotesk", sans-serif; color: var(--ph-moon-400); font-weight: 600; margin-right: 4px; }
+
+    #ph-root .ph-badcluster { border-left: 2px solid var(--ph-failed); padding-left: 8px; margin-left: -8px; background: rgba(224,107,100,.05); border-radius: 0 6px 6px 0; }
+
+    #ph-root .ph-loadmore { display: block; width: 100%; margin-top: 18px; padding: 10px; border-radius: 8px; border: 1px solid var(--ph-ink-700); background: var(--ph-ink-900); color: var(--ph-moon-400); font-size: 12.5px; text-align: center; }
+
+    /* ---- mini time rail ---- */
+    #ph-root .ph-rail-strip { width: 74px; flex: 0 0 74px; margin-left: 14px; position: sticky; top: 90px; align-self: flex-start; display: flex; flex-direction: column; align-items: center; padding-top: 30px; }
+    #ph-root .ph-rail-line { width: 2px; flex: 1; background: var(--ph-ink-700); position: relative; min-height: 480px; }
+    #ph-root .ph-rail-marker { position: absolute; left: -34px; width: 70px; text-align: right; font-size: 10.5px; color: var(--ph-moon-600); font-family: "IBM Plex Mono", monospace; }
+    #ph-root .ph-rail-marker::after { content: ''; position: absolute; right: -6px; top: 3px; width: 6px; height: 6px; border-radius: 999px; background: var(--ph-ink-700); }
+    #ph-root .ph-rail-marker.ph-rail-current { color: var(--ph-lamp); font-weight: 700; }
+    #ph-root .ph-rail-marker.ph-rail-current::after { background: var(--ph-lamp); box-shadow: 0 0 6px rgba(69,192,132,.6); }
+    #ph-root .ph-rail-marker.ph-rail-bad::after { background: var(--ph-failed); }
+
+    /* ---- legend ---- */
+    #ph-root .ph-legend { width: 1440px; margin-top: 22px; background: var(--ph-ink-900); border: 1px solid var(--ph-ink-700); border-radius: 12px; padding: 16px 20px; }
+    #ph-root .ph-legend h3 { margin: 0 0 10px; font-size: 13px; font-family: "Space Grotesk", sans-serif; color: var(--ph-moon-100); }
+    #ph-root .ph-legend-item { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--ph-ink-800); font-size: 12px; color: var(--ph-moon-400); }
+    #ph-root .ph-legend-item:first-of-type { border-top: none; }
+    #ph-root .ph-legend-num { flex: 0 0 20px; height: 20px; border-radius: 999px; background: var(--ph-warn); color: #241a04; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+    #ph-root .ph-legend-body b { color: var(--ph-moon-100); }
+    #ph-root .ph-legend-tag { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--ph-moon-600); background: var(--ph-ink-800); border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+    #ph-root .ph-legend-need { color: var(--ph-warn); }
+  </style>
+
+  <div class="ph-stage-wrap">
+    <div class="ph-stage">
+      <!-- nav rail -->
+      <nav class="ph-rail">
+        <div class="ph-rail-logo">nightdesk</div>
+        <div class="ph-rail-item">Desk</div>
+        <div class="ph-rail-item">Tickets</div>
+        <div class="ph-rail-item ph-active">Projects</div>
+        <div class="ph-rail-group">
+          <div class="ph-rail-item ph-rail-sub ph-active"><span><span class="ph-rail-dot"></span>nightdesk</span><span class="ph-rail-badge ph-active-badge">5</span></div>
+          <div class="ph-rail-item ph-rail-sub"><span><span class="ph-rail-dot"></span>CREAM</span><span class="ph-rail-badge">1</span></div>
+          <div class="ph-rail-item ph-rail-sub"><span><span class="ph-rail-dot"></span>blubblub</span><span class="ph-rail-badge">1</span></div>
+          <div class="ph-rail-item ph-rail-sub"><span><span class="ph-rail-dot ph-quiet"></span>Vibeslop</span></div>
+          <div class="ph-rail-item ph-rail-sub"><span><span class="ph-rail-dot ph-quiet"></span>reaper</span></div>
+        </div>
+        <div class="ph-rail-item">Agents</div>
+        <div class="ph-rail-item">Inbox</div>
+        <div class="ph-rail-item">Scheduled</div>
+        <div class="ph-rail-item">Analytics</div>
+        <div class="ph-rail-item">Archive</div>
+        <div class="ph-rail-item">Settings</div>
+        <div class="ph-rail-spacer"></div>
+        <div class="ph-rail-foot"><span>Sign out</span><span>Collapse «</span></div>
+      </nav>
+
+      <!-- main -->
+      <div class="ph-main">
+        <div class="ph-topstrip">
+          <div class="ph-search">Search tickets, runs, projects… (/)</div>
+          <div class="ph-worker-pill"><span class="ph-live-dot"></span>Running · 2/5 · $60.31 today</div>
+        </div>
+
+        <div class="ph-projstrip">
+          <div class="ph-projtab ph-active"><span class="ph-pdot"></span>nightdesk<span class="ph-pbadge">5</span></div>
+          <div class="ph-projtab"><span class="ph-pdot"></span>CREAM<span class="ph-pbadge">1</span></div>
+          <div class="ph-projtab"><span class="ph-pdot"></span>blubblub<span class="ph-pbadge">1</span></div>
+          <div class="ph-projtab"><span class="ph-pdot"></span>Vibeslop</div>
+          <div class="ph-projtab"><span class="ph-pdot"></span>reaper</div>
+          <div class="ph-hophint"><kbd>[</kbd> prev · next <kbd>]</kbd></div>
+        </div>
+
+        <div class="ph-header">
+          <div class="ph-header-top">
+            <div class="ph-header-title"><span class="ph-jdot"></span>nightdesk <span class="ph-header-path ph-mono">/home/thor/fun/nightdesk</span></div>
+            <div class="ph-header-actions">
+              <button class="ph-btn">Edit</button>
+              <button class="ph-btn ph-primary">New ticket</button>
+            </div>
+          </div>
+          <div class="ph-statline">profile <b>overnight-default</b> · <b>2</b> toolsets · <b>30d $37.73</b> · <b>42 runs</b> · <b>5% failed</b></div>
+        </div>
+
+        <div class="ph-tabs">
+          <div class="ph-tab">Overview</div>
+          <div class="ph-tab ph-tab-active">History</div>
+          <div class="ph-tab">Trends</div>
+          <div class="ph-tab">Plan</div>
+        </div>
+
+        <div class="ph-body">
+          <div class="ph-ledger-col">
+            <div class="ph-toolrow">
+              <div class="ph-callout" style="top:-30px; left:0;">①</div>
+              <div class="ph-chip ph-chip-active" data-ph-filter="all">All</div>
+              <div class="ph-chip" data-ph-filter="run">Runs</div>
+              <div class="ph-chip" data-ph-filter="failed">Failures</div>
+              <div class="ph-chip" data-ph-filter="shipped">Shipped</div>
+              <div class="ph-chip" data-ph-filter="repo">Repo</div>
+              <div class="ph-chip" data-ph-filter="lifecycle">Lifecycle</div>
+              <div class="ph-hsearch">Filter history…</div>
+              <div class="ph-callout" style="top:-30px; right:0; left:auto; background:var(--ph-azure); color:#071d2e;">②</div>
+            </div>
+
+            <!-- Jul 12 -->
+            <div class="ph-daygroup">
+              <div class="ph-dayhead"><span class="ph-dayhead-date ph-mono">Sun Jul 12</span><span class="ph-dayhead-today">TODAY</span><span class="ph-dayhead-sub">9 runs · 2 repo · 1 lifecycle</span></div>
+              <div class="ph-row" data-kind="run"><span class="ph-row-time ph-mono">14:02</span><span class="ph-pill ph-pill-running">RUNNING</span><span class="ph-row-title">GitLab panel: MR/issue counts on project header — $0.90 · 1h</span><span class="ph-row-meta ph-mono"></span></div>
+              <div class="ph-row" data-kind="repo"><span class="ph-row-time ph-mono">13:40</span><span class="ph-pill ph-pill-repo">MR</span><span class="ph-row-title">!412 "Retry with backoff for upstream 5xx" opened by agent</span><span class="ph-row-meta ph-mono">+388 −71</span></div>
+              <div class="ph-row" data-kind="lifecycle"><span class="ph-row-time ph-mono">13:38</span><span class="ph-pill ph-pill-review">REVIEW</span><span class="ph-row-title">"Harden runs against transient upstream errors…" entered review — unacked</span><span class="ph-row-meta ph-mono">57m · $2.31</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">12:55</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Issue/MR side-peek — inline panel instead of new tab</span><span class="ph-row-meta ph-mono">18m · 41k tok · $1.05</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">12:20</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Lens toggles persist via URL param on refresh</span><span class="ph-row-meta ph-mono">22m · 38k tok · $0.94</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">11:47</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Project GitLab panel: connection health chip</span><span class="ph-row-meta ph-mono">16m · 29k tok · $0.71</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">11:02</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Transient upstream errors: retry classification</span><span class="ph-row-meta ph-mono">31m · 55k tok · $1.40</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">10:15</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Run timer relocated next to elapsed badge</span><span class="ph-row-meta ph-mono">9m · 14k tok · $0.38</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">09:40</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Desk full-bleed layout on wide viewports</span><span class="ph-row-meta ph-mono">13m · 24k tok · $0.63</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">09:05</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Analytics: per-model spend breakdown chart</span><span class="ph-row-meta ph-mono">27m · 46k tok · $1.18</span></div>
+            </div>
+
+            <!-- Jul 11 -->
+            <div class="ph-daygroup">
+              <div class="ph-dayhead"><span class="ph-dayhead-date ph-mono">Sat Jul 11</span><span class="ph-dayhead-sub">7 runs (1 failed, retried ok) · 1 repo · 3 lifecycle</span></div>
+              <div class="ph-row" data-kind="lifecycle"><span class="ph-row-time ph-mono">18:20</span><span class="ph-pill ph-pill-archived">ARCHIVED</span><span class="ph-row-title">3 tickets archived (acked)</span><span class="ph-row-meta ph-mono"></span></div>
+              <div class="ph-row" data-kind="repo"><span class="ph-row-time ph-mono">16:44</span><span class="ph-pill ph-pill-repo">ISSUE</span><span class="ph-row-title">#224 closed</span><span class="ph-row-meta ph-mono"></span></div>
+              <div class="ph-row ph-dim" data-kind="run failed"><span class="ph-row-time ph-mono">15:12</span><span class="ph-pill ph-pill-failed">FAILED</span><span class="ph-row-title">Board lens: retry after upstream 503 — auto-retried, ok</span><span class="ph-row-meta ph-mono">6m · $0.22</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">15:20</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Board lens URL param — retry succeeded</span><span class="ph-row-meta ph-mono">11m · 21k tok · $0.55</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">14:02</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Ticket sidebar: profile picker check mark alignment</span><span class="ph-row-meta ph-mono">14m · $0.61</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">12:30</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Connections: repo link field validation</span><span class="ph-row-meta ph-mono">19m · $0.88</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">10:55</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Worker double-dispatch guard: idempotency key</span><span class="ph-row-meta ph-mono">24m · $1.02</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">09:18</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Analytics per-project cost rollup query</span><span class="ph-row-meta ph-mono">17m · $0.74</span></div>
+            </div>
+
+            <!-- Jul 10 -->
+            <div class="ph-daygroup">
+              <div class="ph-dayhead"><span class="ph-dayhead-date ph-mono">Fri Jul 10</span><span class="ph-dayhead-sub">4 runs · 1 repo · 1 cron</span></div>
+              <div class="ph-row" data-kind="lifecycle"><span class="ph-row-time ph-mono">02:00</span><span class="ph-pill ph-pill-cron">CRON</span><span class="ph-row-title">nightly inbox triage — promoted 2 inbox items</span><span class="ph-row-meta ph-mono"></span></div>
+              <div class="ph-row" data-kind="repo"><span class="ph-row-time ph-mono">17:05</span><span class="ph-pill ph-pill-repo">MR</span><span class="ph-row-title">!398 "Peek rail positioning" merged</span><span class="ph-row-meta ph-mono">+112 −40</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">15:40</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Peek rail: sticky footer actions</span><span class="ph-row-meta ph-mono">21m · $0.96</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">13:10</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Inbox promote: profile default assignment</span><span class="ph-row-meta ph-mono">12m · $0.51</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">11:22</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Trends: duration p50/p90 band chart</span><span class="ph-row-meta ph-mono">33m · $1.44</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">09:50</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Model-mix stacked area: glm to claude drift annotation</span><span class="ph-row-meta ph-mono">26m · $1.12</span></div>
+            </div>
+
+            <div class="ph-rollup ph-mono"><span class="ph-rollup-label">Week of Jul 7</span><b>31 runs</b> · <b>28 shipped</b> · <b>$9.60</b> · <b>94% success</b></div>
+
+            <!-- Jul 8 -->
+            <div class="ph-daygroup">
+              <div class="ph-dayhead"><span class="ph-dayhead-date ph-mono">Wed Jul 8</span><span class="ph-dayhead-sub">3 runs · 1 lifecycle</span></div>
+              <div class="ph-row" data-kind="lifecycle"><span class="ph-row-time ph-mono">16:00</span><span class="ph-pill ph-pill-review">REVIEW</span><span class="ph-row-title">"mobile shouldn't be able to drag tickets" flagged — blocked, no profile</span><span class="ph-row-meta ph-mono"></span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">14:30</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Sidebar collapse state persisted to localStorage</span><span class="ph-row-meta ph-mono">10m · $0.47</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">11:05</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Ticket search: fuzzy title match ranking</span><span class="ph-row-meta ph-mono">19m · $0.82</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">09:12</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Archive: bulk-restore action</span><span class="ph-row-meta ph-mono">15m · $0.63</span></div>
+            </div>
+
+            <!-- Jul 7 -->
+            <div class="ph-daygroup">
+              <div class="ph-dayhead"><span class="ph-dayhead-date ph-mono">Tue Jul 7</span><span class="ph-dayhead-sub">5 runs · 1 repo</span></div>
+              <div class="ph-row" data-kind="repo"><span class="ph-row-time ph-mono">17:30</span><span class="ph-pill ph-pill-repo">ISSUE</span><span class="ph-row-title">#217 closed</span><span class="ph-row-meta ph-mono"></span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">15:48</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Cron editor: cadence validation</span><span class="ph-row-meta ph-mono">14m · $0.60</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">13:20</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Capacity strip: schedule window editor</span><span class="ph-row-meta ph-mono">28m · $1.20</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">11:02</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Backlog table: dependency chips</span><span class="ph-row-meta ph-mono">21m · $0.91</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">09:40</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Milestones-lite: progress bar component</span><span class="ph-row-meta ph-mono">17m · $0.74</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">08:55</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Agent quick-reply input: inline send</span><span class="ph-row-meta ph-mono">12m · $0.50</span></div>
+            </div>
+
+            <div class="ph-rollup ph-mono"><span class="ph-rollup-label">Week of Jun 30</span><b>26 runs</b> · <b>24 shipped</b> · <b>$8.15</b> · <b>92% success</b></div>
+
+            <!-- Jul 1 -->
+            <div class="ph-daygroup">
+              <div class="ph-dayhead"><span class="ph-dayhead-date ph-mono">Wed Jul 1</span><span class="ph-dayhead-sub">6 runs · 1 repo</span></div>
+              <div class="ph-row" data-kind="repo"><span class="ph-row-time ph-mono">16:10</span><span class="ph-pill ph-pill-repo">MR</span><span class="ph-row-title">!390 "Analytics per-model breakdown" merged</span><span class="ph-row-meta ph-mono">+201 −18</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">14:22</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Toolset preset: rust toolchain draft</span><span class="ph-row-meta ph-mono">31m · $1.35</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">12:05</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Retention GC: dry-run report</span><span class="ph-row-meta ph-mono">19m · $0.83</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">10:40</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Wall-clock timeout: per-profile override</span><span class="ph-row-meta ph-mono">24m · $1.05</span></div>
+              <div class="ph-row" data-kind="run shipped"><span class="ph-row-time ph-mono">09:15</span><span class="ph-pill ph-pill-success">SUCCESS</span><span class="ph-row-title">Metrics endpoint: /metrics prometheus format</span><span class="ph-row-meta ph-mono">27m · $1.18</span></div>
+            </div>
+
+            <!-- Jun 28 (bad day) -->
+            <div class="ph-daygroup ph-badcluster">
+              <div class="ph-dayhead"><span class="ph-dayhead-date ph-mono">Sun Jun 28</span><span class="ph-dayhead-sub" style="color:var(--ph-failed)">3 failed — upstream 5xx cluster</span></div>
+              <div class="ph-row" data-kind="run failed"><span class="ph-row-time ph-mono">21:40</span><span class="ph-pill ph-pill-failed">FAILED</span><span class="ph-row-title">Runner sync — upstream 502 on model call</span><span class="ph-row-meta ph-mono">4m · $0.11</span></div>
+              <div class="ph-row" data-kind="run failed"><span class="ph-row-time ph-mono">20:55</span><span class="ph-pill ph-pill-failed">FAILED</span><span class="ph-row-title">Runner sync retry — upstream 503</span><span class="ph-row-meta ph-mono">3m · $0.09</span></div>
+              <div class="ph-row" data-kind="run failed"><span class="ph-row-time ph-mono">20:10</span><span class="ph-pill ph-pill-failed">FAILED</span><span class="ph-row-title">Runner sync — upstream 502, provider outage window</span><span class="ph-row-meta ph-mono">5m · $0.14</span></div>
+            </div>
+
+            <div class="ph-rollup ph-mono"><span class="ph-rollup-label">Week of Jun 23</span><b>19 runs</b> · <b>15 shipped</b> · <b>83% success</b> · <b>$5.20</b></div>
+            <div class="ph-rollup ph-mono"><span class="ph-rollup-label">Week of Jun 16</span><b>22 runs</b> · <b>21 shipped</b> · <b>95% success</b> · <b>$6.80</b></div>
+
+            <button class="ph-loadmore">Load earlier — back to Jun 9</button>
+          </div>
+
+          <!-- mini time rail -->
+          <div class="ph-rail-strip">
+            <div class="ph-callout" style="top:-6px; left:8px; background:var(--ph-review); color:#100c2e;">③</div>
+            <div class="ph-rail-line">
+              <div class="ph-rail-marker ph-rail-current" style="top:0;">Jul 12</div>
+              <div class="ph-rail-marker" style="top:22%;">Jul 7</div>
+              <div class="ph-rail-marker" style="top:44%;">Jun 30</div>
+              <div class="ph-rail-marker ph-rail-bad" style="top:58%;">Jun 28</div>
+              <div class="ph-rail-marker" style="top:72%;">Jun 23</div>
+              <div class="ph-rail-marker" style="top:90%;">Jun 16</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ph-legend">
+    <h3>Callouts</h3>
+    <div class="ph-legend-item">
+      <div class="ph-legend-num">①</div>
+      <div class="ph-legend-body"><b>Filter chips + search</b><span class="ph-legend-tag">horizon: past, scoped to view</span> — client-side filter over the loaded ledger window (All / Runs / Failures / Shipped / Repo / Lifecycle); search narrows by title/MR/issue text. Click a chip or type "/" to focus search. <span class="ph-legend-need">Backend need: none for filtering already-fetched pages, but "Shipped" as a first-class filter implies runs need a queryable shipped/merged flag, not just terminal status — currently inferred client-side from status+review-exit.</span></div>
+    </div>
+    <div class="ph-legend-item">
+      <div class="ph-legend-num">②</div>
+      <div class="ph-legend-body"><b>Day-grouped, interleaved ledger</b><span class="ph-legend-tag">horizon: past, one line per event</span> — reverse-chronological rows mixing run outcomes, lifecycle transitions, repo events (MR/issue), and cron fires under sticky day headers. Click a row to peek (transcript, diff, or MR) in place; hover surfaces the full title via native truncation tooltip. <span class="ph-legend-need">Backend need: a single unified activity/events feed endpoint (today runs, tickets, GitLab, and crons are four separate queries with different pagination and timestamp semantics — this view needs them pre-merged and cursor-paginated together).</span></div>
+    </div>
+    <div class="ph-legend-item">
+      <div class="ph-legend-num">③</div>
+      <div class="ph-legend-body"><b>Right-edge mini time rail</b><span class="ph-legend-tag">horizon: past, fast scrub</span> — month/week markers along a vertical line; click a marker to jump-scroll the ledger to that date, drag to scrub continuously. The Jun 28 marker is tinted ember to preflight a bad day before scrolling to it. <span class="ph-legend-need">Backend need: a lightweight date-histogram endpoint (event counts + failure counts per day) to place markers and color them without loading full day payloads up front.</span></div>
+    </div>
+    <div class="ph-legend-item">
+      <div class="ph-legend-num" style="background:var(--ph-ink-700); color:var(--ph-moon-100);">·</div>
+      <div class="ph-legend-body"><b>Week-boundary rollup rows</b><span class="ph-legend-tag">horizon: past, numbers only</span> — dashed numeric-only summary between weeks (runs, shipped, cost, success%); intentionally no generated prose digest per prior product direction. Not interactive. <span class="ph-legend-need">Backend need: weekly aggregate rollup (already computable from Trends' weekly series — reuse that endpoint rather than building a second aggregator).</span></div>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      var root = document.getElementById('ph-root');
+      var chips = root.querySelectorAll('.ph-chip');
+      var rows = root.querySelectorAll('.ph-row');
+      chips.forEach(function(chip){
+        chip.addEventListener('click', function(){
+          chips.forEach(function(c){ c.classList.remove('ph-chip-active'); });
+          chip.classList.add('ph-chip-active');
+          var f = chip.getAttribute('data-ph-filter');
+          rows.forEach(function(r){
+            var kind = r.getAttribute('data-kind') || '';
+            var show = f === 'all' || kind.indexOf(f) !== -1 || (f === 'run' && kind.indexOf('run') !== -1);
+            r.style.display = show ? '' : 'none';
+          });
+        });
+      });
+    })();
+  </script>
+</section>
+</div>
+<div id="rv-stage-ps" class="rv-stage" role="tabpanel">
+<p class="rv-stage-thesis"><b>Settings — every project-scoped setting in the project&#39;s own home.</b> Sticky section rail with unsaved-change dots, collapsible sections, the dirty row with its sticky save bar. Pure frontend lift — zero new backend.</p>
+<section id="ps-root">
+<style>
+  #ps-root {
+    --ink-950:#0a0a0b; --ink-900:#171719; --ink-800:#232327; --ink-700:#42424b;
+    --moon-100:#f4f5f7; --moon-400:#b7bbc4; --moon-600:#7e828c;
+    --lamp:#45c084; --lamp-soft:#6fd3a1; --dawn:#7fe0ad;
+    --review:#9c93f0; --queued:#8b99ae; --success:#56b89a; --failed:#e06b64; --warn:#d9a13d; --azure:#6aabdf;
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    background: var(--ink-950);
+    color: var(--moon-100);
+    display: block;
+    overflow-x: auto;
+  }
+  #ps-root * { box-sizing: border-box; }
+  #ps-root .ps-mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  #ps-root .ps-display { font-family: "Space Grotesk", "Inter", sans-serif; }
+  #ps-root .ps-stage { width: 1440px; min-height: 100vh; display: grid; grid-template-columns: 240px 1fr; }
+
+  /* ---- nav rail ---- */
+  #ps-root .ps-rail { background: var(--ink-900); border-right: 1px solid var(--ink-700); display: flex; flex-direction: column; padding: 16px 12px; }
+  #ps-root .ps-rail-logo { font-weight: 700; font-size: 15px; padding: 6px 8px 18px; letter-spacing: .01em; }
+  #ps-root .ps-rail-nav { display: flex; flex-direction: column; gap: 1px; flex: 1; }
+  #ps-root .ps-rail-item { padding: 7px 8px; border-radius: 6px; font-size: 13px; color: var(--moon-400); cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+  #ps-root .ps-rail-item:hover { background: var(--ink-800); color: var(--moon-100); }
+  #ps-root .ps-rail-item.ps-active { background: var(--ink-800); color: var(--moon-100); font-weight: 600; }
+  #ps-root .ps-rail-group { margin-top: 2px; display: flex; flex-direction: column; gap: 1px; }
+  #ps-root .ps-rail-sub { padding: 5px 8px 5px 22px; border-radius: 6px; font-size: 12.5px; color: var(--moon-600); display: flex; align-items: center; gap: 7px; cursor: pointer; }
+  #ps-root .ps-rail-sub:hover { color: var(--moon-100); }
+  #ps-root .ps-rail-sub.ps-current { color: var(--moon-100); font-weight: 600; }
+  #ps-root .ps-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  #ps-root .ps-badge { font-size: 10px; background: var(--ink-700); color: var(--moon-400); padding: 1px 5px; border-radius: 8px; font-family: "IBM Plex Mono", monospace; }
+  #ps-root .ps-badge.ps-live { background: rgba(69,192,132,.18); color: var(--lamp-soft); }
+  #ps-root .ps-rail-foot { display: flex; flex-direction: column; gap: 1px; border-top: 1px solid var(--ink-700); padding-top: 8px; margin-top: 8px; }
+
+  /* ---- top strip ---- */
+  #ps-root .ps-main { display: flex; flex-direction: column; }
+  #ps-root .ps-topstrip { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--ink-700); background: var(--ink-950); }
+  #ps-root .ps-search { flex: 1; max-width: 420px; background: var(--ink-900); border: 1px solid var(--ink-700); border-radius: 8px; padding: 7px 12px; font-size: 12.5px; color: var(--moon-600); }
+  #ps-root .ps-worker-pill { margin-left: auto; display: flex; align-items: center; gap: 6px; background: var(--ink-900); border: 1px solid var(--ink-700); border-radius: 999px; padding: 5px 12px; font-size: 12px; color: var(--moon-400); }
+  #ps-root .ps-worker-pill .ps-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--lamp); box-shadow: 0 0 0 3px rgba(69,192,132,.18); }
+
+  /* ---- project strip ---- */
+  #ps-root .ps-pstrip { display: flex; align-items: center; gap: 4px; padding: 8px 20px; border-bottom: 1px solid var(--ink-700); background: var(--ink-950); }
+  #ps-root .ps-ptab { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 7px; font-size: 12.5px; color: var(--moon-600); cursor: pointer; }
+  #ps-root .ps-ptab.ps-active { background: var(--ink-800); color: var(--moon-100); font-weight: 600; }
+  #ps-root .ps-ptab .ps-dot.jade { background: var(--lamp); }
+  #ps-root .ps-hop { margin-left: auto; font-size: 11px; color: var(--moon-600); }
+
+  /* ---- project header ---- */
+  #ps-root .ps-phead { display: flex; align-items: center; gap: 14px; padding: 18px 20px 14px; border-bottom: 1px solid var(--ink-700); }
+  #ps-root .ps-phead .ps-dot.jade { width: 10px; height: 10px; background: var(--lamp); }
+  #ps-root .ps-phead-name { font-size: 20px; font-weight: 700; }
+  #ps-root .ps-phead-path { color: var(--moon-600); font-size: 12.5px; }
+  #ps-root .ps-phead-stats { margin-left: 4px; color: var(--moon-600); font-size: 12px; padding-left: 14px; border-left: 1px solid var(--ink-700); }
+  #ps-root .ps-phead-actions { margin-left: auto; display: flex; gap: 8px; }
+  #ps-root .ps-btn { border-radius: 8px; padding: 7px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid var(--ink-700); background: var(--ink-900); color: var(--moon-100); }
+  #ps-root .ps-btn:hover { background: var(--ink-800); }
+  #ps-root .ps-btn.ps-primary { background: var(--lamp); color: #0a0a0b; border-color: var(--lamp); }
+  #ps-root .ps-btn.ps-primary:hover { background: var(--lamp-soft); }
+
+  /* ---- horizon tabs ---- */
+  #ps-root .ps-htabs { display: flex; align-items: center; gap: 22px; padding: 0 20px; border-bottom: 1px solid var(--ink-700); }
+  #ps-root .ps-htab { padding: 11px 2px; font-size: 13px; color: var(--moon-600); cursor: pointer; border-bottom: 2px solid transparent; }
+  #ps-root .ps-htab.ps-active { color: var(--moon-100); font-weight: 600; border-bottom-color: var(--lamp); }
+  #ps-root .ps-htab-spacer { margin-left: auto; }
+  #ps-root .ps-htab-link { padding: 11px 2px; font-size: 12px; color: var(--moon-600); }
+
+  /* ---- page body ---- */
+  #ps-root .ps-body { padding: 26px 20px 120px; display: flex; align-items: flex-start; gap: 32px; }
+  #ps-root .ps-body-form { max-width: 880px; flex: 1; min-width: 0; }
+  #ps-root .ps-page-kicker { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--moon-600); margin-bottom: 4px; }
+  #ps-root .ps-page-title { font-size: 18px; font-weight: 700; margin-bottom: 22px; }
+
+  /* in-page section rail */
+  #ps-root .ps-secrail { width: 176px; flex-shrink: 0; position: sticky; top: 26px; display: flex; flex-direction: column; gap: 1px; }
+  #ps-root .ps-secrail-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; font-size: 11.5px; letter-spacing: .03em; color: var(--moon-600); cursor: pointer; position: relative; border-left: 2px solid transparent; }
+  #ps-root .ps-secrail-item:hover { color: var(--moon-100); background: var(--ink-900); }
+  #ps-root .ps-secrail-item.ps-secrail-active { color: var(--moon-100); font-weight: 700; border-left-color: var(--lamp); background: var(--ink-900); }
+  #ps-root .ps-secrail-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); flex-shrink: 0; margin-left: auto; box-shadow: 0 0 0 2px rgba(217,161,61,.18); }
+
+  #ps-root .ps-section { margin-bottom: 30px; scroll-margin-top: 20px; }
+  #ps-root .ps-section-head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--ink-700); margin-bottom: 2px; cursor: pointer; }
+  #ps-root .ps-section-title { font-size: 11.5px; letter-spacing: .07em; text-transform: uppercase; font-weight: 700; color: var(--moon-400); }
+  #ps-root .ps-section-num { font-size: 11px; color: var(--moon-600); font-family: "IBM Plex Mono", monospace; }
+  #ps-root .ps-section-hint { margin-left: 10px; font-size: 11.5px; color: var(--moon-600); }
+  #ps-root .ps-section-chevron { margin-left: auto; font-size: 10px; color: var(--moon-600); transition: transform .12s; }
+  #ps-root .ps-section.ps-collapsed .ps-section-chevron { transform: rotate(-90deg); }
+  #ps-root .ps-section-body { overflow: hidden; }
+  #ps-root .ps-section.ps-collapsed .ps-section-body { display: none; }
+
+  #ps-root .ps-row { display: grid; grid-template-columns: 220px 1fr; align-items: center; gap: 18px; padding: 13px 4px; border-bottom: 1px solid rgba(66,66,75,.5); }
+  #ps-root .ps-row:last-child { border-bottom: none; }
+  #ps-root .ps-row-label { font-size: 13px; color: var(--moon-400); }
+  #ps-root .ps-row-label .ps-sub { display: block; font-size: 11.5px; color: var(--moon-600); margin-top: 2px; font-weight: 400; }
+  #ps-root .ps-row-control { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  #ps-root .ps-field { background: var(--ink-900); border: 1px solid var(--ink-700); border-radius: 8px; padding: 7px 11px; font-size: 12.5px; color: var(--moon-100); flex: 1; max-width: 340px; }
+  #ps-root .ps-field.ps-mono { font-family: "IBM Plex Mono", monospace; }
+  #ps-root .ps-field-sm { max-width: 160px; }
+
+  #ps-root .ps-select { background: var(--ink-900); border: 1px solid var(--ink-700); border-radius: 8px; padding: 7px 11px; font-size: 12.5px; color: var(--moon-100); max-width: 260px; display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; }
+  #ps-root .ps-select:hover { border-color: var(--moon-600); }
+  #ps-root .ps-select .ps-caret { color: var(--moon-600); font-size: 10px; }
+
+  #ps-root .ps-chip { background: var(--ink-800); border: 1px solid var(--ink-700); border-radius: 999px; padding: 3px 10px; font-size: 11.5px; color: var(--moon-400); display: inline-flex; align-items: center; gap: 5px; }
+  #ps-root .ps-chip.ps-x { cursor: pointer; }
+  #ps-root .ps-chip.ps-x:hover { color: var(--moon-100); }
+  #ps-root .ps-chip-add { border-style: dashed; color: var(--moon-600); cursor: pointer; }
+  #ps-root .ps-chip-add:hover { color: var(--moon-100); border-color: var(--moon-600); }
+
+  #ps-root .ps-swatches { display: flex; gap: 8px; }
+  #ps-root .ps-swatch { width: 18px; height: 18px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+  #ps-root .ps-swatch.ps-active { border-color: var(--moon-100); box-shadow: 0 0 0 2px var(--ink-950), 0 0 0 3px currentColor; }
+
+  #ps-root .ps-toggle { width: 34px; height: 19px; border-radius: 999px; background: var(--ink-700); position: relative; cursor: pointer; flex-shrink: 0; }
+  #ps-root .ps-toggle.ps-on { background: var(--lamp); }
+  #ps-root .ps-toggle::after { content:''; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: var(--moon-100); transition: left .12s; }
+  #ps-root .ps-toggle.ps-on::after { left: 17px; background: #0a0a0b; }
+  #ps-root .ps-toggle-label { font-size: 12px; color: var(--moon-600); }
+
+  #ps-root .ps-segmented { display: inline-flex; border: 1px solid var(--ink-700); border-radius: 8px; overflow: hidden; }
+  #ps-root .ps-seg { padding: 6px 12px; font-size: 12px; color: var(--moon-600); cursor: pointer; background: var(--ink-900); border-right: 1px solid var(--ink-700); }
+  #ps-root .ps-seg:last-child { border-right: none; }
+  #ps-root .ps-seg.ps-seg-active { background: var(--lamp); color: #0a0a0b; font-weight: 600; }
+
+  #ps-root .ps-inline-note { font-size: 11.5px; color: var(--moon-600); margin-top: 8px; padding: 4px 4px 0; }
+
+  /* repo link row */
+  #ps-root .ps-repo-row { display: flex; align-items: center; gap: 14px; padding: 12px 4px; border-bottom: 1px solid rgba(66,66,75,.5); font-size: 12.5px; }
+  #ps-root .ps-repo-name { font-family: "IBM Plex Mono", monospace; color: var(--moon-100); }
+  #ps-root .ps-pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  #ps-root .ps-pill.ps-ok { background: rgba(86,184,154,.15); color: var(--success); }
+  #ps-root .ps-repo-stat { color: var(--moon-600); }
+  #ps-root .ps-repo-actions { margin-left: auto; display: flex; gap: 8px; }
+  #ps-root .ps-btn-sm { border-radius: 6px; padding: 5px 10px; font-size: 11.5px; font-weight: 600; cursor: pointer; border: 1px solid var(--ink-700); background: var(--ink-900); color: var(--moon-400); }
+  #ps-root .ps-btn-sm:hover { color: var(--moon-100); background: var(--ink-800); }
+  #ps-root .ps-btn-sm.ps-danger { color: var(--failed); border-color: rgba(224,107,100,.3); }
+  #ps-root .ps-btn-sm.ps-danger:hover { background: rgba(224,107,100,.1); }
+
+  /* cron row */
+  #ps-root .ps-cron-row { display: flex; align-items: center; gap: 16px; padding: 12px 4px; border-bottom: 1px solid rgba(66,66,75,.5); font-size: 12.5px; }
+  #ps-root .ps-cron-name { color: var(--moon-100); min-width: 190px; }
+  #ps-root .ps-cron-meta { color: var(--moon-600); display: flex; gap: 14px; }
+  #ps-root .ps-cron-meta .ps-good { color: var(--success); }
+
+  /* danger */
+  #ps-root .ps-danger-row { display: flex; align-items: center; gap: 14px; padding: 13px 4px; border-bottom: 1px solid rgba(66,66,75,.5); }
+  #ps-root .ps-danger-row:last-child { border-bottom: none; }
+  #ps-root .ps-danger-title { font-size: 13px; color: var(--moon-100); font-weight: 600; }
+  #ps-root .ps-danger-desc { font-size: 11.5px; color: var(--moon-600); margin-top: 2px; }
+  #ps-root .ps-danger-actions { margin-left: auto; }
+  #ps-root .ps-btn-danger { border-radius: 8px; padding: 7px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid rgba(224,107,100,.4); background: rgba(224,107,100,.08); color: var(--failed); }
+  #ps-root .ps-btn-danger:hover { background: rgba(224,107,100,.16); }
+  #ps-root .ps-btn-mute { border-radius: 8px; padding: 7px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid var(--ink-700); background: var(--ink-900); color: var(--moon-600); }
+  #ps-root .ps-btn-mute[disabled] { opacity: .5; cursor: not-allowed; }
+
+  /* dirty row highlight */
+  #ps-root .ps-row.ps-dirty { background: linear-gradient(90deg, rgba(217,161,61,.09), transparent 60%); border-left: 2px solid var(--warn); padding-left: 12px; margin-left: -14px; }
+  #ps-root .ps-dirty-flag { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--warn); background: rgba(217,161,61,.14); border-radius: 4px; padding: 2px 6px; margin-left: 8px; }
+  #ps-root .ps-diff-was { color: var(--moon-600); text-decoration: line-through; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; }
+  #ps-root .ps-diff-now { color: var(--warn); font-family: "IBM Plex Mono", monospace; font-size: 12.5px; font-weight: 600; }
+  #ps-root .ps-diff-arrow { color: var(--moon-600); font-size: 11px; }
+
+  /* sticky save bar */
+  #ps-root .ps-savebar { position: sticky; bottom: 0; left: 0; right: 0; background: var(--ink-900); border-top: 1px solid var(--ink-700); box-shadow: 0 -6px 16px -4px rgba(0,0,0,.5); padding: 12px 20px; display: flex; align-items: center; gap: 12px; z-index: 5; }
+  #ps-root .ps-savebar-msg { font-size: 12.5px; color: var(--moon-100); display: flex; align-items: center; gap: 8px; }
+  #ps-root .ps-savebar-msg .ps-dot.warn { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
+  #ps-root .ps-savebar-actions { margin-left: auto; display: flex; gap: 8px; }
+
+  /* legend */
+  #ps-root .ps-legend { margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--ink-700); font-size: 11.5px; color: var(--moon-600); line-height: 1.7; }
+  #ps-root .ps-legend b { color: var(--moon-400); }
+  #ps-root .ps-legend .ps-legend-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--moon-600); margin-bottom: 8px; font-weight: 700; }
+  #ps-root .ps-legend-real { color: var(--success); font-weight: 600; }
+  #ps-root .ps-callout { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: var(--ink-700); color: var(--moon-100); font-size: 9.5px; font-weight: 700; margin-right: 5px; }
+
+  #ps-root .ps-migrate-note { margin-top: 10px; font-size: 11.5px; color: var(--azure); background: rgba(106,171,223,.08); border: 1px solid rgba(106,171,223,.25); border-radius: 8px; padding: 9px 12px; }
+</style>
+
+<div class="ps-stage">
+  <!-- nav rail -->
+  <nav class="ps-rail">
+    <div class="ps-rail-logo ps-display">nightdesk</div>
+    <div class="ps-rail-nav">
+      <div class="ps-rail-item">Desk</div>
+      <div class="ps-rail-item">Tickets</div>
+      <div class="ps-rail-item ps-active">Projects</div>
+      <div class="ps-rail-group">
+        <div class="ps-rail-sub ps-current"><span class="ps-dot" style="background:var(--lamp)"></span>nightdesk<span class="ps-badge ps-live">5</span></div>
+        <div class="ps-rail-sub"><span class="ps-dot" style="background:var(--azure)"></span>CREAM<span class="ps-badge">1</span></div>
+        <div class="ps-rail-sub"><span class="ps-dot" style="background:var(--review)"></span>blubblub<span class="ps-badge">1</span></div>
+        <div class="ps-rail-sub"><span class="ps-dot" style="background:var(--moon-600)"></span>Vibeslop</div>
+        <div class="ps-rail-sub"><span class="ps-dot" style="background:var(--moon-600)"></span>reaper</div>
+      </div>
+      <div class="ps-rail-item" style="margin-top:6px">Agents</div>
+      <div class="ps-rail-item">Inbox</div>
+      <div class="ps-rail-item">Scheduled</div>
+      <div class="ps-rail-item">Analytics</div>
+      <div class="ps-rail-item">Archive</div>
+      <div class="ps-rail-item">Settings</div>
+    </div>
+    <div class="ps-rail-foot">
+      <div class="ps-rail-item">Sign out</div>
+      <div class="ps-rail-item">Collapse «</div>
+    </div>
+  </nav>
+
+  <div class="ps-main">
+    <!-- top strip -->
+    <div class="ps-topstrip">
+      <div class="ps-search ps-mono">Search tickets, runs, projects… (/)</div>
+      <div class="ps-worker-pill ps-mono"><span class="ps-pulse"></span>Running · 2/5 · $60.31 today</div>
+    </div>
+
+    <!-- project strip -->
+    <div class="ps-pstrip">
+      <div class="ps-ptab ps-active"><span class="ps-dot jade"></span>nightdesk<span class="ps-badge ps-live">5</span></div>
+      <div class="ps-ptab"><span class="ps-dot" style="background:var(--azure)"></span>CREAM<span class="ps-badge">1</span></div>
+      <div class="ps-ptab"><span class="ps-dot" style="background:var(--review)"></span>blubblub<span class="ps-badge">1</span></div>
+      <div class="ps-ptab"><span class="ps-dot" style="background:var(--moon-600)"></span>Vibeslop</div>
+      <div class="ps-ptab"><span class="ps-dot" style="background:var(--moon-600)"></span>reaper</div>
+      <div class="ps-hop ps-mono">[ hop ]</div>
+    </div>
+
+    <!-- project header -->
+    <div class="ps-phead">
+      <span class="ps-dot jade"></span>
+      <span class="ps-phead-name ps-display">nightdesk</span>
+      <span class="ps-phead-path ps-mono">/home/thor/fun/nightdesk</span>
+      <span class="ps-phead-stats ps-mono">profile overnight-default · 2 toolsets · 30d $37.73 · 42 runs · 5% failed</span>
+      <div class="ps-phead-actions">
+        <div class="ps-btn">Edit</div>
+        <div class="ps-btn ps-primary">New ticket</div>
+      </div>
+    </div>
+
+    <!-- horizon tabs -->
+    <div class="ps-htabs">
+      <div class="ps-htab">Overview</div>
+      <div class="ps-htab">Plan</div>
+      <div class="ps-htab">History</div>
+      <div class="ps-htab ps-active">Settings</div>
+      <div class="ps-htab-spacer"></div>
+      <div class="ps-htab-link">Trends ↗ Analytics</div>
+    </div>
+
+    <!-- body -->
+    <div class="ps-body">
+      <!-- in-page section rail -->
+      <nav class="ps-secrail" data-ps-secrail>
+        <div class="ps-secrail-item ps-secrail-active" data-ps-secnav="ps-sec-identity">IDENTITY</div>
+        <div class="ps-secrail-item" data-ps-secnav="ps-sec-exec">EXECUTION DEFAULTS<span class="ps-secrail-dot"></span></div>
+        <div class="ps-secrail-item" data-ps-secnav="ps-sec-repo">REPO LINKS</div>
+        <div class="ps-secrail-item" data-ps-secnav="ps-sec-labels">LABELS &amp; DEFAULTS</div>
+        <div class="ps-secrail-item" data-ps-secnav="ps-sec-automation">AUTOMATION</div>
+        <div class="ps-secrail-item" data-ps-secnav="ps-sec-danger">DANGER</div>
+      </nav>
+
+      <div class="ps-body-form">
+      <div class="ps-page-kicker ps-mono">PROJECT · SETTINGS</div>
+      <div class="ps-page-title ps-display">Every project-scoped setting, in the project's own home</div>
+
+      <div class="ps-migrate-note">Global <b>Settings → Projects</b> is now a thin list that deep-links here — "Project settings live on the project now."</div>
+
+      <!-- 1. IDENTITY -->
+      <div class="ps-section" id="ps-sec-identity">
+        <div class="ps-section-head" data-ps-toggle><span class="ps-callout">①</span><span class="ps-section-title">Identity</span><span class="ps-section-chevron">▾</span></div>
+        <div class="ps-section-body">
+        <div class="ps-row">
+          <div class="ps-row-label">Name</div>
+          <div class="ps-row-control"><div class="ps-field">nightdesk</div></div>
+        </div>
+        <div class="ps-row">
+          <div class="ps-row-label">Color</div>
+          <div class="ps-row-control ps-swatches">
+            <div class="ps-swatch ps-active" style="background:var(--lamp);color:var(--lamp)"></div>
+            <div class="ps-swatch" style="background:var(--azure);color:var(--azure)"></div>
+            <div class="ps-swatch" style="background:var(--review);color:var(--review)"></div>
+            <div class="ps-swatch" style="background:var(--warn);color:var(--warn)"></div>
+            <div class="ps-swatch" style="background:var(--failed);color:var(--failed)"></div>
+            <div class="ps-swatch" style="background:#e0a0d0;color:#e0a0d0"></div>
+            <div class="ps-swatch" style="background:#7fc9e0;color:#7fc9e0"></div>
+            <div class="ps-swatch" style="background:var(--moon-600);color:var(--moon-600)"></div>
+          </div>
+        </div>
+        <div class="ps-row">
+          <div class="ps-row-label">Source path</div>
+          <div class="ps-row-control"><div class="ps-field ps-mono">/home/thor/fun/nightdesk</div><div class="ps-btn-sm">Browse</div></div>
+        </div>
+        <div class="ps-row">
+          <div class="ps-row-label">Archived<span class="ps-sub">hidden from strip &amp; sidebar</span></div>
+          <div class="ps-row-control"><div class="ps-toggle"></div><span class="ps-toggle-label">off</span></div>
+        </div>
+        </div>
+      </div>
+
+      <!-- 2. EXECUTION DEFAULTS -->
+      <div class="ps-section" id="ps-sec-exec">
+        <div class="ps-section-head" data-ps-toggle><span class="ps-callout">②</span><span class="ps-section-title">Execution defaults</span><span class="ps-section-chevron">▾</span></div>
+        <div class="ps-section-body">
+        <div class="ps-row">
+          <div class="ps-row-label">Default profile</div>
+          <div class="ps-row-control"><div class="ps-select">overnight-default<span class="ps-caret">▾</span></div></div>
+        </div>
+        <div class="ps-row">
+          <div class="ps-row-label">Toolsets</div>
+          <div class="ps-row-control">
+            <span class="ps-chip">python-uv <span class="ps-x">×</span></span>
+            <span class="ps-chip">node-pnpm <span class="ps-x">×</span></span>
+            <span class="ps-chip ps-chip-add">+ add</span>
+          </div>
+        </div>
+        <div class="ps-row">
+          <div class="ps-row-label">Workspace mode</div>
+          <div class="ps-row-control">
+            <div class="ps-segmented">
+              <div class="ps-seg">directory</div>
+              <div class="ps-seg ps-seg-active">git_worktree</div>
+              <div class="ps-seg">in_place</div>
+            </div>
+          </div>
+        </div>
+        <div class="ps-row ps-dirty">
+          <div class="ps-row-label">Base ref<span class="ps-dirty-flag">edited</span></div>
+          <div class="ps-row-control"><span class="ps-diff-was">main</span><span class="ps-diff-arrow">→</span><span class="ps-diff-now">v2</span></div>
+        </div>
+        <div class="ps-row">
+          <div class="ps-row-label">Commit on finish</div>
+          <div class="ps-row-control"><div class="ps-toggle ps-on"></div><span class="ps-toggle-label">on</span></div>
+        </div>
+        <div class="ps-inline-note">Tickets inherit these unless overridden — see effective config on any ticket.</div>
+        </div>
+      </div>
+
+      <!-- 3. REPO LINKS -->
+      <div class="ps-section" id="ps-sec-repo">
+        <div class="ps-section-head" data-ps-toggle><span class="ps-callout">③</span><span class="ps-section-title">Repo links</span><span class="ps-section-chevron">▾</span></div>
+        <div class="ps-section-body">
+        <div class="ps-repo-row">
+          <span class="ps-repo-name">gitlab.local/thor/nightdesk</span>
+          <span class="ps-pill ps-ok">connection ok</span>
+          <span class="ps-repo-stat">7 issues</span>
+          <span class="ps-repo-stat">2 MRs</span>
+          <div class="ps-repo-actions"><div class="ps-btn-sm ps-danger">Detach</div></div>
+        </div>
+        <div class="ps-inline-note">[+ Attach repo…] — link a second repo to this project.</div>
+        </div>
+      </div>
+
+      <!-- 4. LABELS & DEFAULTS (starts collapsed) -->
+      <div class="ps-section ps-collapsed" id="ps-sec-labels">
+        <div class="ps-section-head" data-ps-toggle><span class="ps-callout">④</span><span class="ps-section-title">Labels &amp; defaults</span><span class="ps-section-chevron">▾</span></div>
+        <div class="ps-section-body">
+        <div class="ps-row">
+          <div class="ps-row-label">Default labels<span class="ps-sub">applied on ticket create</span></div>
+          <div class="ps-row-control"><span class="ps-chip">nightdesk <span class="ps-x">×</span></span><span class="ps-chip ps-chip-add">+ add</span></div>
+        </div>
+        <div class="ps-inline-note">Labels themselves are instance-wide — <a style="color:var(--azure)">Settings ↗</a></div>
+        </div>
+      </div>
+
+      <!-- 5. AUTOMATION (starts collapsed) -->
+      <div class="ps-section ps-collapsed" id="ps-sec-automation">
+        <div class="ps-section-head" data-ps-toggle><span class="ps-callout">⑤</span><span class="ps-section-title">Automation</span><span class="ps-section-hint">crons target this project's tickets</span><span class="ps-section-chevron">▾</span></div>
+        <div class="ps-section-body">
+        <div class="ps-cron-row">
+          <span class="ps-cron-name">nightly inbox triage · 02:00 UTC daily</span>
+          <span class="ps-cron-meta"><span>last <span class="ps-good">✓</span> 20h ago</span></span>
+          <div class="ps-repo-actions"><div class="ps-btn-sm">Edit</div><div class="ps-btn-sm ps-danger">Disable</div></div>
+        </div>
+        <div class="ps-cron-row">
+          <span class="ps-cron-name">weekly dep-upgrade sweep · Mon 03:00 UTC</span>
+          <span class="ps-cron-meta"><span>next in 2d</span></span>
+          <div class="ps-repo-actions"><div class="ps-btn-sm">Edit</div><div class="ps-btn-sm ps-danger">Disable</div></div>
+        </div>
+        <div class="ps-inline-note">[+ New cron…]</div>
+        </div>
+      </div>
+
+      <!-- 6. DANGER -->
+      <div class="ps-section" id="ps-sec-danger">
+        <div class="ps-section-head" data-ps-toggle><span class="ps-callout">⑥</span><span class="ps-section-title">Danger</span><span class="ps-section-chevron">▾</span></div>
+        <div class="ps-section-body">
+        <div class="ps-danger-row">
+          <div><div class="ps-danger-title">Archive project</div><div class="ps-danger-desc">Hides from strip/sidebar; tickets remain.</div></div>
+          <div class="ps-danger-actions"><div class="ps-btn-mute">Archive</div></div>
+        </div>
+        <div class="ps-danger-row">
+          <div><div class="ps-danger-title">Delete project</div><div class="ps-danger-desc">Requires project to be empty of tickets.</div></div>
+          <div class="ps-danger-actions"><div class="ps-btn-danger" disabled title="requires empty project">Delete</div></div>
+        </div>
+        </div>
+      </div>
+
+      <div class="ps-legend">
+        <div class="ps-legend-title">Legend</div>
+        <div><span class="ps-callout">①</span><b>Identity</b> — name, color, source path, archived flag. <span class="ps-legend-real">backend-real</span> today (Project entity).</div>
+        <div><span class="ps-callout">②</span><b>Execution defaults</b> — profile, toolsets, workspace_mode, base_ref, commit-on-finish. <span class="ps-legend-real">backend-real</span>; row shown dirty (base ref main → v2) to demonstrate in-place editing with the sticky save bar below.</div>
+        <div><span class="ps-callout">③</span><b>Repo links</b> — attach/detach uses the 0029 repo-link API. <span class="ps-legend-real">backend-real</span>.</div>
+        <div><span class="ps-callout">④</span><b>Labels &amp; defaults</b> — default-labels-on-create is project-scoped and <span class="ps-legend-real">backend-real</span>; label management itself stays instance-wide, hence the link-out.</div>
+        <div><span class="ps-callout">⑤</span><b>Automation</b> — crons already exist and target projects; edit/disable/new use the existing cron API. <span class="ps-legend-real">backend-real</span>.</div>
+        <div><span class="ps-callout">⑥</span><b>Danger</b> — archive/delete on the Project entity. <span class="ps-legend-real">backend-real</span>.</div>
+        <div style="margin-top:8px">This page is a frontend LIFT: every field already exists on the Project entity / existing APIs — nothing here is new backend surface. Only the page itself (moving these fields out of global Settings into a project-scoped tab) is new frontend.</div>
+      </div>
+      </div>
+    </div>
+
+    <!-- sticky dirty-state save bar -->
+    <div class="ps-savebar">
+      <div class="ps-savebar-msg"><span class="ps-dot warn"></span>1 unsaved change — Base ref: main → v2</div>
+      <div class="ps-savebar-actions">
+        <div class="ps-btn">Revert</div>
+        <div class="ps-btn ps-primary">Save changes</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById('ps-root');
+  if (!root) return;
+
+  // collapsible section headers
+  root.querySelectorAll('[data-ps-toggle]').forEach(function (head) {
+    head.addEventListener('click', function () {
+      head.closest('.ps-section').classList.toggle('ps-collapsed');
+    });
+  });
+
+  // section rail: click to scroll + set active
+  var railItems = root.querySelectorAll('[data-ps-secnav]');
+  railItems.forEach(function (item) {
+    item.addEventListener('click', function () {
+      var targetId = item.getAttribute('data-ps-secnav');
+      var target = root.querySelector('#' + targetId);
+      if (!target) return;
+      target.classList.remove('ps-collapsed');
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      railItems.forEach(function (i) { i.classList.remove('ps-secrail-active'); });
+      item.classList.add('ps-secrail-active');
+    });
+  });
+
+  // scroll-spy: highlight the rail item for the section nearest the top
+  var scrollParent = root.querySelector('.ps-stage');
+  var sections = Array.prototype.slice.call(root.querySelectorAll('.ps-section'));
+  function onScroll() {
+    var best = null;
+    var bestDist = Infinity;
+    sections.forEach(function (sec) {
+      var rect = sec.getBoundingClientRect();
+      var dist = Math.abs(rect.top - 80);
+      if (rect.top < 220 && dist < bestDist) { bestDist = dist; best = sec; }
+    });
+    if (!best) return;
+    railItems.forEach(function (i) {
+      i.classList.toggle('ps-secrail-active', i.getAttribute('data-ps-secnav') === best.id);
+    });
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+})();
+</script>
+</section>
+</div>
+<div class="rv-foot">
+  <h2>Backend implications, round-4 rollup</h2>
+  <div class="rv-be-scroll">
+    <table class="rv-be">
+      <thead><tr><th>Need</th><th>Status</th><th>Unlocks</th></tr></thead>
+      <tbody>
+        <tr><td>Unified project activity feed (runs + lifecycle + repo events + cron fires, cursor-paginated, server-side filters)</td><td><span class="rv-pill new">NEW</span></td><td>History; Overview recency; true last-activity everywhere</td></tr>
+        <tr><td>Path/coverage classifier (queued / dependency / cron / blocked / unset) + dependency-depth staging</td><td><span class="rv-pill new">NEW (client-side)</span></td><td>Plan's roadmap lanes and badges; reads the existing TicketDependency DAG, no schema change</td></tr>
+        <tr><td>Batch ticket create + dependency wiring in one flow</td><td><span class="rv-pill new">NEW (thin)</span></td><td>Breakdown workbench commit; composes existing single-ticket endpoints</td></tr>
+        <tr><td>Per-run light diff stat (files, +/−)</td><td><span class="rv-pill new">NEW</span></td><td>Overview verdict rows; History run rows</td></tr>
+        <tr><td>Attention rollup per project (review/failed/blocked/unacked + last activity)</td><td><span class="rv-pill new">NEW</span></td><td>Sidebar + strip badges, hop ordering</td></tr>
+        <tr><td>"Awaiting your review" MR flag + unified waiting-on-you feed</td><td><span class="rv-pill new">NEW</span></td><td>Overview's interrupt section; keep the item shape generic for future gates</td></tr>
+        <tr><td>Agentic proposal generation (breakdown), flesh-out agent, milestone entity</td><td><span class="rv-pill new">LATER PASS</span></td><td>The agentic-workflows feature pass; UI is designed to receive them</td></tr>
+        <tr><td>Project settings tab (identity, defaults, repo links, labels, crons, danger)</td><td><span class="rv-pill real">REAL — frontend lift</span></td><td>Every field exists on the Project entity / current APIs; global Settings→Projects becomes deep links</td></tr>
+        <tr><td>Ticket CRUD/promote/queue, TicketDependency DAG, crons, windows, steering, GitLab reads, pending-input answers</td><td><span class="rv-pill real">REAL TODAY</span></td><td>Everything else on all four pages</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Remaining tensions</h2>
+  <div class="rv-tension"><b>Roadmap lanes are derived, and derived things flicker.</b> A ticket completing at night can promote three LATER rows to READY by morning — good, that's the point — but mid-session queue/wire actions also re-stage rows under your cursor. The build should re-stage on explicit action, not on poll, or planning will feel like standing on ice.</div>
+  <div class="rv-tension"><b>Breakdown needs a home for intent.</b> The prose intent that generated a decomposition is worth keeping (it's the "why" behind five tickets), but there's no entity for it until milestones land in the agentic pass. Cheapest v1: stamp the intent text into each created ticket's description footer.</div>
+  <div class="rv-tension"><b>History's filters must be server-side</b> on the activity endpoint from day one, or the Failures chip lies about anything beyond the loaded window.</div>
+
+  <h2>Next step</h2>
+  <div class="rv-reco"><b>Round 4 is the convergence candidate.</b> If it holds after you click through: convert to structured nightdesk tickets — chrome + attention rollup → Overview → Plan (roadmap + breakdown-manual + coverage) → Settings lift → History + activity endpoint — dependencies wired, these mockups linked as spec, chained after v2 merge readiness.</div>
+</div>
+
+<script>
+  (function () {
+    var tabs = document.querySelectorAll(".rv-tab");
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        tabs.forEach(function (t) { t.setAttribute("aria-selected", t === tab ? "true" : "false"); });
+        document.querySelectorAll(".rv-stage").forEach(function (s) { s.classList.remove("rv-on"); });
+        document.getElementById(tab.dataset.stage).classList.add("rv-on");
+      });
+    });
+  })();
+</script>
