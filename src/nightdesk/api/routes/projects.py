@@ -4,11 +4,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from nightdesk.domain import scopes as sc
-from nightdesk.api.schemas import ProjectCreate, ProjectOut, ProjectUpdate
+from nightdesk.api.schemas import (
+    ProjectAttention,
+    ProjectCreate,
+    ProjectOut,
+    ProjectUpdate,
+)
 from nightdesk.domain.projects import (
     ProjectNameTaken,
     ProjectNotFound,
     archive_project,
+    attention_rollup,
     create_project,
     get_project,
     list_projects,
@@ -49,6 +55,18 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
         session: Session = Depends(get_session),
     ):
         return list_projects(session, include_archived=archived)
+
+    @router.get("/attention", response_model=list[ProjectAttention])
+    async def attention(session: Session = Depends(get_session)):
+        """Per-active-project attention rollup for the sidebar group + project
+        strip badges and ordering (docs/design/project-control-plane.md §Chrome).
+
+        One efficient query pass over the active projects; never one query per
+        project. Returns display-ordered rows: attention desc, then running,
+        then true last activity (derived from latest run/event, not
+        ``Project.updated_at``).
+        """
+        return attention_rollup(session)
 
     @router.get("/{project_id}", response_model=ProjectOut)
     async def show(project_id: str, session: Session = Depends(get_session)):

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import { qk } from "./keys";
-import type { ProjectCreate, ProjectOut, ProjectUpdate } from "./types";
+import type { ProjectAttention, ProjectCreate, ProjectOut, ProjectUpdate } from "./types";
 
 const BASE = "/api/v1/projects";
 
@@ -12,6 +12,7 @@ export const projectsApi = {
   create: (body: ProjectCreate) => api.post<ProjectOut>(BASE, { body }),
   update: (id: string, body: ProjectUpdate) => api.patch<ProjectOut>(`${BASE}/${id}`, { body }),
   remove: (id: string) => api.delete<void>(`${BASE}/${id}`),
+  attention: () => api.get<ProjectAttention[]>(`${BASE}/attention`),
 };
 
 /** Active projects by default. Pass `{ archived: true }` for the archived set
@@ -47,5 +48,20 @@ export function useSaveProject() {
     mutationFn: ({ id, body }: { id?: string; body: ProjectCreate | ProjectUpdate }) =>
       id ? projectsApi.update(id, body) : projectsApi.create(body as ProjectCreate),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.projects.all }),
+  });
+}
+
+/** Per-active-project attention rollup — drives the sidebar group + project
+ *  strip badges and ordering. The response is already display-ordered
+ *  (attention desc, then running, then last activity); poll so badges stay
+ *  fresh. */
+export function useProjectAttention() {
+  return useQuery({
+    queryKey: qk.projects.attention,
+    queryFn: () => projectsApi.attention(),
+    // Badges are an ambient signal; poll on the same cadence the project
+    // pages already use for their live counts.
+    refetchInterval: 15_000,
+    staleTime: 10_000,
   });
 }

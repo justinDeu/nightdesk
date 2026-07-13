@@ -847,8 +847,10 @@ class TestHelpersApi:
 
         r = await client.get(f"/api/v1/projects/{proj.id}/activity")
         assert r.status_code == 200, r.text
-        rows = r.json()
-        assert any(row["ticket_id"] == t.id for row in rows)
+        body = r.json()
+        assert body["has_more"] is False
+        assert any(it["ticket_id"] == t.id and it["kind"] == "run"
+                   and it["outcome"] == "success" for it in body["items"])
 
     async def test_project_activity_404_for_unknown_project(self, client):
         r = await client.get("/api/v1/projects/does-not-exist/activity")

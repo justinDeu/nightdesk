@@ -351,6 +351,26 @@ export interface RunDiff {
   repo_root: string | null;
 }
 
+// --- Run diff stat (lightweight, from GET /runs/{rid}/diffstat) ----------------
+// Same source as RunDiff, projected to per-file path + adds/deletes + totals —
+// no hunk bodies. Powers the Overview verdict row meta and evidence block.
+
+export interface RunDiffStatFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+}
+export interface RunDiffStat {
+  files: RunDiffStatFile[];
+  total_files: number;
+  total_added: number;
+  total_deleted: number;
+  truncated: boolean;
+  hidden_files: number;
+  error: string;
+}
+
 // --- Diff comments (line-anchored review comments on a run's diff) -------------
 
 export interface DiffCommentOut {
@@ -426,6 +446,24 @@ export interface ProjectCreate {
 }
 
 export type ProjectUpdate = Partial<ProjectCreate>;
+
+/** One active project's attention rollup (GET /api/v1/projects/attention).
+ *  Drives the sidebar group + project strip badges and ordering. The four
+ *  attention signals sum into ``needs_you``; ``running`` drives the lamp pulse
+ *  but scores zero. */
+export interface ProjectAttention {
+  id: string;
+  name: string;
+  slug: string;
+  color: string | null;
+  review: number;
+  failed: number;
+  inbox_blocked: number;
+  unacked: number;
+  needs_you: number;
+  running: number;
+  last_activity_at: string | null;
+}
 
 // --- Profiles ------------------------------------------------------------------
 
@@ -1173,6 +1211,9 @@ export interface GitLabItem {
   target_branch?: string;
   merge_status?: string;
   draft?: boolean;
+  /** MR list items only: the connection user is a requested reviewer on an
+   *  open MR. Derived server-side from the proxied GitLab read. */
+  awaiting_your_review?: boolean;
   [k: string]: unknown;
 }
 

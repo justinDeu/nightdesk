@@ -419,6 +419,35 @@ class ProjectOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
+class ProjectAttention(BaseModel):
+    """One active project's attention rollup — drives the sidebar/strip badges
+    and ordering (docs/design/project-control-plane.md §Chrome).
+
+    Four attention signals sum into ``needs_you`` (the badge). ``running`` is a
+    live-work signal only: it drives the lamp pulse and ordering tie-break but
+    scores zero — a system working is not a project that needs you. Every
+    timestamp is derived from runs/events, never ``Project.updated_at`` (which
+    drifts to "1mo ago" on a project that ran 30 minutes ago).
+    """
+
+    model_config = {"from_attributes": True}
+
+    id: str
+    name: str
+    slug: str
+    color: Optional[str] = None
+    # The four attention signals.
+    review: int = 0          # tickets currently in review
+    failed: int = 0          # non-archived tickets whose latest run failed
+    inbox_blocked: int = 0   # inbox items blocked or older than 48h
+    unacked: int = 0         # review/archived tickets not yet acknowledged
+    needs_you: int = 0       # review + failed + inbox_blocked + unacked
+    # Live work (not attention): drives the lamp pulse + ordering tie-break.
+    running: int = 0
+    last_activity_at: Optional[datetime] = None
+
+
 class TicketCreate(BaseModel):
     title: str
     prompt: str = ""
@@ -1599,14 +1628,55 @@ class WebhookTestRequest(BaseModel):
     url: str
 
 
-class ProjectActivityRow(BaseModel):
-    run_id: str
-    ticket_id: str
-    ticket_title: str
-    outcome: str
+class ProjectActivityItem(BaseModel):
+    """One row in the merged project activity feed
+    (GET /api/v1/projects/{id}/activity). ``kind`` selects which optional
+    fields are populated; see domain.activity.ActivityItem."""
+
+    id: str
+    kind: str  # run | lifecycle | repo | cron
+    ts: datetime
+    title: str
+    # run-specific
+    outcome: Optional[str] = None  # success | failed | running | unknown
     duration_seconds: Optional[float] = None
     tokens: Optional[int] = None
-    started_at: Optional[datetime] = None
+    cost_usd: Optional[float] = None
+    # deep-links back into the app
+    run_id: Optional[str] = None
+    ticket_id: Optional[str] = None
+    # lifecycle-specific
+    to_status: Optional[str] = None
+    # repo-specific
+    repo_kind: Optional[str] = None  # merge_request | issue
+    repo_link_id: Optional[str] = None
+    external_iid: Optional[str] = None
+    external_url: Optional[str] = None
+    state: Optional[str] = None  # opened | merged | closed
+    diff_add: Optional[int] = None
+    diff_del: Optional[int] = None
+    # cron-specific
+    skipped_reason: Optional[str] = None
+
+
+class ProjectActivityWeekRollup(BaseModel):
+    """Numbers-only week-boundary rollup (Mon–Sun, UTC). No prose digest."""
+
+    week_start: date  # the Monday that starts the week
+    runs: int
+    failures: int
+    shipped: int
+    cost_usd: float
+    success_rate: float  # 0..1 of completed runs
+
+
+class ProjectActivityFeed(BaseModel):
+    """Envelope for the unified, cursor-paginated project activity feed."""
+
+    items: list[ProjectActivityItem]
+    rollups: list[ProjectActivityWeekRollup] = []
+    next_cursor: Optional[str] = None
+    has_more: bool = False
 
 
 class AnalyticsSummaryOut(BaseModel):

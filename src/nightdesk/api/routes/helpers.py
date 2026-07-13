@@ -16,23 +16,63 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import (
-    CronPreviewOut, CronPreviewRequest, DiagnosticsOut, ProjectActivityRow,
+    CronPreviewOut, CronPreviewRequest, DiagnosticsOut, ProjectActivityFeed,
+    ProjectActivityItem, ProjectActivityWeekRollup,
     WebhookTestRequest, WorktreeNamePreviewOut, WorktreeNamePreviewRequest,
 )
-from nightdesk.db.models import DaemonStatus, Run, Ticket
+from nightdesk.db.models import DaemonStatus
+from nightdesk.domain.activity import (
+    VALID_FILTERS, project_activity_feed,
+)
 from nightdesk.domain.cron_jobs import InvalidCronJob, validate_schedule, validate_timezone
 from nightdesk.domain.notifications import build_test_payload, fire_webhook
-from nightdesk.domain.projects import ProjectNotFound, get_project
+from nightdesk.domain.projects import ProjectNotFound
 from nightdesk.domain.worktree_preview import base_ref_status, preview_worktree_path
 
 
 _WEBHOOK_URL_RE = re.compile(r"^https?://")
+
+
+def _activity_item_out(it) -> "ProjectActivityItem":
+    """Map a domain.activity.ActivityItem onto its Pydantic schema."""
+    return ProjectActivityItem(
+        id=it.id,
+        kind=it.kind,
+        ts=it.ts,
+        title=it.title,
+        outcome=it.outcome,
+        duration_seconds=it.duration_seconds,
+        tokens=it.tokens,
+        cost_usd=it.cost_usd,
+        run_id=it.run_id,
+        ticket_id=it.ticket_id,
+        to_status=it.to_status,
+        repo_kind=it.repo_kind,
+        repo_link_id=it.repo_link_id,
+        external_iid=it.external_iid,
+        external_url=it.external_url,
+        state=it.state,
+        diff_add=it.diff_add,
+        diff_del=it.diff_del,
+        skipped_reason=it.skipped_reason,
+    )
+
+
+def _rollup_out(r) -> "ProjectActivityWeekRollup":
+    return ProjectActivityWeekRollup(
+        week_start=r.week_start.date(),
+        runs=r.runs,
+        failures=r.failures,
+        shipped=r.shipped,
+        cost_usd=round(r.cost_usd, 4),
+        success_rate=round(r.success_rate, 4),
+    )
 
 
 def _bwrap_version() -> Optional[str]:
@@ -110,47 +150,36 @@ def build_router(get_session, bearer_token: str, scoped, *, worktree_root: Path)
         return None
 
     @router.get(
-        "/projects/{project_id}/activity", response_model=list[ProjectActivityRow],
+        "/projects/{project_id}/activity", response_model=ProjectActivityFeed,
         dependencies=[auth],
     )
     async def project_activity(
-        project_id: str, session: Session = Depends(get_session),
+        project_id: str,
+        kind: str = Query("all", description=f"filter chip: {', '.join(VALID_FILTERS)}"),
+        q: Optional[str] = Query(None, description="server-side title search"),
+        cursor: Optional[str] = Query(None, description="opaque cursor from next_cursor"),
+        limit: int = Query(50, ge=1, le=200),
+        include_rollups: bool = Query(False, description="weekly aggregates (first page only)"),
+        session: Session = Depends(get_session),
     ):
-        """JSON twin of the HTML project activity pane: the ~30 most recent
-        agent runs against tickets in this project, newest first."""
+        """Unified project activity feed — one merged, reverse-chronological,
+        cursor-paginated stream of run outcomes, ticket lifecycle transitions,
+        repo (MR/issue) events, and cron fires. Filters + search are server-side
+        so a chip never lies about rows past the loaded window
+        (docs/design/project-control-plane.md §History)."""
         try:
-            get_project(session, project_id)
+            feed = project_activity_feed(
+                session, project_id, kind=kind, q=q, cursor=cursor,
+                limit=limit, include_rollups=include_rollups,
+            )
         except ProjectNotFound:
             raise HTTPException(404, "project not found")
-        runs = list(session.scalars(
-            select(Run)
-            .join(Ticket, Run.ticket_id == Ticket.id)
-            .where(Ticket.project_id == project_id)
-            .order_by(Run.started_at.desc())
-            .limit(30)
-        ))
-        rows = []
-        for run in runs:
-            ticket = run.ticket
-            if ticket is None:
-                continue
-            tokens = (run.input_tokens or 0) + (run.output_tokens or 0)
-            duration = None
-            if run.started_at and run.finished_at:
-                s = run.started_at if run.started_at.tzinfo else run.started_at.replace(tzinfo=timezone.utc)
-                f = run.finished_at if run.finished_at.tzinfo else run.finished_at.replace(tzinfo=timezone.utc)
-                duration = (f - s).total_seconds()
-            outcome = run.exit_status or ("running" if run.finished_at is None else "unknown")
-            rows.append(ProjectActivityRow(
-                run_id=run.id,
-                ticket_id=ticket.id,
-                ticket_title=ticket.title,
-                outcome=outcome,
-                duration_seconds=duration,
-                tokens=tokens or None,
-                started_at=run.started_at,
-            ))
-        return rows
+        return ProjectActivityFeed(
+            items=[_activity_item_out(it) for it in feed.items],
+            rollups=[_rollup_out(r) for r in feed.rollups],
+            next_cursor=feed.next_cursor,
+            has_more=feed.has_more,
+        )
 
     @router.get("/diagnostics", response_model=DiagnosticsOut, dependencies=[config_read])
     async def diagnostics_json(session: Session = Depends(get_session)):

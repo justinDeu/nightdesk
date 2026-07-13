@@ -459,7 +459,7 @@ class Run(Base):
     __tablename__ = "runs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"))
+    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), index=True)
     # The conversation this turn belongs to. Nullable only for rows created
     # before this column existed; backfilled by the 0019 migration. Every run
     # created through ``start_run`` gets one.

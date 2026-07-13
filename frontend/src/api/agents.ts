@@ -40,7 +40,8 @@ const BASE = "/api/v1/agents";
 export const agentTranscriptPath = (id: string) => `${BASE}/${id}/transcript`;
 
 export const agentsApi = {
-  list: () => api.get<AgentOut[]>(BASE),
+  list: (params?: { project_id?: string }) =>
+    api.get<AgentOut[]>(BASE, { query: params }),
   get: (id: string) => api.get<AgentDetailOut>(`${BASE}/${id}`),
   create: (body: AgentCreate) => api.post<AgentDetailOut>(BASE, { body }),
   update: (id: string, body: AgentUpdate) =>
@@ -84,6 +85,20 @@ export function useAgents(options?: Partial<UseQueryOptions<AgentOut[]>>) {
   return useQuery({
     queryKey: qk.agents.list,
     queryFn: () => agentsApi.list(),
+    ...options,
+  });
+}
+
+/** Resident agents scoped to one project (sessions carry project_id). Used by
+ *  the project Overview's "agent waiting" count + waiting-on-reply feed. */
+export function useProjectAgents(
+  projectId: string | undefined,
+  options?: Partial<UseQueryOptions<AgentOut[]>>,
+) {
+  return useQuery({
+    queryKey: ["agents", "list", "project", projectId ?? null],
+    queryFn: () => agentsApi.list({ project_id: projectId }),
+    enabled: !!projectId,
     ...options,
   });
 }

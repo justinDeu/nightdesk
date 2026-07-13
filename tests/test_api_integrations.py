@@ -12,13 +12,17 @@ from nightdesk.domain.tickets import create_ticket
 
 
 class FakeGitLab:
-    def __init__(self, *, issues=None, mrs=None, projects=None):
+    def __init__(self, *, issues=None, mrs=None, projects=None, user=None):
         self.issues = issues or {}
         self.mrs = mrs or {}
         self.projects = projects or []
+        self.user = user or {"id": 1, "username": "you"}
 
     def test_auth(self):
         return {"version": "17.0"}
+
+    def current_user(self):
+        return self.user
 
     def list_projects(self, *, search=None, page_token=None):
         from nightdesk.integrations.gitlab import Page
@@ -172,6 +176,99 @@ async def test_browse_issues_admin_and_cache(client, monkeypatch):
     assert r.json()["items"][0]["iid"] == 482
     r = await client.get(f"/api/v1/repo-links/{rid}/issues/482")
     assert r.json()["title"] == "heartbeat"
+
+
+async def test_mr_list_awaiting_your_review_flag(client, monkeypatch):
+    """Each MR list item carries ``awaiting_your_review`` — true when the
+    connection user (the token's own user) is a requested reviewer on an open
+    MR. Derived from the proxied read; no persistence."""
+    _cid, rid = await _mk_connection_and_repo(client)
+    # Connection user is id=42; only !412 lists them as a reviewer.
+    fake = FakeGitLab(
+        user={"id": 42, "username": "you"},
+        mrs={
+            "412": {
+                "iid": 412, "title": "Retry with backoff", "state": "opened",
+                "reviewers": [{"id": 42, "username": "you"}],
+            },
+            "413": {
+                "iid": 413, "title": "Someone else's MR", "state": "opened",
+                "reviewers": [{"id": 7, "username": "teammate"}],
+            },
+            # Reviewer match but MR is merged → not awaiting.
+            "414": {
+                "iid": 414, "title": "Already merged", "state": "merged",
+                "reviewers": [{"id": 42, "username": "you"}],
+            },
+        },
+    )
+    _patch_client(monkeypatch, fake)
+
+    r = await client.get(f"/api/v1/repo-links/{rid}/merge-requests")
+    assert r.status_code == 200, r.text
+    by_iid = {it["iid"]: it for it in r.json()["items"]}
+    assert by_iid[412]["awaiting_your_review"] is True
+    assert by_iid[413]["awaiting_your_review"] is False
+    assert by_iid[414]["awaiting_your_review"] is False
+
+
+async def test_mr_list_awaiting_flag_without_reviewers(client, monkeypatch):
+    """MRs that carry no reviewers (older GitLab or stripped payload) are
+    simply not-awaiting; the flag is always present."""
+    _cid, rid = await _mk_connection_and_repo(client)
+    _patch_client(monkeypatch, FakeGitLab(
+        user={"id": 42},
+        mrs={"1": {"iid": 1, "title": "no reviewers field", "state": "opened"}},
+    ))
+    r = await client.get(f"/api/v1/repo-links/{rid}/merge-requests")
+    assert r.status_code == 200
+    assert r.json()["items"][0]["awaiting_your_review"] is False
+
+
+async def test_mr_awaiting_degrades_and_does_not_cache_on_transient_user_failure(
+    client, monkeypatch,
+):
+    """A transient /user failure must NOT 502 the list nor cache all-False flags.
+
+    The MR list succeeds but the connection-user lookup fails; this pass returns
+    awaiting_your_review=False for every item AND skips the items cache, so the
+    next list re-resolves the user (instead of serving stale False for the TTL).
+    """
+    from nightdesk.integrations import IntegrationError
+
+    _cid, rid = await _mk_connection_and_repo(client)
+
+    class FlakyUser:
+        def __init__(self):
+            self._inner = FakeGitLab(
+                user={"id": 42},
+                mrs={"412": {
+                    "iid": 412, "title": "x", "state": "opened",
+                    "reviewers": [{"id": 42}],
+                }},
+            )
+            self.user_calls = 0
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def current_user(self):
+            self.user_calls += 1
+            if self.user_calls == 1:
+                raise IntegrationError("transient 503", status=503)
+            return self._inner.current_user()
+
+    fake = FlakyUser()
+    _patch_client(monkeypatch, fake)
+
+    r1 = await client.get(f"/api/v1/repo-links/{rid}/merge-requests")
+    assert r1.status_code == 200  # degraded, not 502
+    assert r1.json()["items"][0]["awaiting_your_review"] is False
+
+    # Second call: /user succeeds → flag resolves True (proves r1 was not cached).
+    r2 = await client.get(f"/api/v1/repo-links/{rid}/merge-requests")
+    assert r2.status_code == 200
+    assert r2.json()["items"][0]["awaiting_your_review"] is True
 
 
 # ---------------------------------------------------------------------------
