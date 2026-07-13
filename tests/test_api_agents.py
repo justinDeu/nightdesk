@@ -34,6 +34,25 @@ async def test_create_list_get_delete(client):
     assert r.status_code == 404
 
 
+async def test_list_filters_by_project(client):
+    """GET /api/v1/agents?project_id= scopes to that project's sessions."""
+    in_proj = await _create(client, project_id="proj-a", title="in")
+    other = await _create(client, project_id="proj-b", title="other")
+    none = await _create(client, title="no project")
+
+    r = await client.get("/api/v1/agents", params={"project_id": "proj-a"})
+    assert r.status_code == 200
+    ids = {x["id"] for x in r.json()}
+    assert in_proj["id"] in ids
+    assert other["id"] not in ids
+    assert none["id"] not in ids
+
+    # Unfiltered still returns everything.
+    r = await client.get("/api/v1/agents")
+    all_ids = {x["id"] for x in r.json()}
+    assert {in_proj["id"], other["id"], none["id"]} <= all_ids
+
+
 async def test_message_enqueues_turn(client):
     a = await _create(client)
     r = await client.post(f"/api/v1/agents/{a['id']}/messages", json={"message": "hi"})

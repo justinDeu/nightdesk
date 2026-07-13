@@ -195,6 +195,49 @@ def build_router(get_session, bearer_token: str, engine=None) -> APIRouter:
         except IntegrationError as exc:
             raise _map_integration_error(exc)
 
+    def _connection_user_id(session: Session, connection) -> Optional[int]:
+        """The connection token's own GitLab user id, cached per connection.
+
+        Drives the MR "awaiting your review" flag (an MR is awaiting your review
+        when the connection user is one of its requested reviewers). Cached for
+        the browse TTL — the user is stable for a credential. Only positive ids
+        are cached; a failure returns None without caching so a later credential
+        fix re-resolves on the next list.
+        """
+        key = f"user:{connection.id}"
+        cached = browse_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            # _live maps any IntegrationError to HTTPException (and stamps
+            # connection.status on auth/unreachable before re-raising). Catch
+            # both so a transient /user failure degrades the flag to "not
+            # awaiting" for this response instead of 502-ing the whole list.
+            user = _live(session, connection, lambda cl: cl.current_user())
+        except (HTTPException, IntegrationError):
+            return None
+        uid = (
+            int(user["id"])
+            if isinstance(user, dict) and user.get("id") is not None
+            else None
+        )
+        if uid is not None:
+            browse_cache.set(key, uid)
+        return uid
+
+    def _with_awaiting(item: dict, uid: Optional[int]) -> dict:
+        """Stamp an MR list item with ``awaiting_your_review``: the connection
+        user is a requested reviewer on an open MR. Derived purely from the
+        proxied GitLab read — no persistence."""
+        if uid is None:
+            return {**item, "awaiting_your_review": False}
+        reviewers = item.get("reviewers") or []
+        is_open = (item.get("state") or "opened") == "opened"
+        awaiting = is_open and any(
+            isinstance(r, dict) and r.get("id") == uid for r in reviewers
+        )
+        return {**item, "awaiting_your_review": awaiting}
+
     # -- connections ----------------------------------------------------
 
     @admin.get("/connections", response_model=list[ConnectionOut])
@@ -421,8 +464,17 @@ def build_router(get_session, bearer_token: str, engine=None) -> APIRouter:
                 repo.external_id, state=state, search=search, page_token=page_token,
             ),
         )
-        result = {"items": page.items, "next_page_token": page.next_page_token}
-        browse_cache.set(key, result)
+        # Derive the "awaiting your review" flag from the connection user's
+        # reviewer membership; cached with the items since the user is stable.
+        uid = _connection_user_id(session, connection)
+        items = [_with_awaiting(it, uid) for it in page.items]
+        result = {"items": items, "next_page_token": page.next_page_token}
+        # Only cache when the awaiting flag actually resolved. A transient /user
+        # failure leaves uid=None and stamps False on every MR — caching that
+        # would hide awaiting MRs for the whole TTL. Skip the cache so the next
+        # list re-resolves the user.
+        if uid is not None:
+            browse_cache.set(key, result)
         return result
 
     @scoped.get("/repo-links/{rid}/merge-requests/{iid}", dependencies=[Depends(_read_gate)])

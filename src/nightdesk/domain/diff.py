@@ -130,6 +130,34 @@ def diff_to_json(d: RunDiff) -> dict:
     }
 
 
+def diff_to_stat_json(d: RunDiff) -> dict:
+    """Project a RunDiff to a lightweight diff-stat shape: per-file path +
+    additions/deletions + totals, with NO hunk bodies.
+
+    This is what the Overview verdict rows need (a files count and a +/− tally
+    per review run) without paying for — or shipping — the full unified diff.
+    The same source a full ``GET /diff`` resolves (pod sidecar or workspace
+    compute) is projected here, so the stat always agrees with the Changes tab.
+    """
+    return {
+        "files": [
+            {
+                "path": f.path,
+                "additions": f.lines_added,
+                "deletions": f.lines_deleted,
+                "binary": f.binary,
+            }
+            for f in d.files
+        ],
+        "total_files": d.total_files,
+        "total_added": d.total_added,
+        "total_deleted": d.total_deleted,
+        "truncated": d.truncated,
+        "hidden_files": d.hidden_files,
+        "error": d.error,
+    }
+
+
 def run_diff_from_json(payload: dict) -> RunDiff:
     """Reconstruct a RunDiff from the canonical dict (inverse of ``diff_to_json``).
 

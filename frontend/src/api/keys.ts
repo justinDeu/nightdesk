@@ -18,6 +18,7 @@ export const qk = {
     list: (ticketId?: string) => ["runs", "list", ticketId ?? null] as const,
     detail: (id: string) => ["runs", "detail", id] as const,
     comments: (id: string) => ["runs", "detail", id, "comments"] as const,
+    diffstat: (id: string) => ["runs", "detail", id, "diffstat"] as const,
   },
   agents: {
     all: ["agents"] as const,

@@ -11,7 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from nightdesk.db.models import Run, TicketWorkspace
 from nightdesk.domain.diff import (
-    FileDiff, RunDiff, compute_run_diff, _parse_unified_diff,
+    FileDiff, RunDiff, compute_run_diff, diff_to_stat_json, _parse_unified_diff,
 )
 from nightdesk.domain.profiles import create_profile
 from nightdesk.domain.tickets import create_ticket
@@ -528,3 +528,191 @@ async def test_diff_endpoint_ticket_workspace_fallback_uses_worktree_path(
 async def test_diff_endpoint_run_not_found(client):
     r = await client.get("/api/v1/runs/nonexistent/diff")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# diff_to_stat_json + GET /diffstat
+# ---------------------------------------------------------------------------
+
+
+def test_diff_to_stat_json_strips_hunks():
+    """The stat projection keeps path + add/del counts and totals but drops
+    every hunk body — that is the whole point of the lightweight endpoint."""
+    diff = RunDiff(
+        files=[
+            FileDiff(path="a.txt", lines_added=3, lines_deleted=1),
+            FileDiff(path="b.bin", binary=True, lines_added=0, lines_deleted=0),
+        ],
+        total_added=3,
+        total_deleted=1,
+        total_files=2,
+    )
+    stat = diff_to_stat_json(diff)
+    assert stat["total_files"] == 2
+    assert stat["total_added"] == 3
+    assert stat["total_deleted"] == 1
+    assert [f["path"] for f in stat["files"]] == ["a.txt", "b.bin"]
+    a = next(f for f in stat["files"] if f["path"] == "a.txt")
+    assert a["additions"] == 3
+    assert a["deletions"] == 1
+    assert a["binary"] is False
+    b = next(f for f in stat["files"] if f["path"] == "b.bin")
+    assert b["binary"] is True
+    # The stat shape carries no hunk/line payload.
+    assert all(set(f) == {"path", "additions", "deletions", "binary"} for f in stat["files"])
+    assert "hunks" not in stat
+    assert "branch" not in stat
+
+
+async def test_diffstat_endpoint_returns_stat_without_hunks(client, session, tmp_path):
+    """GET /runs/{rid}/diffstat returns per-file add/del + totals and agrees
+    with the full /diff totals, but never ships hunks."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    (repo / "a.txt").write_text("aaa\n")
+    subprocess.run(["git", "add", "."], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], **{_PROC_DIR_KW: str(repo)},
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    (repo / "a.txt").write_text("bbb\nccc\n")
+    (repo / "b.txt").write_text("new\n")
+    subprocess.run(["git", "add", "-A"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "edit"], **{_PROC_DIR_KW: str(repo)}, capture_output=True, check=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], **{_PROC_DIR_KW: str(repo)},
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    profile = create_profile(
+        session, name="stat_p", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(session, title="stat_t", prompt="", priority=0,
+                      profile_id=profile.id, run_now=False,
+                      status="review", source_path=str(repo))
+    run = Run(
+        ticket_id=t.id,
+        started_at=datetime.now(timezone.utc),
+        worktree_path=str(repo),
+        transcript_path="/tmp/tr_stat",
+        host="testhost",
+    )
+    session.add(run)
+    session.flush()
+    ws = TicketWorkspace(
+        ticket_id=t.id,
+        run_id=run.id,
+        role="primary",
+        kind="git_worktree",
+        repo_root=str(repo),
+        base_sha=base,
+        head_sha=head,
+        branch="feat-test",
+        state="ready",
+    )
+    session.add(ws)
+    session.commit()
+
+    full = (await client.get(f"/api/v1/runs/{run.id}/diff")).json()
+    r = await client.get(f"/api/v1/runs/{run.id}/diffstat")
+    assert r.status_code == 200
+    stat = r.json()
+    # Totals agree with the full diff...
+    assert stat["total_files"] == full["total_files"] == 2
+    assert stat["total_added"] == full["total_added"]
+    assert stat["total_deleted"] == full["total_deleted"]
+    # ...but the stat payload carries no hunks.
+    assert all("hunks" not in f for f in stat["files"])
+    assert {f["path"] for f in stat["files"]} == {"a.txt", "b.txt"}
+    a = next(f for f in stat["files"] if f["path"] == "a.txt")
+    assert a["additions"] >= 1 and a["deletions"] >= 1
+    b = next(f for f in stat["files"] if f["path"] == "b.txt")
+    assert b["additions"] > 0 and b["deletions"] == 0
+
+
+async def test_diffstat_endpoint_no_workspace(client, session):
+    """A run with no diffable workspace yields an empty stat with an error."""
+    profile = create_profile(
+        session, name="stat_nw", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(session, title="stat_nw_t", prompt="", priority=0,
+                      profile_id=profile.id, run_now=False,
+                      status="review", source_path="/tmp")
+    run = Run(
+        ticket_id=t.id,
+        started_at=datetime.now(timezone.utc),
+        worktree_path="/tmp/wt",
+        transcript_path="/tmp/tr_nw",
+        host="testhost",
+    )
+    session.add(run)
+    session.commit()
+
+    r = await client.get(f"/api/v1/runs/{run.id}/diffstat")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["files"] == []
+    assert data["total_files"] == 0
+    assert data["error"] == "no workspace found for this run"
+
+
+async def test_diffstat_endpoint_run_not_found(client):
+    r = await client.get("/api/v1/runs/nonexistent/diffstat")
+    assert r.status_code == 404
+
+
+async def test_diffstat_endpoint_uses_uploaded_sidecar(client, session, tmp_path, monkeypatch):
+    """A pod-uploaded diff sidecar is the source for the stat too (k8s runs)."""
+    import nightdesk.api.routes.runs as runs_routes
+    from nightdesk.domain.diff import diff_sidecar_path
+
+    profile = create_profile(
+        session, name="stat_sc", fs_read=[], fs_write=[], allowed_tools=[],
+        denied_tools=[], network_mode="off", network_allowlist=[],
+        secret_keys=[], default_model=None,
+    )
+    t = create_ticket(session, title="stat_sc_t", prompt="", priority=0,
+                      profile_id=profile.id, run_now=False,
+                      status="review", source_path="/tmp")
+    transcript_dir = tmp_path / "transcripts"
+    transcript_dir.mkdir()
+    run = Run(
+        ticket_id=t.id,
+        started_at=datetime.now(timezone.utc),
+        worktree_path="/tmp/wt",
+        transcript_path=str(transcript_dir / "t.jsonl"),
+        host="testhost",
+    )
+    session.add(run)
+    session.commit()
+
+    # Write a sidecar with the canonical RunDiff shape (what POST /diff stores).
+    from nightdesk.domain.diff import diff_to_json, run_diff_from_json
+    payload = diff_to_json(run_diff_from_json({
+        "files": [
+            {"path": "src/a.py", "lines_added": 10, "lines_deleted": 2, "hunks": []},
+            {"path": "src/b.py", "lines_added": 4, "lines_deleted": 0, "hunks": []},
+        ],
+        "total_added": 14,
+        "total_deleted": 2,
+        "total_files": 2,
+    }))
+    from nightdesk.domain.diff import write_diff_sidecar
+    write_diff_sidecar(diff_sidecar_path(transcript_dir, run.id), payload)
+
+    r = await client.get(f"/api/v1/runs/{run.id}/diffstat")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_files"] == 2
+    assert data["total_added"] == 14
+    assert data["total_deleted"] == 2
+    assert {f["path"] for f in data["files"]} == {"src/a.py", "src/b.py"}
+    assert all("hunks" not in f for f in data["files"])

@@ -149,6 +149,12 @@ class GitLabClient:
             resp = self._get("/user")
             return resp.json()
 
+    def current_user(self) -> dict:
+        """The token's own user (``GET /user``). Used to derive the
+        "awaiting your review" flag on MR list items — the connection user is
+        a requested reviewer when its id appears in an MR's ``reviewers``."""
+        return self._get("/user").json()
+
     def list_issues(
         self,
         project_id: str,

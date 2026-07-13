@@ -17,8 +17,8 @@ from nightdesk.api.schemas import RunOut
 from nightdesk.db.models import TicketWorkspace
 from nightdesk.domain.diff import (
     RunDiff, compute_workspace_diff, diff_sidecar_path, diff_to_json,
-    read_diff_sidecar, run_diff_from_json, select_diff_workspace,
-    write_diff_sidecar,
+    diff_to_stat_json, read_diff_sidecar, run_diff_from_json,
+    select_diff_workspace, write_diff_sidecar,
 )
 from nightdesk.domain.run_result import result_sidecar_path, write_result_sidecar
 from nightdesk.domain.runs import get_run, list_runs, RunNotFound
@@ -49,6 +49,34 @@ def build_router(get_session, bearer_token: str, engine=None, scoped=None) -> AP
         except RunNotFound:
             raise HTTPException(404, "not found")
 
+    def _resolve_run_diff(session: Session, rid: str):
+        """Resolve the canonical RunDiff for a run, shared by /diff and /diffstat.
+
+        Prefers the pod-uploaded sidecar (k8s runs have no host worktree); else
+        selects the run's diffable workspace by kind and computes the diff
+        (git worktree ``start_sha..end`` or a directory snapshot diff). Returns
+        ``(RunDiff | None, sidecar_hit)`` — ``None`` means no diffable workspace
+        (caller renders its empty state). Raises HTTPException(404) on unknown rid.
+        """
+        try:
+            run = get_run(session, rid)
+        except RunNotFound:
+            raise HTTPException(404, "not found")
+
+        sidecar = read_diff_sidecar(
+            diff_sidecar_path(Path(run.transcript_path).parent, rid)
+        )
+        if sidecar is not None:
+            return run_diff_from_json(sidecar), True
+
+        ws = select_diff_workspace(_run_workspaces(session, run))
+        result = compute_workspace_diff(
+            ws,
+            transcript_root=Path(run.transcript_path).parent,
+            run_id=rid,
+        )
+        return result, False
+
     @read.get("/{rid}/diff")
     async def run_diff(rid: str, session: Session = Depends(get_session)):
         """Return a structured unified diff for the run's workspace changes.
@@ -61,24 +89,7 @@ def build_router(get_session, bearer_token: str, engine=None, scoped=None) -> AP
         (directory) workspaces diff the run-start filesystem snapshot against the
         current tree.
         """
-        try:
-            run = get_run(session, rid)
-        except RunNotFound:
-            raise HTTPException(404, "not found")
-
-        # Prefer the pod-uploaded sidecar (k8s runs) — the host has no worktree.
-        sidecar = read_diff_sidecar(
-            diff_sidecar_path(Path(run.transcript_path).parent, rid)
-        )
-        if sidecar is not None:
-            return JSONResponse(diff_to_json(run_diff_from_json(sidecar)))
-
-        ws = select_diff_workspace(_run_workspaces(session, run))
-        result = compute_workspace_diff(
-            ws,
-            transcript_root=Path(run.transcript_path).parent,
-            run_id=rid,
-        )
+        result, _sidecar_hit = _resolve_run_diff(session, rid)
         if result is None:
             return JSONResponse({
                 "files": [],
@@ -94,8 +105,30 @@ def build_router(get_session, bearer_token: str, engine=None, scoped=None) -> AP
                 "head_sha": "",
                 "repo_root": "",
             })
-
         return JSONResponse(diff_to_json(result))
+
+    @read.get("/{rid}/diffstat")
+    async def run_diffstat(rid: str, session: Session = Depends(get_session)):
+        """Light per-file diff stat (path, additions, deletions) + totals.
+
+        Same source resolution as ``GET /{rid}/diff`` (pod-uploaded sidecar,
+        else the selected workspace's computed diff), projected to a stat-only
+        shape with no hunk bodies. The Overview verdict rows read this for a
+        files count and +/− tally per review run without shipping the full
+        unified diff. Numbers always agree with the Changes tab.
+        """
+        result, _sidecar_hit = _resolve_run_diff(session, rid)
+        if result is None:
+            return JSONResponse({
+                "files": [],
+                "total_files": 0,
+                "total_added": 0,
+                "total_deleted": 0,
+                "truncated": False,
+                "hidden_files": 0,
+                "error": "no workspace found for this run",
+            })
+        return JSONResponse(diff_to_stat_json(result))
 
     @read.get("/{rid}/log")
     async def download_log(rid: str, session: Session = Depends(get_session)):

@@ -155,7 +155,7 @@ export function ProjectPage() {
 
       {/* Active horizon tab */}
       <div className={cn("min-h-0 flex-1", activeTab !== "overview" && "overflow-y-auto")}>
-        {activeTab === "overview" && <OverviewTab project={project} />}
+        {activeTab === "overview" && <OverviewTab project={project} onEdit={() => goTab("settings")} />}
         {activeTab === "plan" && <PlanTab />}
         {activeTab === "history" && <HistoryTab />}
         {activeTab === "settings" && <SettingsTab />}

@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from nightdesk.domain import scopes as sc
@@ -135,8 +135,13 @@ def build_router(
         return _to_detail(session, row)
 
     @router.get("", response_model=list[AgentOut])
-    async def lst(session: Session = Depends(get_session)):
-        return [_to_out(session, r) for r in sess.list_sessions(session)]
+    async def lst(
+        project_id: Optional[str] = Query(default=None),
+        session: Session = Depends(get_session),
+    ):
+        """Resident agents. ``project_id`` filters to one project's sessions
+        (sessions already carry ``project_id``); omit it for the whole list."""
+        return [_to_out(session, r) for r in sess.list_sessions(session, project_id=project_id)]
 
     @router.get("/pending", response_model=list[AgentPendingItem])
     async def pending(session: Session = Depends(get_session)):

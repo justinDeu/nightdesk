@@ -295,12 +295,19 @@ def create_session(
     return row
 
 
-def list_sessions(session: OrmSession, *, limit: int = 200) -> list[Session]:
+def list_sessions(
+    session: OrmSession,
+    *,
+    limit: int = 200,
+    project_id: Optional[str] = None,
+) -> list[Session]:
     stmt = (
         select(Session)
         .order_by(Session.updated_at.desc(), Session.id.desc())
-        .limit(limit)
     )
+    if project_id is not None:
+        stmt = stmt.where(Session.project_id == project_id)
+    stmt = stmt.limit(limit)
     return list(session.scalars(stmt))
 
 
