@@ -3,9 +3,10 @@ import { Link } from "@tanstack/react-router";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-// The real History tab lives in its own module; re-exported here so ProjectPage
-// keeps one import for every horizon tab.
+// The real History + Settings tabs live in their own modules; re-exported here
+// so ProjectPage keeps one import for every horizon tab.
 export { HistoryTab } from "./history/HistoryTab";
+export { SettingsTab } from "./SettingsTab";
 
 /** The four project-space horizon tabs (docs/design/project-control-plane.md). */
 export type ProjectTab = "overview" | "plan" | "history" | "settings";
@@ -89,7 +90,3 @@ export function PlanTab() {
   );
 }
 
-/** Settings tab — plain placeholder (a later ticket lifts project settings here). */
-export function SettingsTab() {
-  return <ProjectStub title="Settings" />;
-}

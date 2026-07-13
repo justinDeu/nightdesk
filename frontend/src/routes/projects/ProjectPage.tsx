@@ -158,7 +158,7 @@ export function ProjectPage() {
         {activeTab === "overview" && <OverviewTab project={project} onEdit={() => goTab("settings")} />}
         {activeTab === "plan" && <PlanTab />}
         {activeTab === "history" && <HistoryTab project={project} />}
-        {activeTab === "settings" && <SettingsTab />}
+        {activeTab === "settings" && <SettingsTab project={project} />}
       </div>
     </div>
   );
