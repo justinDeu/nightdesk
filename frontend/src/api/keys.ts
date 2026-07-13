@@ -30,6 +30,7 @@ export const qk = {
   projects: {
     all: ["projects"] as const,
     detail: (id: string) => ["projects", "detail", id] as const,
+    attention: ["projects", "attention"] as const,
   },
   profiles: {
     all: ["profiles"] as const,

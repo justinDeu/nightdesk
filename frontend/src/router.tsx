@@ -12,7 +12,7 @@ import { DeskPage } from "@/routes/desk/DeskPage";
 import { TicketsPage } from "@/routes/tickets/TicketsPage";
 import { TicketDetailPage } from "@/routes/tickets/TicketDetailPage";
 import { RunTheater } from "@/routes/tickets/RunTheater";
-import { ProjectsIndexPage } from "@/routes/projects/ProjectsIndexPage";
+import { ProjectsRedirect } from "@/routes/projects/ProjectsRedirect";
 import { ProjectPage } from "@/routes/projects/ProjectPage";
 import { AgentsPage } from "@/routes/agents/AgentsPage";
 import { AgentScreen } from "@/routes/agents/AgentScreen";
@@ -64,12 +64,23 @@ const ticketDetailRoute = createRoute({
 const projectsIndexRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/projects",
-  component: ProjectsIndexPage,
+  component: ProjectsRedirect,
 });
 
 const projectDetailRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/projects/$id",
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tab?: "overview" | "plan" | "history" | "settings" } => ({
+    tab:
+      search.tab === "plan" ||
+      search.tab === "history" ||
+      search.tab === "settings" ||
+      search.tab === "overview"
+        ? search.tab
+        : undefined,
+  }),
   component: ProjectPage,
 });
 

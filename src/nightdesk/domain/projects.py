@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timezone
-from typing import Any
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from nightdesk.db.models import Project
+from nightdesk.db.models import Project, Run, Ticket, TicketEvent
 from nightdesk.domain.toolchains import (
     assert_known_toolchains,
     assert_paths_not_excluded,
@@ -247,3 +248,192 @@ def _resolve_worktree_name(project: Project, title: str) -> str | None:
 def _validate_workspace_mode(value: str | None) -> None:
     if value is not None and value not in _VALID_WORKSPACE_MODES:
         raise ValueError(f"unknown workspace mode {value!r}")
+
+
+# ---------------------------------------------------------------------------
+# Attention rollup — drives the project sidebar/strip badges + ordering.
+# docs/design/project-control-plane.md §Chrome.
+# ---------------------------------------------------------------------------
+
+# Inbox item counts as "needs you" once it has sat untriaged this long.
+INBOX_STALE_AFTER = timedelta(hours=48)
+
+# Terminal-ish states whose tickets can accrue acknowledgement debt (mirrors
+# domain.ack.DIGEST_STATUSES — duplicated only to avoid a cross-domain import).
+_DIGEST_STATUSES = ("review", "archived")
+
+
+@dataclass
+class ProjectAttentionRow:
+    """One active project's attention rollup. See schemas.ProjectAttention."""
+
+    id: str
+    name: str
+    slug: str
+    color: Optional[str]
+    review: int
+    failed: int
+    inbox_blocked: int
+    unacked: int
+    running: int
+    needs_you: int
+    last_activity_at: Optional[datetime]
+
+
+def _aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """SQLite drops tzinfo; treat naive stored datetimes as UTC."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _latest_runs_by_ticket(session: Session, ticket_ids: list[str]) -> dict[str, Run]:
+    """Most-recent run per ticket (by started_at, id breaks ties), batched.
+
+    One query over the ticket set; the latest row per ticket wins because rows
+    arrive newest-first. Mirrors the pattern in ``domain.ack._latest_runs``."""
+    if not ticket_ids:
+        return {}
+    rows = session.scalars(
+        select(Run)
+        .where(Run.ticket_id.in_(ticket_ids))
+        .order_by(Run.started_at.desc(), Run.id.desc())
+    )
+    out: dict[str, Run] = {}
+    for r in rows:
+        out.setdefault(r.ticket_id, r)
+    return out
+
+
+def _latest_events_by_ticket(session: Session, ticket_ids: list[str]) -> dict[str, TicketEvent]:
+    """Most-recent ticket_event per ticket, batched (any to_status)."""
+    if not ticket_ids:
+        return {}
+    rows = session.scalars(
+        select(TicketEvent)
+        .where(TicketEvent.ticket_id.in_(ticket_ids))
+        .order_by(TicketEvent.created_at.desc(), TicketEvent.id.desc())
+    )
+    out: dict[str, TicketEvent] = {}
+    for ev in rows:
+        out.setdefault(ev.ticket_id, ev)
+    return out
+
+
+def attention_rollup(session: Session) -> list[ProjectAttentionRow]:
+    """Per-active-project attention rollup for sidebar/strip badges + ordering.
+
+    One efficient pass: a small fixed set of batched queries covers every active
+    project (never one query per project). Returns display-ordered rows:
+    attention desc, then running, then true last activity, then name.
+
+    "Last activity" derives from the latest run/event across the project's
+    tickets — deliberately NOT ``Project.updated_at``, which drifts.
+    """
+    # Lazy import to avoid the domain.tickets <-> domain.projects cycle.
+    from nightdesk.domain.tickets import ticket_completeness
+
+    projects = list_projects(session)
+    if not projects:
+        return []
+
+    proj_ids = [p.id for p in projects]
+    # Every ticket owned by an active project (archived + non-archived —
+    # archived tickets still carry unacked debt). Workspaces are eager-loaded
+    # so the inbox "blocked" check (ticket_completeness) doesn't N+1.
+    tickets = list(
+        session.scalars(
+            select(Ticket)
+            .where(Ticket.project_id.in_(proj_ids))
+            .options(selectinload(Ticket.workspaces))
+        )
+    )
+    ticket_ids = [t.id for t in tickets]
+    latest_runs = _latest_runs_by_ticket(session, ticket_ids)
+    latest_events = _latest_events_by_ticket(session, ticket_ids)
+
+    now = _now()
+    stale_before = now - INBOX_STALE_AFTER
+    epoch = datetime(1, 1, 1, tzinfo=timezone.utc)
+
+    # Accumulators per project.
+    agg: dict[str, dict[str, Any]] = {
+        p.id: {
+            "project": p,
+            "review": 0,
+            "failed": 0,
+            "inbox_blocked": 0,
+            "unacked": 0,
+            "running": 0,
+            "last_activity": epoch,
+        }
+        for p in projects
+    }
+
+    for t in tickets:
+        bucket = agg.get(t.project_id)
+        if bucket is None:
+            continue
+        if t.status == "review":
+            bucket["review"] += 1
+        if t.status == "running":
+            bucket["running"] += 1
+        # Unacked debt: review/archived tickets a human has not acknowledged.
+        if t.status in _DIGEST_STATUSES and t.acknowledged_at is None:
+            bucket["unacked"] += 1
+        # Inbox needing triage: blocked (can't promote) or stale >48h.
+        if t.status == "inbox":
+            created = _aware(t.created_at)
+            stale = created is not None and created < stale_before
+            blocked = bool(ticket_completeness(t))
+            if stale or blocked:
+                bucket["inbox_blocked"] += 1
+        # Latest run failed (non-archived only — an archived ticket's old
+        # failure is settled history, not a live "needs you").
+        if t.status != "archived":
+            run = latest_runs.get(t.id)
+            if run is not None and run.exit_status is not None and run.exit_status != "success":
+                bucket["failed"] += 1
+        # True last activity: the most recent run finish/start or event.
+        run = latest_runs.get(t.id)
+        if run is not None:
+            run_ts = _aware(run.finished_at) or _aware(run.started_at)
+            if run_ts and run_ts > bucket["last_activity"]:
+                bucket["last_activity"] = run_ts
+        ev = latest_events.get(t.id)
+        if ev is not None:
+            ev_ts = _aware(ev.created_at)
+            if ev_ts and ev_ts > bucket["last_activity"]:
+                bucket["last_activity"] = ev_ts
+
+    rows: list[ProjectAttentionRow] = []
+    for bucket in agg.values():
+        p: Project = bucket["project"]
+        needs = (
+            bucket["review"] + bucket["failed"]
+            + bucket["inbox_blocked"] + bucket["unacked"]
+        )
+        last = bucket["last_activity"]
+        rows.append(ProjectAttentionRow(
+            id=p.id,
+            name=p.name,
+            slug=p.slug,
+            color=p.color,
+            review=bucket["review"],
+            failed=bucket["failed"],
+            inbox_blocked=bucket["inbox_blocked"],
+            unacked=bucket["unacked"],
+            running=bucket["running"],
+            needs_you=needs,
+            last_activity_at=last if last != epoch else None,
+        ))
+
+    # Display order: attention desc, then running, then last activity desc
+    # (None last), then name for a stable tie-break.
+    rows.sort(key=lambda r: (
+        -r.needs_you,
+        -r.running,
+        -int((r.last_activity_at or epoch).timestamp()),
+        (r.name or "").lower(),
+    ))
+    return rows

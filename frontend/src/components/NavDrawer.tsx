@@ -4,6 +4,7 @@ import { LogOut, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAgentAttention } from "@/api/agents";
 import { ENTRIES, signOut } from "./navEntries";
+import { ProjectsNavGroup } from "./ProjectsNavGroup";
 
 /** Mobile navigation drawer (below md). Slides in from the left over a scrim;
  *  shares ENTRIES + signOut with the desktop SideNav. Closes on Escape, scrim
@@ -78,6 +79,9 @@ export function NavDrawer({ open, onClose }: { open: boolean; onClose: () => voi
 
         <div className="flex-1 space-y-0.5 px-2.5 py-2">
           {ENTRIES.map((entry) => {
+            if (entry.group === "projects") {
+              return <ProjectsNavGroup key={entry.to} onNavigate={onClose} />;
+            }
             const Icon = entry.icon;
             const badge = entry.badgeKey === "agents-pending" ? pendingCount : 0;
             return (

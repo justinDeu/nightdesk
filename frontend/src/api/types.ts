@@ -427,6 +427,24 @@ export interface ProjectCreate {
 
 export type ProjectUpdate = Partial<ProjectCreate>;
 
+/** One active project's attention rollup (GET /api/v1/projects/attention).
+ *  Drives the sidebar group + project strip badges and ordering. The four
+ *  attention signals sum into ``needs_you``; ``running`` drives the lamp pulse
+ *  but scores zero. */
+export interface ProjectAttention {
+  id: string;
+  name: string;
+  slug: string;
+  color: string | null;
+  review: number;
+  failed: number;
+  inbox_blocked: number;
+  unacked: number;
+  needs_you: number;
+  running: number;
+  last_activity_at: string | null;
+}
+
 // --- Profiles ------------------------------------------------------------------
 
 export interface ClaudeCredentialsOut {

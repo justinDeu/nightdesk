@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { Tooltip } from "@/ui/Tooltip";
 import { useAgentAttention } from "@/api/agents";
 import { ENTRIES, signOut } from "./navEntries";
+import { ProjectsNavGroup } from "./ProjectsNavGroup";
 
 const COLLAPSE_KEY = "nightdesk:nav-collapsed";
 
@@ -58,6 +59,37 @@ export function SideNav() {
 
       <div className="flex-1 space-y-0.5 px-2.5 py-2">
         {ENTRIES.map((entry) => {
+          // The Projects entry is an expandable group when the rail is open;
+          // collapsed (icon-only) falls back to a plain Projects link that
+          // hops to the highest-attention project (via the /projects redirect).
+          if (entry.group === "projects") {
+            if (collapsed) {
+              const link = (
+                <Link
+                  key={entry.to}
+                  to={entry.to}
+                  activeOptions={{ exact: entry.exact }}
+                  className={cn(
+                    "group relative flex items-center justify-center rounded-control px-0 py-2 text-sm font-medium",
+                    "text-moon-400 transition-colors duration-100",
+                    "hover:bg-ink-800 hover:text-moon-100",
+                  )}
+                  activeProps={{
+                    className:
+                      "!text-moon-100 bg-ink-800 shadow-[inset_2px_0_0_var(--color-lamp)]",
+                  }}
+                >
+                  <entry.icon size={17} className="shrink-0" />
+                </Link>
+              );
+              return (
+                <Tooltip key={entry.to} content={entry.label} side="right">
+                  {link}
+                </Tooltip>
+              );
+            }
+            return <ProjectsNavGroup key={entry.to} />;
+          }
           const Icon = entry.icon;
           const badge = entry.badgeKey === "agents-pending" ? pendingCount : 0;
           const link = (

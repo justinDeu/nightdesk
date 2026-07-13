@@ -22,6 +22,9 @@ export interface NavEntry {
    *  agent attention total (structured needs-input + unread replies). The
    *  value is supplied by the shell, not baked into the static list. */
   badgeKey?: "agents-pending";
+  /** The Projects entry renders as an expandable group (active projects with
+   *  attention badges) instead of a flat link. See ProjectsNavGroup. */
+  group?: "projects";
 }
 
 /** Primary navigation, shared by the desktop rail (SideNav) and the mobile
@@ -29,7 +32,7 @@ export interface NavEntry {
 export const ENTRIES: NavEntry[] = [
   { to: "/", label: "Desk", icon: LayoutDashboard, exact: true },
   { to: "/tickets", label: "Tickets", icon: ListTodo },
-  { to: "/projects", label: "Projects", icon: FolderKanban },
+  { to: "/projects", label: "Projects", icon: FolderKanban, group: "projects" },
   { to: "/agents", label: "Agents", icon: Bot, badgeKey: "agents-pending" },
   { to: "/inbox", label: "Inbox", icon: Inbox },
   { to: "/scheduled", label: "Scheduled", icon: CalendarClock },

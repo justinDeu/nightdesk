@@ -419,6 +419,35 @@ class ProjectOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
+class ProjectAttention(BaseModel):
+    """One active project's attention rollup — drives the sidebar/strip badges
+    and ordering (docs/design/project-control-plane.md §Chrome).
+
+    Four attention signals sum into ``needs_you`` (the badge). ``running`` is a
+    live-work signal only: it drives the lamp pulse and ordering tie-break but
+    scores zero — a system working is not a project that needs you. Every
+    timestamp is derived from runs/events, never ``Project.updated_at`` (which
+    drifts to "1mo ago" on a project that ran 30 minutes ago).
+    """
+
+    model_config = {"from_attributes": True}
+
+    id: str
+    name: str
+    slug: str
+    color: Optional[str] = None
+    # The four attention signals.
+    review: int = 0          # tickets currently in review
+    failed: int = 0          # non-archived tickets whose latest run failed
+    inbox_blocked: int = 0   # inbox items blocked or older than 48h
+    unacked: int = 0         # review/archived tickets not yet acknowledged
+    needs_you: int = 0       # review + failed + inbox_blocked + unacked
+    # Live work (not attention): drives the lamp pulse + ordering tie-break.
+    running: int = 0
+    last_activity_at: Optional[datetime] = None
+
+
 class TicketCreate(BaseModel):
     title: str
     prompt: str = ""
