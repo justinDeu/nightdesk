@@ -693,7 +693,7 @@ def unarchive(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Tick
     return transition_status(session, ticket_id, target, actor=actor)
 
 
-def send_to_inbox(session: Session, ticket_id: str) -> Ticket:
+def send_to_inbox(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
     """Send a draft ticket back to the inbox for further triage.
 
     Mirrors the old UI's "send to inbox" action. Valid ONLY from ``draft``:
@@ -706,7 +706,7 @@ def send_to_inbox(session: Session, ticket_id: str) -> Ticket:
     t = get_ticket(session, ticket_id)
     if t.status != "draft":
         raise InvalidTransition(f"cannot send to inbox from {t.status}")
-    return transition_status(session, ticket_id, "inbox")
+    return transition_status(session, ticket_id, "inbox", actor=actor)
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +740,9 @@ def list_inbox(
     return list(session.scalars(stmt))
 
 
-def promote_ticket(session: Session, ticket_id: str, target_status: str = "draft") -> Ticket:
+def promote_ticket(
+    session: Session, ticket_id: str, target_status: str = "draft", *, actor: Actor = ADMIN,
+) -> Ticket:
     """Promote an inbox item onto the runnable board.
 
     ``target_status`` is ``draft`` (accept for later) or ``queued`` (accept and
@@ -752,16 +754,16 @@ def promote_ticket(session: Session, ticket_id: str, target_status: str = "draft
     t = get_ticket(session, ticket_id)
     if t.status != "inbox":
         raise InvalidTransition(f"cannot promote from {t.status}")
-    return transition_status(session, ticket_id, target_status)
+    return transition_status(session, ticket_id, target_status, actor=actor)
 
 
-def decline_ticket(session: Session, ticket_id: str) -> Ticket:
+def decline_ticket(session: Session, ticket_id: str, *, actor: Actor = ADMIN) -> Ticket:
     """Decline an inbox item: inbox -> archived. Always allowed (no completeness
     requirement) so junk and dead ideas can be cleared from triage."""
     t = get_ticket(session, ticket_id)
     if t.status != "inbox":
         raise InvalidTransition(f"cannot decline from {t.status}")
-    return transition_status(session, ticket_id, "archived")
+    return transition_status(session, ticket_id, "archived", actor=actor)
 
 
 def set_run_now(session: Session, ticket_id: str, run_now: bool) -> Ticket:
@@ -1331,6 +1333,8 @@ def bulk_update_profile(
 def bulk_archive(
     session: Session,
     ticket_ids: list[str],
+    *,
+    actor: Actor = ADMIN,
 ) -> tuple[list[Ticket], list[dict]]:
     """Bulk archive.  Archives every ticket that is not actively running (see
     ``archive``): ``inbox``/``draft``/``queued``/``review`` all move to
@@ -1342,7 +1346,7 @@ def bulk_archive(
     skipped: list[dict] = []
     for tid in ticket_ids:
         try:
-            t = archive(session, tid)
+            t = archive(session, tid, actor=actor)
             updated.append(t)
         except TicketNotFound:
             skipped.append({"ticket_id": tid, "reason": "not found"})
@@ -1354,6 +1358,8 @@ def bulk_archive(
 def bulk_unarchive(
     session: Session,
     ticket_ids: list[str],
+    *,
+    actor: Actor = ADMIN,
 ) -> tuple[list[Ticket], list[dict]]:
     """Bulk unarchive.  Returns each archived ticket to ``queued`` if complete
     or ``inbox`` if incomplete (the supported reverse of archiving — see
@@ -1363,7 +1369,7 @@ def bulk_unarchive(
     skipped: list[dict] = []
     for tid in ticket_ids:
         try:
-            t = unarchive(session, tid)
+            t = unarchive(session, tid, actor=actor)
             updated.append(t)
         except TicketNotFound:
             skipped.append({"ticket_id": tid, "reason": "not found"})

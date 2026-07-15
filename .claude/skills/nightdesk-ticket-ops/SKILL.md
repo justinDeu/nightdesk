@@ -411,6 +411,10 @@ curl -s "${AUTH[@]}" -X POST "$BASE/api/v1/tickets/$TID/unarchive"  # archived �
 
 `/unarchive` routes by completeness (it does **not** always land in `queued`): a *complete* ticket (title + profile + primary workspace) returns to `queued` and is staged for the scheduler; an *incomplete* one — e.g. an under-specified inbox item you archived — returns to `inbox` so the scheduler never picks a ticket missing the fields a run needs. (The `archived → inbox` hop is domain-only; it is still not a valid `POST /transition` target.)
 
+### Archive is not acknowledge
+
+Archiving marks work *done*; acknowledging marks it *seen by the human*. They are separate on purpose. Every transition records who performed it (`actor_kind`: `admin` for the human session, `token`/`run` for agents), and only an **admin** transition into `review`/`archived` auto-acknowledges. An agent archiving with a scoped `ndk_` token leaves `acknowledged_at` null, so the ticket lands in the human's Desk digest (`GET /api/v1/tickets/ack/digest`). The ack endpoints themselves (`POST /tickets/{tid}/ack`, `POST /tickets/ack`, the digest) are admin-only — there is deliberately no mintable ack scope, so an agent can never mark its own work seen. This is the concrete reason agents must use a scoped token, not the human's root bearer: archives done as the human self-acknowledge and silently skip their review queue.
+
 ## Delete
 
 ```bash

@@ -308,6 +308,32 @@ async def test_profile_allowlist_restricts_create(client, engine):
 # --- revocation is immediate ----------------------------------------------
 
 
+async def test_pm_agent_bulk_archive_does_not_ack(client, engine):
+    """Integration seam: a scoped agent token driving bulk archive over the API
+    is recorded as ``actor_kind='token'`` and never auto-acknowledges (see
+    ``domain.events.record_transition_event``)."""
+    pid = _seed_profile(engine)
+    tid = _seed_ticket(engine, pid, status="review")
+    tok = await _mint(client, name="pm", bundle="pm-agent")
+    hdr = {"Authorization": f"Bearer {tok}"}
+
+    r = await client.post("/api/v1/tickets/bulk/archive", headers=hdr,
+                          json={"ticket_ids": [tid]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [t["id"] for t in body["updated"]] == [tid]
+
+    with Session(engine) as s:
+        from nightdesk.db.models import Ticket, TicketEvent
+        t = s.get(Ticket, tid)
+        assert t.status == "archived"
+        assert t.acknowledged_at is None
+        ev = s.query(TicketEvent).filter_by(ticket_id=tid).order_by(
+            TicketEvent.created_at.desc(),
+        ).first()
+        assert ev.actor_kind == "token"
+
+
 async def test_revoke_is_immediate(client, engine):
     r = await client.post("/api/v1/tokens", headers=ADMIN,
                           json={"name": "obs", "bundle": "observer"})

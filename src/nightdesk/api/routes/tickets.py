@@ -369,23 +369,29 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
             skipped=skipped,
         )
 
-    @router.post("/bulk/archive", response_model=BulkUpdateResult, dependencies=[archive_dep])
+    @router.post("/bulk/archive", response_model=BulkUpdateResult)
     async def bulk_archive_route(
         payload: BulkArchiveRequest,
         session: Session = Depends(get_session),
+        principal: Principal = archive_dep,
     ):
-        updated, skipped = bulk_archive(session, payload.ticket_ids)
+        updated, skipped = bulk_archive(
+            session, payload.ticket_ids, actor=actor_from_principal(principal),
+        )
         return BulkUpdateResult(
             updated=[_ticket_to_out(t) for t in updated],
             skipped=skipped,
         )
 
-    @router.post("/bulk/unarchive", response_model=BulkUpdateResult, dependencies=[archive_dep])
+    @router.post("/bulk/unarchive", response_model=BulkUpdateResult)
     async def bulk_unarchive_route(
         payload: BulkArchiveRequest,
         session: Session = Depends(get_session),
+        principal: Principal = archive_dep,
     ):
-        updated, skipped = bulk_unarchive(session, payload.ticket_ids)
+        updated, skipped = bulk_unarchive(
+            session, payload.ticket_ids, actor=actor_from_principal(principal),
+        )
         return BulkUpdateResult(
             updated=[_ticket_to_out(t) for t in updated],
             skipped=skipped,
@@ -606,8 +612,12 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
         except InvalidTransition as e:
             raise HTTPException(409, str(e))
 
-    @router.post("/{tid}/send-to-inbox", response_model=TicketOut, dependencies=[transition_dep])
-    async def send_to_inbox_route(tid: str, session: Session = Depends(get_session)):
+    @router.post("/{tid}/send-to-inbox", response_model=TicketOut)
+    async def send_to_inbox_route(
+        tid: str,
+        session: Session = Depends(get_session),
+        principal: Principal = transition_dep,
+    ):
         """Send a draft ticket back to the inbox. Valid ONLY from ``draft``;
         every other status is a 409 (see ``domain.tickets.send_to_inbox``).
 
@@ -617,7 +627,7 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
         is the only JSON path back into the inbox for an existing ticket.
         """
         try:
-            t = send_to_inbox(session, tid)
+            t = send_to_inbox(session, tid, actor=actor_from_principal(principal))
             return _ticket_to_out(t)
         except TicketNotFound:
             raise HTTPException(404, "not found")

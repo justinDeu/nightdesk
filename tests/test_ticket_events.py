@@ -9,10 +9,10 @@ from sqlalchemy import select
 
 from nightdesk.db.models import Profile, TicketEvent
 from nightdesk.domain import ack as ack_domain
-from nightdesk.domain.events import ADMIN, run_actor
+from nightdesk.domain.events import ADMIN, Actor, run_actor
 from nightdesk.domain.tickets import (
-    archive, create_ticket, get_ticket, requeue, request_run_now,
-    transition_status, unarchive,
+    archive, bulk_archive, create_ticket, decline_ticket, get_ticket, requeue,
+    request_run_now, transition_status, unarchive,
 )
 
 
@@ -161,3 +161,42 @@ def test_entering_event_is_the_latest_matching_status(session, profile):
     assert ev is not None
     assert ev.to_status == "archived"
     assert ev.actor_kind == "run"
+
+
+# --- actor threading through bulk_archive/decline_ticket ---------------------
+
+
+def test_bulk_archive_with_token_actor_does_not_ack(session, profile):
+    t = _draft(session, profile)
+    _to_review(session, t.id, actor=run_actor("r1"))
+    bulk_archive(session, [t.id], actor=Actor(kind="token"))
+    t = get_ticket(session, t.id)
+    assert t.status == "archived"
+    assert t.acknowledged_at is None
+    ev = _events(session, t.id)[-1]
+    assert ev.actor_kind == "token"
+
+
+def test_bulk_archive_default_actor_still_acks(session, profile):
+    t = _draft(session, profile)
+    _to_review(session, t.id, actor=run_actor("r1"))
+    bulk_archive(session, [t.id])
+    t = get_ticket(session, t.id)
+    assert t.status == "archived"
+    assert t.acknowledged_at is not None
+    assert t.acknowledged_by == "admin"
+    ev = _events(session, t.id)[-1]
+    assert ev.actor_kind == "admin"
+
+
+def test_decline_ticket_with_token_actor_does_not_ack(session, profile):
+    t = create_ticket(
+        session, title="t", profile_id=profile.id, source_path="/tmp",
+        status="inbox",
+    )
+    decline_ticket(session, t.id, actor=Actor(kind="token"))
+    t = get_ticket(session, t.id)
+    assert t.status == "archived"
+    assert t.acknowledged_at is None
+    ev = _events(session, t.id)[-1]
+    assert ev.actor_kind == "token"

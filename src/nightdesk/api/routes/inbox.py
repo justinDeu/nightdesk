@@ -14,8 +14,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from nightdesk.api.auth import Principal
 from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import InboxCountOut, InboxItemOut, TicketPromote
+from nightdesk.domain.events import actor_from_principal
 from nightdesk.domain.tickets import (
     IncompleteTicket,
     InvalidTransition,
@@ -50,13 +52,16 @@ def build_api_router(get_session, bearer_token: str, scoped) -> APIRouter:
     async def inbox_count_api(session: Session = Depends(get_session)):
         return InboxCountOut(count=len(list_inbox(session, limit=10_000)))
 
-    @router.post("/tickets/{tid}/promote", dependencies=[transition])
+    @router.post("/tickets/{tid}/promote")
     async def promote_api(
         tid: str, payload: TicketPromote,
         session: Session = Depends(get_session),
+        principal: Principal = transition,
     ):
         try:
-            t = promote_ticket(session, tid, payload.target)
+            t = promote_ticket(
+                session, tid, payload.target, actor=actor_from_principal(principal),
+            )
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except IncompleteTicket as e:
@@ -65,10 +70,14 @@ def build_api_router(get_session, bearer_token: str, scoped) -> APIRouter:
             raise HTTPException(409, str(e))
         return _ticket_to_out(t)
 
-    @router.post("/tickets/{tid}/decline", dependencies=[transition])
-    async def decline_api(tid: str, session: Session = Depends(get_session)):
+    @router.post("/tickets/{tid}/decline")
+    async def decline_api(
+        tid: str,
+        session: Session = Depends(get_session),
+        principal: Principal = transition,
+    ):
         try:
-            t = decline_ticket(session, tid)
+            t = decline_ticket(session, tid, actor=actor_from_principal(principal))
         except TicketNotFound:
             raise HTTPException(404, "not found")
         except InvalidTransition as e:

@@ -12,29 +12,28 @@ description: Use when calling the nightdesk HTTP API from scripts, curl, tests, 
 
 `/api/v1/*` is the entire HTTP API — JSON in, JSON out. There is no separate HTMX/HTML API surface anymore: the old server-rendered UI (`/board/*`, `/tickets/{tid}/*` HTML page, `/archive/*`, `/header/*`, `/settings/*`, `/profiles/*` HTML editor, `/diagnostics` page, `/cron/*` page, `/fs/suggest` HTML partial) was removed and replaced by a React SPA that talks exclusively to `/api/v1`. The SPA itself is served at `/` (see "SPA / static serving" below) — everything under `/` that isn't `/api/v1/*`, `/auth/*`, or `/healthz` is the SPA's own client-side routing, not a server route.
 
-`/api/v1/*` admin routes accept `Authorization: Bearer <token>` **or** the signed `nightdesk_session` browser cookie — the cookie support exists so the browser SPA can call the JSON API directly without also sending a bearer header; scripts should keep using the bearer header. `ndr_`-prefixed run-scoped tokens (issued to sandboxed agent runs) are unaffected — they still only work via the bearer header and only on the scopes granted to that run.
+`/api/v1/*` routes accept `Authorization: Bearer <token>` **or** the signed `nightdesk_session` browser cookie — the cookie support exists so the browser SPA can call the JSON API directly without also sending a bearer header; scripts and agents use the bearer header with a scoped token.
 
 ## Auth
 
-Bearer token, host, and port live in `~/.config/nightdesk/config.toml`:
-
-```toml
-bearer_token = "..."
-bind_host = "127.0.0.1"
-bind_port = 8765
-```
-
-Read it fresh every time (a stale value will return `{"detail":"missing bearer"}` or `{"detail":"bad bearer"}`):
+Authenticate with a **scoped access token** (`ndk_...`), minted by the human in Settings → Access tokens (or `POST /api/v1/tokens` with the admin bearer). Resolution order — env var wins, then the conventional token file:
 
 ```bash
-TOKEN=$(awk -F\" '/^bearer_token/ {print $2}' ~/.config/nightdesk/config.toml)
-HOST=$(awk -F\" '/^bind_host/    {print $2}' ~/.config/nightdesk/config.toml)
-PORT=$(awk -F'= *' '/^bind_port/ {print $2}' ~/.config/nightdesk/config.toml)
-BASE="http://${HOST:-127.0.0.1}:${PORT:-8765}"
+TOKEN="${NIGHTDESK_TOKEN:-$(cat ~/.config/nightdesk/agent-token 2>/dev/null)}"
+BASE="${NIGHTDESK_BASE_URL:-http://127.0.0.1:8765}"
 AUTH=(-H "Authorization: Bearer $TOKEN")
 
 curl -s "${AUTH[@]}" "$BASE/api/v1/tickets" | jq .
 ```
+
+If `$TOKEN` is empty, stop and ask the human to mint one — do **not** go looking for other credentials. In particular, never read `~/.config/nightdesk/config.toml`: the `bearer_token` there is the human's root credential (it also signs sessions and encrypts stored secrets). Agent actions performed with it are attributed to the human — archives self-acknowledge and skip the human's Desk review queue — and it grants far more than any agent needs.
+
+### Scopes, 401 vs 403
+
+Tokens carry a scope snapshot (e.g. the `operator` bundle: ticket read/create/update/transition/archive/run, runs read, comments, projects read, labels, analytics, cron read). Two failure shapes:
+
+- `401 {"detail":"invalid token"}` — missing/revoked/expired token. Ask the human to re-mint; retrying is pointless.
+- `403 {"detail":"missing scope","missing_scopes":[...],"token":"<name>","hint":"..."}` — the token lacks that scope. If the hint says **human-only** (acknowledge, delete, profile/provider/config/cron writes, token management), the action is deliberately reserved for the human's admin session: hand it off, never work around it.
 
 ## Endpoint discovery
 
@@ -57,7 +56,7 @@ For Python-side schema details (field types, defaults, validators), read `src/ni
 
 - `/api/v1/*` mutations return the affected resource as JSON (or `204` for delete/cancel-style actions).
 - **Update endpoints are PATCH with sparse semantics**: only fields included in the body are touched; omitted fields are preserved. Sending `{"title": "x"}` will NOT wipe the prompt.
-- Errors: FastAPI `{"detail": "..."}` with appropriate status code (`401` missing bearer, `404` not found, `409` invalid transition, `422` validation).
+- Errors: FastAPI `{"detail": "..."}` with appropriate status code (`401` invalid/missing token, `403` missing scope (structured body, see Auth), `404` not found, `409` invalid transition, `422` validation).
 
 ## SPA / static serving
 
@@ -107,7 +106,7 @@ In Python, just read `resp.headers["x-total-count"]` / `resp.headers["x-has-more
 
 ## Common gotchas
 
-- `POST /api/v1/...` without `Authorization` → `{"detail":"missing bearer"}`. Always set the header.
+- `POST /api/v1/...` without `Authorization` → `401 {"detail":"invalid token"}`. Always set the header.
 - A `PATCH` body that omits a field does not clear it. To clear, send an explicit `null` (where the `*Update` schema allows `Optional[...]`).
 - Tickets in `status="running"` cannot be deleted — `409` from `DELETE /api/v1/tickets/{tid}`. Cancel or wait first.
 - `bind_host = "127.0.0.1"` by default — `localhost` works, but a stale `0.0.0.0` assumption from elsewhere will hang.

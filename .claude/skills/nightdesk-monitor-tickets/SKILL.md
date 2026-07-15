@@ -19,7 +19,7 @@ Auth and base-URL depth live in `nightdesk-api`; this skill assumes you know the
 | # | Gotcha | What to do |
 |---|---|---|
 | 1 | **Wrong surface.** HTMX `/board/*`, `/tickets/{tid}/*` return `204 + HX-Redirect: /` — useless to a script. | Use JSON `/api/v1/*` with `Authorization: Bearer <token>` only. |
-| 1 | **Stale token.** A cached bearer returns `{"detail":"bad bearer"}`. | Read host/port/token **fresh** from `~/.config/nightdesk/config.toml` every run (`bearer_token`, `bind_host`, `bind_port`). |
+| 1 | **Stale token.** A cached/revoked token returns `401 {"detail":"invalid token"}`. | Resolve the token **fresh** every run: `NIGHTDESK_TOKEN` env, else `~/.config/nightdesk/agent-token`. Never the admin `bearer_token` in `config.toml` (see `nightdesk-api` Auth). Host/port may still come from `config.toml`. |
 | 2 | **A run has NO `status` field.** `run["status"]` is silently `null`. | Derive: *running* ⟺ `finished_at is null`. Outcome = `exit_status`. |
 | 2 | **`exit_status` is a STRING, not a number.** Values: `"success"` \| `"failed"` \| `"cancelled"` \| `"worker_crash"`. | Test success with `== "success"`. A `!= 0` check flags *every* run as failed. |
 | 2 | **Error detail is split across fields.** | Read `error_summary` (human text) and `failure_kind` (category). |
@@ -42,7 +42,7 @@ A run finishing — **success or failure** — transitions the ticket `running �
 
 ## Reference monitor script
 
-Copy this to `monitor_tickets.py` (or anywhere outside the repo). It takes ticket IDs on argv, or a `--status` filter via the API; reads auth/base-URL fresh from config.toml (env overrides: `NIGHTDESK_API_URL`, `NIGHTDESK_BEARER_TOKEN`); and bakes in every lesson above — flush-per-line, transition/failure/stuck/heartbeat/terminal emit, elapsed math, tz-fixed timestamps, self-exit on all-terminal, TIMEOUT cap. `--once` is the built-in smoke test.
+Copy this to `monitor_tickets.py` (or anywhere outside the repo). It takes ticket IDs on argv, or a `--status` filter via the API; resolves the token fresh each run (`NIGHTDESK_TOKEN` env → `~/.config/nightdesk/agent-token`; base URL from `NIGHTDESK_BASE_URL` or config.toml host/port); and bakes in every lesson above — flush-per-line, transition/failure/stuck/heartbeat/terminal emit, elapsed math, tz-fixed timestamps, self-exit on all-terminal, TIMEOUT cap. `--once` is the built-in smoke test.
 
 ```python
 #!/usr/bin/env python3
@@ -54,9 +54,10 @@ the Monitor tool consumes.
 
 Bakes in every hard-won lesson from monitoring real batches:
 
-  * Auth + base URL are read FRESH from ~/.config/nightdesk/config.toml every run
-    (stale token -> {"detail":"bad bearer"}). Only the JSON /api/v1/* surface is
-    used; the HTMX /board/* routes return 204 + HX-Redirect and are useless here.
+  * The token is resolved FRESH every run: NIGHTDESK_TOKEN env, else the
+    ~/.config/nightdesk/agent-token file (a scoped ndk_ token — never the admin
+    bearer). Stale/revoked -> 401 {"detail":"invalid token"}. Only the JSON
+    /api/v1/* surface is used.
   * A run has NO `status` field. It is *running* iff finished_at is null; the
     outcome is the STRING exit_status ("success"|"failed"|"cancelled"|
     "worker_crash"); error detail is error_summary / failure_kind.
@@ -75,9 +76,10 @@ Usage:
   python3 monitor_tickets.py <ids...> --once              # SMOKE TEST: one snapshot, exit
   python3 monitor_tickets.py <ids...> --interval 60 --timeout-mins 360
 
-Env overrides (otherwise read from config.toml):
-  NIGHTDESK_API_URL        e.g. http://127.0.0.1:8765
-  NIGHTDESK_BEARER_TOKEN   the admin bearer_token
+Env overrides (token file / config.toml host+port otherwise):
+  NIGHTDESK_TOKEN          a scoped ndk_ token (preferred)
+  NIGHTDESK_BASE_URL       e.g. http://127.0.0.1:8765
+  (NIGHTDESK_API_URL / NIGHTDESK_BEARER_TOKEN still honored as legacy names)
 """
 from __future__ import annotations
 
@@ -105,13 +107,24 @@ CONFIG_PATH = Path(
 
 # --- Config + auth -----------------------------------------------------------
 def load_base_and_token() -> tuple[str, str]:
-    """Read base URL + bearer FRESH from config.toml (env overrides win).
+    """Resolve base URL + token FRESH each run (env overrides win).
 
-    config.toml is flat (bearer_token/bind_host/bind_port at top level); we also
-    tolerate a nested [nightdesk] table just in case.
+    Token order: NIGHTDESK_TOKEN env -> NIGHTDESK_BEARER_TOKEN env (legacy
+    name) -> ~/.config/nightdesk/agent-token file. Monitoring only needs read
+    scopes, so a scoped ndk_ token is the right credential — never the admin
+    bearer in config.toml. config.toml is consulted for host/port only.
     """
-    token = os.environ.get("NIGHTDESK_BEARER_TOKEN", "")
-    base = os.environ.get("NIGHTDESK_API_URL", "")
+    token = os.environ.get("NIGHTDESK_TOKEN", "") or os.environ.get(
+        "NIGHTDESK_BEARER_TOKEN", ""
+    )
+    if not token:
+        try:
+            token = (Path.home() / ".config/nightdesk/agent-token").read_text().strip()
+        except OSError:
+            pass
+    base = os.environ.get("NIGHTDESK_BASE_URL", "") or os.environ.get(
+        "NIGHTDESK_API_URL", ""
+    )
     if token and base:
         return base.rstrip("/"), token
     host, port = "127.0.0.1", 8765
@@ -119,7 +132,6 @@ def load_base_and_token() -> tuple[str, str]:
         with open(CONFIG_PATH, "rb") as fh:
             raw = tomllib.load(fh)
         cfg = {**raw, **raw.get("nightdesk", {})}  # top-level wins; tolerate nesting
-        token = token or cfg.get("bearer_token") or ""
         host = cfg.get("bind_host", host)
         port = int(cfg.get("bind_port", port))
     except FileNotFoundError:
@@ -130,8 +142,8 @@ def load_base_and_token() -> tuple[str, str]:
         base = f"http://{host}:{port}"
     if not token:
         sys.stderr.write(
-            f"ERROR no bearer token: set NIGHTDESK_BEARER_TOKEN or bearer_token in "
-            f"{CONFIG_PATH}\n"
+            "ERROR no token: set NIGHTDESK_TOKEN or write a scoped token to "
+            "~/.config/nightdesk/agent-token (ask the human to mint one)\n"
         )
         sys.exit(2)
     return base.rstrip("/"), token
