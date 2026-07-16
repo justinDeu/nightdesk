@@ -13,8 +13,8 @@ import {
 } from "lucide-react";
 import { Page } from "@/components/Page";
 import { Button } from "@/ui/Button";
-import { Textarea } from "@/ui/Input";
 import { Kbd } from "@/ui/Kbd";
+import { HighlightedPromptArea } from "@/components/HighlightedPromptArea";
 import { EmptyState } from "@/ui/EmptyState";
 import { Tooltip } from "@/ui/Tooltip";
 import { toast } from "@/ui/Toast";
@@ -489,12 +489,12 @@ function InlinePrompt({ ticket, onSaved }: { ticket: TicketOut; onSaved: () => v
       <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-moon-600">
         Prompt
       </label>
-      <Textarea
+      <HighlightedPromptArea
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onBlur={commit}
         placeholder="What should the agent do? Describe the task…"
-        className="min-h-[120px] flex-1 resize-none"
+        className="min-h-[120px] flex-1"
       />
     </div>
   );
