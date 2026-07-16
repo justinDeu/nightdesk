@@ -72,40 +72,83 @@ function highlightProse(src: string): ReactNode[] {
 
 // --- Fence splitter --------------------------------------------------------------
 
-interface Segment {
+export interface Segment {
   code: boolean;
   lang: string;
   body: string;
   /** whether a code segment saw its closing fence (unterminated output while
    *  streaming shouldn't invent one). */
   closed: boolean;
+  /** Raw opening fence line, verbatim — e.g. "```js  " keeping trailing space;
+   *  "" for prose. An editor overlay repaints this exactly rather than
+   *  re-synthesizing "```" + lang (which would drop trailing whitespace). */
+  open: string;
+  /** Raw closing fence line, verbatim; "" when unclosed or prose. */
+  close: string;
+  /** Whether a line followed the opening fence (so a newline separates the
+   *  marker from the body). False only for a bare open fence at end of input
+   *  ("```" typed as the last line) — lets an editor avoid painting a phantom
+   *  newline after the marker. */
+  bodyStarted: boolean;
 }
 
-function segments(text: string): Segment[] {
+export function segments(text: string): Segment[] {
   if (!text) return [];
   const out: Segment[] = [];
   let buf: string[] = [];
   let inCode = false;
   let lang = "";
+  let open = "";
   for (const line of text.split("\n")) {
     const m = line.match(/^```([A-Za-z0-9_+\-.]*)\s*$/);
     if (m) {
       if (inCode) {
-        out.push({ code: true, lang, body: buf.join("\n"), closed: true });
+        out.push({
+          code: true,
+          lang,
+          body: buf.join("\n"),
+          closed: true,
+          open,
+          close: line,
+          bodyStarted: buf.length > 0,
+        });
         buf = [];
         inCode = false;
         lang = "";
+        open = "";
       } else {
-        if (buf.length) out.push({ code: false, lang: "", body: buf.join("\n"), closed: true });
+        if (buf.length)
+          out.push({
+            code: false,
+            lang: "",
+            body: buf.join("\n"),
+            closed: true,
+            open: "",
+            close: "",
+            bodyStarted: false,
+          });
         buf = [];
         inCode = true;
         lang = m[1] ?? "";
+        open = line;
       }
       continue;
     }
     buf.push(line);
   }
-  if (buf.length) out.push({ code: inCode, lang, body: buf.join("\n"), closed: false });
+  // Emit a trailing segment for leftover prose OR for an open fence with no body
+  // yet (buf empty) — the fence-open marker line must still render.
+  if (buf.length || inCode) {
+    out.push({
+      code: inCode,
+      lang,
+      body: buf.join("\n"),
+      closed: false,
+      open,
+      close: "",
+      bodyStarted: inCode && buf.length > 0,
+    });
+  }
   return out;
 }
 
@@ -114,8 +157,12 @@ export function MarkdownSource({ text, className }: { text: string; className?: 
   if (!text.trim()) return null;
   return (
     <div className={cn("min-w-0 font-mono text-[12.5px] leading-relaxed text-moon-100", className)}>
-      {segs.map((s, i) =>
-        s.code ? (
+      {segs.map((s, i) => {
+        // A bare open fence with no body or close (a lone "```") now yields a
+        // segment (for the editor overlay); the read-only view showed nothing
+        // for it before, so keep skipping it here.
+        if (s.code && !s.closed && !s.bodyStarted && s.body === "") return null;
+        return s.code ? (
           <pre
             key={i}
             className="my-1.5 overflow-x-auto rounded-control border border-ink-700 bg-ink-950 px-2.5 py-2 text-[11px] leading-relaxed text-moon-100"
@@ -128,8 +175,8 @@ export function MarkdownSource({ text, className }: { text: string; className?: 
           <pre key={i} className="whitespace-pre-wrap break-words">
             {highlightProse(s.body)}
           </pre>
-        ),
-      )}
+        );
+      })}
     </div>
   );
 }

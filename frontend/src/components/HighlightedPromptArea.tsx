@@ -2,6 +2,7 @@ import { useMemo, useRef } from "react";
 import type { ReactNode, TextareaHTMLAttributes } from "react";
 import { createLowlight } from "lowlight";
 import markdown from "highlight.js/lib/languages/markdown";
+import { segments } from "@/components/MarkdownSource";
 import { cn } from "@/lib/cn";
 
 /**
@@ -21,10 +22,12 @@ const lowlight = createLowlight({ markdown });
 /**
  * hljs markdown scope (sans `hljs-` prefix) → app token classes.
  *
- * Metrics-safe variant of MarkdownSource's TOKEN_CLASS: the `code` entry keeps
- * only background+color (no px-1/py-px/rounded) because any padding on an inline
- * span would nudge the following glyphs out from under the transparent textarea
- * text. font-semibold / italic are safe — IBM Plex Mono holds advance widths
+ * Metrics-safe variant of MarkdownSource's TOKEN_CLASS: token classes may only
+ * recolor / reweight, never add padding/margins or change font-size (that would
+ * shift glyph advance out from under the transparent textarea text). The inline
+ * `code` entry is color-only — no background — so a wrapped inline span can't
+ * stripe the line-height gaps; fenced blocks get a contiguous block background
+ * instead. font-semibold / italic are safe — IBM Plex Mono holds advance widths
  * across weight and slant, so bold/italic tokens don't drift.
  */
 const TOKEN_CLASS: Record<string, string> = {
@@ -32,7 +35,7 @@ const TOKEN_CLASS: Record<string, string> = {
   bullet: "text-lamp", // -, *, 1. list markers
   strong: "font-semibold text-moon-100", // **bold**, markers in place
   emphasis: "italic text-moon-100", // *italic*
-  code: "bg-ink-800 text-dawn", // `inline code` — no padding/radius (metrics)
+  code: "text-dawn", // `inline code` — color only (no bg; would stripe)
   link: "text-lamp underline decoration-lamp/40 underline-offset-2", // (url)
   string: "text-lamp", // [link text]
   symbol: "text-moon-400", // reference labels
@@ -76,6 +79,15 @@ function highlight(src: string): ReactNode[] {
   return renderHast(tree.children ?? [], "md");
 }
 
+/**
+ * A segment block whose text is empty or ends in "\n" would collapse its final
+ * (empty) line box in HTML, so the highlight layer would come up one line short
+ * of the textarea. Emit a trailing zero-width space to keep that line rendered.
+ */
+function pad(text: string): ReactNode {
+  return text === "" || text.endsWith("\n") ? "​" : null;
+}
+
 export interface HighlightedPromptAreaProps
   extends Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "onChange"> {
   value: string;
@@ -94,13 +106,13 @@ export function HighlightedPromptArea({
 }: HighlightedPromptAreaProps) {
   const highlightRef = useRef<HTMLDivElement>(null);
 
-  // A value ending in "\n" collapses its final (empty) line in HTML, so the
-  // highlight layer would be one line shorter than the textarea. Append a
-  // zero-width space to keep the trailing line rendered.
-  const rendered = useMemo(
-    () => highlight(value.endsWith("\n") ? value + "​" : value),
-    [value],
-  );
+  // Split on fenced ``` blocks so code blocks get a contiguous block background
+  // (an inline `bg` span only paints each line's text box, striping the
+  // line-height gaps). The splitter consumes the \n between segments; stacking
+  // the segment blocks reproduces exactly those breaks — same trick as
+  // MarkdownSource's per-segment <pre>s — so the flow stays char-for-char with
+  // the textarea.
+  const segs = useMemo(() => segments(value), [value]);
 
   return (
     <div
@@ -114,9 +126,38 @@ export function HighlightedPromptArea({
       <div
         ref={highlightRef}
         aria-hidden
-        className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12.5px] leading-relaxed text-moon-100 [scrollbar-gutter:stable]"
+        className="pointer-events-none absolute inset-0 overflow-hidden px-3 py-2 font-mono text-[12.5px] leading-relaxed text-moon-100 [scrollbar-gutter:stable]"
       >
-        {rendered}
+        {segs.map((s, i) => {
+          if (s.code) {
+            // Exact source text of this fenced block, reconstructed from the raw
+            // marker lines so trailing whitespace ("```js  ") survives and a
+            // bare open fence ("```" at EOF) gets no phantom newline.
+            const text =
+              s.open + (s.bodyStarted ? "\n" + s.body : "") + (s.closed ? "\n" + s.close : "");
+            return (
+              // Block-level contiguous background. The -mx-1/px-1 pair is net-zero:
+              // the padding widens only the paint, the negative margin pulls the
+              // box back so glyph x-positions don't move. No vertical padding, no
+              // border, no font-size change — vertical flow stays aligned.
+              <div
+                key={i}
+                className="-mx-1 whitespace-pre-wrap break-words rounded bg-ink-800/70 px-1"
+              >
+                <span className="text-moon-600">{s.open}</span>
+                {s.bodyStarted && "\n" + s.body}
+                {s.closed && <span className="text-moon-600">{"\n" + s.close}</span>}
+                {pad(text)}
+              </div>
+            );
+          }
+          return (
+            <div key={i} className="whitespace-pre-wrap break-words">
+              {highlight(s.body)}
+              {pad(s.body)}
+            </div>
+          );
+        })}
       </div>
       {/* Real editor — transparent glyphs, visible caret over the paint. */}
       <textarea
