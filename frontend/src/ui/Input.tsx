@@ -42,12 +42,20 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
   { className, mono, invalid, ...rest },
   ref,
 ) {
+  // cn is plain clsx (no tailwind-merge), so a conflicting utility in className
+  // wouldn't reliably beat the base one. Drop the base default when the caller
+  // supplies its own min-height or resize behaviour (e.g. a flex-1 fill).
+  const cls = className ?? "";
+  const overridesMinH = /(?:^|\s)min-h-/.test(cls);
+  const overridesResize = /(?:^|\s)resize-(?:none|x|y)(?:\s|$)/.test(cls);
   return (
     <textarea
       ref={ref}
       className={cn(
         fieldBase,
-        "min-h-[80px] px-3 py-2 text-sm leading-relaxed resize-y",
+        "px-3 py-2 text-sm leading-relaxed",
+        !overridesMinH && "min-h-[80px]",
+        !overridesResize && "resize-y",
         mono && "font-mono text-[13px]",
         invalid && "border-failed focus:border-failed",
         className,

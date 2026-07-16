@@ -485,7 +485,7 @@ function InlinePrompt({ ticket, onSaved }: { ticket: TicketOut; onSaved: () => v
   }
 
   return (
-    <div>
+    <div className="flex min-h-0 flex-1 flex-col">
       <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-moon-600">
         Prompt
       </label>
@@ -494,7 +494,7 @@ function InlinePrompt({ ticket, onSaved }: { ticket: TicketOut; onSaved: () => v
         onChange={(e) => setValue(e.target.value)}
         onBlur={commit}
         placeholder="What should the agent do? Describe the task…"
-        className="min-h-[120px]"
+        className="min-h-[120px] flex-1 resize-none"
       />
     </div>
   );
