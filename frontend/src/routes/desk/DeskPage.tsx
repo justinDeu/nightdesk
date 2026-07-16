@@ -675,7 +675,6 @@ function ToAcknowledgeBand({
   const acknowledge = useAcknowledge();
   const total = digest.data?.total ?? 0;
   const groups = digest.data?.groups ?? [];
-  const before = digest.data?.generated_at;
 
   // Expanded project-day groups, keyed like the row key. Survives digest
   // re-polls (the key is stable) and quietly drops with the group when a
@@ -692,11 +691,11 @@ function ToAcknowledgeBand({
 
   const projName = (id: string | null) => (id ? projects.get(id)?.name ?? "No project" : "No project");
   const ackGroup = (group: AckDigestGroup) => {
-    if (group.project_id != null) {
-      bulkAck.mutate({ project_scope: true, project_id: group.project_id, before });
-    } else {
-      bulkAck.mutate({ ticket_ids: group.tickets.map((t) => t.ticket_id) });
-    }
+    // Each group row is a (project, day) pair, so ack exactly the tickets the
+    // digest already carries for it — a project_scope ack would clear every
+    // unacked ticket in the project across all days. Explicit ids are also
+    // inherently race-safe (no generated_at watermark needed).
+    bulkAck.mutate({ ticket_ids: group.tickets.map((t) => t.ticket_id) });
   };
   const ackAll = () => {
     for (const group of groups) ackGroup(group);
@@ -773,6 +772,11 @@ function ToAcknowledgeBand({
             </div>
           );
         })}
+        {groups.length > 8 && (
+          <div className="px-3 py-2 text-xs text-moon-600">
+            +{groups.length - 8} more groups — ack a group above to reveal
+          </div>
+        )}
       </div>
     </DeskBand>
   );
