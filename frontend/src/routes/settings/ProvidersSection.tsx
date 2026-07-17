@@ -675,7 +675,12 @@ function EndpointFormDialog({
 // Create-provider wizard
 // ---------------------------------------------------------------------------
 
-type WizardStep = "offering" | "credential" | "endpoints";
+// Two steps: pick the provider type, then fill in the detail form for that
+// type only (credential + endpoints). Merging what used to be a separate
+// "credential" step and "endpoints" step keeps the whole per-type form on
+// one screen instead of forcing an extra click through fields that were
+// already committed to a single offering.
+type WizardStep = "type" | "detail";
 
 interface DraftEndpoint {
   key: string;
@@ -700,7 +705,7 @@ function CreateProviderDialog({
   const catalog = useProviderCatalog();
   const protocols = useProviderProtocols();
   const createProvider = useCreateProvider();
-  const [step, setStep] = useState<WizardStep>("offering");
+  const [step, setStep] = useState<WizardStep>("type");
   const [offering, setOffering] = useState<CatalogOfferingOut | "custom" | null>(null);
   const [name, setName] = useState("");
   const [customVendorTag, setCustomVendorTag] = useState("");
@@ -710,37 +715,48 @@ function CreateProviderDialog({
   const [sharedCredential, setSharedCredential] = useState("");
   const [endpoints, setEndpoints] = useState<DraftEndpoint[]>([]);
 
+  function isSameOffering(a: CatalogOfferingOut | "custom" | null, b: CatalogOfferingOut | "custom") {
+    if (a === "custom" || b === "custom") return a === b;
+    return a !== null && a.key === b.key;
+  }
+
+  // Advances to the detail step. Re-picking the *same* type (e.g. hitting
+  // Back from step 2 just to glance at the list, then re-selecting it) must
+  // not clobber whatever the user already typed — only reset the draft when
+  // the chosen type actually changed.
   function pickOffering(o: CatalogOfferingOut | "custom") {
-    setOffering(o);
-    setSharedCredential("");
-    if (o === "custom") {
-      setName("");
-      setCustomVendorTag("");
-      setEndpoints([
-        {
-          key: "custom-0", checked: true, label: "Custom endpoint",
-          protocol_kind: "openai_compat", base_url: "", credential_source: "api_key",
-          harness_lock: null, credential_override: "", default_model: "", models: [],
-        },
-      ]);
-    } else {
-      setName(o.suggested_name || o.label);
-      setEndpoints(
-        o.endpoints.map((e, i) => ({
-          key: `${o.key}-${i}`,
-          checked: true,
-          label: e.label,
-          protocol_kind: e.protocol_kind,
-          base_url: e.base_url ?? "",
-          credential_source: o.credential_source,
-          harness_lock: e.harness_lock,
-          credential_override: "",
-          default_model: e.default_model ?? "",
-          models: e.models,
-        })),
-      );
+    if (!isSameOffering(offering, o)) {
+      setOffering(o);
+      setSharedCredential("");
+      if (o === "custom") {
+        setName("");
+        setCustomVendorTag("");
+        setEndpoints([
+          {
+            key: "custom-0", checked: true, label: "Custom endpoint",
+            protocol_kind: "openai_compat", base_url: "", credential_source: "api_key",
+            harness_lock: null, credential_override: "", default_model: "", models: [],
+          },
+        ]);
+      } else {
+        setName(o.suggested_name || o.label);
+        setEndpoints(
+          o.endpoints.map((e, i) => ({
+            key: `${o.key}-${i}`,
+            checked: true,
+            label: e.label,
+            protocol_kind: e.protocol_kind,
+            base_url: e.base_url ?? "",
+            credential_source: o.credential_source,
+            harness_lock: e.harness_lock,
+            credential_override: "",
+            default_model: e.default_model ?? "",
+            models: e.models,
+          })),
+        );
+      }
     }
-    setStep("credential");
+    setStep("detail");
   }
 
   function updateEndpoint(key: string, patch: Partial<DraftEndpoint>) {
@@ -771,6 +787,10 @@ function CreateProviderDialog({
   const customEndpoint = offering === "custom" ? endpoints[0] : undefined;
 
   async function create() {
+    if (!name.trim()) {
+      toast.error("Name is required");
+      return;
+    }
     const chosen = endpoints.filter((e) => e.checked);
     if (chosen.length === 0) {
       toast.error("Select at least one endpoint");
@@ -807,101 +827,107 @@ function CreateProviderDialog({
       onOpenChange={(o) => !o && onClose()}
       title="Add provider"
       description={
-        step === "offering" ? "Pick a known offering, or configure a custom one." :
-        step === "credential" ? "Every offering has exactly one credential mode — enter it once." :
-        "Confirm the endpoints to register."
+        step === "type"
+          ? "Pick a known offering, or configure a custom one."
+          : offering === "custom"
+            ? "Manual protocol, credential, and endpoints."
+            : "Every offering has exactly one credential mode — enter it once, then confirm its endpoints."
       }
       size="md"
       footer={
-        step === "offering" ? (
+        step === "type" ? (
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
         ) : (
           <>
-            <Button variant="ghost" onClick={() => setStep(step === "endpoints" ? "credential" : "offering")}>
-              Back
+            <Button variant="ghost" onClick={() => setStep("type")}>Back</Button>
+            <Button variant="primary" loading={createProvider.isPending} disabled={!name.trim()} onClick={create}>
+              Create
             </Button>
-            {step === "credential" ? (
-              <Button variant="primary" onClick={() => setStep("endpoints")} disabled={!name.trim()}>
-                Next
-              </Button>
-            ) : (
-              <Button variant="primary" loading={createProvider.isPending} onClick={create}>
-                Create
-              </Button>
-            )}
           </>
         )
       }
     >
-      {step === "offering" && (
-        <div className="grid grid-cols-2 gap-2.5">
+      {step === "type" && (
+        <div className="space-y-1.5">
           {catalog.isLoading ? (
-            <div className="col-span-2 flex items-center gap-2 text-sm text-moon-400"><Spinner size={14} /> Loading catalog…</div>
+            <div className="flex items-center gap-2 text-sm text-moon-400"><Spinner size={14} /> Loading catalog…</div>
           ) : (
             <>
               {(catalog.data ?? []).map((o) => (
                 <button
                   key={o.key}
                   type="button"
+                  aria-pressed={isSameOffering(offering, o)}
                   onClick={() => pickOffering(o)}
-                  className="rounded-card border border-ink-700 bg-ink-900 px-3.5 py-3 text-left hover:border-lamp/50 hover:bg-ink-800"
+                  className={cn(
+                    "flex w-full items-center justify-between gap-4 rounded-card border px-4 py-3 text-left transition-colors",
+                    isSameOffering(offering, o)
+                      ? "border-lamp/50 bg-ink-800"
+                      : "border-ink-700 bg-ink-900 hover:border-lamp/50 hover:bg-ink-800",
+                  )}
                 >
-                  <div className="text-sm font-medium text-moon-100">{o.label}</div>
-                  {o.description && <div className="mt-0.5 text-xs text-moon-600">{o.description}</div>}
-                  <Badge tone="neutral" mono className="mt-1.5">{CREDENTIAL_SOURCE_LABEL[o.credential_source]}</Badge>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-moon-100">{o.label}</div>
+                    {o.description && <div className="mt-0.5 truncate text-xs text-moon-600">{o.description}</div>}
+                  </div>
+                  <Badge tone="neutral" mono className="shrink-0">{CREDENTIAL_SOURCE_LABEL[o.credential_source]}</Badge>
                 </button>
               ))}
               <button
                 type="button"
+                aria-pressed={offering === "custom"}
                 onClick={() => pickOffering("custom")}
-                className="rounded-card border border-dashed border-ink-700 bg-ink-900/50 px-3.5 py-3 text-left hover:border-lamp/50 hover:bg-ink-800"
+                className={cn(
+                  "flex w-full items-center justify-between gap-4 rounded-card border border-dashed px-4 py-3 text-left transition-colors",
+                  offering === "custom"
+                    ? "border-lamp/50 bg-ink-800"
+                    : "border-ink-700 bg-ink-900/50 hover:border-lamp/50 hover:bg-ink-800",
+                )}
               >
-                <div className="text-sm font-medium text-moon-100">Custom</div>
-                <div className="mt-0.5 text-xs text-moon-600">Manual protocol, URL, credential</div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-moon-100">Custom</div>
+                  <div className="mt-0.5 text-xs text-moon-600">Manual protocol, URL, credential</div>
+                </div>
               </button>
             </>
           )}
         </div>
       )}
 
-      {step === "credential" && offering && offering !== "custom" && (
+      {step === "detail" && offering && offering !== "custom" && (
         <div className="space-y-4">
           <Field label="Name">
             <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={offering.suggested_name} />
           </Field>
 
           {offering.credential_source === "none" ? (
-            <p className="text-xs text-moon-600">No credential needed for this offering.</p>
-          ) : isPathCredential(offering.credential_source) ? (
-            <Field
-              label="Credential file path"
-              hint={`Seeded into ${endpoints.length} endpoint${endpoints.length === 1 ? "" : "s"}.`}
-            >
-              <Input
-                mono
-                value={sharedCredential}
-                onChange={(e) => setSharedCredential(e.target.value)}
-                placeholder={offering.credential_hint ?? DEFAULT_CREDENTIAL_PATH[offering.credential_source]}
-              />
-            </Field>
+            <div className="rounded-card border border-ink-700 bg-ink-900/40 px-3 py-2.5 text-xs text-moon-600">
+              No credential needed for this offering.
+            </div>
           ) : (
             <Field
-              label={CREDENTIAL_SOURCE_LABEL[offering.credential_source]}
+              label={isPathCredential(offering.credential_source) ? "Credential file path" : CREDENTIAL_SOURCE_LABEL[offering.credential_source]}
               hint={`Seeded into ${endpoints.length} endpoint${endpoints.length === 1 ? "" : "s"}.`}
             >
               <Input
                 mono
-                type="password"
+                type={isPathCredential(offering.credential_source) ? "text" : "password"}
                 value={sharedCredential}
                 onChange={(e) => setSharedCredential(e.target.value)}
-                placeholder="sk-…"
+                placeholder={
+                  isPathCredential(offering.credential_source)
+                    ? (offering.credential_hint ?? DEFAULT_CREDENTIAL_PATH[offering.credential_source])
+                    : "sk-…"
+                }
               />
             </Field>
           )}
+
+          <EndpointsFieldset endpoints={endpoints} protocols={protocols.data} updateEndpoint={updateEndpoint} setEndpointProtocol={setEndpointProtocol} />
         </div>
       )}
 
-      {step === "credential" && offering === "custom" && customEndpoint && (
+      {step === "detail" && offering === "custom" && customEndpoint && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Name">
@@ -912,100 +938,127 @@ function CreateProviderDialog({
             </Field>
           </div>
 
-          <Field label="Credential mode" hint="Pick exactly one — the input below matches your choice.">
-            <Select
-              value={customEndpoint.credential_source}
-              onChange={(e) =>
-                updateEndpoint(customEndpoint.key, {
-                  credential_source: e.target.value as CredentialSource,
-                  credential_override: "",
-                })
-              }
-            >
-              {Object.entries(CREDENTIAL_SOURCE_LABEL).map(([k, v]) => (
-                <option key={k} value={k}>{v}</option>
-              ))}
-            </Select>
-          </Field>
-
-          {customEndpoint.credential_source === "none" ? (
-            <p className="text-xs text-moon-600">No credential needed for this endpoint.</p>
-          ) : (
-            <Field label={isPathCredential(customEndpoint.credential_source) ? "Credential file path" : "Credential value"}>
-              <Input
-                mono
-                type={isPathCredential(customEndpoint.credential_source) ? "text" : "password"}
-                value={customEndpoint.credential_override}
-                onChange={(e) => updateEndpoint(customEndpoint.key, { credential_override: e.target.value })}
-                placeholder={
-                  isPathCredential(customEndpoint.credential_source)
-                    ? DEFAULT_CREDENTIAL_PATH[customEndpoint.credential_source]
-                    : "sk-…"
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Credential mode" hint="Pick exactly one — the input below matches your choice.">
+              <Select
+                value={customEndpoint.credential_source}
+                onChange={(e) =>
+                  updateEndpoint(customEndpoint.key, {
+                    credential_source: e.target.value as CredentialSource,
+                    credential_override: "",
+                  })
                 }
-              />
+              >
+                {Object.entries(CREDENTIAL_SOURCE_LABEL).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </Select>
             </Field>
-          )}
-        </div>
-      )}
 
-      {step === "endpoints" && (
-        <div className="space-y-2.5">
-          {endpoints.map((e) => (
-            <div key={e.key} className="rounded-card border border-ink-700 bg-ink-900 px-3.5 py-3">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={e.checked}
-                  onChange={(ev) => updateEndpoint(e.key, { checked: ev.target.checked })}
-                  className="h-3.5 w-3.5 rounded border-ink-700 bg-ink-950 accent-lamp"
+            {customEndpoint.credential_source === "none" ? (
+              <div className="flex items-end pb-2.5 text-xs text-moon-600">
+                No credential needed for this endpoint.
+              </div>
+            ) : (
+              <Field label={isPathCredential(customEndpoint.credential_source) ? "Credential file path" : "Credential value"}>
+                <Input
+                  mono
+                  type={isPathCredential(customEndpoint.credential_source) ? "text" : "password"}
+                  value={customEndpoint.credential_override}
+                  onChange={(e) => updateEndpoint(customEndpoint.key, { credential_override: e.target.value })}
+                  placeholder={
+                    isPathCredential(customEndpoint.credential_source)
+                      ? DEFAULT_CREDENTIAL_PATH[customEndpoint.credential_source]
+                      : "sk-…"
+                  }
                 />
-                <span className="text-sm font-medium text-moon-100">{e.label}</span>
-                {e.harness_lock && (
-                  <Badge tone="review" dot>
-                    <Lock size={10} /> {HARNESS_LABEL[e.harness_lock] ?? e.harness_lock} only
-                  </Badge>
-                )}
-              </label>
-              {e.checked && (
-                <div className="mt-2.5 space-y-2.5 pl-5.5">
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <Field label="Protocol">
-                      <Select value={e.protocol_kind} onChange={(ev) => setEndpointProtocol(e.key, ev.target.value as ProtocolKind)}>
-                        {Object.entries(PROTOCOL_LABEL).map(([k, v]) => (
-                          <option key={k} value={k}>{v}</option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field label="Base URL">
-                      <Input mono value={e.base_url} onChange={(ev) => updateEndpoint(e.key, { base_url: ev.target.value })} placeholder="(none)" />
-                    </Field>
-                  </div>
-                  {!protocolSupportsModelList(protocols.data, e.protocol_kind) && (
-                    <div className="rounded-card border border-lamp/40 bg-lamp/5 px-3 py-2.5">
-                      <p className="text-xs font-medium text-moon-100">
-                        {PROTOCOL_LABEL[e.protocol_kind]} has no model list
-                      </p>
-                      <p className="mt-0.5 text-xs text-moon-400">
-                        This protocol has no list operation to pull from, so its models are curated by hand.
-                        Sensible defaults are pre-filled below — add or remove ids as needed.
-                      </p>
-                      <div className="mt-2.5">
-                        <Field label="Models">
-                          <ListEditor
-                            value={e.models}
-                            onChange={(next) => updateEndpoint(e.key, { models: next })}
-                            placeholder="gpt-5.4"
-                          />
-                        </Field>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+              </Field>
+            )}
+          </div>
+
+          <EndpointsFieldset endpoints={endpoints} protocols={protocols.data} updateEndpoint={updateEndpoint} setEndpointProtocol={setEndpointProtocol} />
         </div>
       )}
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Draft-endpoint checklist shared by both branches of the create-provider
+// detail step (catalog offering and custom) — same row shape either way, so
+// the field grid stays identical regardless of which type was picked.
+// ---------------------------------------------------------------------------
+
+function EndpointsFieldset({
+  endpoints,
+  protocols,
+  updateEndpoint,
+  setEndpointProtocol,
+}: {
+  endpoints: DraftEndpoint[];
+  protocols: ProtocolInfoOut[] | undefined;
+  updateEndpoint: (key: string, patch: Partial<DraftEndpoint>) => void;
+  setEndpointProtocol: (key: string, kind: ProtocolKind) => void;
+}) {
+  return (
+    <div className="space-y-2.5">
+      <h4 className="text-xs font-medium uppercase tracking-wide text-moon-600">
+        Endpoint{endpoints.length === 1 ? "" : "s"}
+      </h4>
+      {endpoints.map((e) => (
+        <div key={e.key} className="rounded-card border border-ink-700 bg-ink-900 px-3.5 py-3">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={e.checked}
+              onChange={(ev) => updateEndpoint(e.key, { checked: ev.target.checked })}
+              className="h-3.5 w-3.5 rounded border-ink-700 bg-ink-950 accent-lamp"
+            />
+            <span className="text-sm font-medium text-moon-100">{e.label}</span>
+            {e.harness_lock && (
+              <Badge tone="review" dot>
+                <Lock size={10} /> {HARNESS_LABEL[e.harness_lock] ?? e.harness_lock} only
+              </Badge>
+            )}
+          </label>
+          {e.checked && (
+            <div className="mt-2.5 space-y-2.5 pl-5.5">
+              <div className="grid grid-cols-2 gap-2.5">
+                <Field label="Protocol">
+                  <Select value={e.protocol_kind} onChange={(ev) => setEndpointProtocol(e.key, ev.target.value as ProtocolKind)}>
+                    {Object.entries(PROTOCOL_LABEL).map(([k, v]) => (
+                      <option key={k} value={k}>{v}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Base URL">
+                  <Input mono value={e.base_url} onChange={(ev) => updateEndpoint(e.key, { base_url: ev.target.value })} placeholder="(none)" />
+                </Field>
+              </div>
+              {!protocolSupportsModelList(protocols, e.protocol_kind) && (
+                <div className="rounded-card border border-lamp/40 bg-lamp/5 px-3 py-2.5">
+                  <p className="text-xs font-medium text-moon-100">
+                    {PROTOCOL_LABEL[e.protocol_kind]} has no model list
+                  </p>
+                  <p className="mt-0.5 text-xs text-moon-400">
+                    This protocol has no list operation to pull from, so its models are curated by hand.
+                    Sensible defaults are pre-filled below — add or remove ids as needed.
+                  </p>
+                  <div className="mt-2.5">
+                    <Field label="Models">
+                      <ListEditor
+                        value={e.models}
+                        onChange={(next) => updateEndpoint(e.key, { models: next })}
+                        placeholder="gpt-5.4"
+                      />
+                    </Field>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
