@@ -9,7 +9,8 @@ export type StatusKind =
   | "review"
   | "archived"
   | "success"
-  | "failed";
+  | "failed"
+  | "canceled";
 
 interface Meta {
   label: string;
@@ -34,6 +35,10 @@ const META: Record<StatusKind, Meta> = {
     dot: "bg-success",
   },
   failed: { label: "Failed", cls: "text-failed border-failed/30 bg-failed/10", dot: "bg-failed" },
+  // Warning family (amber), deliberately apart from the failed ember so a
+  // canceled run never reads as a hard failure — but still bolder than the
+  // neutral/draft grays so it doesn't disappear next to them.
+  canceled: { label: "Canceled", cls: "text-warn border-warn/30 bg-warn/10", dot: "bg-warn" },
 };
 
 export interface StatusPillProps {

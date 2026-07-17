@@ -234,7 +234,9 @@ export function TicketPeek({
                 "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-control border p-3 font-mono text-[11px] text-moon-400",
                 runStatusKind(latestRun.exit_status) === "failed"
                   ? "border-failed/30 bg-failed/[0.05]"
-                  : "border-ink-700 bg-ink-950/40",
+                  : runStatusKind(latestRun.exit_status) === "canceled"
+                    ? "border-warn/25 bg-warn/[0.05]"
+                    : "border-ink-700 bg-ink-950/40",
               )}
             >
               <StatusPill status={runStatusKind(latestRun.exit_status)} />
