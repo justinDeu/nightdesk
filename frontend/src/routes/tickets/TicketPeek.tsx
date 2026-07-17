@@ -17,6 +17,8 @@ import { toast } from "@/ui/Toast";
 import { PriorityPicker, ProfilePicker, ProjectPicker, LabelPicker } from "@/components/PropertyPickers";
 import { EffectiveConfigCard } from "@/components/EffectiveConfigCard";
 import { WorkspaceList } from "@/components/WorkspaceList";
+import { MarkdownSource } from "@/components/MarkdownSource";
+import { HighlightedPromptArea } from "@/components/HighlightedPromptArea";
 import { useTicketActions } from "@/lib/ticketActions";
 import { useUnsavedGuard } from "@/lib/useUnsavedGuard";
 import { ticketHref, inAppNav } from "@/lib/routes";
@@ -415,9 +417,9 @@ function PromptSection({ ticket }: { ticket: TicketOut }) {
       {hasPrompt ? (
         <button
           onClick={() => setOpen(true)}
-          className="block max-h-32 w-full overflow-y-auto rounded-control border border-ink-700 bg-ink-950/40 p-3 text-left text-[13px] leading-relaxed text-moon-100 hover:border-ink-700/80"
+          className="block max-h-32 w-full overflow-y-auto rounded-control border border-ink-700 bg-ink-950/40 p-3 text-left hover:border-ink-700/80"
         >
-          <span className="whitespace-pre-wrap">{ticket.prompt}</span>
+          <MarkdownSource text={ticket.prompt} className="text-[12px]" />
         </button>
       ) : (
         <button
@@ -491,7 +493,7 @@ function PromptDialog({
         </>
       }
     >
-      <Textarea
+      <HighlightedPromptArea
         autoFocus
         className="max-h-[60vh] min-h-[320px]"
         value={value}
