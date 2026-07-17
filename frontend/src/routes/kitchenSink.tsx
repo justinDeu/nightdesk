@@ -63,6 +63,7 @@ const STATUSES: StatusKind[] = [
   "archived",
   "success",
   "failed",
+  "canceled",
 ];
 const BADGE_TONES: BadgeTone[] = [
   "neutral",

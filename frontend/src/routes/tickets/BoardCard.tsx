@@ -204,8 +204,8 @@ export const BoardCard = forwardRef<HTMLDivElement, BoardCardProps>(function Boa
             </span>
           )}
           {outcome === "canceled" && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-ink-800 px-1.5 py-0.5 text-[10px] font-medium text-moon-400">
-              <Ban size={9} /> canceled
+            <span className="inline-flex items-center gap-1 rounded-full border border-warn/30 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+              <Ban size={9} /> Canceled
             </span>
           )}
           {ticket.run_now && (

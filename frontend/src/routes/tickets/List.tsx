@@ -84,7 +84,9 @@ export function List({
             {g.tickets.map((t) => {
               const run = latestRun.get(t.id);
               const isSel = selected.has(t.id);
-              const failed = t.status !== "running" && listOutcome(run) === "failed";
+              const outcome = t.status !== "running" ? listOutcome(run) : null;
+              const failed = outcome === "failed";
+              const canceled = outcome === "canceled";
               return (
                 <div
                   key={t.id}
@@ -206,6 +208,11 @@ export function List({
                   {failed && (
                     <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-failed/30 bg-failed/10 px-1.5 py-0.5 text-[10px] font-medium text-failed">
                       <span className="h-1.5 w-1.5 rounded-full bg-failed" /> Failed
+                    </span>
+                  )}
+                  {canceled && (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-warn/30 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+                      <span className="h-1.5 w-1.5 rounded-full bg-warn" /> Canceled
                     </span>
                   )}
                   {ticketNeedsAck(t) && <UnackedDot />}

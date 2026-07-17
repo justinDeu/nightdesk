@@ -14,10 +14,14 @@ export function ticketStatusKind(status: string): StatusKind {
   }
 }
 
-/** Map a run exit_status to a StatusPill kind. Unfinished runs are "running". */
+/** Map a run exit_status to a StatusPill kind. Unfinished runs are "running".
+ *  Canceled runs get their own warning (amber) kind so they never read as an
+ *  actual failure — matched against "cancel" rather than an exact string
+ *  since the API uses "cancelled"/"canceled" interchangeably. */
 export function runStatusKind(exitStatus: string | null | undefined): StatusKind {
   if (!exitStatus) return "running";
   if (exitStatus === "success") return "success";
+  if (exitStatus.toLowerCase().includes("cancel")) return "canceled";
   return "failed";
 }
 

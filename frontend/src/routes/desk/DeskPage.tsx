@@ -38,7 +38,7 @@ import { useTicketActions } from "@/lib/ticketActions";
 import { useKeybinds } from "@/lib/keymap";
 import { getLastVisit, setLastVisit } from "@/lib/lastVisit";
 import { parseTs, relativeTime, durationBetween } from "@/lib/time";
-import { formatUsd, formatTokens } from "@/lib/status";
+import { formatUsd, formatTokens, runStatusKind } from "@/lib/status";
 import { humanizeRunError } from "@/lib/runError";
 import { Tooltip } from "@/ui/Tooltip";
 import { ticketHref } from "@/lib/routes";
@@ -119,7 +119,7 @@ function latestRunMap(runs: RunOut[]): Map<string, RunOut> {
 
 interface NeedsItem {
   ticket: TicketOut;
-  reason: "failed" | "review";
+  reason: "failed" | "canceled" | "review";
   run?: RunOut;
 }
 
@@ -196,7 +196,7 @@ export function DeskPage() {
     const items: NeedsItem[] = [];
     const seen = new Set<string>();
 
-    // Failed runs whose ticket isn't currently re-running.
+    // Failed (or canceled) runs whose ticket isn't currently re-running.
     for (const r of runsList) {
       if (!r.finished_at) continue;
       if (r.exit_status === "success") continue;
@@ -205,7 +205,8 @@ export function DeskPage() {
       const t = reviewTickets.find((x) => x.id === r.ticket_id);
       if (!t) continue; // only surface if it's sitting in review awaiting you
       seen.add(r.ticket_id);
-      items.push({ ticket: t, reason: "failed", run: r });
+      const reason = runStatusKind(r.exit_status) === "canceled" ? "canceled" : "failed";
+      items.push({ ticket: t, reason, run: r });
     }
     // Remaining review tickets (succeeded / no run yet).
     for (const t of reviewTickets) {
@@ -567,6 +568,8 @@ const NeedsRow = forwardRef<
       <div className="flex min-w-0 items-start gap-2.5 md:contents md:items-center">
         {reason === "failed" ? (
           <StatusPill status="failed" label="Failed" />
+        ) : reason === "canceled" ? (
+          <StatusPill status="canceled" />
         ) : (
           <StatusPill status="review" />
         )}
