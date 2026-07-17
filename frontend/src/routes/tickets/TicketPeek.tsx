@@ -77,16 +77,24 @@ export function TicketPeek({
         )}
         <span className="font-mono text-xs text-moon-600">{ticket.id.slice(0, 8)}</span>
         <div className="ml-auto flex items-center gap-1">
-          <Tooltip content="Open full ticket">
+          {/* Expand control (ticket 55105222): the peek stays the default,
+              dismissible summary; this is the opt-in escape hatch to the full
+              ticket page for deep reading (transcript, activity, linked
+              items) that the bounded rail can't fit. Navigating to the
+              existing detail route beats an in-place full-width takeover
+              here — that page is already the fully-built "document +
+              evidence" surface, so a takeover would just duplicate it inside
+              the peek. */}
+          <Tooltip content="Expand to full ticket">
             <a
               href={ticketHref(ticket.id)}
-              aria-label="Open full ticket"
+              aria-label="Expand to full ticket"
               onClick={(e) => {
                 if (inAppNav(e)) onOpenFull();
               }}
               className="rounded-control p-1.5 text-moon-400 hover:bg-ink-800 hover:text-moon-100"
             >
-              <ArrowRight size={16} />
+              <Maximize2 size={16} />
             </a>
           </Tooltip>
           <Tooltip content="Close (Esc)">

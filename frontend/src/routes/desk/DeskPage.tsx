@@ -25,6 +25,7 @@ import { StatusPill } from "@/ui/StatusPill";
 import { PriorityChip } from "@/components/PriorityChip";
 import { ProjectTag } from "@/components/ProjectDot";
 import { TicketPeek } from "@/routes/tickets/TicketPeek";
+import { peekBackdropClasses } from "@/routes/tickets/peekLayout";
 import { useTicket, useTickets } from "@/api/tickets";
 import { useRuns } from "@/api/runs";
 import { useAgentAttention } from "@/api/agents";
@@ -470,16 +471,19 @@ export function DeskPage() {
       </div>
 
       {peekTicket && (
-        <TicketPeek
-          key={peekTicket.id}
-          ticket={peekTicket}
-          project={peekTicket.project_id ? projects.get(peekTicket.project_id) : undefined}
-          latestRun={latest.get(peekTicket.id)}
-          projects={projectsQ.data ?? []}
-          labels={labelsQ.data ?? []}
-          onClose={() => setPeekId(null)}
-          onOpenFull={() => navigate({ to: "/tickets/$id", params: { id: peekTicket.id } })}
-        />
+        <>
+          <div aria-hidden className={peekBackdropClasses} />
+          <TicketPeek
+            key={peekTicket.id}
+            ticket={peekTicket}
+            project={peekTicket.project_id ? projects.get(peekTicket.project_id) : undefined}
+            latestRun={latest.get(peekTicket.id)}
+            projects={projectsQ.data ?? []}
+            labels={labelsQ.data ?? []}
+            onClose={() => setPeekId(null)}
+            onOpenFull={() => navigate({ to: "/tickets/$id", params: { id: peekTicket.id } })}
+          />
+        </>
       )}
     </Page>
   );
