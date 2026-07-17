@@ -13,6 +13,7 @@ import { Board } from "./Board";
 import { GroupedBoard } from "./GroupedBoard";
 import { List } from "./List";
 import { TicketPeek } from "./TicketPeek";
+import { peekBackdropClasses } from "./peekLayout";
 import { DisplayOptions } from "./DisplayOptions";
 import { IntegrationLensPanel, type Lens, type LensScope } from "./IntegrationLens";
 import { useProjectRepoLinks, useRepoLinks } from "@/api/integrations";
@@ -460,8 +461,10 @@ export function TicketsPage() {
           "relative z-40 flex shrink-0 flex-wrap items-center gap-2.5 border-b border-ink-700 bg-ink-950 px-4 py-2 transition-[padding] duration-150 md:h-12 md:flex-nowrap md:py-0",
           // With the rail open the controls can exceed the padded width on
           // mid-size screens; let the bar wrap back to two rows instead of
-          // letting the trailing buttons slide under the peek.
-          anyPeekOpen && "lg:h-auto lg:flex-wrap lg:py-2 lg:pr-[440px]",
+          // letting the trailing buttons slide under the peek. Width must
+          // match peekLayout's PEEK_RAIL_WIDTH exactly, or this reserves the
+          // wrong amount of space as the rail's own vw-based width changes.
+          anyPeekOpen && "lg:h-auto lg:flex-wrap lg:py-2 lg:pr-[clamp(480px,44vw,760px)]",
         )}
       >
         <span className="shrink-0 font-display text-sm font-semibold tracking-tight text-moon-100">
@@ -515,7 +518,8 @@ export function TicketsPage() {
       <div
         className={cn(
           "min-h-0 flex-1 transition-[padding] duration-150",
-          anyPeekOpen && "lg:pr-[440px]",
+          // Must match peekLayout's PEEK_RAIL_WIDTH — see the header comment.
+          anyPeekOpen && "lg:pr-[clamp(480px,44vw,760px)]",
         )}
       >
         {lensActive ? (
@@ -617,16 +621,19 @@ export function TicketsPage() {
       )}
 
       {peekTicket && (
-        <TicketPeek
-          key={peekTicket.id}
-          ticket={peekTicket}
-          project={peekTicket.project_id ? projectMap.get(peekTicket.project_id) : undefined}
-          latestRun={latestRun.get(peekTicket.id)}
-          projects={projectsQ.data ?? []}
-          labels={labelsQ.data ?? []}
-          onClose={() => setPeekId(null)}
-          onOpenFull={() => open(peekTicket.id)}
-        />
+        <>
+          <div aria-hidden className={peekBackdropClasses} />
+          <TicketPeek
+            key={peekTicket.id}
+            ticket={peekTicket}
+            project={peekTicket.project_id ? projectMap.get(peekTicket.project_id) : undefined}
+            latestRun={latestRun.get(peekTicket.id)}
+            projects={projectsQ.data ?? []}
+            labels={labelsQ.data ?? []}
+            onClose={() => setPeekId(null)}
+            onOpenFull={() => open(peekTicket.id)}
+          />
+        </>
       )}
     </div>
   );
