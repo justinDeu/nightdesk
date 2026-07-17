@@ -1,6 +1,6 @@
 import { Archive, Check, Tag, X } from "lucide-react";
 import { useState } from "react";
-import type { LabelOut, ProjectOut, TicketStatus } from "@/api/types";
+import type { BulkUpdateResult, LabelOut, ProjectOut, TicketStatus } from "@/api/types";
 import { ticketsApi } from "@/api/tickets";
 import { Button } from "@/ui/Button";
 import {
@@ -30,6 +30,7 @@ export function BulkBar({
   openMenu = null,
   onOpenMenuChange,
   onClear,
+  onSelectFailed,
   onDone,
 }: {
   ids: string[];
@@ -39,6 +40,9 @@ export function BulkBar({
   openMenu?: BulkMenu | null;
   onOpenMenuChange: (menu: BulkMenu | null) => void;
   onClear: () => void;
+  /** Narrow the selection down to just the tickets a bulk op could not apply
+   *  to (from `BulkUpdateResult.skipped`), so a retry targets only those. */
+  onSelectFailed: (ids: string[]) => void;
   onDone: () => void;
 }) {
   const count = ids.length;
@@ -49,14 +53,41 @@ export function BulkBar({
 
   const toggle = (menu: BulkMenu, open: boolean) => onOpenMenuChange(open ? menu : null);
 
-  async function run(label: string, fn: () => Promise<unknown>) {
-    try {
-      await fn();
-      onDone();
-      // Keep the selection so further bulk ops (set priority, then project, …)
-      // can chain without re-selecting. Escape or the X button clears it.
+  // Bulk endpoints never reject for per-ticket failures (e.g. archiving a
+  // running ticket) — they resolve 200 with the offending ids in `skipped`.
+  // Report that split honestly instead of showing a blanket success toast.
+  function reportResult(label: string, result: BulkUpdateResult) {
+    if (result.skipped.length === 0) {
       toast.success(`${label} · ${count} ticket${count === 1 ? "" : "s"}`);
+      return;
+    }
+    onSelectFailed(result.skipped.map((s) => s.ticket_id));
+    const n = result.skipped.length;
+    const reason = result.skipped[0]?.reason;
+    toast.error(
+      `${label} failed for ${n} ticket${n === 1 ? "" : "s"}` +
+        (result.updated.length ? ` (${result.updated.length} succeeded)` : "") +
+        (reason ? ` — ${reason}` : ""),
+    );
+  }
+
+  async function run(
+    label: string,
+    fn: () => Promise<BulkUpdateResult>,
+    opts?: { clearOnSuccess?: boolean },
+  ) {
+    try {
+      const result = await fn();
+      onDone();
+      reportResult(label, result);
+      // Full success: keep the selection so further bulk ops (set priority,
+      // then project, …) can chain without re-selecting — unless the caller
+      // says this action removes tickets from view (e.g. Archive), in which
+      // case dismiss right away instead of waiting on the next refetch.
+      if (result.skipped.length === 0 && opts?.clearOnSuccess) onClear();
     } catch (err) {
+      // Unknown per-ticket outcome (network/server error) — leave the whole
+      // selection in place so the user can retry the batch.
       toast.error(`${label} failed`, { error: err });
     }
   }
@@ -64,8 +95,14 @@ export function BulkBar({
   async function applyLabels(next: string[]) {
     setPendingLabels(next);
     try {
-      await ticketsApi.bulkLabels({ ticket_ids: ids, label_ids: next });
+      const result = await ticketsApi.bulkLabels({ ticket_ids: ids, label_ids: next });
       onDone();
+      if (result.skipped.length > 0) {
+        onSelectFailed(result.skipped.map((s) => s.ticket_id));
+        const n = result.skipped.length;
+        const reason = result.skipped[0]?.reason;
+        toast.error(`Labels failed for ${n} ticket${n === 1 ? "" : "s"}` + (reason ? ` — ${reason}` : ""));
+      }
     } catch (err) {
       toast.error("Labels failed", { error: err });
     }
@@ -195,7 +232,9 @@ export function BulkBar({
           size="sm"
           variant="ghost"
           leadingIcon={<Archive size={13} />}
-          onClick={() => run("Archived", () => ticketsApi.bulkArchive({ ticket_ids: ids }))}
+          onClick={() =>
+            run("Archived", () => ticketsApi.bulkArchive({ ticket_ids: ids }), { clearOnSuccess: true })
+          }
         >
           Archive
         </Button>

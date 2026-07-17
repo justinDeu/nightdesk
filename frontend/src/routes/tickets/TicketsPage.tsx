@@ -29,7 +29,7 @@ import { useRuns, runsApi } from "@/api/runs";
 import { useProjects } from "@/api/projects";
 import { useProfiles } from "@/api/profiles";
 import { useLabels } from "@/api/labels";
-import type { ProjectOut, RunOut, TicketOut } from "@/api/types";
+import type { BulkUpdateResult, ProjectOut, RunOut, TicketOut } from "@/api/types";
 import { applyFilter, commitTrailingToken, parseFilter, type FilterContext } from "./filterModel";
 import { useTicketActions } from "@/lib/ticketActions";
 import { useKeybinds, type Keybind } from "@/lib/keymap";
@@ -203,6 +203,21 @@ export function TicketsPage() {
   useEffect(() => {
     if (cursor >= visible.length) setCursor(Math.max(0, visible.length - 1));
   }, [visible.length, cursor]);
+  // Prune the selection whenever the visible ticket set changes so it can
+  // never reference a ticket that's no longer on screen — archived away by a
+  // bulk action, dropped by a filter change, or removed by an unrelated
+  // refetch. This is what makes the bulk-actions bar dismiss itself once
+  // every selected ticket has left the list, and (combined with the explicit
+  // skipped-id handling in BulkBar) narrows a partially-failed selection down
+  // to just the tickets still around to retry.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const visibleIds = new Set(visible.map((t) => t.id));
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visible]);
   const focused: TicketOut | undefined = visible[cursor];
   const hasSel = selected.size > 0;
 
@@ -312,16 +327,30 @@ export function TicketsPage() {
     if (target) focusTo(target.id);
   };
 
+  const isBulkResult = (v: unknown): v is BulkUpdateResult =>
+    !!v && typeof v === "object" && Array.isArray((v as BulkUpdateResult).skipped);
+
   // Bulk-fallback: apply to the whole selection when one exists, else the focus.
+  // Keybind-driven twin of BulkBar's `run()` — same skipped-id handling, so
+  // pressing "a" behaves the same as clicking Archive in the bar.
   const bulkOrSingle = async (
     bulk: (ids: string[]) => Promise<unknown>,
     single: (t: TicketOut) => void,
   ) => {
     if (hasSel) {
       try {
-        await bulk([...selected]);
+        const result = await bulk([...selected]);
         qc.invalidateQueries({ queryKey: qk.tickets.all });
-        clearSelect();
+        if (isBulkResult(result) && result.skipped.length > 0) {
+          setSelected(new Set(result.skipped.map((s) => s.ticket_id)));
+          const n = result.skipped.length;
+          const reason = result.skipped[0]?.reason;
+          toast.error(
+            `Bulk action failed for ${n} ticket${n === 1 ? "" : "s"}` + (reason ? ` — ${reason}` : ""),
+          );
+        } else {
+          clearSelect();
+        }
       } catch (err) {
         toast.error("Bulk action failed", { error: err });
       }
@@ -582,6 +611,7 @@ export function TicketsPage() {
           openMenu={bulkMenu}
           onOpenMenuChange={setBulkMenu}
           onClear={clearSelect}
+          onSelectFailed={(ids) => setSelected(new Set(ids))}
           onDone={() => qc.invalidateQueries({ queryKey: qk.tickets.all })}
         />
       )}

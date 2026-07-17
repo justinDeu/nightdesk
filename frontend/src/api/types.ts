@@ -285,9 +285,13 @@ export interface BulkProfileUpdate {
   ticket_ids: string[];
   profile_id: string;
 }
+export interface BulkSkipped {
+  ticket_id: string;
+  reason: string;
+}
 export interface BulkUpdateResult {
   updated: TicketOut[];
-  skipped: Array<Record<string, unknown>>;
+  skipped: BulkSkipped[];
 }
 
 // --- Runs ----------------------------------------------------------------------
