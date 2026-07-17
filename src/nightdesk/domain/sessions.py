@@ -29,7 +29,8 @@ from typing import Any, Optional
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session as OrmSession
 
-from nightdesk.db.models import ConfigRow, PendingInput, Session, SessionTurn
+from nightdesk.db.models import ConfigRow, PendingInput, Profile, Session, SessionTurn
+from nightdesk.domain.backend_capabilities import CLAUDE_SDK
 from nightdesk.domain.profile_secrets import ProfileSecretBox
 
 
@@ -60,6 +61,14 @@ class PendingNotOpen(Exception):
 
 class TurnNotFound(Exception):
     """Raised when a turn id does not resolve for the given agent. HTTP 404."""
+
+
+class UnsupportedBackend(Exception):
+    """Raised by :func:`create_session` when the profile's backend has no
+    resident-agent runtime yet (only :data:`CLAUDE_SDK` ships one — see
+    ``worker/resident_backends.py``). Maps to HTTP 422; the create is refused
+    outright rather than silently spawning a Claude agent on a non-Claude
+    profile."""
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +261,20 @@ def create_session(
     box: Optional[ProfileSecretBox] = None,
 ) -> Session:
     """Create an idle, cold agent. ``source_path`` None -> a fresh per-agent
-    scratch directory. Env secrets are encrypted if ``box`` is provided."""
+    scratch directory. Env secrets are encrypted if ``box`` is provided.
+
+    Raises :class:`UnsupportedBackend` if the profile is on a backend other
+    than :data:`CLAUDE_SDK` — the resident-agent host only knows how to spawn
+    a Claude runtime (``worker/resident_backends.py``); a profile pointed at
+    e.g. opencode would otherwise silently get a Claude agent instead."""
     from nightdesk.db.models import _uuid
+
+    profile = session.get(Profile, profile_id) if profile_id else None
+    if profile is not None and profile.backend != CLAUDE_SDK.code:
+        raise UnsupportedBackend(
+            "agent sessions currently support only the Claude backend; "
+            f"the profile's backend is {profile.backend}"
+        )
 
     sid = _uuid()
     if source_path:

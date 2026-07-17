@@ -34,6 +34,30 @@ async def test_create_list_get_delete(client):
     assert r.status_code == 404
 
 
+async def test_create_rejects_non_claude_backend_profile(client, session):
+    """Only the claude_sdk backend has a resident-agent runtime. Creating an
+    agent against a profile on another backend (e.g. opencode) must be
+    refused with a clear 422, not silently coerced to a Claude agent."""
+    from nightdesk.domain.profiles import create_profile
+
+    profile = create_profile(
+        session, name="opencode-profile", fs_read=[], fs_write=[],
+        allowed_tools=[], denied_tools=[], network_mode="off",
+        network_allowlist=[], secret_keys=[], default_model="gpt-5.6-sol",
+        backend="opencode",
+    )
+    r = await client.post(
+        "/api/v1/agents", json={"profile_id": profile.id, "title": "A"},
+    )
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert "claude" in detail.lower() and "opencode" in detail
+
+    # Nothing was created.
+    r = await client.get("/api/v1/agents")
+    assert all(x["title"] != "A" for x in r.json())
+
+
 async def test_list_filters_by_project(client):
     """GET /api/v1/agents?project_id= scopes to that project's sessions."""
     in_proj = await _create(client, project_id="proj-a", title="in")
