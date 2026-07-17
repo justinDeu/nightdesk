@@ -47,6 +47,7 @@ from typing import Any, AsyncIterator, Callable, Optional, Protocol
 
 import httpx
 
+from nightdesk.backends import opencode_config as ocfg
 from nightdesk.backends.opencode_translate import new_state, translate_event
 
 
@@ -307,6 +308,13 @@ class _OpencodeResidentHandle:
         self.session_id: Optional[str] = resume
         self._queue: "asyncio.Queue[Optional[dict]]" = asyncio.Queue()
         self._reader_task: Optional[asyncio.Task] = None
+        # Set once the /event stream is actually subscribed (or the reader
+        # has given up). ``start`` waits on it so the first turn is never
+        # POSTed before the SSE subscription is live — opencode can emit
+        # events (up to session.idle) the instant a prompt is accepted, and a
+        # prompt posted ahead of the subscribe would silently drop them, the
+        # same race backends/opencode_driver.py avoids by subscribing first.
+        self._stream_ready = asyncio.Event()
         self._state = new_state()
         self._cost_by_message: dict[str, float] = {}
         self._active_turn_id: Optional[str] = None
@@ -367,12 +375,9 @@ class _OpencodeResidentHandle:
         self._active_turn_id = turn_id
         try:
             sid = await self._ensure_session()
-            body: dict = {"agent": "build", "parts": [{"type": "text", "text": text}]}
-            if self._system_prompt:
-                body["system"] = self._system_prompt
-            if self._model and "/" in self._model:
-                provider_id, model_id = self._model.split("/", 1)
-                body["model"] = {"providerID": provider_id, "modelID": model_id}
+            body = ocfg.build_prompt_body(
+                text, system=self._system_prompt, model=self._model,
+            )
             r = await self._client.post(
                 f"/session/{sid}/prompt_async",
                 params={"directory": self._workdir}, json=body, timeout=30.0,
@@ -409,6 +414,7 @@ class _OpencodeResidentHandle:
     async def _read_loop(self) -> None:
         try:
             async with self._client.stream("GET", "/event", timeout=None) as resp:
+                self._stream_ready.set()
                 async for line in resp.aiter_lines():
                     if self._closed:
                         break
@@ -428,6 +434,10 @@ class _OpencodeResidentHandle:
             log.exception("opencode resident event stream ended for session %s",
                           self.session_id)
         finally:
+            # Unblock ``start`` even if the subscribe raised before the stream
+            # ever opened — the handle then fails on the first turn instead of
+            # hanging the boot until the wait times out.
+            self._stream_ready.set()
             self._queue.put_nowait(None)
 
     def _handle_sse_event(self, evt: dict) -> None:
@@ -444,7 +454,10 @@ class _OpencodeResidentHandle:
             # so this handle tracks it itself, the same way translate_event
             # tracks per-message tokens in state["usage_by_message"].
             info = props.get("info") or {}
-            mid = info.get("id")
+            # Key by the same (id or modelID) fallback translate_event uses for
+            # tokens (see opencode_translate.new_state) so an id-less message's
+            # cost is counted on the same accumulator as its tokens, not dropped.
+            mid = info.get("id") or info.get("modelID")
             cost = info.get("cost")
             if mid and cost is not None:
                 self._cost_by_message[str(mid)] = float(cost)
@@ -500,6 +513,16 @@ class OpencodeResidentBackend:
             system_prompt=spec.system_prompt, resume=spec.resume,
         )
         handle.start_reader()
+        # Don't hand the host a handle whose /event stream isn't subscribed yet:
+        # the host may deliver a turn immediately, and a prompt posted ahead of
+        # the subscribe would drop the events it triggers. The reader sets this
+        # the moment the stream opens (or gives up); the timeout is only a
+        # backstop against a wedged connect on an already-health-checked server.
+        try:
+            await asyncio.wait_for(handle._stream_ready.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            await handle.close()
+            raise RuntimeError("opencode event stream failed to subscribe")
         return handle
 
 

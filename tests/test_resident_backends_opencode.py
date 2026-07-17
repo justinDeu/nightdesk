@@ -243,6 +243,78 @@ async def test_start_and_turn_round_trip_yields_canonical_events_and_turn_comple
     assert fake_client.closed
 
 
+async def test_turn_complete_usage_is_cumulative_across_turns(monkeypatch, tmp_path):
+    """opencode reports usage per-message; the handle must sum every message
+    seen so far so each ``turn_complete`` carries session-cumulative tokens
+    and cost — the shape ``SessionHost._slice_usage`` deltas against a
+    per-generation baseline (parity with Claude's cumulative ResultMessage)."""
+    _patch_process_spawn(monkeypatch)
+    line_queue: "asyncio.Queue[str | None]" = asyncio.Queue()
+    fake_client = _FakeClient(_queue_lines(line_queue))
+    monkeypatch.setattr(rb.httpx, "AsyncClient", lambda **kw: fake_client)
+
+    handle = await OpencodeResidentBackend().start(
+        StartSpec(working_dir=str(tmp_path)), "trusted")
+    collected: list[dict] = []
+    consumer = asyncio.create_task(_collect(handle, collected))
+    try:
+        # Turn 1: one message with input/output + cache tokens.
+        await handle.send({"type": "user_turn", "turn_id": "t1", "text": "a"})
+        await _await(lambda: any(c.endswith("/prompt_async") for c in fake_client.calls))
+        await line_queue.put("data: " + json.dumps({
+            "type": "message.updated",
+            "properties": {"info": {
+                "id": "m1", "modelID": "gpt-5.4",
+                "tokens": {"input": 100, "output": 40, "cache": {"read": 10, "write": 5}},
+                "cost": 0.02,
+            }},
+        }))
+        await line_queue.put("data: " + json.dumps({
+            "type": "session.idle", "properties": {"sessionID": "sess-1"}}))
+        assert await _await(lambda: _turn_complete(collected, "t1") is not None)
+        tc1 = _turn_complete(collected, "t1")
+        assert tc1["usage"] == {
+            "input_tokens": 100, "output_tokens": 40,
+            "cache_read_tokens": 10, "cache_write_tokens": 5}
+        assert tc1["cost_usd"] == pytest.approx(0.02)
+
+        # Turn 2: a second, distinct message. The running total must include m1.
+        await handle.send({"type": "user_turn", "turn_id": "t2", "text": "b"})
+        await line_queue.put("data: " + json.dumps({
+            "type": "message.updated",
+            "properties": {"info": {
+                "id": "m2", "modelID": "gpt-5.4",
+                "tokens": {"input": 30, "output": 20, "cache": {"read": 1, "write": 2}},
+                "cost": 0.01,
+            }},
+        }))
+        await line_queue.put("data: " + json.dumps({
+            "type": "session.idle", "properties": {"sessionID": "sess-1"}}))
+        assert await _await(lambda: _turn_complete(collected, "t2") is not None)
+        tc2 = _turn_complete(collected, "t2")
+        assert tc2["usage"] == {
+            "input_tokens": 130, "output_tokens": 60,
+            "cache_read_tokens": 11, "cache_write_tokens": 7}
+        assert tc2["cost_usd"] == pytest.approx(0.03)
+    finally:
+        await handle.close()
+        consumer.cancel()
+        try:
+            await consumer
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
+def _turn_complete(collected: list[dict], turn_id: str):
+    return next((e for e in collected
+                 if e.get("type") == "turn_complete" and e.get("turn_id") == turn_id), None)
+
+
+async def _collect(handle, sink: list[dict]):
+    async for evt in handle.events():
+        sink.append(evt)
+
+
 async def test_resume_reuses_existing_session_without_creating_a_new_one(
     monkeypatch, tmp_path,
 ):

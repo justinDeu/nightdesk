@@ -21,6 +21,7 @@ from typing import Optional
 
 import httpx
 
+from nightdesk.backends import opencode_config as ocfg
 from nightdesk.backends.opencode_translate import new_state, translate_event, usage_by_model
 from nightdesk.domain.cost import RunUsage, compute_cost
 from nightdesk.transcript import next_seq, now_iso, write_event
@@ -181,17 +182,11 @@ async def _post_text(
     """POST one user turn (the initial prompt or a mid-run follow-up) to the
     live session. Posting a follow-up before ``session.idle`` keeps the same
     session/run alive, so the agent picks it up at its next step boundary."""
-    body: dict = {
-        "agent": "build",
-        "parts": [{"type": "text", "text": text}],
-    }
-    system = getattr(req.permission_spec, "system_prompt", None)
-    if system:
-        body["system"] = system
-    model = req.launch_meta.get("model")
-    if model and "/" in model:
-        provider_id, model_id = model.split("/", 1)
-        body["model"] = {"providerID": provider_id, "modelID": model_id}
+    body = ocfg.build_prompt_body(
+        text,
+        system=getattr(req.permission_spec, "system_prompt", None),
+        model=req.launch_meta.get("model"),
+    )
     r = await client.post(
         f"/session/{session_id}/prompt_async",
         params={"directory": workdir}, json=body, timeout=30.0,
