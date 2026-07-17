@@ -175,6 +175,26 @@ def model_str(assignment: "Assignment") -> str:
     return f"{block_id(assignment.endpoint_id)}/{assignment.model}"
 
 
+def build_prompt_body(
+    text: str, *, system: Optional[str] = None, model: Optional[str] = None,
+) -> dict:
+    """The ``POST /session/{id}/prompt_async`` body for one user turn.
+
+    Shared by the ticket driver (``opencode_driver._post_text``) and the
+    resident handle (``worker.resident_backends``) so the prompt wire shape —
+    the ``build`` agent, the text part, the optional per-prompt system text,
+    and the ``nd_<endpoint>/<model>`` split into ``{providerID, modelID}`` —
+    lives in exactly one place. ``model`` without a ``/`` is left unset so
+    opencode falls back to the config's own model."""
+    body: dict = {"agent": "build", "parts": [{"type": "text", "text": text}]}
+    if system:
+        body["system"] = system
+    if model and "/" in model:
+        provider_id, model_id = model.split("/", 1)
+        body["model"] = {"providerID": provider_id, "modelID": model_id}
+    return body
+
+
 def _render_agents(
     backend_config: dict,
     assignments: "dict[str, Assignment]",

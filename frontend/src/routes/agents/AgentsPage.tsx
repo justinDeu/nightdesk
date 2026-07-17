@@ -392,11 +392,13 @@ function DetailEmpty({
   );
 }
 
-// Resident agent sessions only have a Claude runtime (worker/resident_backends.py
-// ships ClaudeResidentBackend only); the API rejects a create against any other
-// backend with a 422 (see nightdesk.domain.sessions.UnsupportedBackend). Mirror
-// that here so the picker prevents the failure instead of just surfacing it.
-const CLAUDE_BACKEND = "claude_sdk";
+// Resident agent sessions have a runtime for every backend
+// worker/resident_backends.py ships a ResidentBackend for — currently
+// claude_sdk (ClaudeResidentBackend) and opencode (OpencodeResidentBackend).
+// The API rejects a create against anything else with a 422 (see
+// nightdesk.domain.sessions.UnsupportedBackend). Mirror that here so the
+// picker prevents the failure instead of just surfacing it.
+const RESIDENT_BACKENDS = new Set(["claude_sdk", "opencode"]);
 
 function NewAgentDialog({
   open,
@@ -414,18 +416,20 @@ function NewAgentDialog({
   const [sourcePath, setSourcePath] = useState("");
   const [idleTimeout, setIdleTimeout] = useState("");
 
-  const claudeProfiles = (profiles.data ?? []).filter((p) => p.backend === CLAUDE_BACKEND);
-  const effectiveProfile = profileId || claudeProfiles[0]?.id || "";
+  const supportedProfiles = (profiles.data ?? []).filter((p) => RESIDENT_BACKENDS.has(p.backend));
+  const effectiveProfile = profileId || supportedProfiles[0]?.id || "";
   const chosenProfile = profiles.data?.find((p) => p.id === effectiveProfile);
-  const hasUnsupportedProfiles = (profiles.data ?? []).some((p) => p.backend !== CLAUDE_BACKEND);
+  const hasUnsupportedProfiles = (profiles.data ?? []).some(
+    (p) => !RESIDENT_BACKENDS.has(p.backend),
+  );
 
   const submit = async () => {
     if (!effectiveProfile) {
       toast.error("Pick a profile first");
       return;
     }
-    if (chosenProfile && chosenProfile.backend !== CLAUDE_BACKEND) {
-      toast.error("Agent sessions are Claude-only for now", {
+    if (chosenProfile && !RESIDENT_BACKENDS.has(chosenProfile.backend)) {
+      toast.error("Agent sessions don't support this profile's backend yet", {
         description: `“${chosenProfile.name}” uses the ${chosenProfile.backend} backend.`,
       });
       return;
@@ -456,7 +460,11 @@ function NewAgentDialog({
       open={open}
       onOpenChange={onOpenChange}
       title="New agent"
-      description="A resident agent works against a profile and an optional directory. Trusted posture: it runs on your real ~/.claude — your skills, hooks, and CLAUDE.md all apply."
+      description={
+        chosenProfile?.backend === "opencode"
+          ? "A resident agent works against a profile and an optional directory. Trusted posture: it runs opencode directly on the host, dialing the profile's configured provider."
+          : "A resident agent works against a profile and an optional directory. Trusted posture: it runs on your real ~/.claude — your skills, hooks, and CLAUDE.md all apply."
+      }
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
@@ -476,16 +484,16 @@ function NewAgentDialog({
           label="Profile"
           hint={
             hasUnsupportedProfiles
-              ? "Sessions are Claude-only for now — profiles on another backend are disabled below."
+              ? "Sessions support Claude and opencode profiles for now — profiles on another backend are disabled below."
               : undefined
           }
         >
           <Select value={effectiveProfile} onChange={(e) => setProfileId(e.target.value)}>
             {(profiles.data ?? []).map((p) => {
-              const supported = p.backend === CLAUDE_BACKEND;
+              const supported = RESIDENT_BACKENDS.has(p.backend);
               return (
                 <option key={p.id} value={p.id} disabled={!supported}>
-                  {p.name} ({p.backend}){supported ? "" : " — unsupported, Claude-only"}
+                  {p.name} ({p.backend}){supported ? "" : " — unsupported backend"}
                 </option>
               );
             })}

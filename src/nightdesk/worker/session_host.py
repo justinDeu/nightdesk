@@ -28,11 +28,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from nightdesk.backends import opencode_config as ocfg
 from nightdesk.config import NightdeskConfig, load_config
-from nightdesk.db.models import ConfigRow, Session, SessionTurn
+from nightdesk.db.models import ConfigRow, Profile, Session, SessionTurn
 from nightdesk.domain import sessions as sess
 from nightdesk.domain import session_import as simp
+from nightdesk.domain.backend_capabilities import OPENCODE
+from nightdesk.domain.model_assignment import compute_model_assignments
+from nightdesk.domain.permissions import PermissionSpec
 from nightdesk.domain.profile_secrets import ProfileSecretBox
+from nightdesk.domain.providers import resolve_endpoints_for_profile
 from nightdesk.transcript import (
     append_event,
     next_transcript_seq,
@@ -40,8 +45,11 @@ from nightdesk.transcript import (
     write_event,
 )
 from nightdesk.worker._session_runner import CONTROL_EVENT_TYPES
-from nightdesk.worker.claude_translator import translate
-from nightdesk.worker.resident_backends import ClaudeResidentBackend, StartSpec
+from nightdesk.worker.resident_backends import (
+    StartSpec,
+    resident_backend_for,
+    translator_for,
+)
 
 
 log = logging.getLogger(__name__)
@@ -68,7 +76,9 @@ class SessionHost:
     ) -> None:
         self._sf = session_factory
         self._sid = session_id
-        self._backend = backend or ClaudeResidentBackend()
+        # None -> resolved from the row's frozen ``backend`` at boot (see
+        # ``run()``); an explicit override (tests) always wins.
+        self._backend = backend
         self._config = config or load_config()
         self._box = box or ProfileSecretBox(self._config.bearer_token)
         self._host = host
@@ -76,6 +86,12 @@ class SessionHost:
         # Grace after a watchdog interrupt() before declaring the inner
         # unresponsive and tearing down (crashed -> idle, turn failed).
         self._watchdog_grace = watchdog_grace
+
+        # Resolved at boot from row.backend: which resident runtime this
+        # generation is (never changes across restarts — Session.backend is
+        # frozen at create time) and its transcript-translate step.
+        self._backend_code = "claude"
+        self._translate = translator_for(self._backend_code)
 
         self._handle: Any = None
         self._transcript_path: Optional[Path] = None
@@ -94,7 +110,9 @@ class SessionHost:
     # ------------------------------------------------------------------
     # Boot / claim
     # ------------------------------------------------------------------
-    def _build_spec(self, row: Session, env: dict, resume: Optional[str]) -> StartSpec:
+    def _build_spec(self, db, row: Session, env: dict, resume: Optional[str]) -> StartSpec:
+        if row.backend == "opencode":
+            return self._build_opencode_spec(db, row, env, resume)
         return StartSpec(
             working_dir=row.source_path,
             model=row.model,
@@ -102,6 +120,72 @@ class SessionHost:
             env=env,
             # Trusted posture loads the owner's real ~/.claude.
             setting_sources=["project", "user"],
+        )
+
+    def _build_opencode_spec(self, db, row: Session, env: dict,
+                             resume: Optional[str]) -> StartSpec:
+        """Render the opencode config/auth the same way a ticket run does
+        (``domain.model_assignment.compute_model_assignments`` +
+        ``backends.opencode_config``) and inject it via env, mirroring how
+        ``backends.opencode.OpencodeBackend.prepare_launch`` wires the
+        sandboxed ticket path — trusted resident posture just skips the
+        bwrap/mount machinery, there is no sandbox here.
+        """
+        profile = db.get(Profile, row.profile_id) if row.profile_id else None
+        backend_config = dict(getattr(profile, "backend_config", None) or {})
+        endpoints = (
+            resolve_endpoints_for_profile(db, profile, self._box)
+            if profile is not None else {}
+        )
+        primary = (
+            endpoints.get(profile.endpoint_id)
+            if profile is not None and profile.endpoint_id else None
+        )
+        default_model = (
+            row.model
+            or (profile.default_model if profile is not None else None)
+            or (primary.default_model if primary is not None else None)
+        )
+        assignments = compute_model_assignments(
+            OPENCODE, backend_config, primary=primary, default_model=default_model,
+        )
+        system_prompt = getattr(profile, "system_prompt", None) if profile is not None else None
+        perm_spec = PermissionSpec(
+            allowed_tools=list(profile.allowed_tools) if profile is not None else [],
+            denied_tools=list(profile.denied_tools) if profile is not None else [],
+            default_model=default_model,
+            backend=OPENCODE.code,
+            backend_config=backend_config,
+            system_prompt=system_prompt,
+        )
+        config = ocfg.render_config(perm_spec, endpoints, assignments)
+        auth = ocfg.render_auth(endpoints)
+
+        primary_assignment = assignments.get("primary")
+        model = ocfg.model_str(primary_assignment) if primary_assignment is not None else None
+
+        oc_env = dict(env)
+        oc_env.update({
+            "OPENCODE_CONFIG_CONTENT": json.dumps(config),
+            # Fail-closed network/footprint posture, mirroring the ticket
+            # path's env (see backends/opencode.py) — a resident agent is
+            # still unattended between turns.
+            "OPENCODE_DISABLE_AUTOUPDATE": "1",
+            "OPENCODE_DISABLE_SHARE": "1",
+            "OPENCODE_DISABLE_MODELS_FETCH": "1",
+            "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
+            "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+            "OPENCODE_DISABLE_CLAUDE_CODE": "1",  # don't pick up host CLAUDE.md
+        })
+        if auth is not None:
+            oc_env["OPENCODE_AUTH_CONTENT"] = json.dumps(auth)
+
+        return StartSpec(
+            working_dir=row.source_path,
+            model=model,
+            system_prompt=system_prompt,
+            resume=resume,
+            env=oc_env,
         )
 
     async def run(self) -> int:
@@ -112,6 +196,10 @@ class SessionHost:
                 return 0
             row = sess.get_session_row(db, self._sid)
             self._transcript_path = Path(row.transcript_path)
+            self._backend_code = row.backend
+            self._translate = translator_for(row.backend)
+            if self._backend is None:
+                self._backend = resident_backend_for(row.backend)
             try:
                 env = sess.decrypt_env_for_spawn(row, self._box)
             except ValueError as exc:
@@ -124,7 +212,7 @@ class SessionHost:
                 return 1
             resume = (row.resume_handle or {}).get("session_id")
             source_path = row.source_path
-            spec = self._build_spec(row, env, resume)
+            spec = self._build_spec(db, row, env, resume)
 
         self._transcript_path.parent.mkdir(parents=True, exist_ok=True)
         self._seq = [next_transcript_seq(self._transcript_path)]
@@ -133,7 +221,10 @@ class SessionHost:
 
         # Best-effort: import any turns made in a terminal round-trip past our
         # last-written jsonl entry, then the resident resumes the same id.
-        if resume:
+        # Claude-only: the CC session jsonl this replays has no opencode
+        # counterpart (cc_session_jsonl would just never resolve a path for
+        # an opencode session id, but skip the lookup outright for clarity).
+        if resume and self._backend_code == "claude":
             try:
                 self._delta_import(source_path, resume)
             except Exception:  # noqa: BLE001
@@ -476,7 +567,7 @@ class SessionHost:
                                         "kind": "env_secret_unreadable",
                                         "summary": str(exc)})
                 return
-            spec = self._build_spec(row, env, resume)
+            spec = self._build_spec(db, row, env, resume)
         try:
             await old.close()
         except Exception:  # noqa: BLE001
@@ -558,7 +649,7 @@ class SessionHost:
 
     def _write_transcript_translated(self, evt: dict) -> None:
         try:
-            canonical = translate(evt)
+            canonical = self._translate(evt)
         except Exception:  # noqa: BLE001
             canonical = [{"type": "assistant_text", "text": json.dumps(evt, default=str)}]
         for c in canonical:

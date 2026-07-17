@@ -34,10 +34,11 @@ async def test_create_list_get_delete(client):
     assert r.status_code == 404
 
 
-async def test_create_rejects_non_claude_backend_profile(client, session):
-    """Only the claude_sdk backend has a resident-agent runtime. Creating an
-    agent against a profile on another backend (e.g. opencode) must be
-    refused with a clear 422, not silently coerced to a Claude agent."""
+async def test_create_derives_backend_from_opencode_profile(client, session):
+    """Creating an agent against an opencode-backend profile now succeeds
+    (OpencodeResidentBackend, worker/resident_backends.py) and the row's
+    ``backend`` reflects the resolved resident runtime, not the profile's
+    raw capability code."""
     from nightdesk.domain.profiles import create_profile
 
     profile = create_profile(
@@ -49,9 +50,27 @@ async def test_create_rejects_non_claude_backend_profile(client, session):
     r = await client.post(
         "/api/v1/agents", json={"profile_id": profile.id, "title": "A"},
     )
+    assert r.status_code == 201, r.text
+    assert r.json()["backend"] == "opencode"
+
+
+async def test_create_rejects_backend_with_no_resident_runtime(client, session):
+    """A profile on a backend with no resident-agent runtime at all must be
+    refused with a clear 422, not silently coerced to a Claude agent."""
+    from nightdesk.domain.profiles import create_profile
+
+    profile = create_profile(
+        session, name="mystery-profile", fs_read=[], fs_write=[],
+        allowed_tools=[], denied_tools=[], network_mode="off",
+        network_allowlist=[], secret_keys=[], default_model=None,
+        backend="totally_unknown_backend",
+    )
+    r = await client.post(
+        "/api/v1/agents", json={"profile_id": profile.id, "title": "A"},
+    )
     assert r.status_code == 422, r.text
     detail = r.json()["detail"]
-    assert "claude" in detail.lower() and "opencode" in detail
+    assert "totally_unknown_backend" in detail
 
     # Nothing was created.
     r = await client.get("/api/v1/agents")

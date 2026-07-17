@@ -43,6 +43,7 @@ import {
   useWake,
 } from "@/api/agents";
 import { useProfiles } from "@/api/profiles";
+import { useProviders } from "@/api/providers";
 import { ApiError } from "@/api/client";
 import { cn } from "@/lib/cn";
 import { formatTokens, formatUsd } from "@/lib/status";
@@ -732,10 +733,17 @@ function RailRow({ label, children }: { label: string; children: React.ReactNode
 /** Read-only runtime facts: harness, model, profile, posture, access. */
 function RuntimeCard({ agent }: { agent: AgentDetailOut }) {
   const profiles = useProfiles();
+  const providers = useProviders();
   const profile = profiles.data?.find((p) => p.id === agent.profile_id);
-  // Row model null = harness default; the profile's default_model is what the
-  // spawn actually resolves to when set.
-  const model = agent.model ?? profile?.default_model ?? null;
+  // Endpoint's own default_model — the last fallback the resident host
+  // actually resolves against (domain.model_assignment.compute_model_assignments)
+  // when neither the agent row nor the profile pin one.
+  const endpointDefaultModel = (providers.data ?? [])
+    .flatMap((p) => p.endpoints)
+    .find((e) => e.id === profile?.endpoint_id)?.default_model ?? null;
+  // Row model null = harness default; the profile's default_model, then the
+  // endpoint's own default_model, are what the spawn actually resolves to.
+  const model = agent.model ?? profile?.default_model ?? endpointDefaultModel;
   return (
     <div className="space-y-1 rounded-card border border-ink-700 bg-ink-900 px-3 py-2.5 text-[11px] text-moon-500">
       <div className="pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-moon-400">
@@ -748,7 +756,9 @@ function RuntimeCard({ agent }: { agent: AgentDetailOut }) {
         <span className="min-w-0 truncate font-mono text-moon-300">
           {model ?? "harness default"}
           {agent.model == null && model != null && (
-            <span className="text-moon-600"> (profile)</span>
+            <span className="text-moon-600">
+              {" "}({profile?.default_model ? "profile" : "endpoint"})
+            </span>
           )}
         </span>
       </RailRow>

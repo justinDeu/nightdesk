@@ -15,7 +15,7 @@ Read `resident-sessions.md` §"The load-bearing insight" and §"Design decisions
 | Env | none | `Session.env` JSON, secret values encrypted, apply-and-restart |
 | Composer | plain `<Textarea>` | tiptap editor: slash autocomplete, @-mentions, chips, live highlight |
 | Agent screen | transcript + queue strip | RunTheater parity (TasksPanel, SubagentsPanel, thinking, tool cards) + interrupt + env panel + terminal handoff |
-| Backends | claude + opencode resident | claude only; opencode seam kept, deferred |
+| Backends | claude + opencode resident | claude only at v3 ship; opencode resident backend later shipped on the kept seam (§10 addendum) |
 | Resume cost | open question | folds into first post-cold turn with a "resume" tooltip label (decided) |
 
 The single biggest structural addition is the **needs-input control loop**. v2's runner used the one-shot `query()` and baked `AskUserQuestion`/`ExitPlanMode` into `_HEADLESS_DISALLOWED` (`_sdk_runner.py:382`). v3's resident runner uses `ClaudeSDKClient` with a `can_use_tool` callback, so those tools are no longer banned in the interactive path. They become the mechanism by which the agent asks the human something.
@@ -47,7 +47,7 @@ Concretely: `navEntries.ts` gets `{ to: "/agents", label: "Agents", icon: Bot }`
 
 **Non-Goals (this cut)**
 - Sandboxed (bwrap) interactive agents. v1 trusted agents run on the owner's real `~/.claude` with no bwrap. The `ResidentBackend` spawn seam takes a posture argument so the sandbox can be added later without reshaping the pipe.
-- opencode resident backend (seam only).
+- opencode resident backend (seam only at v3 ship — later implemented, see §10 addendum).
 - In-browser terminal / xterm / tmux anywhere. The escape hatch is "open in terminal" printing `claude --resume <id>`.
 - Multi-user, collaborative agents, concurrent turns in one agent (queue + interrupt).
 - Promote-to-ticket (v2 dropped it; `promote_session` goes away with the v1 teardown).
@@ -227,6 +227,21 @@ Screen-only additions: `AgentStatePill` (five-state), interrupt button (alive; a
 
 ## 10. Backends seam (claude only)
 
+> **Addendum (multi-backend resident sessions ticket):** the "defer entirely"
+> call below was v1/v3's assessment. `OpencodeResidentBackend` has since
+> shipped in `worker/resident_backends.py` — see that module's docstring for
+> how the needs-input gap was actually resolved (short answer: it isn't
+> needed, because opencode's config is rendered headless-never-ask at start
+> time the same way a ticket run's is, so `_OpencodeResidentHandle` never has
+> anything to ask; `answer` control messages are a no-op for it). The
+> assessment that opencode's HTTP/SSE process model doesn't fit the
+> stdin/stdout `ResidentHandle` shape verbatim was correct — the fix was
+> implementing `ResidentHandle` against the HTTP driver directly rather than
+> faking a stdio pipe, not reshaping the protocol itself. `Session.backend`
+> now derives from the profile's capability code (`claude_sdk` -> `"claude"`,
+> `opencode` -> `"opencode"`) instead of being hard-coded; see
+> `domain/sessions.py`'s `_RESIDENT_BACKEND_FOR_CAPABILITY`.
+
 `worker/resident_backends.py`:
 
 ```python
@@ -236,7 +251,7 @@ class ResidentBackend(Protocol):
     #                 answer(request_id, decision); close(); resume_handle
 ```
 
-**opencode: defer entirely (assessed honestly).** No `can_use_tool`, no `AskUserQuestion`, no `ExitPlanMode` — the needs-input spine has no counterpart; completion is `session.idle` over HTTP, not a typed ResultMessage. A thin plain-chat slice would ship an agent that silently cannot do the defining v3 feature and needs a parallel host loop. Not "extremely trivial". Seam + frozen `Session.backend` keep it clean to add later.
+**opencode: originally deferred entirely (assessed honestly).** No `can_use_tool`, no `AskUserQuestion`, no `ExitPlanMode` — the needs-input spine has no counterpart; completion is `session.idle` over HTTP, not a typed ResultMessage. A thin plain-chat slice would ship an agent that silently cannot do the defining v3 feature and needs a parallel host loop. Not "extremely trivial". Seam + frozen `Session.backend` keep it clean to add later. (See the addendum above — this has since shipped.)
 
 `_session_runner.py` lifts from `_sdk_runner.py` with the critical divergences: `ClaudeSDKClient` (persistent) not `query()` (one-shot), and `AskUserQuestion`/`ExitPlanMode` are NOT in the disallowed set — they route through `can_use_tool` → pending/answer. The headless guard still applies to ticket runs; interactive agents are the sanctioned exception, gated by a human.
 

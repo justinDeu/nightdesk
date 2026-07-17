@@ -30,8 +30,18 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session as OrmSession
 
 from nightdesk.db.models import ConfigRow, PendingInput, Profile, Session, SessionTurn
-from nightdesk.domain.backend_capabilities import CLAUDE_SDK
+from nightdesk.domain.backend_capabilities import CLAUDE_SDK, OPENCODE
 from nightdesk.domain.profile_secrets import ProfileSecretBox
+
+
+# Profile.backend (the capability descriptor code, see backend_capabilities.py)
+# -> Session.backend (the resident-runtime lock this module and
+# worker/resident_backends.py use). Only capabilities with a resident-agent
+# runtime are listed here; anything else raises UnsupportedBackend below.
+_RESIDENT_BACKEND_FOR_CAPABILITY: dict[str, str] = {
+    CLAUDE_SDK.code: "claude",
+    OPENCODE.code: "opencode",
+}
 
 
 # Turn kinds carried on the SessionTurn inbox.
@@ -263,17 +273,20 @@ def create_session(
     """Create an idle, cold agent. ``source_path`` None -> a fresh per-agent
     scratch directory. Env secrets are encrypted if ``box`` is provided.
 
-    Raises :class:`UnsupportedBackend` if the profile is on a backend other
-    than :data:`CLAUDE_SDK` — the resident-agent host only knows how to spawn
-    a Claude runtime (``worker/resident_backends.py``); a profile pointed at
-    e.g. opencode would otherwise silently get a Claude agent instead."""
+    Raises :class:`UnsupportedBackend` if the profile's backend has no
+    resident-agent runtime (see :data:`_RESIDENT_BACKEND_FOR_CAPABILITY` and
+    ``worker/resident_backends.py``) — a profile pointed at an unsupported
+    backend would otherwise silently get a Claude agent instead."""
     from nightdesk.db.models import _uuid
 
     profile = session.get(Profile, profile_id) if profile_id else None
-    if profile is not None and profile.backend != CLAUDE_SDK.code:
+    capability_code = profile.backend if profile is not None else CLAUDE_SDK.code
+    resident_backend = _RESIDENT_BACKEND_FOR_CAPABILITY.get(capability_code)
+    if resident_backend is None:
         raise UnsupportedBackend(
-            "agent sessions currently support only the Claude backend; "
-            f"the profile's backend is {profile.backend}"
+            "agent sessions support the "
+            f"{', '.join(sorted(_RESIDENT_BACKEND_FOR_CAPABILITY))} backends; "
+            f"the profile's backend is {capability_code}"
         )
 
     sid = _uuid()
@@ -300,7 +313,7 @@ def create_session(
         title=title or "Agent",
         profile_id=profile_id,
         project_id=project_id,
-        backend="claude",
+        backend=resident_backend,
         model=model,
         status="idle",
         source_path=path,
