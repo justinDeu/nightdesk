@@ -392,6 +392,12 @@ function DetailEmpty({
   );
 }
 
+// Resident agent sessions only have a Claude runtime (worker/resident_backends.py
+// ships ClaudeResidentBackend only); the API rejects a create against any other
+// backend with a 422 (see nightdesk.domain.sessions.UnsupportedBackend). Mirror
+// that here so the picker prevents the failure instead of just surfacing it.
+const CLAUDE_BACKEND = "claude_sdk";
+
 function NewAgentDialog({
   open,
   onOpenChange,
@@ -408,11 +414,20 @@ function NewAgentDialog({
   const [sourcePath, setSourcePath] = useState("");
   const [idleTimeout, setIdleTimeout] = useState("");
 
-  const effectiveProfile = profileId || profiles.data?.[0]?.id || "";
+  const claudeProfiles = (profiles.data ?? []).filter((p) => p.backend === CLAUDE_BACKEND);
+  const effectiveProfile = profileId || claudeProfiles[0]?.id || "";
+  const chosenProfile = profiles.data?.find((p) => p.id === effectiveProfile);
+  const hasUnsupportedProfiles = (profiles.data ?? []).some((p) => p.backend !== CLAUDE_BACKEND);
 
   const submit = async () => {
     if (!effectiveProfile) {
       toast.error("Pick a profile first");
+      return;
+    }
+    if (chosenProfile && chosenProfile.backend !== CLAUDE_BACKEND) {
+      toast.error("Agent sessions are Claude-only for now", {
+        description: `“${chosenProfile.name}” uses the ${chosenProfile.backend} backend.`,
+      });
       return;
     }
     const idle = idleTimeout.trim() ? Number(idleTimeout.trim()) : undefined;
@@ -457,13 +472,23 @@ function NewAgentDialog({
         <Field label="Title" hint="Optional — defaults to “Agent”.">
           <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Agent" />
         </Field>
-        <Field label="Profile">
+        <Field
+          label="Profile"
+          hint={
+            hasUnsupportedProfiles
+              ? "Sessions are Claude-only for now — profiles on another backend are disabled below."
+              : undefined
+          }
+        >
           <Select value={effectiveProfile} onChange={(e) => setProfileId(e.target.value)}>
-            {(profiles.data ?? []).map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.backend})
-              </option>
-            ))}
+            {(profiles.data ?? []).map((p) => {
+              const supported = p.backend === CLAUDE_BACKEND;
+              return (
+                <option key={p.id} value={p.id} disabled={!supported}>
+                  {p.name} ({p.backend}){supported ? "" : " — unsupported, Claude-only"}
+                </option>
+              );
+            })}
           </Select>
         </Field>
         <Field

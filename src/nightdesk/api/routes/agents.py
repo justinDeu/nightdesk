@@ -122,6 +122,8 @@ def build_router(
                 scratch_root=scratch_root,
                 box=box,
             )
+        except sess.UnsupportedBackend as e:
+            raise HTTPException(422, str(e))
         except ValueError as e:
             raise HTTPException(422, str(e))
         if payload.wake:

@@ -53,6 +53,37 @@ def test_create_scratch_dir_when_no_source(session, tmp_path):
     assert os.path.isdir(row.source_path)
 
 
+def test_create_rejects_non_claude_backend_profile(session, tmp_path):
+    """A profile on a backend without a resident-agent runtime (e.g.
+    opencode) must be refused outright, not silently spawn a Claude agent."""
+    from nightdesk.domain.profiles import create_profile
+
+    profile = create_profile(
+        session, name="opencode-profile", fs_read=[], fs_write=[],
+        allowed_tools=[], denied_tools=[], network_mode="off",
+        network_allowlist=[], secret_keys=[], default_model="gpt-5.6-sol",
+        backend="opencode",
+    )
+    with pytest.raises(sess.UnsupportedBackend, match="opencode"):
+        sess.create_session(
+            session, profile_id=profile.id, scratch_root=tmp_path,
+            transcript_root=tmp_path, box=BOX,
+        )
+    # No orphan row/scratch dir left behind by the rejected create.
+    assert session.query(Session).count() == 0
+
+
+def test_create_unknown_profile_id_is_not_rejected(session, tmp_path):
+    """A profile_id that does not resolve to a row (unit-test placeholder ids,
+    or a stale reference) is left alone: this guard only fires when the
+    profile IS found and IS on an unsupported backend."""
+    row = sess.create_session(
+        session, profile_id="does-not-exist", scratch_root=tmp_path,
+        transcript_root=tmp_path, box=BOX,
+    )
+    assert row.profile_id == "does-not-exist"
+
+
 def test_liveness_ended_wins(session):
     row = _mk(session)
     row.status = "ended"
