@@ -34,6 +34,12 @@ class EndpointTemplate:
     base_url: Optional[str] = None
     harness_lock: Optional[str] = None
     default_model: Optional[str] = None
+    # Seeded into the endpoint's model menu at create time. Mainly for
+    # protocols with no list operation (see
+    # ``nightdesk.domain.providers.PROTOCOLS_WITHOUT_MODEL_LIST``) — the user
+    # can't pull a menu, so the catalog offers sensible starting ids instead
+    # of an empty list and a blank text box.
+    models: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -82,7 +88,13 @@ _CATALOG: tuple[OfferingTemplate, ...] = (
         description="ChatGPT subscription via Codex OAuth.",
         suggested_name="OpenAI (Codex)",
         endpoints=(
-            EndpointTemplate(label="Codex", protocol_kind="openai_codex"),
+            EndpointTemplate(
+                label="Codex", protocol_kind="openai_codex",
+                default_model="gpt-5.4",
+                # Codex has no list operation (see PROTOCOLS_WITHOUT_MODEL_LIST) —
+                # seed the menu instead of leaving it empty.
+                models=("gpt-5.4", "gpt-5.4-mini"),
+            ),
         ),
     ),
     OfferingTemplate(

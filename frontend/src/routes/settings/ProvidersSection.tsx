@@ -22,6 +22,7 @@ import { ApiError } from "@/api/client";
 import {
   useProviders,
   useProviderCatalog,
+  useProviderProtocols,
   useCreateProvider,
   useDeleteProvider,
   useRotateCredential,
@@ -31,10 +32,12 @@ import {
   usePullModels,
 } from "@/api/providers";
 import type {
+  CatalogEndpointOut,
   CatalogOfferingOut,
   CredentialSource,
   EndpointCreate,
   EndpointOut,
+  ProtocolInfoOut,
   ProtocolKind,
   ProviderOut,
 } from "@/api/types";
@@ -75,6 +78,27 @@ const DEFAULT_CREDENTIAL_PATH: Partial<Record<CredentialSource, string>> = {
 
 function isPathCredential(source: CredentialSource): boolean {
   return source === "oauth_file" || source === "subscription_file";
+}
+
+/** Whether `kind` has a model-list operation to pull from, per the
+ *  `/api/v1/providers/protocols` capability data — drives "Refresh models"
+ *  disabling and manual-curation messaging instead of hard-coding protocol
+ *  names in the UI. Defaults to `true` (enabled) while the capability data
+ *  hasn't loaded yet, so the button doesn't flash disabled on first paint. */
+function protocolSupportsModelList(protocols: ProtocolInfoOut[] | undefined, kind: ProtocolKind): boolean {
+  const info = protocols?.find((p) => p.key === kind);
+  return info ? info.supports_model_list : true;
+}
+
+/** Catalog-seeded model ids for a protocol with no list operation (e.g.
+ *  Codex), so a fresh endpoint on that protocol doesn't start from a blank
+ *  text box. Looks across every offering rather than one specific key, so it
+ *  keeps working if the catalog grows another no-list protocol. */
+function catalogModelSuggestion(
+  catalog: CatalogOfferingOut[] | undefined,
+  kind: ProtocolKind,
+): CatalogEndpointOut | undefined {
+  return catalog?.flatMap((o) => o.endpoints).find((e) => e.protocol_kind === kind && e.models.length > 0);
 }
 
 export function ProvidersSection() {
@@ -352,8 +376,11 @@ function RotateCredentialDialog({
 function EndpointCard({ endpoint, onEdit }: { endpoint: EndpointOut; onEdit: () => void }) {
   const pullModels = usePullModels();
   const deleteEndpoint = useDeleteEndpoint();
+  const protocols = useProviderProtocols();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [expanded, setExpanded] = useState(false);
+
+  const canListModels = protocolSupportsModelList(protocols.data, endpoint.protocol_kind);
 
   async function refresh() {
     try {
@@ -404,15 +431,25 @@ function EndpointCard({ endpoint, onEdit }: { endpoint: EndpointOut; onEdit: () 
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            leadingIcon={pullModels.isPending ? <Spinner size={12} /> : <RefreshCw size={12} />}
-            onClick={refresh}
-            disabled={pullModels.isPending}
-          >
-            Refresh models
-          </Button>
+          {canListModels ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              leadingIcon={pullModels.isPending ? <Spinner size={12} /> : <RefreshCw size={12} />}
+              onClick={refresh}
+              disabled={pullModels.isPending}
+            >
+              Refresh models
+            </Button>
+          ) : (
+            <Tooltip content={`${PROTOCOL_LABEL[endpoint.protocol_kind]} has no model-list operation — its models are curated manually. Edit the endpoint to add or remove ids.`}>
+              <span>
+                <Button variant="ghost" size="sm" leadingIcon={<RefreshCw size={12} />} disabled>
+                  Refresh models
+                </Button>
+              </span>
+            </Tooltip>
+          )}
           <Button variant="ghost" size="sm" onClick={onEdit}>Edit</Button>
           <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)}>
             <Trash2 size={13} />
@@ -472,6 +509,8 @@ function EndpointFormDialog({
 }) {
   const createEndpoint = useCreateEndpoint();
   const updateEndpoint = useUpdateEndpoint();
+  const protocols = useProviderProtocols();
+  const catalog = useProviderCatalog();
   const [label, setLabel] = useState(endpoint?.label ?? "");
   const [protocolKind, setProtocolKind] = useState<ProtocolKind>(endpoint?.protocol_kind ?? "anthropic_compat");
   const [baseUrl, setBaseUrl] = useState(endpoint?.base_url ?? "");
@@ -482,6 +521,22 @@ function EndpointFormDialog({
   const [models, setModels] = useState<string[]>(endpoint?.models ?? []);
   const [extra, setExtra] = useState("");
   const busy = createEndpoint.isPending || updateEndpoint.isPending;
+  const canListModels = protocolSupportsModelList(protocols.data, protocolKind);
+
+  // New endpoint, protocol with no list operation, nothing typed yet: seed
+  // the manual model menu from the catalog instead of leaving it blank —
+  // the user shouldn't have to type Codex model ids from memory. Never runs
+  // when editing an existing endpoint (would clobber curated models).
+  useEffect(() => {
+    if (endpoint) return;
+    if (protocolSupportsModelList(protocols.data, protocolKind)) return;
+    if (models.length > 0) return;
+    const suggestion = catalogModelSuggestion(catalog.data, protocolKind);
+    if (!suggestion) return;
+    setModels(suggestion.models);
+    setDefaultModel((prev) => prev || suggestion.default_model || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [protocolKind, protocols.data, catalog.data, endpoint]);
 
   async function save() {
     const fields: EndpointCreate = {
@@ -545,6 +600,22 @@ function EndpointFormDialog({
         <Field label="Base URL" hint="Leave blank where the protocol implies it (e.g. OpenAI Codex).">
           <Input mono value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.z.ai/api/anthropic" />
         </Field>
+        {!canListModels && (
+          <div className="rounded-card border border-lamp/40 bg-lamp/5 px-3 py-2.5">
+            <p className="text-xs font-medium text-moon-100">
+              {PROTOCOL_LABEL[protocolKind]} has no model list
+            </p>
+            <p className="mt-0.5 text-xs text-moon-400">
+              This protocol has no list operation to pull from, so its models are curated by hand. Edit the list
+              below — sensible defaults are pre-filled where known.
+            </p>
+            <div className="mt-2.5">
+              <Field label="Models">
+                <ListEditor value={models} onChange={setModels} placeholder="gpt-5.4" />
+              </Field>
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <Field label="Credential source">
             <Select value={credentialSource} onChange={(e) => setCredentialSource(e.target.value as CredentialSource)}>
@@ -584,9 +655,11 @@ function EndpointFormDialog({
         <Field label="Default model">
           <Input mono value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} placeholder="glm-5.2" />
         </Field>
-        <Field label="Models" hint="Curated manually, or filled by Refresh models where the protocol supports it.">
-          <ListEditor value={models} onChange={setModels} placeholder="glm-5.2" />
-        </Field>
+        {canListModels && (
+          <Field label="Models" hint="Curated manually, or filled by Refresh models where the protocol supports it.">
+            <ListEditor value={models} onChange={setModels} placeholder="glm-5.2" />
+          </Field>
+        )}
         <Field
           label="Extra (JSON)"
           hint={endpoint?.extra_set ? "Currently set. Paste new JSON to replace it; leave blank to keep it." : "Vendor-quirk overrides (headers, env, options)."}
@@ -613,6 +686,8 @@ interface DraftEndpoint {
   credential_source: CredentialSource;
   harness_lock: string | null;
   credential_override: string;
+  default_model: string;
+  models: string[];
 }
 
 function CreateProviderDialog({
@@ -623,6 +698,7 @@ function CreateProviderDialog({
   onCreated: (id: string) => void;
 }) {
   const catalog = useProviderCatalog();
+  const protocols = useProviderProtocols();
   const createProvider = useCreateProvider();
   const [step, setStep] = useState<WizardStep>("offering");
   const [offering, setOffering] = useState<CatalogOfferingOut | "custom" | null>(null);
@@ -644,7 +720,7 @@ function CreateProviderDialog({
         {
           key: "custom-0", checked: true, label: "Custom endpoint",
           protocol_kind: "openai_compat", base_url: "", credential_source: "api_key",
-          harness_lock: null, credential_override: "",
+          harness_lock: null, credential_override: "", default_model: "", models: [],
         },
       ]);
     } else {
@@ -659,6 +735,8 @@ function CreateProviderDialog({
           credential_source: o.credential_source,
           harness_lock: e.harness_lock,
           credential_override: "",
+          default_model: e.default_model ?? "",
+          models: e.models,
         })),
       );
     }
@@ -667,6 +745,25 @@ function CreateProviderDialog({
 
   function updateEndpoint(key: string, patch: Partial<DraftEndpoint>) {
     setEndpoints((prev) => prev.map((e) => (e.key === key ? { ...e, ...patch } : e)));
+  }
+
+  // Switching a draft endpoint's protocol to one with no list operation
+  // (Codex today): seed the manual model menu from the catalog instead of
+  // leaving it blank, same as the standalone endpoint form. Never
+  // overwrites models the user already entered.
+  function setEndpointProtocol(key: string, kind: ProtocolKind) {
+    setEndpoints((prev) =>
+      prev.map((e) => {
+        if (e.key !== key) return e;
+        if (protocolSupportsModelList(protocols.data, kind) || e.models.length > 0) {
+          return { ...e, protocol_kind: kind };
+        }
+        const suggestion = catalogModelSuggestion(catalog.data, kind);
+        return suggestion
+          ? { ...e, protocol_kind: kind, models: suggestion.models, default_model: e.default_model || suggestion.default_model || "" }
+          : { ...e, protocol_kind: kind };
+      }),
+    );
   }
 
   // Custom offerings register exactly one endpoint from the wizard, so its
@@ -691,6 +788,8 @@ function CreateProviderDialog({
           harness_lock: e.harness_lock,
           credential_value:
             (offering === "custom" ? e.credential_override.trim() : sharedCredential.trim()) || undefined,
+          default_model: e.default_model.trim() || null,
+          models: e.models,
         })),
       });
       toast.success("Provider created", {
@@ -868,17 +967,39 @@ function CreateProviderDialog({
                 )}
               </label>
               {e.checked && (
-                <div className="mt-2.5 grid grid-cols-2 gap-2.5 pl-5.5">
-                  <Field label="Protocol">
-                    <Select value={e.protocol_kind} onChange={(ev) => updateEndpoint(e.key, { protocol_kind: ev.target.value as ProtocolKind })}>
-                      {Object.entries(PROTOCOL_LABEL).map(([k, v]) => (
-                        <option key={k} value={k}>{v}</option>
-                      ))}
-                    </Select>
-                  </Field>
-                  <Field label="Base URL">
-                    <Input mono value={e.base_url} onChange={(ev) => updateEndpoint(e.key, { base_url: ev.target.value })} placeholder="(none)" />
-                  </Field>
+                <div className="mt-2.5 space-y-2.5 pl-5.5">
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <Field label="Protocol">
+                      <Select value={e.protocol_kind} onChange={(ev) => setEndpointProtocol(e.key, ev.target.value as ProtocolKind)}>
+                        {Object.entries(PROTOCOL_LABEL).map(([k, v]) => (
+                          <option key={k} value={k}>{v}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="Base URL">
+                      <Input mono value={e.base_url} onChange={(ev) => updateEndpoint(e.key, { base_url: ev.target.value })} placeholder="(none)" />
+                    </Field>
+                  </div>
+                  {!protocolSupportsModelList(protocols.data, e.protocol_kind) && (
+                    <div className="rounded-card border border-lamp/40 bg-lamp/5 px-3 py-2.5">
+                      <p className="text-xs font-medium text-moon-100">
+                        {PROTOCOL_LABEL[e.protocol_kind]} has no model list
+                      </p>
+                      <p className="mt-0.5 text-xs text-moon-400">
+                        This protocol has no list operation to pull from, so its models are curated by hand.
+                        Sensible defaults are pre-filled below — add or remove ids as needed.
+                      </p>
+                      <div className="mt-2.5">
+                        <Field label="Models">
+                          <ListEditor
+                            value={e.models}
+                            onChange={(next) => updateEndpoint(e.key, { models: next })}
+                            placeholder="gpt-5.4"
+                          />
+                        </Field>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

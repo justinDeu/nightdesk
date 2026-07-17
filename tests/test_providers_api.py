@@ -142,6 +142,24 @@ async def test_catalog_route_shape(client):
     assert zai["endpoints"][0]["protocol_kind"] == "anthropic_compat"
 
 
+async def test_catalog_codex_seeds_default_models(client):
+    r = await client.get("/api/v1/providers/catalog")
+    codex = next(o for o in r.json() if o["key"] == "openai_codex")
+    ep = codex["endpoints"][0]
+    assert ep["protocol_kind"] == "openai_codex"
+    assert ep["models"], "codex should seed default model ids, not an empty list"
+    assert ep["default_model"] in ep["models"]
+
+
+async def test_protocols_route_marks_codex_as_no_list(client):
+    r = await client.get("/api/v1/providers/protocols")
+    assert r.status_code == 200
+    by_key = {p["key"]: p["supports_model_list"] for p in r.json()}
+    assert by_key["openai_codex"] is False
+    assert by_key["openai"] is True
+    assert by_key["anthropic_compat"] is True
+
+
 async def test_create_provider_rejects_mixed_secret_and_file_credentials(client):
     r = await client.post("/api/v1/providers", json={
         "name": "Mixed",
@@ -281,7 +299,7 @@ async def test_pull_models_codex_returns_400(client):
 
     r = await client.post(f"/api/v1/provider-endpoints/{eid}/pull-models")
     assert r.status_code == 400
-    assert "curate manually" in r.json()["detail"]
+    assert "add models manually" in r.json()["detail"]
 
 
 async def test_pull_models_failure_returns_502(client, monkeypatch):
