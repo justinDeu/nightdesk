@@ -1,6 +1,9 @@
 """Tests for /api/v1/providers and /api/v1/provider-endpoints."""
+import json
+
 import httpx
 
+from nightdesk.api.routes import providers as providers_route
 from nightdesk.db.models import Profile, ProviderEndpoint
 
 
@@ -151,11 +154,11 @@ async def test_catalog_codex_seeds_default_models(client):
     assert ep["default_model"] in ep["models"]
 
 
-async def test_protocols_route_marks_codex_as_no_list(client):
+async def test_protocols_route_marks_codex_as_supporting_model_list(client):
     r = await client.get("/api/v1/providers/protocols")
     assert r.status_code == 200
     by_key = {p["key"]: p["supports_model_list"] for p in r.json()}
-    assert by_key["openai_codex"] is False
+    assert by_key["openai_codex"] is True
     assert by_key["openai"] is True
     assert by_key["anthropic_compat"] is True
 
@@ -287,19 +290,96 @@ async def test_pull_models_ollama_success(client, monkeypatch):
     assert r.json()["models"] == ["llama3", "qwen"]
 
 
-async def test_pull_models_codex_returns_400(client):
+async def _create_codex_endpoint(client, *, auth_path) -> str:
     r = await client.post("/api/v1/providers", json={
         "name": "OpenAICodex", "vendor": "openai",
         "endpoints": [{
             "label": "codex", "protocol_kind": "openai_codex",
-            "credential_source": "oauth_file", "credential_value": "~/.codex/auth.json",
+            "credential_source": "oauth_file", "credential_value": str(auth_path),
         }],
     })
-    eid = r.json()["endpoints"][0]["id"]
+    return r.json()["endpoints"][0]["id"]
+
+
+async def test_pull_models_codex_success_filters_hidden_visibility(client, monkeypatch, tmp_path):
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(json.dumps({
+        "tokens": {
+            "access_token": "codex-access-token",
+            "refresh_token": "codex-refresh-token",
+            "account_id": "acct-123",
+        },
+    }))
+    eid = await _create_codex_endpoint(client, auth_path=auth_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://chatgpt.com/backend-api/codex/models"
+        assert request.headers["authorization"] == "Bearer codex-access-token"
+        assert request.headers["chatgpt-account-id"] == "acct-123"
+        return httpx.Response(200, json={"models": [
+            {"slug": "gpt-5.6-sol", "visibility": "list"},
+            {"slug": "gpt-5.5", "visibility": "list"},
+            # Hidden internal models must not enter the menu.
+            {"slug": "codex-auto-review", "visibility": "hide"},
+        ]})
+
+    _patch_client(monkeypatch, handler)
 
     r = await client.post(f"/api/v1/provider-endpoints/{eid}/pull-models")
-    assert r.status_code == 400
-    assert "add models manually" in r.json()["detail"]
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["models"] == ["gpt-5.6-sol", "gpt-5.5"]
+    assert body["models_pulled_at"] is not None
+
+
+async def test_pull_models_codex_falls_back_to_local_cache_on_fetch_failure(
+    client, monkeypatch, tmp_path,
+):
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(json.dumps({"tokens": {"access_token": "codex-access-token"}}))
+    eid = await _create_codex_endpoint(client, auth_path=auth_path)
+
+    cache_path = tmp_path / "models_cache.json"
+    cache_path.write_text(json.dumps({
+        "fetched_at": "2026-07-16T00:00:00Z",
+        "etag": "some-etag",
+        "client_version": "0.144.5",
+        "models": [
+            {"slug": "gpt-5.6-sol", "visibility": "list"},
+            {"slug": "codex-auto-review", "visibility": "hide"},
+        ],
+    }))
+    monkeypatch.setattr(providers_route, "_CODEX_MODELS_CACHE_PATH", str(cache_path))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="upstream unavailable")
+
+    _patch_client(monkeypatch, handler)
+
+    r = await client.post(f"/api/v1/provider-endpoints/{eid}/pull-models")
+    assert r.status_code == 200, r.text
+    assert r.json()["models"] == ["gpt-5.6-sol"]
+
+
+async def test_pull_models_codex_fetch_failure_without_cache_returns_502(
+    client, monkeypatch, tmp_path,
+):
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(json.dumps({"tokens": {"access_token": "codex-access-token"}}))
+    eid = await _create_codex_endpoint(client, auth_path=auth_path)
+
+    # Point at a cache file that doesn't exist.
+    monkeypatch.setattr(
+        providers_route, "_CODEX_MODELS_CACHE_PATH", str(tmp_path / "no_such_cache.json"),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="upstream unavailable")
+
+    _patch_client(monkeypatch, handler)
+
+    r = await client.post(f"/api/v1/provider-endpoints/{eid}/pull-models")
+    assert r.status_code == 502
 
 
 async def test_pull_models_failure_returns_502(client, monkeypatch):

@@ -90,10 +90,21 @@ _CATALOG: tuple[OfferingTemplate, ...] = (
         endpoints=(
             EndpointTemplate(
                 label="Codex", protocol_kind="openai_codex",
-                default_model="gpt-5.4",
-                # Codex has no list operation (see PROTOCOLS_WITHOUT_MODEL_LIST) —
-                # seed the menu instead of leaving it empty.
-                models=("gpt-5.4", "gpt-5.4-mini"),
+                default_model="gpt-5.6-sol",
+                # Codex does support a model list (pulled from
+                # https://chatgpt.com/backend-api/codex/models — see
+                # nightdesk.api.routes.providers), but a fresh install has
+                # nothing pulled yet, so seed the menu with the current
+                # top models instead of leaving it empty.
+                models=(
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "gpt-5.6-luna",
+                    "gpt-5.5",
+                    "gpt-5.4",
+                    "gpt-5.4-mini",
+                    "gpt-5.3-codex-spark",
+                ),
             ),
         ),
     ),
