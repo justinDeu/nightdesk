@@ -8,7 +8,10 @@ never return plaintext, only ``credential_set`` / ``extra_set`` flags.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+import logging
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -55,6 +58,27 @@ from nightdesk.domain.providers import (
 
 
 _PULL_MODELS_TIMEOUT = 10.0
+
+log = logging.getLogger(__name__)
+
+# The ChatGPT backend endpoint Codex CLI (0.144.x) calls to fetch its model
+# catalog — confirmed by inspecting the CLI's Rust binary: the literal base
+# string ``https://chatgpt.com/backend-api/codex`` appears standalone in the
+# vendored ``codex-api/src/endpoint/models.rs`` build, and probing
+# ``.../codex/models`` unauthenticated returns a JSON 401 from the real auth
+# middleware ("Could not parse your authentication token"), while sibling
+# nonexistent paths under the same prefix return a generic 403 HTML page.
+# Same surface Codex CLI itself uses with the stored OAuth access token.
+_CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
+
+# Codex CLI's own local cache of the last successful fetch (written by the
+# CLI, read here only as a fallback — see ``_codex_cache_fallback_models``).
+_CODEX_MODELS_CACHE_PATH = "~/.codex/models_cache.json"
+
+# "fresh enough" to serve on a live-fetch failure. Generous on purpose: a
+# stale local list beats a hard error, and this cache only feeds a manual
+# "Refresh models" click, not anything time-critical.
+_CODEX_MODELS_CACHE_MAX_AGE = timedelta(days=7)
 
 
 # ---------------------------------------------------------------------------
@@ -180,10 +204,39 @@ def _list_request(resolved) -> tuple[str, dict[str, str]]:
         base = (resolved.base_url or "http://localhost:11434").rstrip("/")
         return f"{base}/api/tags", {}
     if protocol == "openai_codex":
-        raise PullModelsError(
-            "this protocol has no model list; add models manually on the endpoint"
-        )
+        return _CODEX_MODELS_URL, _codex_auth_headers(cred)
     raise PullModelsError(f"unknown protocol_kind {protocol!r}")
+
+
+def _codex_auth_headers(credential: Optional[str]) -> dict[str, str]:
+    """Headers for a Codex model-list request, built from the resolved
+    ``auth.json`` blob (an ``oauth_file`` credential is the file's raw text —
+    see ``_resolve_credential``).
+
+    Fail-soft like ``_parse_codex_oauth`` in ``backends/opencode_config.py``:
+    any parse/shape problem yields an empty header set rather than raising,
+    so a bad/missing credential surfaces as a 401 from the live fetch (which
+    then falls through to the local cache) instead of a crash here.
+    """
+    if not credential:
+        return {}
+    try:
+        data = json.loads(credential)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    tokens = data.get("tokens")
+    if not isinstance(tokens, dict):
+        return {}
+    access = tokens.get("access_token")
+    if not isinstance(access, str) or not access:
+        return {}
+    headers = {"Authorization": f"Bearer {access}", "originator": "codex_cli_rs"}
+    account_id = tokens.get("account_id")
+    if isinstance(account_id, str) and account_id:
+        headers["chatgpt-account-id"] = account_id
+    return headers
 
 
 def _parse_models(protocol: str, payload: Any) -> list[str]:
@@ -195,12 +248,61 @@ def _parse_models(protocol: str, payload: Any) -> list[str]:
             if isinstance(it, dict) and it.get("name"):
                 out.append(it["name"])
         return out
+    if protocol == "openai_codex":
+        return _codex_slugs(payload.get("models") if isinstance(payload, dict) else None)
     data = payload.get("data") if isinstance(payload, dict) else None
     out = []
     for it in data or []:
         if isinstance(it, dict) and it.get("id"):
             out.append(it["id"])
     return out
+
+
+def _codex_slugs(items: Any) -> list[str]:
+    """Filter a Codex model list (either the live API response's ``models``
+    array or the local cache's) down to publicly-listable slugs.
+
+    ``visibility`` distinguishes the public menu from internal-only entries
+    (e.g. ``codex-auto-review``) that must never appear as a user-selectable
+    model.
+    """
+    out = []
+    for it in items or []:
+        if isinstance(it, dict) and it.get("visibility") == "list" and it.get("slug"):
+            out.append(it["slug"])
+    return out
+
+
+def _codex_cache_fallback_models() -> Optional[list[str]]:
+    """Slugs from Codex CLI's local ``~/.codex/models_cache.json``, if the
+    file exists, parses, and isn't too stale. Returns ``None`` when no
+    usable fallback is available (missing file, bad JSON, or ``fetched_at``
+    older than ``_CODEX_MODELS_CACHE_MAX_AGE``) so the caller can tell "no
+    fallback" apart from "fallback yielded zero listable models".
+    """
+    path = os.path.expanduser(_CODEX_MODELS_CACHE_PATH)
+    try:
+        with open(path, "r") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        log.info("codex models cache fallback: %s unusable: %s", path, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    fetched_at = data.get("fetched_at")
+    if isinstance(fetched_at, str):
+        try:
+            fetched = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+        except ValueError:
+            log.info("codex models cache fallback: unparseable fetched_at %r", fetched_at)
+            return None
+        if fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - fetched
+        if age > _CODEX_MODELS_CACHE_MAX_AGE:
+            log.info("codex models cache fallback: cache is stale (age=%s)", age)
+            return None
+    return _codex_slugs(data.get("models"))
 
 
 # ---------------------------------------------------------------------------
@@ -396,14 +498,40 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
             url, headers = _list_request(resolved)
         except PullModelsError as exc:
             raise HTTPException(400, str(exc))
+
+        payload: Any = None
+        fetch_error: Optional[Exception] = None
         try:
             with httpx.Client(timeout=_PULL_MODELS_TIMEOUT) as http_client:
                 resp = http_client.get(url, headers={"Accept": "application/json", **headers})
                 resp.raise_for_status()
                 payload = resp.json()
-        except Exception as exc:  # noqa: BLE001 — surfaced to the caller as 502
-            raise HTTPException(502, f"model pull failed: {exc}")
-        models = _parse_models(resolved.protocol_kind, payload)
+        except Exception as exc:  # noqa: BLE001 — may still be recoverable via cache below
+            fetch_error = exc
+
+        if fetch_error is None:
+            models = _parse_models(resolved.protocol_kind, payload)
+            log.info(
+                "pull-models %s: served %d models from live fetch (%s)",
+                eid, len(models), resolved.protocol_kind,
+            )
+        elif resolved.protocol_kind == "openai_codex":
+            # Better a slightly stale local Codex CLI cache than a hard
+            # error — the live fetch needing a fresh access token, network
+            # access, etc. is more fragile than reading a file the CLI
+            # already maintains.
+            cached = _codex_cache_fallback_models()
+            if cached is None:
+                raise HTTPException(502, f"model pull failed: {fetch_error}")
+            models = cached
+            log.warning(
+                "pull-models %s: live fetch failed (%s); served %d models from "
+                "local codex cache fallback (%s)",
+                eid, fetch_error, len(models), _CODEX_MODELS_CACHE_PATH,
+            )
+        else:
+            raise HTTPException(502, f"model pull failed: {fetch_error}")
+
         ep = update_endpoint(
             session, eid, models=models, models_pulled_at=datetime.now(timezone.utc),
         )
