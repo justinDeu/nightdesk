@@ -41,6 +41,7 @@ export const qk = {
     all: ["providers"] as const,
     detail: (id: string) => ["providers", "detail", id] as const,
     catalog: ["providers", "catalog"] as const,
+    protocols: ["providers", "protocols"] as const,
   },
   backends: ["backends"] as const,
   labels: ["labels"] as const,

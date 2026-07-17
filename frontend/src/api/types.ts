@@ -716,6 +716,9 @@ export interface CatalogEndpointOut {
   base_url: string | null;
   harness_lock: string | null;
   default_model: string | null;
+  /** Suggested model ids to seed the menu with (e.g. Codex, which has no
+   *  list operation and would otherwise start with an empty model list). */
+  models: string[];
 }
 
 /**
@@ -735,6 +738,17 @@ export interface CatalogOfferingOut {
   description: string;
   suggested_name: string;
   endpoints: CatalogEndpointOut[];
+}
+
+/**
+ * Per-`protocol_kind` capability info — currently just whether the protocol
+ * has a model-list operation to pull from. Drives "Refresh models" disabling
+ * and manual-curation messaging off data instead of a hard-coded protocol
+ * name. See `nightdesk.domain.providers.PROTOCOLS_WITHOUT_MODEL_LIST`.
+ */
+export interface ProtocolInfoOut {
+  key: ProtocolKind;
+  supports_model_list: boolean;
 }
 
 // --- Backends (Layer 2: harness capability catalog) ------------------------

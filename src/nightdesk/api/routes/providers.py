@@ -21,6 +21,7 @@ from nightdesk.api.schemas import (
     EndpointCreate,
     EndpointOut,
     EndpointUpdate,
+    ProtocolInfoOut,
     ProviderCreate,
     ProviderOut,
     ProviderRotateCredential,
@@ -47,6 +48,7 @@ from nightdesk.domain.providers import (
     get_provider,
     list_providers,
     resolve_endpoint,
+    supports_model_list,
     update_endpoint,
     update_provider,
 )
@@ -107,11 +109,19 @@ def _catalog_out() -> list[dict]:
                     "base_url": e.base_url,
                     "harness_lock": e.harness_lock,
                     "default_model": e.default_model,
+                    "models": list(e.models),
                 }
                 for e in o.endpoints
             ],
         }
         for o in offering_catalog()
+    ]
+
+
+def _protocols_out() -> list[dict]:
+    return [
+        {"key": kind, "supports_model_list": supports_model_list(kind)}
+        for kind in PROTOCOL_KINDS
     ]
 
 
@@ -170,7 +180,9 @@ def _list_request(resolved) -> tuple[str, dict[str, str]]:
         base = (resolved.base_url or "http://localhost:11434").rstrip("/")
         return f"{base}/api/tags", {}
     if protocol == "openai_codex":
-        raise PullModelsError("openai_codex has no list operation; curate manually")
+        raise PullModelsError(
+            "this protocol has no model list; add models manually on the endpoint"
+        )
     raise PullModelsError(f"unknown protocol_kind {protocol!r}")
 
 
@@ -265,6 +277,11 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     @router.get("/api/v1/providers/catalog", response_model=list[CatalogOfferingOut])
     async def catalog_api():
         return _catalog_out()
+
+    # Registered before "/{pid}" so "protocols" is never captured by the param route.
+    @router.get("/api/v1/providers/protocols", response_model=list[ProtocolInfoOut])
+    async def protocols_api():
+        return _protocols_out()
 
     @router.get("/api/v1/providers/{pid}", response_model=ProviderOut)
     async def show_provider_api(pid: str, session: Session = Depends(get_session)):

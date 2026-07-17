@@ -6,6 +6,7 @@ import type {
   EndpointCreate,
   EndpointOut,
   EndpointUpdate,
+  ProtocolInfoOut,
   ProviderCreate,
   ProviderOut,
   ProviderRotateCredential,
@@ -25,6 +26,7 @@ export const providersApi = {
   rotateCredential: (id: string, body: ProviderRotateCredential) =>
     api.post<ProviderRotateResult>(`${PROVIDERS_BASE}/${id}/rotate-credential`, { body }),
   catalog: () => api.get<CatalogOfferingOut[]>(`${PROVIDERS_BASE}/catalog`),
+  protocols: () => api.get<ProtocolInfoOut[]>(`${PROVIDERS_BASE}/protocols`),
 
   createEndpoint: (providerId: string, body: EndpointCreate) =>
     api.post<EndpointOut>(`${PROVIDERS_BASE}/${providerId}/endpoints`, { body }),
@@ -40,6 +42,10 @@ export function useProviders() {
 
 export function useProviderCatalog() {
   return useQuery({ queryKey: qk.providers.catalog, queryFn: providersApi.catalog, staleTime: Infinity });
+}
+
+export function useProviderProtocols() {
+  return useQuery({ queryKey: qk.providers.protocols, queryFn: providersApi.protocols, staleTime: Infinity });
 }
 
 export function useCreateProvider() {

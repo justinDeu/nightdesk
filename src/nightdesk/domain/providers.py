@@ -53,6 +53,22 @@ CREDENTIAL_SOURCES: tuple[str, ...] = (
     "none",
 )
 
+# Protocols whose surface has no model-list operation to pull from — a known,
+# permanent property of the protocol, not a runtime failure. ``openai_codex``
+# talks to the ChatGPT/Codex subscription surface (Responses-shaped), which
+# exposes no ``/models`` endpoint; its model menu is always curated by hand
+# (optionally seeded with catalog defaults — see ``provider_catalog``).
+# Read by the pull-models route (fails fast with a guidance message instead
+# of attempting a request) and surfaced to the frontend via
+# ``GET /api/v1/providers/protocols`` so it can disable "Refresh models" and
+# foreground the manual editor instead of hard-coding the protocol name.
+PROTOCOLS_WITHOUT_MODEL_LIST: frozenset[str] = frozenset({"openai_codex"})
+
+
+def supports_model_list(protocol_kind: str) -> bool:
+    """Whether ``protocol_kind`` exposes a model-list operation to pull from."""
+    return protocol_kind not in PROTOCOLS_WITHOUT_MODEL_LIST
+
 
 # ---------------------------------------------------------------------------
 # Run-time views

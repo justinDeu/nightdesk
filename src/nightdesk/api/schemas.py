@@ -203,6 +203,7 @@ class CatalogEndpointOut(BaseModel):
     base_url: Optional[str] = None
     harness_lock: Optional[str] = None
     default_model: Optional[str] = None
+    models: list[str] = []
 
 
 class CatalogOfferingOut(BaseModel):
@@ -214,6 +215,17 @@ class CatalogOfferingOut(BaseModel):
     description: str = ""
     suggested_name: str = ""
     endpoints: list[CatalogEndpointOut] = []
+
+
+class ProtocolInfoOut(BaseModel):
+    """Per-``protocol_kind`` capability info, so the editor can drive UX (e.g.
+    disabling "Refresh models" and foregrounding manual curation) off data
+    instead of hard-coding protocol names. See
+    ``nightdesk.domain.providers.PROTOCOLS_WITHOUT_MODEL_LIST``.
+    """
+
+    key: str
+    supports_model_list: bool = True
 
 
 # --- Backends (Layer 2: harness capability catalog) ------------------------
