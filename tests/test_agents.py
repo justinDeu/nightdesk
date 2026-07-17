@@ -53,9 +53,11 @@ def test_create_scratch_dir_when_no_source(session, tmp_path):
     assert os.path.isdir(row.source_path)
 
 
-def test_create_rejects_non_claude_backend_profile(session, tmp_path):
-    """A profile on a backend without a resident-agent runtime (e.g.
-    opencode) must be refused outright, not silently spawn a Claude agent."""
+def test_create_derives_backend_from_opencode_profile(session, tmp_path):
+    """A profile on the opencode capability now gets an opencode resident
+    agent (OpencodeResidentBackend, worker/resident_backends.py) rather than
+    being refused — the Session.backend runtime-lock is derived from the
+    profile's capability code, not hard-coded to Claude."""
     from nightdesk.domain.profiles import create_profile
 
     profile = create_profile(
@@ -64,7 +66,27 @@ def test_create_rejects_non_claude_backend_profile(session, tmp_path):
         network_allowlist=[], secret_keys=[], default_model="gpt-5.6-sol",
         backend="opencode",
     )
-    with pytest.raises(sess.UnsupportedBackend, match="opencode"):
+    row = sess.create_session(
+        session, profile_id=profile.id, scratch_root=tmp_path,
+        transcript_root=tmp_path, box=BOX,
+    )
+    assert row.backend == "opencode"
+
+
+def test_create_rejects_backend_with_no_resident_runtime(session, tmp_path):
+    """A profile on a backend with no resident-agent runtime at all (neither
+    claude_sdk nor opencode) must be refused outright, not silently spawn a
+    Claude agent. ``Profile.backend`` carries no DB-level enum, so this can
+    only happen via a stale/unknown capability code."""
+    from nightdesk.domain.profiles import create_profile
+
+    profile = create_profile(
+        session, name="mystery-profile", fs_read=[], fs_write=[],
+        allowed_tools=[], denied_tools=[], network_mode="off",
+        network_allowlist=[], secret_keys=[], default_model=None,
+        backend="totally_unknown_backend",
+    )
+    with pytest.raises(sess.UnsupportedBackend, match="totally_unknown_backend"):
         sess.create_session(
             session, profile_id=profile.id, scratch_root=tmp_path,
             transcript_root=tmp_path, box=BOX,
