@@ -157,10 +157,12 @@ async def test_bulk_ack_requires_a_mode(client):
 
 
 async def test_digest_count_endpoint(client, session, profile):
-    _review_ticket(session, profile)
-    _review_ticket(session, profile)
+    pending = _review_ticket(session, profile)
+    decided = _review_ticket(session, profile)
+    transition_status(session, decided.id, "archived", actor=run_actor("r2"))
     r = await client.get("/api/v1/tickets/ack/count")
-    assert r.json()["count"] == 2
+    assert r.json()["count"] == 1
+    assert pending.acknowledged_at is None
 
 
 async def test_digest_groups_by_project_and_day(client, session, profile):
@@ -170,6 +172,8 @@ async def test_digest_groups_by_project_and_day(client, session, profile):
     today = _review_ticket(session, profile, project_id=proj.id)
     yest1 = _review_ticket(session, profile, project_id=proj.id)
     yest2 = _review_ticket(session, profile, project_id=proj.id)
+    for ticket in (today, yest1, yest2):
+        transition_status(session, ticket.id, "archived", actor=run_actor("r2"))
     _backdate_entering(session, yest1.id, now - timedelta(days=1))
     _backdate_entering(session, yest2.id, now - timedelta(days=1))
 
@@ -185,6 +189,30 @@ async def test_digest_groups_by_project_and_day(client, session, profile):
 
 async def test_digest_excludes_acked(client, session, profile):
     t = _review_ticket(session, profile)
+    transition_status(session, t.id, "archived", actor=run_actor("r2"))
     await client.post(f"/api/v1/tickets/{t.id}/ack")
     r = await client.get("/api/v1/tickets/ack/digest")
     assert r.json()["total"] == 0
+
+
+async def test_digest_excludes_pending_review(client, session, profile):
+    pending = _review_ticket(session, profile)
+    decided = _review_ticket(session, profile)
+    transition_status(session, decided.id, "archived", actor=run_actor("r2"))
+
+    body = (await client.get("/api/v1/tickets/ack/digest")).json()
+
+    assert body["total"] == 1
+    assert body["groups"][0]["tickets"][0]["ticket_id"] == decided.id
+    assert pending.acknowledged_at is None
+
+
+async def test_early_ack_stays_out_of_digest_after_agent_archive(client, session, profile):
+    t = _review_ticket(session, profile)
+    await client.post(f"/api/v1/tickets/{t.id}/ack")
+    transition_status(session, t.id, "archived", actor=run_actor("r2"))
+
+    body = (await client.get("/api/v1/tickets/ack/digest")).json()
+
+    assert body["total"] == 0
+    assert (await client.get(f"/api/v1/tickets/{t.id}")).json()["acknowledged_at"] is not None

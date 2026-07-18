@@ -453,7 +453,7 @@ class ProjectAttention(BaseModel):
     review: int = 0          # tickets currently in review
     failed: int = 0          # non-archived tickets whose latest run failed
     inbox_blocked: int = 0   # inbox items blocked or older than 48h
-    unacked: int = 0         # review/archived tickets not yet acknowledged
+    unacked: int = 0         # archived tickets not yet acknowledged
     needs_you: int = 0       # review + failed + inbox_blocked + unacked
     # Live work (not attention): drives the lamp pulse + ordering tie-break.
     running: int = 0
@@ -634,6 +634,12 @@ class RunOut(BaseModel):
     cache_write_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
     sandbox_tool_paths: Optional[list[str]] = None
+    # Denormalized for list consumers (the Desk "while you were away" rail
+    # leads with the ticket title). Populated by the list endpoint via a bulk
+    # title lookup; None on surfaces that don't join it.
+    ticket_title: Optional[str] = None
+
+    model_config = {"from_attributes": True}
 
 
 _HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")

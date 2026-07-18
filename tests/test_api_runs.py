@@ -15,6 +15,17 @@ async def test_runs_empty_initially(client):
     assert r.json() == []
 
 
+async def test_runs_list_carries_ticket_title(client, session):
+    """The list payload denormalizes the ticket title (Desk away-rail rows
+    lead with it; the join happens server-side, not as a client N+1)."""
+    _mk_run(session)
+    r = await client.get("/api/v1/runs")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["ticket_title"] == "t"
+
+
 @pytest.fixture
 async def cookie_client(app):
     transport = ASGITransport(app=app)

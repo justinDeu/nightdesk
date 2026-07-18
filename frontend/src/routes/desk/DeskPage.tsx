@@ -5,6 +5,7 @@ import {
   Archive,
   ArrowRight,
   Bot,
+  CheckCheck,
   CheckCircle2,
   ChevronRight,
   HelpCircle,
@@ -44,6 +45,7 @@ import { humanizeRunError } from "@/lib/runError";
 import { Tooltip } from "@/ui/Tooltip";
 import { ticketHref } from "@/lib/routes";
 import { useNow } from "@/lib/useNow";
+import { toast } from "@/ui/Toast";
 import { cn } from "@/lib/cn";
 import { openComposer } from "@/components/composerBus";
 
@@ -160,11 +162,12 @@ function StatValue({
 export function DeskPage() {
   const navigate = useNavigate();
   const actions = useTicketActions();
+  const acknowledge = useAcknowledge();
   const projects = useProjectMap();
   const projectsQ = useProjects();
   const labelsQ = useLabels();
 
-  // Side-peek for tickets opened from the To-acknowledge band. Tickets never
+  // Side-peek for tickets opened from the action bands. Tickets never
   // navigate away from the Desk — inspection happens in the same peek panel
   // the Tickets board uses.
   const [peekId, setPeekId] = useState<string | null>(null);
@@ -190,51 +193,79 @@ export function DeskPage() {
   const runsList = runs.data ?? [];
   const latest = useMemo(() => latestRunMap(runsList), [runsList]);
 
-  // NEEDS YOU: failed latest-runs first, then review-state tickets.
+  // NEEDS YOU: failed latest-runs first, then review-state tickets. Reason is
+  // derived from each ticket's LATEST run only — an old failure buried behind
+  // a newer success must not flag the ticket as failed.
   const needs = useMemo<NeedsItem[]>(() => {
     const reviewTickets = review.data ?? [];
     const runningIds = new Set((running.data ?? []).map((t) => t.id));
-    const items: NeedsItem[] = [];
-    const seen = new Set<string>();
+    const failedItems: NeedsItem[] = [];
+    const restItems: NeedsItem[] = [];
 
-    // Failed (or canceled) runs whose ticket isn't currently re-running.
-    for (const r of runsList) {
-      if (!r.finished_at) continue;
-      if (r.exit_status === "success") continue;
-      if (runningIds.has(r.ticket_id)) continue;
-      if (seen.has(r.ticket_id)) continue;
-      const t = reviewTickets.find((x) => x.id === r.ticket_id);
-      if (!t) continue; // only surface if it's sitting in review awaiting you
-      seen.add(r.ticket_id);
-      const reason = runStatusKind(r.exit_status) === "canceled" ? "canceled" : "failed";
-      items.push({ ticket: t, reason, run: r });
-    }
-    // Remaining review tickets (succeeded / no run yet).
     for (const t of reviewTickets) {
-      if (seen.has(t.id)) continue;
-      seen.add(t.id);
-      items.push({ ticket: t, reason: "review", run: latest.get(t.id) });
+      const run = latest.get(t.id);
+      if (run && !runningIds.has(t.id)) {
+        const kind = runStatusKind(run.exit_status);
+        if (kind === "failed" || kind === "canceled") {
+          failedItems.push({ ticket: t, reason: kind, run });
+          continue;
+        }
+      }
+      restItems.push({ ticket: t, reason: "review", run });
     }
-    return items;
-  }, [review.data, running.data, runsList, latest]);
+    return [...failedItems, ...restItems];
+  }, [review.data, running.data, latest]);
 
-  // Keyboard cursor over the Needs-You rows.
+  // Keyboard cursor over the Needs-You rows. Mouse hover never moves this —
+  // it's a separate, purely-CSS affordance (see NeedsRow) — and the ring only
+  // renders once the cursor has actually been driven by the keyboard, so a
+  // stray mount at index 0 doesn't paint a ring nobody asked for.
   const [cursor, setCursor] = useState(0);
+  const [cursorActive, setCursorActive] = useState(false);
   useEffect(() => {
     if (cursor >= needs.length) setCursor(Math.max(0, needs.length - 1));
   }, [needs.length, cursor]);
 
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
   useEffect(() => {
-    rowRefs.current[cursor]?.scrollIntoView({ block: "nearest" });
-  }, [cursor]);
+    if (cursorActive) rowRefs.current[cursor]?.scrollIntoView({ block: "nearest" });
+  }, [cursor, cursorActive]);
+
+  // Combined resolve: stamp the ack checkpoint first, then archive. Archive
+  // only fires once the ack landed so a failure can't leave an archived-but-
+  // silently-unacked ticket; each half keeps its own error toast (archive via
+  // useTicketActions, ack surfaced here since useAcknowledge has none).
+  const ackAndArchive = async (t: TicketOut) => {
+    try {
+      await acknowledge.mutateAsync(t.id);
+    } catch (err) {
+      toast.error("Ack failed", { error: err });
+      return;
+    }
+    await actions.archive(t);
+  };
 
   const focused = needs[cursor];
-  const openFocused = () =>
-    focused && navigate({ to: "/tickets/$id", params: { id: focused.ticket.id } });
+  const openFocused = () => focused && setPeekId(focused.ticket.id);
   useKeybinds([
-    { combo: "j", label: "Cursor down", group: "Desk", handler: () => setCursor((c) => Math.min(needs.length - 1, c + 1)) },
-    { combo: "k", label: "Cursor up", group: "Desk", handler: () => setCursor((c) => Math.max(0, c - 1)) },
+    {
+      combo: "j",
+      label: "Cursor down",
+      group: "Desk",
+      handler: () => {
+        setCursorActive(true);
+        setCursor((c) => Math.min(needs.length - 1, c + 1));
+      },
+    },
+    {
+      combo: "k",
+      label: "Cursor up",
+      group: "Desk",
+      handler: () => {
+        setCursorActive(true);
+        setCursor((c) => Math.max(0, c - 1));
+      },
+    },
     { combo: "Enter", label: "Open ticket", group: "Desk", handler: openFocused },
     { combo: "o", label: "Open ticket", group: "Desk", handler: openFocused },
     { combo: "r", label: "Requeue", group: "Desk", handler: () => focused && actions.requeue(focused.ticket) },
@@ -395,9 +426,10 @@ export function DeskPage() {
                     ref={(el) => (rowRefs.current[i] = el)}
                     item={item}
                     project={item.ticket.project_id ? projects.get(item.ticket.project_id) : undefined}
-                    focused={i === cursor}
-                    onFocus={() => setCursor(i)}
-                    onOpen={() => navigate({ to: "/tickets/$id", params: { id: item.ticket.id } })}
+                    cursored={cursorActive && i === cursor}
+                    onOpen={() => setPeekId(item.ticket.id)}
+                    onAck={() => acknowledge.mutate(item.ticket.id)}
+                    onAckArchive={() => ackAndArchive(item.ticket)}
                     onRequeue={() => actions.requeue(item.ticket)}
                     onArchive={() => actions.archive(item.ticket)}
                   />
@@ -545,31 +577,46 @@ const NeedsRow = forwardRef<
   {
     item: NeedsItem;
     project?: ProjectOut;
-    focused: boolean;
-    onFocus: () => void;
+    /** Keyboard (j/k) cursor is on this row. Independent of hover — see the
+     *  className below for why the two must never share a signal. */
+    cursored: boolean;
     onOpen: () => void;
+    onAck: () => void;
+    onAckArchive: () => void;
     onRequeue: () => void;
     onArchive: () => void;
   }
->(function NeedsRow({ item, project, focused, onFocus, onOpen, onRequeue, onArchive }, ref) {
+>(function NeedsRow({ item, project, cursored, onOpen, onAck, onAckArchive, onRequeue, onArchive }, ref) {
   const { ticket, reason, run } = item;
   return (
     <div
       ref={ref}
-      onMouseEnter={onFocus}
       className={cn(
         // Phone: pill+title stack on top, then the meta line, then actions.
         // md+: the original single row. md:contents on the pill+title wrapper
         // hoists them into the row so the layout is unchanged there.
-        "group flex flex-col gap-2 rounded-control border px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors md:flex-row md:items-center md:gap-3",
-        focused
-          ? "border-lamp/40 bg-ink-800"
-          : reason === "failed"
-            ? "wash-failed border-failed/30 bg-ink-900"
-            : "border-ink-700 bg-ink-900 hover:bg-ink-800",
+        "group relative flex flex-col gap-2 rounded-control border px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors md:flex-row md:items-center md:gap-3 hover:bg-ink-800",
+        // State tint always wins the border/background — hover only ever adds
+        // a neutral bg (above), it never swaps the border for the accent
+        // color, so a failed row stays visibly failed while hovered.
+        reason === "failed" ? "wash-failed border-failed/30 bg-ink-900" : "border-ink-700 bg-ink-900",
+        // Keyboard cursor is a distinct signal from hover: an inset ring that
+        // layers on top of (rather than replaces) the state border, matching
+        // the Tickets list's focusedId ring convention.
+        cursored && "ring-1 ring-inset ring-lamp/40",
       )}
     >
-      <div className="flex min-w-0 items-start gap-2.5 md:contents md:items-center">
+      <a
+        href={ticketHref(ticket.id)}
+        aria-label={ticket.title}
+        onClick={(e) => {
+          if (e.button !== 0 || e.metaKey || e.ctrlKey) return;
+          e.preventDefault();
+          onOpen();
+        }}
+        className="absolute inset-0 z-0 rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lamp"
+      />
+      <div className="pointer-events-none relative z-[1] flex min-w-0 items-start gap-2.5 md:contents md:items-center">
         {reason === "failed" ? (
           <StatusPill status="failed" label="Failed" />
         ) : reason === "canceled" ? (
@@ -577,39 +624,46 @@ const NeedsRow = forwardRef<
         ) : (
           <StatusPill status="review" />
         )}
-        <a
-          href={ticketHref(ticket.id)}
-          onClick={(e) => {
-            if (e.metaKey || e.ctrlKey) return;
-            e.preventDefault();
-            onOpen();
-          }}
-          className="min-w-0 flex-1 rounded-[4px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
-        >
+        <div className="min-w-0 flex-1 text-left">
           {/* Title + meta stack on narrow screens; on wide screens they share
               one row — title bounded, meta filling the dead middle a truncated
               title otherwise leaves next to the actions. Telemetry (duration,
               tokens) is xl-only since it only earns its place once inline. */}
           <div className="flex flex-col gap-0.5 xl:flex-row xl:items-center xl:gap-3">
-            <span className="block min-w-0 text-sm font-medium text-moon-100 group-hover:text-lamp line-clamp-2 md:truncate xl:max-w-[40%]">
+            <span
+              className={cn(
+                "block min-w-0 text-sm font-medium text-moon-100 line-clamp-2 md:truncate xl:max-w-[40%]",
+                // Accent title-hover is for review rows only. On a failed or
+                // canceled row the red/amber wash must stay coherent, so hover
+                // merely brightens the title instead of recoloring it green.
+                reason === "review" ? "group-hover:text-lamp" : "group-hover:text-moon-50",
+              )}
+            >
               {ticket.description?.trim() || ticket.title}
             </span>
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-moon-600 md:flex-nowrap xl:min-w-0 xl:flex-1 xl:flex-nowrap">
-              <ProjectTag project={project} showNone />
+            {/* min-w-0 + overflow-hidden: from md up the meta is nowrap, so it
+                must shrink and clip inside its box — without this its content
+                overflows invisibly and the z-10 action cluster paints on top
+                of the text. Variable-length pieces (project name, error
+                summary) truncate; fixed telemetry chips are shrink-0. */}
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden text-xs text-moon-600 md:flex-nowrap xl:flex-1">
+              <ProjectTag project={project} showNone className="min-w-0" />
               {run && (
                 <>
-                  <span className="hidden font-mono text-[11px] tabular-nums xl:inline">
+                  <span className="hidden shrink-0 font-mono text-[11px] tabular-nums xl:inline">
                     {durationBetween(run.started_at, run.finished_at)}
                   </span>
-                  <span className="hidden font-mono text-[11px] tabular-nums xl:inline">
+                  <span className="hidden shrink-0 font-mono text-[11px] tabular-nums xl:inline">
                     {formatTokens((run.input_tokens ?? 0) + (run.output_tokens ?? 0))} tok
                   </span>
                 </>
               )}
               {run?.cost_usd != null && (
-                <span className="font-mono tabular-nums">{formatUsd(run.cost_usd)}</span>
+                <span className="shrink-0 font-mono tabular-nums">{formatUsd(run.cost_usd)}</span>
               )}
-              {run?.finished_at && <span>{relativeTime(run.finished_at)}</span>}
+              {run?.finished_at && (
+                <span className="shrink-0">{relativeTime(run.finished_at)}</span>
+              )}
               {reason === "failed" && run?.error_summary && (
                 <Tooltip content={run.error_summary} mono>
                   <span className="min-w-0 truncate text-failed">
@@ -619,24 +673,46 @@ const NeedsRow = forwardRef<
               )}
             </span>
           </div>
-        </a>
+        </div>
       </div>
-      <div className="flex shrink-0 items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
+      <div className="relative z-10 flex shrink-0 items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
         <PriorityChip value={ticket.priority} hideNone />
-        {/* Open is redundant on a phone (tapping the title opens); requeue and
-            archive collapse to icon-only below sm so the row never overflows. */}
+        {/* One variant family (ghost), ordered by escalating finality:
+            inspect (Open), re-run (Requeue), then the resolution verbs
+            grouped at the end with plain Archive last. Open is redundant on
+            a phone (tapping the title opens); requeue and archive collapse
+            to icon-only below sm so the row never overflows. */}
         <Button size="sm" variant="ghost" onClick={onOpen} className="hidden sm:inline-flex">
           Open
         </Button>
         <Button
           size="sm"
-          variant="subtle"
+          variant="ghost"
           leadingIcon={<RotateCcw size={13} />}
           onClick={onRequeue}
           aria-label="Requeue"
         >
           <span className="hidden sm:inline">Requeue</span>
         </Button>
+        {ticket.acknowledged_at == null && (
+          <>
+            <Button size="sm" variant="ghost" onClick={onAck}>
+              Ack
+            </Button>
+            {/* One-shot resolve for verified work. Icon-only at every width —
+                the full label starves the title even at xl — with the styled
+                tooltip carrying the name. */}
+            <Tooltip content="Ack & archive">
+              <Button
+                size="sm"
+                variant="ghost"
+                leadingIcon={<CheckCheck size={13} />}
+                onClick={onAckArchive}
+                aria-label="Ack & archive"
+              />
+            </Tooltip>
+          </>
+        )}
         <Button
           size="sm"
           variant="ghost"
@@ -653,7 +729,7 @@ const NeedsRow = forwardRef<
 
 // --- To acknowledge ------------------------------------------------------------
 
-/** Durable acknowledgement debt: agent-archived / agent-reviewed work the human
+/** Durable acknowledgement debt: decided (archived) work the human
  *  never saw, grouped by project-day. Each group row expands in place to its
  *  tickets (the digest already carries them — no extra fetch): outcome, title,
  *  cost, when it landed, plus a per-ticket Ack. Clicking a ticket opens the
@@ -886,25 +962,31 @@ function AwayFeed({ away }: { away: RunOut[] | null }) {
   );
 }
 
-/** One finished run since your last visit: outcome dot, model, cost, when. The
- *  whole row links to the run (middle-click opens a new tab). */
+/** One finished run since your last visit: outcome dot, TICKET TITLE, cost,
+ *  when — a timeline of what finished, not which model ran. The model rides in
+ *  a tooltip (the rail is too narrow for it inline; Tooltip no-ops when the
+ *  run has none). The whole row links to the run (middle-click opens a tab). */
 function AwayRunRow({ run }: { run: RunOut }) {
   const ok = run.exit_status === "success";
   return (
-    <Link
-      to="/tickets/$id/runs/$rid"
-      params={{ id: run.ticket_id, rid: run.id }}
-      className="flex h-7 items-center gap-2 rounded-control px-2 text-xs hover:bg-ink-800"
-    >
-      <span
-        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ok ? "bg-success" : "bg-failed")}
-        aria-hidden
-      />
-      <span className="min-w-0 flex-1 truncate font-mono text-moon-400">{run.model_used ?? "run"}</span>
-      {run.cost_usd != null && (
-        <span className="shrink-0 font-mono tabular-nums text-moon-400">{formatUsd(run.cost_usd)}</span>
-      )}
-      <span className="shrink-0 text-moon-600">{relativeTime(run.finished_at)}</span>
-    </Link>
+    <Tooltip content={run.model_used} mono>
+      <Link
+        to="/tickets/$id/runs/$rid"
+        params={{ id: run.ticket_id, rid: run.id }}
+        className="flex h-7 items-center gap-2 rounded-control px-2 text-xs hover:bg-ink-800"
+      >
+        <span
+          className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ok ? "bg-success" : "bg-failed")}
+          aria-hidden
+        />
+        <span className="min-w-0 flex-1 truncate text-moon-200">
+          {run.ticket_title ?? run.model_used ?? "run"}
+        </span>
+        {run.cost_usd != null && (
+          <span className="shrink-0 font-mono tabular-nums text-moon-400">{formatUsd(run.cost_usd)}</span>
+        )}
+        <span className="shrink-0 text-moon-600">{relativeTime(run.finished_at)}</span>
+      </Link>
+    </Tooltip>
   );
 }

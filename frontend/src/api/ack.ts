@@ -19,7 +19,7 @@ export const ackApi = {
   bulkAck: (body: BulkAckBody) => api.post<BulkAckResult>(`${BASE}/ack`, { body }),
 };
 
-/** Unacknowledged review/archived work, grouped by project then day. */
+/** Unacknowledged archived work, grouped by project then day. */
 export function useAckDigest(
   projectId?: string | null,
   options?: { refetchInterval?: number },

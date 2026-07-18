@@ -320,6 +320,8 @@ export interface RunOut {
   cache_write_tokens: number | null;
   cost_usd: number | null;
   sandbox_tool_paths: string[] | null;
+  /** Denormalized ticket title; populated by the list endpoint, null elsewhere. */
+  ticket_title: string | null;
 }
 
 // --- Run diff (structured, from GET /runs/{rid}/diff) --------------------------
