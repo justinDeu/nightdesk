@@ -641,22 +641,29 @@ const NeedsRow = forwardRef<
             >
               {ticket.description?.trim() || ticket.title}
             </span>
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-moon-600 md:flex-nowrap xl:min-w-0 xl:flex-1 xl:flex-nowrap">
-              <ProjectTag project={project} showNone />
+            {/* min-w-0 + overflow-hidden: from md up the meta is nowrap, so it
+                must shrink and clip inside its box — without this its content
+                overflows invisibly and the z-10 action cluster paints on top
+                of the text. Variable-length pieces (project name, error
+                summary) truncate; fixed telemetry chips are shrink-0. */}
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden text-xs text-moon-600 md:flex-nowrap xl:flex-1">
+              <ProjectTag project={project} showNone className="min-w-0" />
               {run && (
                 <>
-                  <span className="hidden font-mono text-[11px] tabular-nums xl:inline">
+                  <span className="hidden shrink-0 font-mono text-[11px] tabular-nums xl:inline">
                     {durationBetween(run.started_at, run.finished_at)}
                   </span>
-                  <span className="hidden font-mono text-[11px] tabular-nums xl:inline">
+                  <span className="hidden shrink-0 font-mono text-[11px] tabular-nums xl:inline">
                     {formatTokens((run.input_tokens ?? 0) + (run.output_tokens ?? 0))} tok
                   </span>
                 </>
               )}
               {run?.cost_usd != null && (
-                <span className="font-mono tabular-nums">{formatUsd(run.cost_usd)}</span>
+                <span className="shrink-0 font-mono tabular-nums">{formatUsd(run.cost_usd)}</span>
               )}
-              {run?.finished_at && <span>{relativeTime(run.finished_at)}</span>}
+              {run?.finished_at && (
+                <span className="shrink-0">{relativeTime(run.finished_at)}</span>
+              )}
               {reason === "failed" && run?.error_summary && (
                 <Tooltip content={run.error_summary} mono>
                   <span className="min-w-0 truncate text-failed">
