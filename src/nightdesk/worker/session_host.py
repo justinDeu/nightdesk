@@ -159,10 +159,14 @@ class SessionHost:
             system_prompt=system_prompt,
         )
         config = ocfg.render_config(perm_spec, endpoints, assignments)
-        auth = ocfg.render_auth(endpoints)
+        auth = ocfg.render_auth(endpoints, assignments)
 
+        provider_ids = ocfg.resolve_provider_ids(endpoints, assignments)
         primary_assignment = assignments.get("primary")
-        model = ocfg.model_str(primary_assignment) if primary_assignment is not None else None
+        model = (
+            ocfg.model_str(primary_assignment, provider_ids)
+            if primary_assignment is not None else None
+        )
 
         oc_env = dict(env)
         oc_env.update({

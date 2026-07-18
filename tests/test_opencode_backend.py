@@ -12,6 +12,7 @@ from nightdesk.backends.opencode_config import (
     render_config,
     render_permission,
     resolve_model,
+    resolve_provider_ids,
 )
 from nightdesk.backends.opencode_translate import new_state, translate_event, usage_by_model
 from nightdesk.domain.permissions import PermissionSpec
@@ -126,12 +127,14 @@ def test_render_config_multi_endpoint_with_agent():
     })
     cfg = render_config(spec, endpoints, assignments)
 
-    assert set(cfg["provider"].keys()) == {"nd_ep_primary", "nd_ep_zai"}
-    assert cfg["provider"]["nd_ep_primary"]["npm"] == "@ai-sdk/openai"
-    assert "options" not in cfg["provider"]["nd_ep_primary"]  # no base_url, no inline key
+    # The openai_codex primary renders onto opencode's bundled "openai"
+    # provider id (see resolve_provider_ids), not its own nd_ namespace.
+    assert set(cfg["provider"].keys()) == {"openai", "nd_ep_zai"}
+    assert "npm" not in cfg["provider"]["openai"]  # extends the bundled provider, no ai-sdk override
+    assert "options" not in cfg["provider"]["openai"]  # no apiKey — oauth lives in OPENCODE_AUTH_CONTENT
     assert cfg["provider"]["nd_ep_zai"]["options"]["apiKey"] == "zai-key"
 
-    assert cfg["model"] == "nd_ep_primary/gpt-5.4"
+    assert cfg["model"] == "openai/gpt-5.4"
     assert "small_model" not in cfg
 
     agent_cfg = cfg["agent"]["researcher"]
@@ -175,11 +178,28 @@ def test_render_auth_empty_when_no_credentials():
 
 
 def test_render_auth_codex_oauth_parses_tokens():
+    """Bug 7: a Codex oauth entry renders onto the native "openai" provider
+    id (not nd_<eid>), carries accountId (renamed from tokens.account_id),
+    and expires=0 to force an eager refresh on first use — see
+    _parse_codex_oauth's docstring for the opencode-source verification."""
+    raw = json.dumps({"tokens": {
+        "access_token": "acc-1", "refresh_token": "ref-1", "account_id": "acct-1",
+    }})
+    ep = _ep(id="ep_codex", protocol_kind="openai_codex", base_url=None,
+             credential=raw, credential_source="oauth_file")
+    auth = render_auth({"ep_codex": ep})
+    assert auth == {"openai": {
+        "type": "oauth", "access": "acc-1", "refresh": "ref-1",
+        "expires": 0, "accountId": "acct-1",
+    }}
+
+
+def test_render_auth_codex_oauth_without_account_id():
     raw = json.dumps({"tokens": {"access_token": "acc-1", "refresh_token": "ref-1"}})
     ep = _ep(id="ep_codex", protocol_kind="openai_codex", base_url=None,
              credential=raw, credential_source="oauth_file")
     auth = render_auth({"ep_codex": ep})
-    assert auth == {"nd_ep_codex": {"type": "oauth", "access": "acc-1", "refresh": "ref-1"}}
+    assert auth == {"openai": {"type": "oauth", "access": "acc-1", "refresh": "ref-1", "expires": 0}}
 
 
 def test_render_auth_codex_oauth_malformed_json_omits_block():
@@ -199,6 +219,59 @@ def test_render_auth_subscription_file_omitted():
     ep = _ep(credential="raw-subscription-blob", credential_source="subscription_file",
               harness_lock="claude_sdk")
     assert render_auth({"ep1": ep}) is None
+
+
+def test_render_auth_non_codex_endpoints_still_nd_namespaced():
+    """Every protocol besides openai_codex keeps nd_<eid> namespacing —
+    only the native-provider mapping changes."""
+    ep1 = _ep(id="ep1", protocol_kind="anthropic_compat", credential="sk-1",
+              credential_source="api_key")
+    ep2 = _ep(id="ep2", protocol_kind="openai_compat", credential="sk-2",
+              credential_source="api_key")
+    auth = render_auth({"ep1": ep1, "ep2": ep2})
+    assert auth == {
+        "nd_ep1": {"type": "api", "key": "sk-1"},
+        "nd_ep2": {"type": "api", "key": "sk-2"},
+    }
+
+
+def test_resolve_provider_ids_native_collision_primary_wins(caplog):
+    """Two openai_codex endpoints in one profile both want the "openai"
+    native id: the endpoint backing the 'primary' assignment wins, the
+    other is dropped (and a warning is logged), never silently overwritten
+    or split across both."""
+    primary_ep = _ep(id="ep_codex_a", protocol_kind="openai_codex",
+                      credential=None, credential_source="oauth_file")
+    other_ep = _ep(id="ep_codex_b", protocol_kind="openai_codex",
+                    credential=None, credential_source="oauth_file")
+    endpoints = {"ep_codex_b": other_ep, "ep_codex_a": primary_ep}
+    assignments = {"primary": Assignment("ep_codex_a", "gpt-5.4")}
+    with caplog.at_level("WARNING"):
+        provider_ids = resolve_provider_ids(endpoints, assignments)
+    assert provider_ids == {"ep_codex_a": "openai"}
+    assert "ep_codex_b" not in provider_ids
+    assert any("both map to the native provider id" in r.message for r in caplog.records)
+
+
+def test_render_config_codex_model_menu_and_prompt_body_split(tmp_path):
+    """The rendered config's model menu lands on the "openai" provider block,
+    and the prompt-body split (build_prompt_body) picks providerID "openai"
+    for a codex-pinned model string — the two things opencode actually needs
+    to route a turn onto its bundled Codex plugin."""
+    from nightdesk.backends.opencode_config import build_prompt_body
+
+    ep = _ep(id="ep_codex", label="Codex", provider_name="Codex",
+             protocol_kind="openai_codex",
+             base_url=None, credential=None, credential_source="oauth_file",
+             default_model="gpt-5.6-sol", models=["gpt-5.6-sol", "gpt-5.5"])
+    assignments = {"primary": Assignment("ep_codex", "gpt-5.6-sol")}
+    cfg = render_config(PermissionSpec(), {"ep_codex": ep}, assignments)
+    assert cfg["provider"]["openai"]["models"] == {"gpt-5.6-sol": {}, "gpt-5.5": {}}
+    assert cfg["provider"]["openai"]["name"] == "Codex"
+    assert cfg["model"] == "openai/gpt-5.6-sol"
+
+    body = build_prompt_body("hi", model=cfg["model"])
+    assert body["model"] == {"providerID": "openai", "modelID": "gpt-5.6-sol"}
 
 
 def _ctx(tmp_path, **kw):

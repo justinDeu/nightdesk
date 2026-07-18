@@ -79,11 +79,13 @@ class OpencodeBackend(Backend):
             endpoints.setdefault(ctx.endpoint.id, ctx.endpoint)
 
         config = ocfg.render_config(ctx.spec, endpoints, assignments)
-        auth = ocfg.render_auth(endpoints)
+        auth = ocfg.render_auth(endpoints, assignments)
 
+        provider_ids = ocfg.resolve_provider_ids(endpoints, assignments)
         primary_assignment = assignments.get("primary")
         model = (
-            ocfg.model_str(primary_assignment) if primary_assignment is not None else None
+            ocfg.model_str(primary_assignment, provider_ids)
+            if primary_assignment is not None else None
         )
 
         env: dict[str, str] = {
