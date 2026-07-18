@@ -545,6 +545,25 @@ function StatusActions({
       Ack
     </Button>
   ) : null;
+  // Combined resolve: ack first (checkpoint stamp), archive only once it
+  // lands so a failure can't leave an archived-but-unacked ticket, then close
+  // the now-stale peek. Archive's toast comes from useTicketActions; the ack
+  // error is surfaced here since useAcknowledge carries no toast of its own.
+  const ackAndArchive = async () => {
+    try {
+      await acknowledge.mutateAsync(ticket.id);
+    } catch (err) {
+      toast.error("Ack failed", { error: err });
+      return;
+    }
+    const ok = await actions.archive(ticket);
+    if (ok) onClose();
+  };
+  const ackArchiveButton = ticketNeedsAck(ticket) ? (
+    <Button size="sm" variant="subtle" onClick={ackAndArchive}>
+      Ack & archive
+    </Button>
+  ) : null;
   switch (ticket.status) {
     case "draft":
       return (
@@ -584,6 +603,7 @@ function StatusActions({
             Requeue
           </Button>
           {ackButton}
+          {ackArchiveButton}
           <Button size="sm" variant="ghost" onClick={() => actions.archive(ticket)}>
             Archive
           </Button>

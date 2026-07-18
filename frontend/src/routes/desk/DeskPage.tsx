@@ -5,6 +5,7 @@ import {
   Archive,
   ArrowRight,
   Bot,
+  CheckCheck,
   CheckCircle2,
   ChevronRight,
   HelpCircle,
@@ -44,6 +45,7 @@ import { humanizeRunError } from "@/lib/runError";
 import { Tooltip } from "@/ui/Tooltip";
 import { ticketHref } from "@/lib/routes";
 import { useNow } from "@/lib/useNow";
+import { toast } from "@/ui/Toast";
 import { cn } from "@/lib/cn";
 import { openComposer } from "@/components/composerBus";
 
@@ -191,50 +193,79 @@ export function DeskPage() {
   const runsList = runs.data ?? [];
   const latest = useMemo(() => latestRunMap(runsList), [runsList]);
 
-  // NEEDS YOU: failed latest-runs first, then review-state tickets.
+  // NEEDS YOU: failed latest-runs first, then review-state tickets. Reason is
+  // derived from each ticket's LATEST run only — an old failure buried behind
+  // a newer success must not flag the ticket as failed.
   const needs = useMemo<NeedsItem[]>(() => {
     const reviewTickets = review.data ?? [];
     const runningIds = new Set((running.data ?? []).map((t) => t.id));
-    const items: NeedsItem[] = [];
-    const seen = new Set<string>();
+    const failedItems: NeedsItem[] = [];
+    const restItems: NeedsItem[] = [];
 
-    // Failed (or canceled) runs whose ticket isn't currently re-running.
-    for (const r of runsList) {
-      if (!r.finished_at) continue;
-      if (r.exit_status === "success") continue;
-      if (runningIds.has(r.ticket_id)) continue;
-      if (seen.has(r.ticket_id)) continue;
-      const t = reviewTickets.find((x) => x.id === r.ticket_id);
-      if (!t) continue; // only surface if it's sitting in review awaiting you
-      seen.add(r.ticket_id);
-      const reason = runStatusKind(r.exit_status) === "canceled" ? "canceled" : "failed";
-      items.push({ ticket: t, reason, run: r });
-    }
-    // Remaining review tickets (succeeded / no run yet).
     for (const t of reviewTickets) {
-      if (seen.has(t.id)) continue;
-      seen.add(t.id);
-      items.push({ ticket: t, reason: "review", run: latest.get(t.id) });
+      const run = latest.get(t.id);
+      if (run && !runningIds.has(t.id)) {
+        const kind = runStatusKind(run.exit_status);
+        if (kind === "failed" || kind === "canceled") {
+          failedItems.push({ ticket: t, reason: kind, run });
+          continue;
+        }
+      }
+      restItems.push({ ticket: t, reason: "review", run });
     }
-    return items;
-  }, [review.data, running.data, runsList, latest]);
+    return [...failedItems, ...restItems];
+  }, [review.data, running.data, latest]);
 
-  // Keyboard cursor over the Needs-You rows.
+  // Keyboard cursor over the Needs-You rows. Mouse hover never moves this —
+  // it's a separate, purely-CSS affordance (see NeedsRow) — and the ring only
+  // renders once the cursor has actually been driven by the keyboard, so a
+  // stray mount at index 0 doesn't paint a ring nobody asked for.
   const [cursor, setCursor] = useState(0);
+  const [cursorActive, setCursorActive] = useState(false);
   useEffect(() => {
     if (cursor >= needs.length) setCursor(Math.max(0, needs.length - 1));
   }, [needs.length, cursor]);
 
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
   useEffect(() => {
-    rowRefs.current[cursor]?.scrollIntoView({ block: "nearest" });
-  }, [cursor]);
+    if (cursorActive) rowRefs.current[cursor]?.scrollIntoView({ block: "nearest" });
+  }, [cursor, cursorActive]);
+
+  // Combined resolve: stamp the ack checkpoint first, then archive. Archive
+  // only fires once the ack landed so a failure can't leave an archived-but-
+  // silently-unacked ticket; each half keeps its own error toast (archive via
+  // useTicketActions, ack surfaced here since useAcknowledge has none).
+  const ackAndArchive = async (t: TicketOut) => {
+    try {
+      await acknowledge.mutateAsync(t.id);
+    } catch (err) {
+      toast.error("Ack failed", { error: err });
+      return;
+    }
+    await actions.archive(t);
+  };
 
   const focused = needs[cursor];
   const openFocused = () => focused && setPeekId(focused.ticket.id);
   useKeybinds([
-    { combo: "j", label: "Cursor down", group: "Desk", handler: () => setCursor((c) => Math.min(needs.length - 1, c + 1)) },
-    { combo: "k", label: "Cursor up", group: "Desk", handler: () => setCursor((c) => Math.max(0, c - 1)) },
+    {
+      combo: "j",
+      label: "Cursor down",
+      group: "Desk",
+      handler: () => {
+        setCursorActive(true);
+        setCursor((c) => Math.min(needs.length - 1, c + 1));
+      },
+    },
+    {
+      combo: "k",
+      label: "Cursor up",
+      group: "Desk",
+      handler: () => {
+        setCursorActive(true);
+        setCursor((c) => Math.max(0, c - 1));
+      },
+    },
     { combo: "Enter", label: "Open ticket", group: "Desk", handler: openFocused },
     { combo: "o", label: "Open ticket", group: "Desk", handler: openFocused },
     { combo: "r", label: "Requeue", group: "Desk", handler: () => focused && actions.requeue(focused.ticket) },
@@ -395,10 +426,10 @@ export function DeskPage() {
                     ref={(el) => (rowRefs.current[i] = el)}
                     item={item}
                     project={item.ticket.project_id ? projects.get(item.ticket.project_id) : undefined}
-                    focused={i === cursor}
-                    onFocus={() => setCursor(i)}
+                    cursored={cursorActive && i === cursor}
                     onOpen={() => setPeekId(item.ticket.id)}
                     onAck={() => acknowledge.mutate(item.ticket.id)}
+                    onAckArchive={() => ackAndArchive(item.ticket)}
                     onRequeue={() => actions.requeue(item.ticket)}
                     onArchive={() => actions.archive(item.ticket)}
                   />
@@ -546,29 +577,33 @@ const NeedsRow = forwardRef<
   {
     item: NeedsItem;
     project?: ProjectOut;
-    focused: boolean;
-    onFocus: () => void;
+    /** Keyboard (j/k) cursor is on this row. Independent of hover — see the
+     *  className below for why the two must never share a signal. */
+    cursored: boolean;
     onOpen: () => void;
     onAck: () => void;
+    onAckArchive: () => void;
     onRequeue: () => void;
     onArchive: () => void;
   }
->(function NeedsRow({ item, project, focused, onFocus, onOpen, onAck, onRequeue, onArchive }, ref) {
+>(function NeedsRow({ item, project, cursored, onOpen, onAck, onAckArchive, onRequeue, onArchive }, ref) {
   const { ticket, reason, run } = item;
   return (
     <div
       ref={ref}
-      onMouseEnter={onFocus}
       className={cn(
         // Phone: pill+title stack on top, then the meta line, then actions.
         // md+: the original single row. md:contents on the pill+title wrapper
         // hoists them into the row so the layout is unchanged there.
-        "group relative flex flex-col gap-2 rounded-control border px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors md:flex-row md:items-center md:gap-3",
-        focused
-          ? "border-lamp/40 bg-ink-800"
-          : reason === "failed"
-            ? "wash-failed border-failed/30 bg-ink-900"
-            : "border-ink-700 bg-ink-900 hover:bg-ink-800",
+        "group relative flex flex-col gap-2 rounded-control border px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors md:flex-row md:items-center md:gap-3 hover:bg-ink-800",
+        // State tint always wins the border/background — hover only ever adds
+        // a neutral bg (above), it never swaps the border for the accent
+        // color, so a failed row stays visibly failed while hovered.
+        reason === "failed" ? "wash-failed border-failed/30 bg-ink-900" : "border-ink-700 bg-ink-900",
+        // Keyboard cursor is a distinct signal from hover: an inset ring that
+        // layers on top of (rather than replaces) the state border, matching
+        // the Tickets list's focusedId ring convention.
+        cursored && "ring-1 ring-inset ring-lamp/40",
       )}
     >
       <a
@@ -633,9 +668,23 @@ const NeedsRow = forwardRef<
           Open
         </Button>
         {ticket.acknowledged_at == null && (
-          <Button size="sm" variant="ghost" onClick={onAck}>
-            Ack
-          </Button>
+          <>
+            <Button size="sm" variant="ghost" onClick={onAck}>
+              Ack
+            </Button>
+            {/* One-shot resolve for verified work. Icon-only at every width —
+                the full label starves the title even at xl — with the styled
+                tooltip carrying the name. */}
+            <Tooltip content="Ack & archive">
+              <Button
+                size="sm"
+                variant="ghost"
+                leadingIcon={<CheckCheck size={13} />}
+                onClick={onAckArchive}
+                aria-label="Ack & archive"
+              />
+            </Tooltip>
+          </>
         )}
         <Button
           size="sm"
