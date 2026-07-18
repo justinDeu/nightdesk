@@ -36,6 +36,13 @@ def new_state() -> dict:
         # a message carries no id, which degrades to one accumulator per
         # model (last value wins), matching ``usage`` above.
         "usage_by_message": {},
+        # message id -> "user" | "assistant", populated from ``message.updated``
+        # (``info.id`` / ``info.role``). opencode emits ``message.part.updated``
+        # for BOTH the user's own message (its prompt, split into parts the
+        # same way an assistant reply is) and the assistant's reply — without
+        # this, the user's prompt gets translated as an ``assistant_text``
+        # event. See ``_translate_part``.
+        "message_role": {},
     }
 
 
@@ -85,6 +92,10 @@ def translate_event(evt: dict, state: dict) -> list[dict]:
 
     if etype == "message.updated":
         info = props.get("info") or {}
+        mid_role = info.get("id")
+        role = info.get("role")
+        if mid_role and role:
+            state["message_role"][mid_role] = role
         tokens = info.get("tokens")
         model = info.get("modelID")
         if tokens is not None or info.get("cost") is not None:
@@ -119,6 +130,17 @@ def translate_event(evt: dict, state: dict) -> list[dict]:
 def _translate_part(part: dict, state: dict) -> list[dict]:
     ptype = part.get("type")
     pid = part.get("id") or part.get("callID") or ptype or "part"
+
+    # Parts belonging to the USER's own message (opencode splits the prompt
+    # into parts the same way it streams an assistant reply) must not be
+    # emitted as assistant_text/thinking — the host already records the user
+    # message itself via its own ``user_message`` transcript write. Unknown
+    # message id (role not seen yet) falls through as assistant, matching
+    # observed ordering: ``message.updated`` for a message always precedes
+    # its ``message.part.updated`` events.
+    mid = part.get("messageID")
+    if mid and state.get("message_role", {}).get(mid) == "user":
+        return []
 
     if ptype == "text":
         text = part.get("text") or ""

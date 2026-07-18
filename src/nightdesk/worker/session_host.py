@@ -504,10 +504,18 @@ class SessionHost:
         self._prev_cumulative = cur
         self._prev_cost = cur_cost
 
+        error = tc.get("error")
         with self._sf() as db:
             row = db.get(SessionTurn, turn_id)
             if row is not None:
-                row.status = "done"
+                # A turn whose only outcome was a provider/session error (e.g.
+                # opencode's ProviderAuthError on a misconfigured endpoint)
+                # still ends via session.idle/turn_complete like any other —
+                # without this it would read as a successful "done" with 0
+                # tokens instead of surfacing the failure.
+                row.status = "failed" if error else "done"
+                if error:
+                    row.error = str(error)
                 row.finished_at = _now()
                 for f in _TOKEN_FIELDS:
                     setattr(row, f, delta[f])

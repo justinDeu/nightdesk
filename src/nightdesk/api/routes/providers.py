@@ -160,6 +160,23 @@ _SECRET_CREDENTIAL_SOURCES = frozenset({"api_key", "env_var"})
 _FILE_CREDENTIAL_SOURCES = frozenset({"oauth_file", "subscription_file"})
 
 
+def _catalog_credential_hint(
+    vendor: str, protocol_kind: str, credential_source: str,
+) -> Optional[str]:
+    """The seeded catalog offering's ``credential_hint`` for an endpoint
+    matching ``vendor`` + ``protocol_kind`` + ``credential_source``, or
+    ``None`` when no catalog offering matches — the signal a create-provider
+    call distinguishes "from the catalog wizard" (default the hint) from
+    "hand-built/custom" (reject an empty file-path credential outright).
+    """
+    for offering in offering_catalog():
+        if offering.vendor != vendor or offering.credential_source != credential_source:
+            continue
+        if any(ep.protocol_kind == protocol_kind for ep in offering.endpoints):
+            return offering.credential_hint
+    return None
+
+
 def _check_single_credential_mode(endpoints: list[EndpointCreate]) -> None:
     sources = {ep.credential_source for ep in endpoints}
     if sources & _SECRET_CREDENTIAL_SOURCES and sources & _FILE_CREDENTIAL_SOURCES:
@@ -329,9 +346,9 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
             )
         return box.encrypt(value)
 
-    def _endpoint_create_fields(
+    def _endpoint_credential_value(
         ep_in: EndpointCreate, *, seeded_credential: Optional[str],
-    ) -> dict[str, Any]:
+    ) -> Optional[str]:
         credential_value = ep_in.credential_value
         if (
             credential_value is None
@@ -339,6 +356,11 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
             and seeded_credential is not None
         ):
             credential_value = seeded_credential
+        return credential_value
+
+    def _endpoint_create_fields(
+        ep_in: EndpointCreate, *, credential_value: Optional[str],
+    ) -> dict[str, Any]:
         return {
             "label": ep_in.label,
             "protocol_kind": ep_in.protocol_kind,
@@ -365,12 +387,40 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
             if ep_in.credential_source not in CREDENTIAL_SOURCES:
                 raise HTTPException(400, f"unknown credential_source {ep_in.credential_source!r}")
         _check_single_credential_mode(payload.endpoints)
+        # Belt-and-braces backstop for file-path credential sources
+        # (oauth_file / subscription_file): a blank value is never a valid
+        # config (see the frontend fix in ProvidersSection.tsx pickOffering,
+        # which now seeds the catalog hint as a real editable value instead
+        # of a placeholder — this covers hand-built API calls and any UI
+        # regression). A create that matches a known catalog offering
+        # defaults the empty path to that offering's credential_hint; a
+        # genuinely custom create with no such match is rejected outright
+        # rather than silently persisting a NULL credential that only
+        # surfaces as an opaque runtime auth error turns later.
+        resolved_credentials: dict[int, Optional[str]] = {}
+        for i, ep_in in enumerate(payload.endpoints):
+            credential_value = _endpoint_credential_value(
+                ep_in, seeded_credential=payload.credential_value)
+            if ep_in.credential_source in _FILE_CREDENTIAL_SOURCES and not (
+                credential_value or ""
+            ).strip():
+                hint = _catalog_credential_hint(
+                    payload.vendor, ep_in.protocol_kind, ep_in.credential_source)
+                if hint is None:
+                    raise HTTPException(
+                        400,
+                        f"endpoint {ep_in.label or ep_in.protocol_kind!r} needs a "
+                        f"credential file path ({ep_in.credential_source})",
+                    )
+                credential_value = hint
+            resolved_credentials[i] = credential_value
         try:
             provider = create_provider(session, name=payload.name, vendor=payload.vendor)
         except ProviderNameTaken:
             raise HTTPException(409, "name taken")
-        for ep_in in payload.endpoints:
-            fields = _endpoint_create_fields(ep_in, seeded_credential=payload.credential_value)
+        for i, ep_in in enumerate(payload.endpoints):
+            fields = _endpoint_create_fields(
+                ep_in, credential_value=resolved_credentials[i])
             create_endpoint(session, provider_id=provider.id, **fields)
         session.refresh(provider)
         return _provider_out(provider)
@@ -426,7 +476,8 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
             get_provider(session, pid)
         except ProviderNotFound:
             raise HTTPException(404, "not found")
-        fields = _endpoint_create_fields(payload, seeded_credential=None)
+        credential_value = _endpoint_credential_value(payload, seeded_credential=None)
+        fields = _endpoint_create_fields(payload, credential_value=credential_value)
         try:
             ep = create_endpoint(session, provider_id=pid, **fields)
         except (UnknownProtocolKind, UnknownCredentialSource) as exc:

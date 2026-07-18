@@ -349,6 +349,37 @@ async def test_max_turn_seconds_watchdog_fails_unresponsive_turn(engine, tmp_pat
             task.cancel()
 
 
+async def test_turn_complete_with_error_marks_turn_failed(engine, tmp_path):
+    """Bug 6: a turn_complete carrying an ``error`` (opencode still reports
+    session.idle after a provider error, e.g. ProviderAuthError on a
+    misconfigured endpoint) must not read as a successful "done" — the host
+    marks the turn failed and records the error."""
+    factory, sid, tpath = _make(engine, tmp_path, idle_timeout_s=3600)
+    with factory() as db:
+        sess.post_message(db, sid, "hello")
+    backend = FakeBackend()
+    host, task = await _run_host(factory, sid, backend)
+    try:
+        assert await _await(lambda: backend.handles
+                            and any(m.get("type") == "user_turn"
+                                    for m in backend.handles[0].sent))
+        backend.handles[0].push({
+            "type": "turn_complete", "turn_id": _first_turn_id(factory, sid),
+            "session_id": "sess-1", "usage": {}, "cost_usd": 0.0,
+            "error": "OpenAI API key is missing",
+        })
+        assert await _await(lambda: _turn_status(factory, sid) == "failed")
+        with factory() as db:
+            turn = db.query(SessionTurn).filter_by(session_id=sid).first()
+            assert turn.error == "OpenAI API key is missing"
+            # The (possibly stale) resume handle from a prior generation is
+            # still published even when the turn failed.
+            row = db.get(SessionModel, sid)
+            assert (row.resume_handle or {}).get("session_id") == "sess-1"
+    finally:
+        await _end(factory, sid, task)
+
+
 async def test_teardown_recovers_session_id_from_handle_when_turn_interrupted(
         engine, tmp_path):
     """Bug 4: a turn torn down without ``turn_complete`` (shutdown mid-turn)

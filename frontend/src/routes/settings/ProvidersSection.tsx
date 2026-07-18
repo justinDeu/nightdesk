@@ -727,8 +727,8 @@ function CreateProviderDialog({
   function pickOffering(o: CatalogOfferingOut | "custom") {
     if (!isSameOffering(offering, o)) {
       setOffering(o);
-      setSharedCredential("");
       if (o === "custom") {
+        setSharedCredential("");
         setName("");
         setCustomVendorTag("");
         setEndpoints([
@@ -739,6 +739,16 @@ function CreateProviderDialog({
           },
         ]);
       } else {
+        // File-path credential offerings (oauth_file / subscription_file)
+        // seed a REAL, editable value here — not just a greyed placeholder —
+        // so an untouched "Create" click doesn't silently store a NULL
+        // credential (see the create-route backstop for the belt-and-braces
+        // server-side default of the same hint).
+        setSharedCredential(
+          isPathCredential(o.credential_source)
+            ? o.credential_hint ?? DEFAULT_CREDENTIAL_PATH[o.credential_source] ?? ""
+            : "",
+        );
         setName(o.suggested_name || o.label);
         setEndpoints(
           o.endpoints.map((e, i) => ({

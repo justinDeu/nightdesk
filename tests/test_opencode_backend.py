@@ -270,6 +270,44 @@ def test_translate_text_emits_deltas_only():
     assert out2 == [{"type": "assistant_text", "text": " world"}]
 
 
+def test_translate_suppresses_parts_belonging_to_the_user_message():
+    """Bug 6: opencode emits message.part.updated for the USER's own message
+    (its prompt, split into parts the same way an assistant reply is) — those
+    parts must NOT be translated into assistant_text. The host already
+    records the user message via its own user_message transcript write."""
+    state = new_state()
+    user_msg = {"type": "message.updated", "properties": {"info": {
+        "id": "msg-user-1", "role": "user"}}}
+    assert translate_event(user_msg, state) == []
+
+    echoed = {"type": "message.part.updated", "properties": {"part": {
+        "id": "p1", "messageID": "msg-user-1", "type": "text",
+        "text": "do the thing"}}}
+    assert translate_event(echoed, state) == []
+
+    # An assistant message's parts still translate normally.
+    asst_msg = {"type": "message.updated", "properties": {"info": {
+        "id": "msg-asst-1", "role": "assistant"}}}
+    assert translate_event(asst_msg, state) == []
+    reply = {"type": "message.part.updated", "properties": {"part": {
+        "id": "p2", "messageID": "msg-asst-1", "type": "text",
+        "text": "here you go"}}}
+    assert translate_event(reply, state) == [
+        {"type": "assistant_text", "text": "here you go"}]
+
+
+def test_translate_part_with_unknown_message_id_still_emits():
+    """A part whose message id hasn't been seen via message.updated yet
+    (role unknown) falls through as assistant — matching observed ordering
+    where message.updated always precedes its part events, and keeping the
+    existing no-messageID test fixtures (below) working unchanged."""
+    state = new_state()
+    evt = {"type": "message.part.updated", "properties": {"part": {
+        "id": "p1", "messageID": "not-seen-yet", "type": "text",
+        "text": "hi"}}}
+    assert translate_event(evt, state) == [{"type": "assistant_text", "text": "hi"}]
+
+
 def test_translate_tool_lifecycle():
     state = new_state()
     start = {"type": "message.part.updated", "properties": {"part": {

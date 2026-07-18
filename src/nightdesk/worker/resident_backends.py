@@ -318,6 +318,12 @@ class _OpencodeResidentHandle:
         self._state = new_state()
         self._cost_by_message: dict[str, float] = {}
         self._active_turn_id: Optional[str] = None
+        # The last session.error summary seen while a turn is active, reset
+        # per turn. opencode still ends the turn via session.idle even when
+        # the provider call itself failed (e.g. ProviderAuthError on a
+        # misconfigured endpoint), so this is the only signal the host has
+        # that a turn_complete masks a failure rather than a real reply.
+        self._active_turn_error: Optional[str] = None
         self._closed = False
 
     def start_reader(self) -> None:
@@ -373,6 +379,7 @@ class _OpencodeResidentHandle:
 
     async def _start_turn(self, turn_id: str, text: str) -> None:
         self._active_turn_id = turn_id
+        self._active_turn_error = None
         try:
             sid = await self._ensure_session()
             body = ocfg.build_prompt_body(
@@ -404,11 +411,14 @@ class _OpencodeResidentHandle:
         self._active_turn_id = None
         totals = _cumulative_tokens(self._state)
         cost = sum(self._cost_by_message.values())
-        self._queue.put_nowait({
+        payload: dict[str, Any] = {
             "type": "turn_complete", "turn_id": turn_id,
             "session_id": self.session_id,
             "usage": totals, "cost_usd": cost,
-        })
+        }
+        if self._active_turn_error is not None:
+            payload["error"] = self._active_turn_error
+        self._queue.put_nowait(payload)
 
     # -- event stream ---------------------------------------------------------
     async def _read_loop(self) -> None:
@@ -465,6 +475,12 @@ class _OpencodeResidentHandle:
                 self._cost_by_message[str(mid)] = float(cost)
         for canonical in translate_event(evt, self._state):
             self._queue.put_nowait(canonical)
+            if (canonical.get("type") == "worker_error"
+                    and self._active_turn_id is not None):
+                # Remembered so the eventual turn_complete (opencode still
+                # reports session.idle after a provider error) carries it —
+                # see the module's ``_active_turn_error`` docstring.
+                self._active_turn_error = canonical.get("summary") or canonical.get("kind")
         if (etype == "session.idle" and self._active_turn_id is not None
                 and sid == self.session_id):
             self._finish_turn(self._active_turn_id)

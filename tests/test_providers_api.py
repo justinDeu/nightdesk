@@ -95,6 +95,59 @@ async def test_provider_name_conflict(client):
     assert r.status_code == 409
 
 
+async def test_catalog_create_with_empty_file_credential_gets_the_hint(client, app):
+    """Bug 5 server backstop: a create matching a known catalog offering
+    (vendor + protocol_kind + credential_source) with a blank file-path
+    credential defaults to that offering's credential_hint instead of
+    persisting a NULL credential."""
+    from nightdesk.domain.profile_secrets import ProfileSecretBox
+    from nightdesk.domain.provider_catalog import CODEX_OAUTH_DEFAULT_PATH
+
+    payload = {
+        "name": "OpenAI (Codex)",
+        "vendor": "openai",
+        "endpoints": [
+            {
+                "label": "Codex", "protocol_kind": "openai_codex",
+                "credential_source": "oauth_file",
+                # No credential_value at all — mirrors an untouched wizard
+                # field before the frontend fix, or a hand-built API call.
+            },
+        ],
+    }
+    r = await client.post("/api/v1/providers", json=payload)
+    assert r.status_code == 201, r.text
+    ep = r.json()["endpoints"][0]
+    assert ep["credential_set"] is True
+
+    from sqlalchemy.orm import Session as OrmSession
+    engine = app.state.engine
+    with OrmSession(engine) as db:
+        row = db.query(ProviderEndpoint).filter_by(id=ep["id"]).one()
+        box = ProfileSecretBox("t")
+        assert box.decrypt(row.credential) == CODEX_OAUTH_DEFAULT_PATH
+
+
+async def test_custom_create_with_empty_file_credential_is_rejected(client):
+    """A custom (non-catalog) create with a file-path credential source and
+    no credential must be rejected outright — there is no catalog hint to
+    fall back to, and silently persisting a NULL credential only surfaces as
+    an opaque runtime auth error turns later."""
+    payload = {
+        "name": "Weird Vendor Subscription",
+        "vendor": "not-a-catalog-vendor",
+        "endpoints": [
+            {
+                "label": "Custom", "protocol_kind": "anthropic",
+                "credential_source": "subscription_file",
+            },
+        ],
+    }
+    r = await client.post("/api/v1/providers", json=payload)
+    assert r.status_code == 400
+    assert "credential file path" in r.json()["detail"]
+
+
 async def test_endpoint_crud(client):
     r = await client.post("/api/v1/providers", json={"name": "Bare", "vendor": "custom"})
     pid = r.json()["id"]

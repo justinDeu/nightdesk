@@ -263,6 +263,48 @@ async def test_event_stream_scoped_to_workdir_directory(monkeypatch, tmp_path):
         await handle.close()
 
 
+async def test_session_error_during_turn_surfaces_on_turn_complete(monkeypatch, tmp_path):
+    """Bug 6: opencode still ends the turn via session.idle after a provider
+    error (e.g. ProviderAuthError on a misconfigured endpoint) — the
+    resulting turn_complete must carry the error so the host doesn't mark
+    a failed turn as a successful "done"."""
+    _patch_process_spawn(monkeypatch)
+    line_queue: "asyncio.Queue[str | None]" = asyncio.Queue()
+    fake_client = _FakeClient(_queue_lines(line_queue))
+    monkeypatch.setattr(rb.httpx, "AsyncClient", lambda **kw: fake_client)
+
+    spec = StartSpec(working_dir=str(tmp_path))
+    handle = await OpencodeResidentBackend().start(spec, "trusted")
+    collected: list[dict] = []
+    consumer = asyncio.create_task(_collect(handle, collected))
+    try:
+        await handle.send({"type": "user_turn", "turn_id": "t1", "text": "hello"})
+        await _await(lambda: any(c.endswith("/prompt_async") for c in fake_client.calls))
+
+        await line_queue.put("data: " + json.dumps({
+            "type": "session.error",
+            "properties": {"sessionID": "sess-1", "error": {
+                "name": "ProviderAuthError",
+                "data": {"message": "OpenAI API key is missing"},
+            }},
+        }))
+        await line_queue.put("data: " + json.dumps({
+            "type": "session.idle", "properties": {"sessionID": "sess-1"}}))
+
+        assert await _await(lambda: _turn_complete(collected, "t1") is not None)
+        tc = _turn_complete(collected, "t1")
+        assert tc["error"] == "OpenAI API key is missing"
+        assert any(e.get("type") == "worker_error" and e.get("kind") == "ProviderAuthError"
+                  for e in collected)
+    finally:
+        await handle.close()
+        consumer.cancel()
+        try:
+            await consumer
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
 async def test_turn_complete_usage_is_cumulative_across_turns(monkeypatch, tmp_path):
     """opencode reports usage per-message; the handle must sum every message
     seen so far so each ``turn_complete`` carries session-cumulative tokens
