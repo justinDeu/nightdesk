@@ -610,8 +610,25 @@ class SessionHost:
             return idle > timeout
 
     async def _teardown(self, reader: asyncio.Task) -> None:
+        # Capture the live handle's inner session id BEFORE closing it. This
+        # only matters for the opencode handle (``_OpencodeResidentHandle``
+        # tracks ``session_id`` from ``_ensure_session``/construction; the
+        # claude ``_SubprocHandle`` has no such attribute, so ``getattr``
+        # below returns None and this is a no-op there — its session id only
+        # ever arrives via a turn_complete event, same as before). Reading
+        # first (rather than after close) means this stays correct even if
+        # ``close()`` is ever changed to reset session state; today it only
+        # aborts/cancels the live turn and does not touch ``session_id``.
+        # ``self._handle`` is always the CURRENT generation's handle —
+        # ``_restart_inner`` (including its ``clear_context`` path) replaces
+        # it with the freshly spawned handle before returning, so teardown
+        # never reads a stale handle's session id. A post-clear_context
+        # handle's session_id is None until its own first turn creates a
+        # session, so this can't resurrect a wiped conversation either.
+        handle_session_id = None
         try:
             if self._handle is not None:
+                handle_session_id = getattr(self._handle, "session_id", None)
                 await self._handle.close()
         except Exception:  # noqa: BLE001
             log.exception("closing inner failed for session %s", self._sid)
@@ -630,6 +647,15 @@ class SessionHost:
                 # next wake must not delta-import it again.
                 self._advance_import_watermark(db, row)
             resume = row.resume_handle if row is not None else None
+            if handle_session_id:
+                # A turn that ended without turn_complete (SIGTERM eviction,
+                # watchdog teardown, crash) never reached ``_slice_usage``,
+                # the only other place that publishes ``session_id`` into the
+                # DB. Without this, a first-generation session whose only
+                # turn was interrupted keeps ``resume_handle`` at None, and
+                # the next wake cold-starts a brand-new inner conversation
+                # instead of resuming the one that actually exists.
+                resume = {**(resume or {}), "session_id": str(handle_session_id)}
             sess.release_host(db, self._sid, status=self._shutdown_status,
                               resume_handle=resume)
 

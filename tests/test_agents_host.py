@@ -52,6 +52,29 @@ class FakeHandle:
         self._q.put_nowait(evt)
 
 
+class FakeOpencodeHandle(FakeHandle):
+    """Like ``FakeHandle`` but also carries ``session_id`` (the shape
+    ``_OpencodeResidentHandle`` has and ``_SubprocHandle``/claude's
+    ``FakeHandle`` does not) so teardown can recover it when a turn ends
+    without a ``turn_complete`` event."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.session_id: str | None = None
+
+
+class FakeOpencodeBackend:
+    def __init__(self) -> None:
+        self.starts: list[tuple[StartSpec, str]] = []
+        self.handles: list[FakeOpencodeHandle] = []
+
+    async def start(self, spec: StartSpec, posture: str) -> FakeOpencodeHandle:
+        self.starts.append((spec, posture))
+        h = FakeOpencodeHandle()
+        self.handles.append(h)
+        return h
+
+
 class FakeBackend:
     def __init__(self) -> None:
         self.starts: list[tuple[StartSpec, str]] = []
@@ -321,6 +344,75 @@ async def test_max_turn_seconds_watchdog_fails_unresponsive_turn(engine, tmp_pat
             turn = db.query(SessionTurn).filter_by(session_id=sid).first()
             assert turn.status == "failed"
         assert "session_crashed" in [e["type"] for e in read_events(tpath)]
+    finally:
+        if not task.done():
+            task.cancel()
+
+
+async def test_teardown_recovers_session_id_from_handle_when_turn_interrupted(
+        engine, tmp_path):
+    """Bug 4: a turn torn down without ``turn_complete`` (shutdown mid-turn)
+    never reaches ``_slice_usage`` (the only other place ``resume_handle`` is
+    published), so on an opencode-style handle that already knows its inner
+    session id, teardown must recover it from the live handle rather than
+    leaving ``resume_handle`` at whatever the DB already had (None on a
+    session's first generation)."""
+    factory, sid, tpath = _make(engine, tmp_path, idle_timeout_s=3600)
+    with factory() as db:
+        sess.post_message(db, sid, "hi")
+    backend = FakeOpencodeBackend()
+    host, task = await _run_host(factory, sid, backend)
+    try:
+        assert await _await(lambda: backend.handles
+                            and any(m.get("type") == "user_turn"
+                                    for m in backend.handles[0].sent))
+        # The inner has already created its session (mirrors
+        # ``_OpencodeResidentHandle._ensure_session``) but never reports
+        # turn_complete before the shutdown races it.
+        backend.handles[0].session_id = "ses_recovered"
+        with factory() as db:
+            row = db.get(SessionModel, sid)
+            assert row.resume_handle in (None, {})
+        with factory() as db:
+            sess.end_session(db, sid)
+        await asyncio.wait_for(task, timeout=5.0)
+        with factory() as db:
+            row = db.get(SessionModel, sid)
+            assert (row.resume_handle or {}).get("session_id") == "ses_recovered"
+            turn = db.query(SessionTurn).filter_by(session_id=sid).first()
+            assert turn.status == "interrupted"
+        assert backend.handles[0].closed
+    finally:
+        if not task.done():
+            task.cancel()
+
+
+async def test_teardown_leaves_resume_handle_unchanged_without_handle_session_id(
+        engine, tmp_path):
+    """The claude path's handle has no ``session_id`` attribute at all
+    (its session id only ever arrives via a ``turn_complete`` event) —
+    teardown's ``getattr`` returns None and ``resume_handle`` is left exactly
+    as the DB already had it (still None here, since the turn never
+    completed)."""
+    factory, sid, tpath = _make(engine, tmp_path, idle_timeout_s=3600)
+    with factory() as db:
+        sess.post_message(db, sid, "hi")
+    backend = FakeBackend()
+    host, task = await _run_host(factory, sid, backend)
+    try:
+        assert await _await(lambda: backend.handles
+                            and any(m.get("type") == "user_turn"
+                                    for m in backend.handles[0].sent))
+        assert not hasattr(backend.handles[0], "session_id")
+        with factory() as db:
+            sess.end_session(db, sid)
+        await asyncio.wait_for(task, timeout=5.0)
+        with factory() as db:
+            row = db.get(SessionModel, sid)
+            assert row.resume_handle in (None, {})
+            turn = db.query(SessionTurn).filter_by(session_id=sid).first()
+            assert turn.status == "interrupted"
+        assert backend.handles[0].closed
     finally:
         if not task.done():
             task.cancel()
