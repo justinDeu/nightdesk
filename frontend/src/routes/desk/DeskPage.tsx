@@ -677,10 +677,22 @@ const NeedsRow = forwardRef<
       </div>
       <div className="relative z-10 flex shrink-0 items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
         <PriorityChip value={ticket.priority} hideNone />
-        {/* Open is redundant on a phone (tapping the title opens); requeue and
-            archive collapse to icon-only below sm so the row never overflows. */}
+        {/* One variant family (ghost), ordered by escalating finality:
+            inspect (Open), re-run (Requeue), then the resolution verbs
+            grouped at the end with plain Archive last. Open is redundant on
+            a phone (tapping the title opens); requeue and archive collapse
+            to icon-only below sm so the row never overflows. */}
         <Button size="sm" variant="ghost" onClick={onOpen} className="hidden sm:inline-flex">
           Open
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          leadingIcon={<RotateCcw size={13} />}
+          onClick={onRequeue}
+          aria-label="Requeue"
+        >
+          <span className="hidden sm:inline">Requeue</span>
         </Button>
         {ticket.acknowledged_at == null && (
           <>
@@ -701,15 +713,6 @@ const NeedsRow = forwardRef<
             </Tooltip>
           </>
         )}
-        <Button
-          size="sm"
-          variant="subtle"
-          leadingIcon={<RotateCcw size={13} />}
-          onClick={onRequeue}
-          aria-label="Requeue"
-        >
-          <span className="hidden sm:inline">Requeue</span>
-        </Button>
         <Button
           size="sm"
           variant="ghost"

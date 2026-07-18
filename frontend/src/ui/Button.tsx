@@ -38,7 +38,11 @@ const variants: Record<ButtonVariant, string> = {
     // a muddy half-strength primary). Enabled stays full-strength lamp.
     "disabled:bg-ink-800 disabled:text-moon-600 disabled:shadow-none disabled:opacity-100",
   ghost:
-    "bg-transparent text-moon-100 border border-ink-700 hover:bg-ink-800 hover:border-ink-700 active:bg-ink-900",
+    // Hover must read on BOTH resting surfaces: ink-900 panels and rows that
+    // themselves hover to ink-800 (a bg-ink-800 button hover vanishes inside
+    // those). One bg step past the row (ink-700, same as subtle's hover) plus
+    // a border brighten (opacity step, mirroring danger's border treatment).
+    "bg-transparent text-moon-100 border border-ink-700 hover:bg-ink-700 hover:border-moon-600/50 active:bg-ink-900",
   subtle: "bg-ink-800 text-moon-100 hover:bg-ink-700 active:brightness-95",
   danger:
     "bg-transparent text-failed border border-failed/40 hover:bg-failed/10 hover:border-failed/70 active:bg-failed/15",
