@@ -630,7 +630,15 @@ const NeedsRow = forwardRef<
               title otherwise leaves next to the actions. Telemetry (duration,
               tokens) is xl-only since it only earns its place once inline. */}
           <div className="flex flex-col gap-0.5 xl:flex-row xl:items-center xl:gap-3">
-            <span className="block min-w-0 text-sm font-medium text-moon-100 group-hover:text-lamp line-clamp-2 md:truncate xl:max-w-[40%]">
+            <span
+              className={cn(
+                "block min-w-0 text-sm font-medium text-moon-100 line-clamp-2 md:truncate xl:max-w-[40%]",
+                // Accent title-hover is for review rows only. On a failed or
+                // canceled row the red/amber wash must stay coherent, so hover
+                // merely brightens the title instead of recoloring it green.
+                reason === "review" ? "group-hover:text-lamp" : "group-hover:text-moon-50",
+              )}
+            >
               {ticket.description?.trim() || ticket.title}
             </span>
             <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-moon-600 md:flex-nowrap xl:min-w-0 xl:flex-1 xl:flex-nowrap">
@@ -944,25 +952,31 @@ function AwayFeed({ away }: { away: RunOut[] | null }) {
   );
 }
 
-/** One finished run since your last visit: outcome dot, model, cost, when. The
- *  whole row links to the run (middle-click opens a new tab). */
+/** One finished run since your last visit: outcome dot, TICKET TITLE, cost,
+ *  when — a timeline of what finished, not which model ran. The model rides in
+ *  a tooltip (the rail is too narrow for it inline; Tooltip no-ops when the
+ *  run has none). The whole row links to the run (middle-click opens a tab). */
 function AwayRunRow({ run }: { run: RunOut }) {
   const ok = run.exit_status === "success";
   return (
-    <Link
-      to="/tickets/$id/runs/$rid"
-      params={{ id: run.ticket_id, rid: run.id }}
-      className="flex h-7 items-center gap-2 rounded-control px-2 text-xs hover:bg-ink-800"
-    >
-      <span
-        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ok ? "bg-success" : "bg-failed")}
-        aria-hidden
-      />
-      <span className="min-w-0 flex-1 truncate font-mono text-moon-400">{run.model_used ?? "run"}</span>
-      {run.cost_usd != null && (
-        <span className="shrink-0 font-mono tabular-nums text-moon-400">{formatUsd(run.cost_usd)}</span>
-      )}
-      <span className="shrink-0 text-moon-600">{relativeTime(run.finished_at)}</span>
-    </Link>
+    <Tooltip content={run.model_used} mono>
+      <Link
+        to="/tickets/$id/runs/$rid"
+        params={{ id: run.ticket_id, rid: run.id }}
+        className="flex h-7 items-center gap-2 rounded-control px-2 text-xs hover:bg-ink-800"
+      >
+        <span
+          className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ok ? "bg-success" : "bg-failed")}
+          aria-hidden
+        />
+        <span className="min-w-0 flex-1 truncate text-moon-200">
+          {run.ticket_title ?? run.model_used ?? "run"}
+        </span>
+        {run.cost_usd != null && (
+          <span className="shrink-0 font-mono tabular-nums text-moon-400">{formatUsd(run.cost_usd)}</span>
+        )}
+        <span className="shrink-0 text-moon-600">{relativeTime(run.finished_at)}</span>
+      </Link>
+    </Tooltip>
   );
 }

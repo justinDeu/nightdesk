@@ -634,6 +634,12 @@ class RunOut(BaseModel):
     cache_write_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
     sandbox_tool_paths: Optional[list[str]] = None
+    # Denormalized for list consumers (the Desk "while you were away" rail
+    # leads with the ticket title). Populated by the list endpoint via a bulk
+    # title lookup; None on surfaces that don't join it.
+    ticket_title: Optional[str] = None
+
+    model_config = {"from_attributes": True}
 
 
 _HH_MM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")

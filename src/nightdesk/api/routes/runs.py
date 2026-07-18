@@ -14,7 +14,7 @@ from nightdesk.api.auth import (
 )
 from nightdesk.domain import scopes as sc
 from nightdesk.api.schemas import RunOut
-from nightdesk.db.models import TicketWorkspace
+from nightdesk.db.models import Ticket, TicketWorkspace
 from nightdesk.domain.diff import (
     RunDiff, compute_workspace_diff, diff_sidecar_path, diff_to_json,
     diff_to_stat_json, read_diff_sidecar, run_diff_from_json,
@@ -40,7 +40,24 @@ def build_router(get_session, bearer_token: str, engine=None, scoped=None) -> AP
     @read.get("", response_model=list[RunOut])
     async def lst(ticket_id: str | None = Query(default=None),
                    session: Session = Depends(get_session)):
-        return list_runs(session, ticket_id=ticket_id)
+        # Attach the ticket title in one bulk lookup (no N+1): the Desk's
+        # "while you were away" rail renders runs as a timeline and needs the
+        # ticket name without a per-row ticket fetch.
+        runs = list_runs(session, ticket_id=ticket_id)
+        tids = {r.ticket_id for r in runs}
+        titles: dict[str, str] = {}
+        if tids:
+            titles = dict(
+                session.execute(
+                    select(Ticket.id, Ticket.title).where(Ticket.id.in_(tids))
+                ).all()
+            )
+        out = []
+        for r in runs:
+            m = RunOut.model_validate(r)
+            m.ticket_title = titles.get(r.ticket_id)
+            out.append(m)
+        return out
 
     @read.get("/{rid}", response_model=RunOut)
     async def show(rid: str, session: Session = Depends(get_session)):
