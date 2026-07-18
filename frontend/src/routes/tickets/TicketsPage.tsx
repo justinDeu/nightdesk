@@ -622,7 +622,7 @@ export function TicketsPage() {
 
       {peekTicket && (
         <>
-          <div aria-hidden className={peekBackdropClasses} />
+          <div aria-hidden className={peekBackdropClasses} onClick={() => setPeekId(null)} />
           <TicketPeek
             key={peekTicket.id}
             ticket={peekTicket}

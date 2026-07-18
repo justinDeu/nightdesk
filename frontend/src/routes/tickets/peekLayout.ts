@@ -48,17 +48,26 @@ export const peekRailClasses: string[] = [
  * Dimmed scrim shown behind the peek while it's open, so the rail reads as a
  * deliberate overlay instead of a floating stray panel (ticket 55105222).
  *
- * Deliberately `pointer-events-none`: it is visual only. The board/list stays
- * fully clickable underneath — clicking a different card is expected to swap
- * the peek's contents in place rather than requiring a close-then-reopen, and
- * ticket ab109541's outside-pointerdown dismissal (capture-phase, keyed off
- * the real event target) already gives "click elsewhere closes it" for free.
- * A click-catching scrim would fight both of those: it would swallow the
- * pointerdown before it ever reaches a card, and it would need its own
- * close/swap logic duplicating ab109541's. Letting clicks pass through keeps
- * this purely additive — it composes with whichever of "no outside-click
- * handling yet" or "ab109541 landed" is true at build time, with no
- * coordination needed between the two changes.
+ * Interactive, not decorative: it is the sole outside-dismiss affordance at
+ * md+. Each page wires a `click` handler on this div that closes the peek.
+ * `click`, NOT `pointerdown`: closing on pointerdown unmounts the scrim
+ * before mouseup, so the browser's subsequent `click` event re-targets to
+ * the now-exposed ticket row underneath and instantly reopens the peek. With
+ * `click`, the scrim stays mounted through mousedown+mouseup, the click's
+ * target is the scrim itself, and it unmounts only after the click completes
+ * — the row never sees anything. (Drag-off — press on scrim, release
+ * elsewhere — simply doesn't close, which is fine.) Because it's a real
+ * element (no `pointer-events-none`), it sits between the peek rail and the
+ * board/list underneath and physically intercepts the click — a click
+ * anywhere on the dimmed area closes the peek and nothing else happens,
+ * including when it's dimming the very row that opened the peek. To open a
+ * different ticket, the user closes the peek first (click the scrim or Esc),
+ * then clicks the ticket they want — no document-level capture listener is
+ * needed to distinguish "outside click that should close" from "outside
+ * click that should swap to a new ticket."
+ * `aria-hidden` stays: this is a redundant, mouse-only dismiss path, not the
+ * accessible one — Escape and the peek's own close button remain the
+ * keyboard/screen-reader route.
  *
  * z-30: above ordinary (unpositioned) page content so the dim actually reads,
  * below the peek rail's z-40 so the peek itself is never dimmed.
@@ -69,4 +78,4 @@ export const peekRailClasses: string[] = [
  * there and defeats the point ("so the overlay reads as intentional").
  */
 export const peekBackdropClasses =
-  "fade-in pointer-events-none fixed inset-0 z-30 hidden bg-ink-950/70 md:block";
+  "fade-in fixed inset-0 z-30 hidden bg-ink-950/70 md:block";

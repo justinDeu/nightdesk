@@ -60,36 +60,13 @@ export function TicketPeek({
     qc.invalidateQueries({ queryKey: qk.tickets.detail(ticket.id) });
   };
 
-  // Click-outside-to-dismiss. Capture phase + `pointerdown` (not `click`)
-  // matters for two reasons:
-  // 1. It lets this fire *before* a target's own onClick (React listens in
-  //    the bubble phase, well after pointerdown), so when the outside click
-  //    is itself "select a different ticket" (a board/list card, a Desk
-  //    acknowledge row), both state updates land in the same batch and the
-  //    later one (select the new ticket) wins — the peek swaps contents
-  //    instead of closing.
-  // 2. Opening a Radix dropdown/menu trigger (e.g. the Priority picker)
-  //    synchronously locks body scroll, which can shift layout *between*
-  //    the trigger's own mousedown and mouseup/click — so a `click`
-  //    listener can see a stray event whose target has drifted off the
-  //    trigger entirely. `pointerdown` reads the target before that shift,
-  //    matching Radix's own dismissable-layer, which also keys off
-  //    pointerdown for this exact reason.
-  // Interactive pickers/dialogs/tooltips render into a portal outside this
-  // <aside>'s subtree, so they're excluded explicitly rather than by DOM
-  // containment.
+  // Outside-dismiss at md+ is owned by the backdrop scrim (peekLayout.ts'
+  // `peekBackdropClasses`), which now physically intercepts the click rather
+  // than this component inferring "outside" from a document-level listener.
+  // Below md the peek is a full-screen cover (`inset-0 w-full`), so there is
+  // no outside area to dismiss from — Escape and the close button are the
+  // only dismiss paths there.
   const rootRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    function onDocPointerDown(e: PointerEvent) {
-      const target = e.target;
-      if (!(target instanceof Element)) return;
-      if (rootRef.current?.contains(target)) return;
-      if (target.closest('[data-radix-popper-content-wrapper], [role="dialog"], .overlay-in')) return;
-      onClose();
-    }
-    document.addEventListener("pointerdown", onDocPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onDocPointerDown, true);
-  }, [onClose]);
 
   const setLabels = (ids: string[]) =>
     labelsApi
