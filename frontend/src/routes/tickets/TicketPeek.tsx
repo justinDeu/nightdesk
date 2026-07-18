@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, CalendarClock, Cpu, Maximize2, Zap, X } from "lucide-react";
 import type { LabelOut, ProjectOut, RunOut, TicketOut } from "@/api/types";
@@ -58,6 +58,37 @@ export function TicketPeek({
     qc.invalidateQueries({ queryKey: qk.tickets.detail(ticket.id) });
   };
 
+  // Click-outside-to-dismiss. Capture phase + `pointerdown` (not `click`)
+  // matters for two reasons:
+  // 1. It lets this fire *before* a target's own onClick (React listens in
+  //    the bubble phase, well after pointerdown), so when the outside click
+  //    is itself "select a different ticket" (a board/list card, a Desk
+  //    acknowledge row), both state updates land in the same batch and the
+  //    later one (select the new ticket) wins — the peek swaps contents
+  //    instead of closing.
+  // 2. Opening a Radix dropdown/menu trigger (e.g. the Priority picker)
+  //    synchronously locks body scroll, which can shift layout *between*
+  //    the trigger's own mousedown and mouseup/click — so a `click`
+  //    listener can see a stray event whose target has drifted off the
+  //    trigger entirely. `pointerdown` reads the target before that shift,
+  //    matching Radix's own dismissable-layer, which also keys off
+  //    pointerdown for this exact reason.
+  // Interactive pickers/dialogs/tooltips render into a portal outside this
+  // <aside>'s subtree, so they're excluded explicitly rather than by DOM
+  // containment.
+  const rootRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    function onDocPointerDown(e: PointerEvent) {
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (rootRef.current?.contains(target)) return;
+      if (target.closest('[data-radix-popper-content-wrapper], [role="dialog"], .overlay-in')) return;
+      onClose();
+    }
+    document.addEventListener("pointerdown", onDocPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onDocPointerDown, true);
+  }, [onClose]);
+
   const setLabels = (ids: string[]) =>
     labelsApi
       .setTicketLabels(ticket.id, ids)
@@ -67,7 +98,7 @@ export function TicketPeek({
   const needsProfile = !ticket.profile_id;
 
   return (
-    <aside className={cn(peekRailClasses)} aria-label="Ticket preview">
+    <aside ref={rootRef} className={cn(peekRailClasses)} aria-label="Ticket preview">
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-ink-700 px-4 py-3">
         {ticket.status === "running" ? (
@@ -124,7 +155,7 @@ export function TicketPeek({
 
         {/* Quick actions */}
         <div className="flex flex-wrap gap-1.5">
-          <StatusActions ticket={ticket} actions={actions} />
+          <StatusActions ticket={ticket} actions={actions} onClose={onClose} />
           <Button asChild size="sm" variant="subtle">
             <a
               href={ticketHref(ticket.id)}
@@ -515,15 +546,23 @@ function PromptDialog({
 function StatusActions({
   ticket,
   actions,
+  onClose,
 }: {
   ticket: TicketOut;
   actions: ReturnType<typeof useTicketActions>;
+  onClose: () => void;
 }) {
   const acknowledge = useAcknowledge();
   // Settled outcome no human has stamped as seen — the peek is where a
-  // surfaced "unacked" marker gets resolved.
+  // surfaced "unacked" marker gets resolved. Acking is a resolving action:
+  // the item no longer needs attention, so close the peek once it lands
+  // instead of leaving a now-stale panel open.
   const ackButton = ticketNeedsAck(ticket) ? (
-    <Button size="sm" variant="subtle" onClick={() => acknowledge.mutate(ticket.id)}>
+    <Button
+      size="sm"
+      variant="subtle"
+      onClick={() => acknowledge.mutate(ticket.id, { onSuccess: onClose })}
+    >
       Ack
     </Button>
   ) : null;
