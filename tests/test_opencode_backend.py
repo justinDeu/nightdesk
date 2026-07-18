@@ -177,29 +177,53 @@ def test_render_auth_empty_when_no_credentials():
     assert render_auth({}) is None
 
 
+def _fake_jwt(exp: int) -> str:
+    """A structurally valid unsigned JWT whose payload carries ``exp``."""
+    import base64 as _b64
+    enc = lambda d: _b64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    return f"{enc({'alg': 'none'})}.{enc({'exp': exp})}.sig"
+
+
 def test_render_auth_codex_oauth_parses_tokens():
-    """Bug 7: a Codex oauth entry renders onto the native "openai" provider
-    id (not nd_<eid>), carries accountId (renamed from tokens.account_id),
-    and expires=0 to force an eager refresh on first use — see
-    _parse_codex_oauth's docstring for the opencode-source verification."""
+    """Bug 7 + bug 8: a Codex oauth entry renders onto the native "openai"
+    provider id (not nd_<eid>), carries accountId (renamed from
+    tokens.account_id), and expires comes from the access token's JWT exp
+    claim in MILLISECONDS — never 0 when decodable, because expires=0 forces
+    an eager refresh whose token rotation strands the file's single-use
+    refresh token (see _parse_codex_oauth's docstring)."""
+    access = _fake_jwt(exp=1_784_000_000)
     raw = json.dumps({"tokens": {
-        "access_token": "acc-1", "refresh_token": "ref-1", "account_id": "acct-1",
+        "access_token": access, "refresh_token": "ref-1", "account_id": "acct-1",
     }})
     ep = _ep(id="ep_codex", protocol_kind="openai_codex", base_url=None,
              credential=raw, credential_source="oauth_file")
     auth = render_auth({"ep_codex": ep})
     assert auth == {"openai": {
-        "type": "oauth", "access": "acc-1", "refresh": "ref-1",
-        "expires": 0, "accountId": "acct-1",
+        "type": "oauth", "access": access, "refresh": "ref-1",
+        "expires": 1_784_000_000_000, "accountId": "acct-1",
     }}
 
 
 def test_render_auth_codex_oauth_without_account_id():
-    raw = json.dumps({"tokens": {"access_token": "acc-1", "refresh_token": "ref-1"}})
+    access = _fake_jwt(exp=2_000_000_000)
+    raw = json.dumps({"tokens": {"access_token": access, "refresh_token": "ref-1"}})
     ep = _ep(id="ep_codex", protocol_kind="openai_codex", base_url=None,
              credential=raw, credential_source="oauth_file")
     auth = render_auth({"ep_codex": ep})
-    assert auth == {"openai": {"type": "oauth", "access": "acc-1", "refresh": "ref-1", "expires": 0}}
+    assert auth == {"openai": {
+        "type": "oauth", "access": access, "refresh": "ref-1",
+        "expires": 2_000_000_000_000,
+    }}
+
+
+def test_render_auth_codex_oauth_non_jwt_access_falls_back_to_eager_refresh():
+    """An opaque (non-JWT) access token has no readable expiry; expires=0 is
+    the least-bad fallback (eager refresh on first request)."""
+    raw = json.dumps({"tokens": {"access_token": "opaque-token", "refresh_token": "ref-1"}})
+    ep = _ep(id="ep_codex", protocol_kind="openai_codex", base_url=None,
+             credential=raw, credential_source="oauth_file")
+    auth = render_auth({"ep_codex": ep})
+    assert auth["openai"]["expires"] == 0
 
 
 def test_render_auth_codex_oauth_malformed_json_omits_block():

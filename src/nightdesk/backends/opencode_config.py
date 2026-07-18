@@ -33,6 +33,7 @@ every model reference render onto ``"openai"`` instead of its own
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from typing import Optional, TYPE_CHECKING
@@ -365,6 +366,25 @@ def render_config(
     return cfg
 
 
+def _jwt_exp_ms(token: str) -> int:
+    """The ``exp`` claim of a JWT access token, in milliseconds — 0 when the
+    token isn't a decodable JWT or carries no numeric ``exp``. No signature
+    verification: the value only schedules opencode's refresh, it grants
+    nothing."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return 0
+    payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except (ValueError, TypeError):
+        return 0
+    exp = claims.get("exp") if isinstance(claims, dict) else None
+    if not isinstance(exp, (int, float)) or exp <= 0:
+        return 0
+    return int(exp * 1000)
+
+
 def _parse_codex_oauth(raw: str, *, endpoint_id: str) -> Optional[dict]:
     """Parse a Codex ``~/.codex/auth.json`` blob into opencode's oauth auth
     shape (verified against opencode 1.16.2 source,
@@ -380,15 +400,23 @@ def _parse_codex_oauth(raw: str, *, endpoint_id: str) -> Optional[dict]:
       confirmed against a live ``~/.codex/auth.json`` and opencode's own
       ``~/.local/share/opencode/auth.json`` entry for its bundled ``openai``
       provider, which are structurally identical apart from that renaming.
-    - ``expires`` is REQUIRED by opencode's auth schema (a non-negative
-      int, not optional) — Codex's auth.json carries no numeric expiry we
-      can trust (the access token's own ``exp`` claim would need JWT
-      decoding, and ``last_refresh`` is a refresh timestamp, not an expiry).
-      Rendering ``expires: 0`` (rather than guessing or omitting) makes the
-      codex plugin's ``currentAuth.expires < Date.now()`` check true on the
-      very first request, forcing an eager refresh via the refresh token —
-      the safe choice: it always yields a fresh access token instead of
-      gambling on however-stale the imported one already is.
+    - ``expires`` is REQUIRED by opencode's auth schema (a non-negative int,
+      milliseconds — confirmed against opencode's own auth store, whose
+      entries are 13-digit epoch values). It is decoded from the access
+      token's JWT ``exp`` claim (seconds -> ms). A forced refresh must be
+      the LAST resort, not the default: ChatGPT oauth refresh tokens rotate
+      on use, so a refresh consumes the single-use refresh token stored in
+      ``~/.codex/auth.json`` and strands the rotated replacement in that one
+      process's memory — the next process re-reads the file, presents the
+      stale token, and gets a 401 (this took down real runs). ``expires: 0``
+      (eager refresh on first request) is only the fallback when the access
+      token isn't a decodable JWT.
+
+    Known gap: when the access token genuinely IS expired, the plugin's
+    refresh still rotates the file's refresh token and nightdesk persists
+    nothing — an ``oauth_file`` endpoint goes stale after one refresh cycle
+    and needs a re-login/re-import. The real fix (nightdesk-owned refresh
+    with write-back to the endpoint credential) is tracked separately.
     """
     try:
         data = json.loads(raw)
@@ -405,7 +433,9 @@ def _parse_codex_oauth(raw: str, *, endpoint_id: str) -> Optional[dict]:
     if not isinstance(access, str) or not access:
         log.warning("endpoint %s: codex oauth credential missing access_token", endpoint_id)
         return None
-    entry: dict[str, object] = {"type": "oauth", "access": access, "expires": 0}
+    entry: dict[str, object] = {
+        "type": "oauth", "access": access, "expires": _jwt_exp_ms(access),
+    }
     refresh = tokens.get("refresh_token")
     if isinstance(refresh, str) and refresh:
         entry["refresh"] = refresh
