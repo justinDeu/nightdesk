@@ -442,7 +442,7 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
         project_id: str | None = Query(default=None),
         session: Session = Depends(get_session),
     ):
-        """Unacknowledged review/archived work, grouped by project then day."""
+        """Unacknowledged archived work, grouped by project then day."""
         return _digest_out(ack_digest(session, project_id=project_id))
 
     @router.get("/ack/count", dependencies=[admin_dep])

@@ -258,9 +258,9 @@ def _validate_workspace_mode(value: str | None) -> None:
 # Inbox item counts as "needs you" once it has sat untriaged this long.
 INBOX_STALE_AFTER = timedelta(hours=48)
 
-# Terminal-ish states whose tickets can accrue acknowledgement debt (mirrors
+# Decided states whose tickets appear in the acknowledgement digest (mirrors
 # domain.ack.DIGEST_STATUSES — duplicated only to avoid a cross-domain import).
-_DIGEST_STATUSES = ("review", "archived")
+_DIGEST_STATUSES = ("archived",)
 
 
 @dataclass
@@ -378,7 +378,7 @@ def attention_rollup(session: Session) -> list[ProjectAttentionRow]:
             bucket["review"] += 1
         if t.status == "running":
             bucket["running"] += 1
-        # Unacked debt: review/archived tickets a human has not acknowledged.
+        # Unacked debt: decided tickets a human has not acknowledged.
         if t.status in _DIGEST_STATUSES and t.acknowledged_at is None:
             bucket["unacked"] += 1
         # Inbox needing triage: blocked (can't promote) or stale >48h.

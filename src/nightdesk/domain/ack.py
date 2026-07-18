@@ -8,9 +8,9 @@ ack endpoints. Acknowledging is deliberately NOT a transition — it never moves
 the ticket or writes a ``ticket_event`` — so an agent can archive but can never
 mark its own work seen.
 
-The digest (``ack_digest``) is the read side: archived-or-review tickets with
-``acknowledged_at IS NULL``, grouped by project and by the day they entered
-their current terminal state. The "entered at" timestamp comes from
+The digest (``ack_digest``) is the read side: archived tickets with
+``acknowledged_at IS NULL``, grouped by project and by the day they were
+archived. The "entered at" timestamp comes from
 ``ticket_events`` (a real archived-at), not ``tickets.updated_at``.
 """
 from __future__ import annotations
@@ -25,9 +25,10 @@ from sqlalchemy.orm import Session
 from nightdesk.db.models import Run, Ticket, TicketEvent
 
 
-# Terminal-ish states whose tickets can accrue acknowledgement debt. Active
-# states never appear in the digest (their outcome is not yet final).
-DIGEST_STATUSES: tuple[str, ...] = ("review", "archived")
+# Review tickets may be acknowledged early from Needs-you, but only decided
+# tickets belong in the acknowledgement digest.
+ACKNOWLEDGEABLE_STATUSES: tuple[str, ...] = ("review", "archived")
+DIGEST_STATUSES: tuple[str, ...] = ("archived",)
 
 
 class TicketNotAcknowledgeable(Exception):
@@ -51,7 +52,7 @@ def acknowledge_ticket(
     from nightdesk.domain.tickets import get_ticket
 
     t = get_ticket(session, ticket_id)
-    if t.status not in DIGEST_STATUSES:
+    if t.status not in ACKNOWLEDGEABLE_STATUSES:
         raise TicketNotAcknowledgeable(
             f"cannot acknowledge a ticket in '{t.status}'"
         )
@@ -89,7 +90,7 @@ def bulk_acknowledge(
     reading — are left for the next pass rather than silently swallowed.
     """
     stmt = select(Ticket).where(
-        Ticket.status.in_(DIGEST_STATUSES),
+        Ticket.status.in_(ACKNOWLEDGEABLE_STATUSES),
         Ticket.acknowledged_at.is_(None),
     )
     if ticket_ids is not None:
@@ -178,6 +179,7 @@ class Digest:
 def ack_digest(session: Session, *, project_id: Optional[str] = None) -> Digest:
     """Build the unacknowledged-work digest, grouped by project then day.
 
+    Only decided (archived) tickets appear; review tickets remain in Needs-you.
     ``project_id`` optionally scopes to one project (or the no-project group is
     NOT special-cased here — pass a real id to scope; omit for everything).
     Groups are sorted newest day first, and tickets within a group newest first.

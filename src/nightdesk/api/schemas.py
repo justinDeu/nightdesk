@@ -453,7 +453,7 @@ class ProjectAttention(BaseModel):
     review: int = 0          # tickets currently in review
     failed: int = 0          # non-archived tickets whose latest run failed
     inbox_blocked: int = 0   # inbox items blocked or older than 48h
-    unacked: int = 0         # review/archived tickets not yet acknowledged
+    unacked: int = 0         # archived tickets not yet acknowledged
     needs_you: int = 0       # review + failed + inbox_blocked + unacked
     # Live work (not attention): drives the lamp pulse + ordering tie-break.
     running: int = 0

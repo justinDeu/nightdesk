@@ -160,11 +160,12 @@ function StatValue({
 export function DeskPage() {
   const navigate = useNavigate();
   const actions = useTicketActions();
+  const acknowledge = useAcknowledge();
   const projects = useProjectMap();
   const projectsQ = useProjects();
   const labelsQ = useLabels();
 
-  // Side-peek for tickets opened from the To-acknowledge band. Tickets never
+  // Side-peek for tickets opened from the action bands. Tickets never
   // navigate away from the Desk — inspection happens in the same peek panel
   // the Tickets board uses.
   const [peekId, setPeekId] = useState<string | null>(null);
@@ -230,8 +231,7 @@ export function DeskPage() {
   }, [cursor]);
 
   const focused = needs[cursor];
-  const openFocused = () =>
-    focused && navigate({ to: "/tickets/$id", params: { id: focused.ticket.id } });
+  const openFocused = () => focused && setPeekId(focused.ticket.id);
   useKeybinds([
     { combo: "j", label: "Cursor down", group: "Desk", handler: () => setCursor((c) => Math.min(needs.length - 1, c + 1)) },
     { combo: "k", label: "Cursor up", group: "Desk", handler: () => setCursor((c) => Math.max(0, c - 1)) },
@@ -397,7 +397,8 @@ export function DeskPage() {
                     project={item.ticket.project_id ? projects.get(item.ticket.project_id) : undefined}
                     focused={i === cursor}
                     onFocus={() => setCursor(i)}
-                    onOpen={() => navigate({ to: "/tickets/$id", params: { id: item.ticket.id } })}
+                    onOpen={() => setPeekId(item.ticket.id)}
+                    onAck={() => acknowledge.mutate(item.ticket.id)}
                     onRequeue={() => actions.requeue(item.ticket)}
                     onArchive={() => actions.archive(item.ticket)}
                   />
@@ -548,10 +549,11 @@ const NeedsRow = forwardRef<
     focused: boolean;
     onFocus: () => void;
     onOpen: () => void;
+    onAck: () => void;
     onRequeue: () => void;
     onArchive: () => void;
   }
->(function NeedsRow({ item, project, focused, onFocus, onOpen, onRequeue, onArchive }, ref) {
+>(function NeedsRow({ item, project, focused, onFocus, onOpen, onAck, onRequeue, onArchive }, ref) {
   const { ticket, reason, run } = item;
   return (
     <div
@@ -561,7 +563,7 @@ const NeedsRow = forwardRef<
         // Phone: pill+title stack on top, then the meta line, then actions.
         // md+: the original single row. md:contents on the pill+title wrapper
         // hoists them into the row so the layout is unchanged there.
-        "group flex flex-col gap-2 rounded-control border px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors md:flex-row md:items-center md:gap-3",
+        "group relative flex flex-col gap-2 rounded-control border px-3 py-2.5 shadow-[var(--shadow-raised)] transition-colors md:flex-row md:items-center md:gap-3",
         focused
           ? "border-lamp/40 bg-ink-800"
           : reason === "failed"
@@ -569,7 +571,17 @@ const NeedsRow = forwardRef<
             : "border-ink-700 bg-ink-900 hover:bg-ink-800",
       )}
     >
-      <div className="flex min-w-0 items-start gap-2.5 md:contents md:items-center">
+      <a
+        href={ticketHref(ticket.id)}
+        aria-label={ticket.title}
+        onClick={(e) => {
+          if (e.button !== 0 || e.metaKey || e.ctrlKey) return;
+          e.preventDefault();
+          onOpen();
+        }}
+        className="absolute inset-0 z-0 rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-lamp"
+      />
+      <div className="pointer-events-none relative z-[1] flex min-w-0 items-start gap-2.5 md:contents md:items-center">
         {reason === "failed" ? (
           <StatusPill status="failed" label="Failed" />
         ) : reason === "canceled" ? (
@@ -577,15 +589,7 @@ const NeedsRow = forwardRef<
         ) : (
           <StatusPill status="review" />
         )}
-        <a
-          href={ticketHref(ticket.id)}
-          onClick={(e) => {
-            if (e.metaKey || e.ctrlKey) return;
-            e.preventDefault();
-            onOpen();
-          }}
-          className="min-w-0 flex-1 rounded-[4px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lamp"
-        >
+        <div className="min-w-0 flex-1 text-left">
           {/* Title + meta stack on narrow screens; on wide screens they share
               one row — title bounded, meta filling the dead middle a truncated
               title otherwise leaves next to the actions. Telemetry (duration,
@@ -619,15 +623,20 @@ const NeedsRow = forwardRef<
               )}
             </span>
           </div>
-        </a>
+        </div>
       </div>
-      <div className="flex shrink-0 items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
+      <div className="relative z-10 flex shrink-0 items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
         <PriorityChip value={ticket.priority} hideNone />
         {/* Open is redundant on a phone (tapping the title opens); requeue and
             archive collapse to icon-only below sm so the row never overflows. */}
         <Button size="sm" variant="ghost" onClick={onOpen} className="hidden sm:inline-flex">
           Open
         </Button>
+        {ticket.acknowledged_at == null && (
+          <Button size="sm" variant="ghost" onClick={onAck}>
+            Ack
+          </Button>
+        )}
         <Button
           size="sm"
           variant="subtle"
@@ -653,7 +662,7 @@ const NeedsRow = forwardRef<
 
 // --- To acknowledge ------------------------------------------------------------
 
-/** Durable acknowledgement debt: agent-archived / agent-reviewed work the human
+/** Durable acknowledgement debt: decided (archived) work the human
  *  never saw, grouped by project-day. Each group row expands in place to its
  *  tickets (the digest already carries them — no extra fetch): outcome, title,
  *  cost, when it landed, plus a per-ticket Ack. Clicking a ticket opens the

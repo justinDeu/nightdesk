@@ -64,7 +64,7 @@ def test_attention_empty_when_no_projects(session):
 
 def test_attention_counts_each_signal(session, sample_profile):
     p = _project(session, "Acme")
-    # review (counts toward review + unacked while unacked)
+    # review counts only as pending work, not acknowledgement debt
     t_review = create_ticket(
         session, title="r", prompt="", profile_id=sample_profile.id,
         source_path="/tmp/x", project_id=p.id, status="draft",
@@ -93,8 +93,7 @@ def test_attention_counts_each_signal(session, sample_profile):
     assert row.review == 1
     assert row.failed == 1
     assert row.inbox_blocked == 1
-    # review (unacked) + archived (unacked)
-    assert row.unacked == 2
+    assert row.unacked == 1  # only the decided archived ticket
     assert row.needs_you == row.review + row.failed + row.inbox_blocked + row.unacked
 
 
@@ -156,7 +155,7 @@ def test_failed_excludes_archived_and_uses_latest_run(session, sample_profile):
 
     [row] = attention_rollup(session)
     assert row.failed == 0
-    # archived is unacked though (review/archived, ack null)
+    # archived is decided and unacknowledged
     assert row.unacked == 1
 
 
@@ -169,12 +168,15 @@ def test_unacked_excludes_acknowledged(session, sample_profile):
     transition_status(session, t.id, "running")
     transition_status(session, t.id, "review", actor=RUN)  # worker -> unacked
     [row] = attention_rollup(session)
+    assert row.unacked == 0  # still pending in Needs-you, not acknowledgement debt
+    transition_status(session, t.id, "archived", actor=RUN)
+    [row] = attention_rollup(session)
     assert row.unacked == 1
     acknowledge_ticket(session, t.id)  # human has seen it
 
     [row] = attention_rollup(session)
     assert row.unacked == 0
-    assert row.review == 1  # still in review, just acked
+    assert row.review == 0
 
 
 def test_last_activity_from_run_not_project_updated_at(session, sample_profile):
