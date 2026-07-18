@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Check, Copy, KeyRound, Lock, Plus, Ban, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, KeyRound, Lock, Plus, Ban, Trash2 } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { IconButton } from "@/ui/IconButton";
 import { Input, Field } from "@/ui/Input";
@@ -18,6 +18,7 @@ import {
   useDeleteToken,
   type TokenOut,
   type TokenMintResult,
+  type TokenCatalog,
 } from "@/api/tokens";
 import { SectionHeader } from "./parts/SettingsSection";
 import { ConfirmDialog } from "./parts/ConfirmDialog";
@@ -28,6 +29,46 @@ const BUNDLE_BLURB: Record<string, string> = {
   "pm-agent": "Create, update, transition, and archive tickets. No run-now or config.",
   operator: "PM-agent plus immediate run-now and firing cron jobs.",
 };
+
+// Scope strings are "resource.action" — grouping by resource matches how the
+// mint dialog's catalog is ordered (contiguous per resource; see
+// domain/scopes.py ALL_SCOPES). Labels for the resources with non-obvious
+// capitalization; everything else falls back to a capitalized first letter.
+const RESOURCE_LABEL: Record<string, string> = {
+  fs: "Filesystem",
+};
+
+function resourceOf(scope: string): string {
+  return scope.split(".")[0] ?? scope;
+}
+
+function resourceLabel(resource: string): string {
+  return RESOURCE_LABEL[resource] ?? resource.charAt(0).toUpperCase() + resource.slice(1);
+}
+
+/** Group scopes by resource, ordered per the catalog's ALL_SCOPES sequence
+ *  (falling back to first-seen order for any scope the catalog hasn't loaded
+ *  yet or doesn't recognize) so the layout matches the mint dialog. */
+function groupScopes(
+  scopes: string[],
+  catalogOrder: string[] | undefined,
+): Array<{ resource: string; scopes: string[] }> {
+  const order = catalogOrder ?? scopes;
+  const rank = new Map<string, number>();
+  order.forEach((s, i) => rank.set(resourceOf(s), rank.get(resourceOf(s)) ?? i));
+
+  const byResource = new Map<string, string[]>();
+  for (const scope of scopes) {
+    const resource = resourceOf(scope);
+    const bucket = byResource.get(resource);
+    if (bucket) bucket.push(scope);
+    else byResource.set(resource, [scope]);
+  }
+
+  return [...byResource.entries()]
+    .sort((a, b) => (rank.get(a[0]) ?? Infinity) - (rank.get(b[0]) ?? Infinity))
+    .map(([resource, s]) => ({ resource, scopes: s }));
+}
 
 function relTime(iso: string | null): string {
   if (!iso) return "never";
@@ -53,6 +94,7 @@ function fmtDate(iso: string | null): string {
 
 export function AccessTokensSection() {
   const tokens = useTokens();
+  const catalog = useTokenCatalog();
   const [minting, setMinting] = useState(false);
   const [minted, setMinted] = useState<TokenMintResult | null>(null);
   const [toRevoke, setToRevoke] = useState<TokenOut | null>(null);
@@ -116,6 +158,7 @@ export function AccessTokensSection() {
         <div className="space-y-6">
           <TokenList
             tokens={active}
+            catalog={catalog.data}
             onRevoke={setToRevoke}
             onDelete={setToDelete}
           />
@@ -124,7 +167,12 @@ export function AccessTokensSection() {
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-moon-600">
                 Revoked
               </h3>
-              <TokenList tokens={revoked} onRevoke={setToRevoke} onDelete={setToDelete} />
+              <TokenList
+                tokens={revoked}
+                catalog={catalog.data}
+                onRevoke={setToRevoke}
+                onDelete={setToDelete}
+              />
             </div>
           )}
         </div>
@@ -170,70 +218,186 @@ export function AccessTokensSection() {
 
 function TokenList({
   tokens,
+  catalog,
   onRevoke,
   onDelete,
 }: {
   tokens: TokenOut[];
+  catalog: TokenCatalog | undefined;
   onRevoke: (t: TokenOut) => void;
   onDelete: (t: TokenOut) => void;
 }) {
   return (
     <ul className="space-y-2">
-      {tokens.map((t) => {
-        const isRevoked = !!t.revoked_at;
-        const expired = t.expires_at && new Date(t.expires_at).getTime() < Date.now();
-        return (
-          <li
-            key={t.id}
-            className={cn(
-              "flex flex-wrap items-center gap-x-4 gap-y-2 rounded-card border border-ink-700 bg-ink-900 px-4 py-3",
-              isRevoked && "opacity-60",
-            )}
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "truncate text-sm font-medium text-moon-100",
-                    isRevoked && "line-through",
-                  )}
-                >
-                  {t.name}
-                </span>
-                {t.bundle && <Badge tone="lamp">{t.bundle}</Badge>}
-                {t.kind === "run" && <Badge tone="neutral">run</Badge>}
-              </div>
-              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-moon-600">
-                <span className="font-mono text-moon-400">{t.prefix_hint}…</span>
-                <span>{t.scopes.length} scopes</span>
-                <span>created {fmtDate(t.created_at)}</span>
-                <span>
-                  {expired ? "expired" : "expires"} {t.expires_at ? fmtDate(t.expires_at) : "never"}
-                </span>
-                <span>last used {relTime(t.last_used_at)}</span>
-              </div>
-            </div>
-            {!isRevoked && (
-              <IconButton
-                label="Revoke"
-                size="sm"
-                icon={<Ban size={14} />}
-                onClick={() => onRevoke(t)}
-                className="hover:text-failed"
-              />
-            )}
-            <IconButton
-              label="Delete"
-              size="sm"
-              icon={<Trash2 size={14} />}
-              onClick={() => onDelete(t)}
-              className="hover:text-failed"
-            />
-          </li>
-        );
-      })}
+      {tokens.map((t) => (
+        <TokenRow key={t.id} token={t} catalog={catalog} onRevoke={onRevoke} onDelete={onDelete} />
+      ))}
     </ul>
   );
+}
+
+function TokenRow({
+  token: t,
+  catalog,
+  onRevoke,
+  onDelete,
+}: {
+  token: TokenOut;
+  catalog: TokenCatalog | undefined;
+  onRevoke: (t: TokenOut) => void;
+  onDelete: (t: TokenOut) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isRevoked = !!t.revoked_at;
+  const expired = t.expires_at && new Date(t.expires_at).getTime() < Date.now();
+  const groups = useMemo(
+    () => groupScopes(t.scopes, catalog?.scopes),
+    [t.scopes, catalog?.scopes],
+  );
+  const profileAllowlist = asStringList(t.scope_data?.profile_allowlist);
+  const projectAllowlist = asStringList(t.scope_data?.project_allowlist);
+
+  return (
+    <li
+      className={cn(
+        "rounded-card border border-ink-700 bg-ink-900",
+        isRevoked && "opacity-60",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "truncate text-sm font-medium text-moon-100",
+                isRevoked && "line-through",
+              )}
+            >
+              {t.name}
+            </span>
+            {t.bundle && <Badge tone="lamp">{t.bundle}</Badge>}
+            {t.kind === "run" && <Badge tone="neutral">run</Badge>}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-moon-600">
+            <span className="font-mono text-moon-400">{t.prefix_hint}…</span>
+            <span>created {fmtDate(t.created_at)}</span>
+            <span>
+              {expired ? "expired" : "expires"} {t.expires_at ? fmtDate(t.expires_at) : "never"}
+            </span>
+            <span>last used {relTime(t.last_used_at)}</span>
+          </div>
+        </div>
+        {!isRevoked && (
+          <IconButton
+            label="Revoke"
+            size="sm"
+            icon={<Ban size={14} />}
+            onClick={() => onRevoke(t)}
+            className="hover:text-failed"
+          />
+        )}
+        <IconButton
+          label="Delete"
+          size="sm"
+          icon={<Trash2 size={14} />}
+          onClick={() => onDelete(t)}
+          className="hover:text-failed"
+        />
+      </div>
+
+      <div className="border-t border-ink-700/70 px-4 py-2">
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          aria-expanded={expanded}
+          className="flex items-center gap-1 text-xs text-moon-400 hover:text-moon-100"
+        >
+          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          {t.scopes.length} scope{t.scopes.length === 1 ? "" : "s"}
+          {profileAllowlist.length > 0 && (
+            <span className="text-moon-600">
+              · {profileAllowlist.length} profile{profileAllowlist.length === 1 ? "" : "s"} allowed
+            </span>
+          )}
+          {projectAllowlist.length > 0 && (
+            <span className="text-moon-600">
+              · {projectAllowlist.length} project{projectAllowlist.length === 1 ? "" : "s"} allowed
+            </span>
+          )}
+        </button>
+
+        {expanded && (
+          <div className="mt-3 space-y-3">
+            {t.bundle && (
+              <p className="text-xs text-moon-600">
+                <span className="font-medium text-moon-400">{t.bundle}</span>
+                {BUNDLE_BLURB[t.bundle] ? ` — ${BUNDLE_BLURB[t.bundle]}` : ""}
+              </p>
+            )}
+
+            {t.scopes.length === 0 ? (
+              <p className="text-xs text-moon-600">No scopes recorded.</p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {groups.map((g) => (
+                  <div key={g.resource}>
+                    <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-moon-600">
+                      {resourceLabel(g.resource)}
+                    </h4>
+                    <ul className="flex flex-wrap gap-1.5">
+                      {g.scopes.map((scope) => (
+                        <li
+                          key={scope}
+                          className="rounded-control border border-ink-700 bg-ink-800 px-2 py-0.5 font-mono text-[11px] text-moon-100"
+                        >
+                          {scope}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {(profileAllowlist.length > 0 || projectAllowlist.length > 0) && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {profileAllowlist.length > 0 && (
+                  <AllowlistGroup label="Profile allowlist" values={profileAllowlist} />
+                )}
+                {projectAllowlist.length > 0 && (
+                  <AllowlistGroup label="Project allowlist" values={projectAllowlist} />
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function AllowlistGroup({ label, values }: { label: string; values: string[] }) {
+  return (
+    <div>
+      <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-moon-600">
+        {label}
+      </h4>
+      <ul className="flex flex-wrap gap-1.5">
+        {values.map((v) => (
+          <li
+            key={v}
+            className="rounded-control border border-ink-700 bg-ink-800 px-2 py-0.5 font-mono text-[11px] text-moon-100"
+          >
+            {v}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
 function MintDialog({
