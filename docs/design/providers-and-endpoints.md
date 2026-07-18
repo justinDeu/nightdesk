@@ -256,6 +256,8 @@ Full-pin (every slot set to the same model) is therefore the safe default **on `
 
 On first-party endpoints (`protocol_kind=anthropic`, key or subscription) the correct default is the opposite: pin nothing and let CC's own alias resolution work. So the rendering contract has an explicit unpinned state — a slot with no assignment emits no env var. `model_assignments` is a partial map, not a total one, and renderers iterate what is present rather than indexing every declared slot.
 
+**Rule revision (2026-07-18):** the unpinned state is not "any non-`*_compat` endpoint" — it is per-(harness, protocol), gated by `BackendCapability.alias_native_protocols`. Only a harness with its own native alias resolution should ever go unpinned, and only on the protocol where that resolution applies. `claude_sdk` declares `alias_native_protocols={"anthropic"}`: first-party Anthropic stays unpinned (CC's own aliases work), `anthropic_compat` still full-pins as above. `opencode` declares no native protocols at all — it has no alias-escape-hatch of its own — so it full-pins on every protocol it can dial, including `openai_codex`. Without this, a profile on an `openai_codex` endpoint with a `default_model` set got no primary assignment, `render_config` emitted no `model` key, and opencode silently fell back to its own global default model instead of the configured endpoint.
+
 ### Harness-global runtime config
 
 Harness-global runtime defaults (binary paths, opencode autoupdate toggle) live in the existing `ConfigRow` global-config row, which already carries `claude_binary_path`. New harnesses add columns or a small `harness_config` JSON map there. These seed new profiles and rarely change.

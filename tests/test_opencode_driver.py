@@ -50,6 +50,7 @@ class _FakeClient:
     def __init__(self, line_gen_factory):
         self.calls: list[str] = []
         self._line_gen_factory = line_gen_factory
+        self.stream_params = None
 
     async def __aenter__(self):
         return self
@@ -67,8 +68,9 @@ class _FakeClient:
             return _FakeResponse(200, {"id": "sess-1"})
         return _FakeResponse(200, {})
 
-    def stream(self, method, path, timeout=None):
+    def stream(self, method, path, params=None, timeout=None):
         self.calls.append(f"stream:{path}")
+        self.stream_params = params
         return _FakeEventStream(self._line_gen_factory)
 
 
@@ -137,6 +139,25 @@ async def test_prompt_posted_after_event_stream_subscribed(tmp_path, monkeypatch
     stream_idx = fake_client.calls.index("stream:/event")
     prompt_idx = fake_client.calls.index("post:/session/sess-1/prompt_async")
     assert stream_idx < prompt_idx, fake_client.calls
+
+
+async def test_event_stream_scoped_to_workdir_directory(tmp_path, monkeypatch):
+    """Bug 2: the /event stream must be subscribed with the same
+    ``directory`` param as the session/prompt POSTs, or opencode 1.16 scopes
+    the event bus to a different instance and the run hangs forever."""
+    _patch_process_spawn(monkeypatch)
+
+    async def _idle_immediately():
+        yield 'data: {"type": "session.idle", "properties": {"sessionID": "sess-1"}}'
+
+    fake_client = _FakeClient(_idle_immediately)
+    monkeypatch.setattr(opencode_driver.httpx, "AsyncClient", lambda **kw: fake_client)
+
+    req = _make_request(tmp_path)
+    result = await opencode_driver.drive_opencode(req)
+
+    assert result.exit_status == "success"
+    assert fake_client.stream_params == {"directory": str(tmp_path)}
 
 
 async def test_post_prompt_splits_endpoint_prefixed_model(tmp_path, monkeypatch):

@@ -135,7 +135,9 @@ async def drive_opencode(req: ExecutionRequest) -> ExecutionResult:
             # can start emitting events the instant the prompt is accepted, and
             # posting first would race the subscribe, silently dropping any
             # events emitted in between.
-            async with client.stream("GET", "/event", timeout=None) as resp:
+            async with client.stream(
+                "GET", "/event", params={"directory": workdir}, timeout=None,
+            ) as resp:
                 await _post_prompt(client, session_id, workdir, req)
                 exit_status, error = await _consume_events(
                     client, resp, session_id, req, state, _emit,

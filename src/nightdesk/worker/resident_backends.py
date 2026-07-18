@@ -413,7 +413,9 @@ class _OpencodeResidentHandle:
     # -- event stream ---------------------------------------------------------
     async def _read_loop(self) -> None:
         try:
-            async with self._client.stream("GET", "/event", timeout=None) as resp:
+            async with self._client.stream(
+                "GET", "/event", params={"directory": self._workdir}, timeout=None,
+            ) as resp:
                 self._stream_ready.set()
                 async for line in resp.aiter_lines():
                     if self._closed:

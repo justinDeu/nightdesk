@@ -27,12 +27,19 @@ def compute_model_assignments(
 ) -> dict[str, Assignment]:
     """Resolve the (partial) slot -> Assignment map for a launch.
 
-    See ``docs/design/providers-and-endpoints.md``, "The rendering contract":
-    full-pin only applies on ``*_compat`` endpoints with a default model set;
-    a first-party primary with no explicit overrides stays unpinned so the
-    harness's own alias resolution (e.g. CC's opus/haiku aliases) still
-    works. Static per-slot overrides in ``backend_config`` win over full-pin.
-    Per-agent slots (``agent:<name>``, opencode only) read their own
+    See ``docs/design/providers-and-endpoints.md``, "The rendering contract"
+    and "The CC alias-escape pitfall, and the unpinned state": full-pin
+    applies whenever a primary endpoint and a default model are both set,
+    UNLESS the primary's protocol is one the descriptor lists in
+    ``alias_native_protocols`` — those are left unpinned so the harness's own
+    alias resolution (e.g. CC's opus/haiku aliases on first-party Anthropic)
+    still works. This is per-(harness, protocol), not a blanket "non-compat
+    stays unpinned" rule: claude_sdk only declares ``anthropic`` native, so
+    ``anthropic_compat`` still pins; opencode declares no native protocols at
+    all, so it pins on every endpoint kind it can dial, including
+    ``openai_codex`` (opencode has no alias resolution of its own to
+    preserve). Static per-slot overrides in ``backend_config`` win over
+    full-pin. Per-agent slots (``agent:<name>``, opencode only) read their own
     ``model``/``endpoint_id`` out of the matching ``backend_config["agents"]``
     entry, defaulting to the primary's assignment/id when unset.
     """
@@ -42,8 +49,8 @@ def compute_model_assignments(
 
     full_pin = (
         primary is not None
-        and primary.protocol_kind.endswith("_compat")
         and bool(default_model)
+        and primary.protocol_kind not in descriptor.alias_native_protocols
     )
     if full_pin:
         for slot in slots:

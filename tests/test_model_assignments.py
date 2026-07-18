@@ -104,16 +104,47 @@ def test_opencode_agent_slot_inherits_primary_when_unset():
     assert result["agent:researcher"] == Assignment("ep-primary", "glm-5.2")
 
 
-def test_opencode_agent_slot_falls_back_to_default_model_when_primary_unpinned():
-    primary_ep = _ep(id="ep-primary", protocol_kind="openai_codex")  # not *_compat
+def test_opencode_agent_slot_falls_back_to_default_model_when_no_primary_endpoint():
+    # No primary endpoint at all means full-pin never fires (regardless of
+    # alias_native_protocols), so the agent slot's own model, unset, falls
+    # back straight to default_model.
     backend_config = {"agents": [{"name": "researcher", "endpoint_id": "ep-zai"}]}
     result = compute_model_assignments(
-        bc.OPENCODE, backend_config, primary=primary_ep, default_model="gpt-5.4",
+        bc.OPENCODE, backend_config, primary=None, default_model="gpt-5.4",
     )
-    # "primary" is unpinned (first-party endpoint) so there is no primary
-    # assignment to inherit from; the agent slot falls back to default_model.
     assert "primary" not in result
     assert result["agent:researcher"] == Assignment("ep-zai", "gpt-5.4")
+
+
+def test_opencode_pins_on_openai_codex_endpoint():
+    """opencode has no alias_native_protocols, so it full-pins even on
+    protocol kinds that stay unpinned for claude_sdk (e.g. openai_codex)."""
+    ep = _ep(id="ep-codex", protocol_kind="openai_codex")
+    result = compute_model_assignments(
+        bc.OPENCODE, {}, primary=ep, default_model="gpt-5.6-sol",
+    )
+    assert result["primary"] == Assignment("ep-codex", "gpt-5.6-sol")
+    assert result["small_model"] == Assignment("ep-codex", "gpt-5.6-sol")
+
+
+def test_claude_sdk_anthropic_compat_still_pins():
+    """Regression guard: the alias_native_protocols gate must not widen
+    unpinning beyond first-party anthropic for claude_sdk."""
+    ep = _ep(protocol_kind="anthropic_compat")
+    result = compute_model_assignments(
+        bc.CLAUDE_SDK, {}, primary=ep, default_model="glm-5.2",
+    )
+    assert result["primary"] == Assignment("ep1", "glm-5.2")
+
+
+def test_claude_sdk_first_party_anthropic_stays_unpinned():
+    """claude_sdk declares anthropic as alias_native, so first-party stays
+    unpinned even with a default_model set (CC's own aliases resolve it)."""
+    ep = _ep(protocol_kind="anthropic")
+    result = compute_model_assignments(
+        bc.CLAUDE_SDK, {}, primary=ep, default_model="claude-opus-4-6",
+    )
+    assert result == {}
 
 
 def test_endpoint_default_model_fallback_feeds_full_pin():

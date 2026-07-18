@@ -212,6 +212,12 @@ class BackendCapability:
     model_slots: tuple[ModelSlot, ...] = ()
     # When True a run cannot start without an endpoint attached to the profile.
     requires_provider: bool = False
+    # Protocol kinds where the harness's own alias/model resolution should be
+    # left alone (see ``domain.model_assignment.compute_model_assignments``).
+    # Only claude_sdk on first-party ``anthropic`` sets this — its opus/sonnet/
+    # haiku aliases resolve natively. Every other (harness, protocol) pair
+    # pins explicitly since the harness has no such native resolution.
+    alias_native_protocols: frozenset[str] = field(default_factory=frozenset)
     # Selectable in the editor dropdown. A described-but-disabled backend
     # shows up greyed out rather than vanishing, so the roadmap is visible.
     enabled: bool = True
@@ -291,6 +297,7 @@ CLAUDE_SDK = BackendCapability(
         ModelSlot("subagent", "Subagent model"),
     ),
     requires_provider=False,  # falls back to claude_credentials
+    alias_native_protocols=frozenset(("anthropic",)),
     enabled=True,
 )
 

@@ -95,6 +95,7 @@ class _FakeClient:
         self._line_gen_factory = line_gen_factory
         self._session_id = session_id
         self.closed = False
+        self.stream_params = None
 
     async def get(self, path, timeout=None):
         self.calls.append(f"get:{path}")
@@ -106,8 +107,9 @@ class _FakeClient:
             return _FakeResponse(200, {"id": self._session_id})
         return _FakeResponse(200, {})
 
-    def stream(self, method, path, timeout=None):
+    def stream(self, method, path, params=None, timeout=None):
         self.calls.append(f"stream:{path}")
+        self.stream_params = params
         return _FakeEventStream(self._line_gen_factory)
 
     async def aclose(self):
@@ -241,6 +243,24 @@ async def test_start_and_turn_round_trip_yields_canonical_events_and_turn_comple
         except (asyncio.CancelledError, Exception):
             pass
     assert fake_client.closed
+
+
+async def test_event_stream_scoped_to_workdir_directory(monkeypatch, tmp_path):
+    """Bug 1: the /event stream must carry the same ``directory`` param as
+    ``/session`` and ``prompt_async``, or opencode 1.16 scopes the event bus
+    to a different instance and the resident handle never sees a turn
+    finish."""
+    _patch_process_spawn(monkeypatch)
+    line_queue: "asyncio.Queue[str | None]" = asyncio.Queue()
+    fake_client = _FakeClient(_queue_lines(line_queue))
+    monkeypatch.setattr(rb.httpx, "AsyncClient", lambda **kw: fake_client)
+
+    spec = StartSpec(working_dir=str(tmp_path))
+    handle = await OpencodeResidentBackend().start(spec, "trusted")
+    try:
+        assert fake_client.stream_params == {"directory": str(tmp_path)}
+    finally:
+        await handle.close()
 
 
 async def test_turn_complete_usage_is_cumulative_across_turns(monkeypatch, tmp_path):
