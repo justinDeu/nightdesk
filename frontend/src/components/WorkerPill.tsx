@@ -111,6 +111,9 @@ export function WorkerPill() {
 
   // Subscription rate-limit windows, same lazy-while-open pattern as spend.
   const usageQ = useSubscriptionUsage({ enabled: open, staleTime: USAGE_POLL });
+  // Limits get their own column (and a wider popover) only when there's
+  // something to show — otherwise the single-column layout stays untouched.
+  const hasUsage = (usageQ.data?.endpoints.length ?? 0) > 0;
 
   const slots = data
     ? data.max_parallel > 0
@@ -180,8 +183,10 @@ export function WorkerPill() {
           className={cn(
             "pop-in z-50 w-[300px] rounded-card border border-ink-700 bg-ink-800 p-3",
             "shadow-[var(--shadow-pop)] outline-none",
-            "max-h-[min(70vh,540px)] overflow-y-auto overscroll-contain",
-            "sm:w-[340px]",
+            // Max-height stays as a safety net; the two-column layout is meant
+            // to fit without scrolling in the common case.
+            "max-h-[min(80vh,640px)] overflow-y-auto overscroll-contain",
+            hasUsage ? "sm:w-[560px]" : "sm:w-[340px]",
           )}
         >
           {data ? (
@@ -242,11 +247,12 @@ function WorkerPopoverContent({
   tone: Tone;
 }) {
   const usageEndpoints = usage?.endpoints ?? [];
+  const hasUsage = usageEndpoints.length > 0;
   const byModel = spend
     ? [...spend.by_model].sort((a, b) => b.cost - a.cost).slice(0, 4)
     : [];
 
-  return (
+  const mainColumn = (
     <div className="space-y-0.5">
       {/* Worker ---------------------------------------------------------- */}
       <div className="space-y-1">
@@ -296,17 +302,6 @@ function WorkerPopoverContent({
           )}
         </dl>
       </div>
-
-      {/* Limits -------------------------------------------------------- */}
-      {usageEndpoints.length > 0 && (
-        <>
-          <Separator />
-          <div className="space-y-1.5">
-            <SectionHeader icon={<Gauge size={11} />} title="Limits" />
-            <UsageMeters endpoints={usageEndpoints} variant="compact" />
-          </div>
-        </>
-      )}
 
       {/* Running tickets ----------------------------------------------- */}
       <Separator />
@@ -415,6 +410,23 @@ function WorkerPopoverContent({
             </p>
           </>
         )}
+      </div>
+    </div>
+  );
+
+  // No usage data → the original single-column popover, unchanged.
+  if (!hasUsage) return mainColumn;
+
+  // Usage present → two columns on sm+: worker/running/spend on the left,
+  // Limits on the right. Stacked (with a top divider) on narrow screens.
+  return (
+    <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
+      {mainColumn}
+      <div className="space-y-2 border-t border-ink-700/70 pt-3 sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
+        <SectionHeader icon={<Gauge size={11} />} title="Limits" />
+        {/* Compact rows: the card variant's fixed label/reset widths overflow
+            a ~260px popover column; the dedicated column is the "room". */}
+        <UsageMeters endpoints={usageEndpoints} variant="compact" />
       </div>
     </div>
   );
