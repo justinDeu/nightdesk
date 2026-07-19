@@ -19,6 +19,7 @@ import {
   type TokenOut,
   type TokenMintResult,
   type TokenCatalog,
+  type ScopeInfo,
 } from "@/api/tokens";
 import { SectionHeader } from "./parts/SettingsSection";
 import { ConfirmDialog } from "./parts/ConfirmDialog";
@@ -52,6 +53,95 @@ function ScopeChip({ scope, description }: { scope: string; description?: string
     </span>
   );
   return description ? <Tooltip content={description}>{chip}</Tooltip> : chip;
+}
+
+// Mint-form scope sections, derived from the scope-name prefix (the part before
+// the dot — the API contract; no backend field). Everyday agent permissions
+// first, admin/human-only-heavy ones last. Any prefix not listed here falls
+// into a trailing "Other" section rather than being dropped.
+const SCOPE_SECTIONS: Array<{ prefix: string; label: string }> = [
+  { prefix: "tickets", label: "Tickets" },
+  { prefix: "runs", label: "Runs" },
+  { prefix: "comments", label: "Comments" },
+  { prefix: "projects", label: "Projects" },
+  { prefix: "labels", label: "Labels" },
+  { prefix: "analytics", label: "Analytics" },
+  { prefix: "integrations", label: "Integrations" },
+  { prefix: "fs", label: "Filesystem" },
+  { prefix: "agents", label: "Agents" },
+  { prefix: "cron", label: "Cron" },
+  { prefix: "profiles", label: "Profiles" },
+  { prefix: "providers", label: "Providers" },
+  { prefix: "config", label: "Configuration" },
+  { prefix: "tokens", label: "Token management" },
+];
+
+const _OTHER_KEY = "__other__";
+
+/** Bucket catalog scopes into ordered sections by prefix, preserving catalog
+ *  order within each section. Unknown prefixes collapse into one trailing
+ *  "Other" section. */
+function sectionizeScopes(scopes: ScopeInfo[]): Array<{ label: string; scopes: ScopeInfo[] }> {
+  const rank = new Map(SCOPE_SECTIONS.map((s, i) => [s.prefix, i]));
+  const labelOf = new Map(SCOPE_SECTIONS.map((s) => [s.prefix, s.label]));
+  const buckets = new Map<string, ScopeInfo[]>();
+  for (const info of scopes) {
+    const prefix = info.name.split(".")[0] ?? info.name;
+    const key = rank.has(prefix) ? prefix : _OTHER_KEY;
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(info);
+    else buckets.set(key, [info]);
+  }
+  return [...buckets.entries()]
+    .sort((a, b) => (rank.get(a[0]) ?? Infinity) - (rank.get(b[0]) ?? Infinity))
+    .map(([key, s]) => ({ label: key === _OTHER_KEY ? "Other" : labelOf.get(key) ?? "Other", scopes: s }));
+}
+
+/** One scope checkbox row: identifier + inline description, with the human-only
+ *  Lock + tooltip treatment. */
+function ScopeCheckItem({
+  info,
+  checked,
+  onToggle,
+}: {
+  info: ScopeInfo;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  const disabled = info.human_only;
+  return (
+    <label
+      className={cn(
+        "flex items-start gap-2 rounded-control px-2 py-1.5",
+        disabled ? "cursor-not-allowed" : "cursor-pointer hover:bg-ink-800",
+      )}
+    >
+      <input
+        type="checkbox"
+        checked={disabled ? false : checked}
+        disabled={disabled}
+        onChange={onToggle}
+        className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-lamp"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className={cn("font-mono text-xs", disabled ? "text-moon-600" : "text-moon-100")}>
+            {info.name}
+          </span>
+          {disabled && (
+            <Tooltip content="Human-only: requires the admin session; never grantable to a token.">
+              <Lock size={11} className="text-moon-600" />
+            </Tooltip>
+          )}
+        </span>
+        {info.description && (
+          <span className="mt-0.5 block text-[11px] leading-snug text-moon-600">
+            {info.description}
+          </span>
+        )}
+      </span>
+    </label>
+  );
 }
 
 // Scope strings are "resource.action" — grouping by resource matches how the
@@ -464,6 +554,18 @@ function MintDialog({
     setTouched(true);
   }
 
+  // Select/clear a whole section at once (skipping human-only scopes).
+  function setSectionScopes(scopeNames: string[], on: boolean) {
+    const next = new Set(effectiveScopes);
+    for (const s of scopeNames) {
+      if (humanOnly.has(s)) continue;
+      if (on) next.add(s);
+      else next.delete(s);
+    }
+    setSelected(next);
+    setTouched(true);
+  }
+
   function pickBundle(b: string) {
     setBundle(b);
     setTouched(false);
@@ -490,6 +592,7 @@ function MintDialog({
   }
 
   const allScopes = catalog.data?.scopes ?? [];
+  const scopeSections = useMemo(() => sectionizeScopes(allScopes), [allScopes]);
 
   return (
     <Dialog
@@ -589,44 +692,38 @@ function MintDialog({
             <label className="mb-1.5 block text-sm font-medium text-moon-100">
               Scopes ({effectiveScopes.size})
             </label>
-            <div className="grid max-h-[320px] gap-0.5 overflow-y-auto rounded-card border border-ink-700 bg-ink-950 p-2 sm:grid-cols-2">
-              {allScopes.map((info) => {
-                const scope = info.name;
-                const disabled = info.human_only || humanOnly.has(scope);
-                const checked = effectiveScopes.has(scope);
+            <div className="max-h-[360px] overflow-y-auto rounded-card border border-ink-700 bg-ink-950 p-2 sm:columns-2 sm:gap-4">
+              {scopeSections.map((section) => {
+                const selectable = section.scopes.filter((s) => !s.human_only);
+                const allOn =
+                  selectable.length > 0 && selectable.every((s) => effectiveScopes.has(s.name));
                 return (
-                  <label
-                    key={scope}
-                    className={cn(
-                      "flex items-start gap-2 rounded-control px-2 py-1.5",
-                      disabled ? "cursor-not-allowed" : "cursor-pointer hover:bg-ink-800",
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={disabled ? false : checked}
-                      disabled={disabled}
-                      onChange={() => toggle(scope)}
-                      className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-lamp"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5">
-                        <span className={cn("font-mono text-xs", disabled ? "text-moon-600" : "text-moon-100")}>
-                          {scope}
-                        </span>
-                        {disabled && (
-                          <Tooltip content="Human-only: requires the admin session; never grantable to a token.">
-                            <Lock size={11} className="text-moon-600" />
-                          </Tooltip>
-                        )}
-                      </span>
-                      {info.description && (
-                        <span className="mt-0.5 block text-[11px] leading-snug text-moon-600">
-                          {info.description}
-                        </span>
+                  <div key={section.label} className="mb-4 break-inside-avoid">
+                    <div className="mb-1 flex items-center justify-between gap-2 px-2">
+                      <h4 className="text-[11px] font-semibold uppercase tracking-wide text-moon-600">
+                        {section.label}
+                      </h4>
+                      {selectable.length >= 2 && (
+                        <button
+                          type="button"
+                          onClick={() => setSectionScopes(selectable.map((s) => s.name), !allOn)}
+                          className="text-[10px] font-medium uppercase tracking-wide text-moon-600 hover:text-moon-100"
+                        >
+                          {allOn ? "Clear" : "All"}
+                        </button>
                       )}
-                    </span>
-                  </label>
+                    </div>
+                    <div className="space-y-0.5">
+                      {section.scopes.map((info) => (
+                        <ScopeCheckItem
+                          key={info.name}
+                          info={info}
+                          checked={effectiveScopes.has(info.name)}
+                          onToggle={() => toggle(info.name)}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 );
               })}
             </div>
