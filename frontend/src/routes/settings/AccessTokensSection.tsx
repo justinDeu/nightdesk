@@ -692,13 +692,16 @@ function MintDialog({
             <label className="mb-1.5 block text-sm font-medium text-moon-100">
               Scopes ({effectiveScopes.size})
             </label>
-            <div className="max-h-[360px] overflow-y-auto rounded-card border border-ink-700 bg-ink-950 p-2 sm:columns-2 sm:gap-4">
+            <div className="max-h-[360px] space-y-2 overflow-y-auto rounded-card border border-ink-700 bg-ink-950 p-2">
               {scopeSections.map((section) => {
                 const selectable = section.scopes.filter((s) => !s.human_only);
                 const allOn =
                   selectable.length > 0 && selectable.every((s) => effectiveScopes.has(s.name));
                 return (
-                  <div key={section.label} className="mb-4 break-inside-avoid">
+                  <div
+                    key={section.label}
+                    className="rounded-control border border-ink-700/70 bg-ink-900 p-2"
+                  >
                     <div className="mb-1 flex items-center justify-between gap-2 px-2">
                       <h4 className="text-[11px] font-semibold uppercase tracking-wide text-moon-600">
                         {section.label}
