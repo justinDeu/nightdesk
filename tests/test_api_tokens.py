@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from nightdesk.api.app import create_app
+from nightdesk.domain import scopes as scope_vocab
 from nightdesk.db.models import ApiToken, Base, Profile, Ticket
 from nightdesk.domain.api_tokens import (
     HumanOnlyScopeError,
@@ -371,9 +372,37 @@ async def test_catalog_lists_scopes_and_human_only(client):
     r = await client.get("/api/v1/tokens/catalog", headers=ADMIN)
     assert r.status_code == 200
     cat = r.json()
-    assert "tickets.read" in cat["scopes"]
-    assert "profiles.write" in cat["human_only"]
-    assert set(cat["bundles"]) == {"observer", "reviewer", "pm-agent", "operator"}
+    scopes_by_name = {s["name"]: s for s in cat["scopes"]}
+    assert "tickets.read" in scopes_by_name
+    # Human-only scopes are flagged inline, not hidden.
+    assert scopes_by_name["profiles.write"]["human_only"] is True
+    assert scopes_by_name["tickets.read"]["human_only"] is False
+    assert {b["name"] for b in cat["bundles"]} == {"observer", "reviewer", "pm-agent", "operator"}
+
+
+async def test_catalog_every_scope_has_description(client):
+    """Every scope in the registry ships a nonempty description, and each
+    bundle carries its description + expanded scope snapshot."""
+    r = await client.get("/api/v1/tokens/catalog", headers=ADMIN)
+    assert r.status_code == 200
+    cat = r.json()
+    names = {s["name"] for s in cat["scopes"]}
+    assert names == set(scope_vocab.ALL_SCOPES)
+    for s in cat["scopes"]:
+        assert s["description"].strip(), f"scope {s['name']} has no description"
+    for b in cat["bundles"]:
+        assert b["description"].strip(), f"bundle {b['name']} has no description"
+        assert b["scopes"] == scope_vocab.BUNDLES[b["name"]]
+
+
+def test_every_scope_has_description_unit():
+    """Domain-level guard: SCOPE_DESCRIPTIONS covers ALL_SCOPES exactly."""
+    for scope in scope_vocab.ALL_SCOPES:
+        assert scope_vocab.scope_description(scope).strip(), scope
+    # No stale descriptions for scopes that no longer exist.
+    assert set(scope_vocab.SCOPE_DESCRIPTIONS) == set(scope_vocab.ALL_SCOPES)
+    for name in scope_vocab.BUNDLES:
+        assert scope_vocab.bundle_description(name).strip(), name
 
 
 # --- run-token grant wiring (ndr_ ticket.create now reaches the route) ------

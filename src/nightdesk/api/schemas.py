@@ -1933,6 +1933,28 @@ class TokenMintResult(TokenOut):
     token: str
 
 
+class ScopeInfoOut(BaseModel):
+    """One scope in the mint catalog: identifier + human description + whether
+    it's human-only (rendered disabled, never grantable to a token)."""
+    name: str
+    description: str
+    human_only: bool = False
+
+
+class BundleInfoOut(BaseModel):
+    """A mint preset: its name, description, and the scope snapshot it expands
+    to. The snapshot is taken at mint time, not a live link."""
+    name: str
+    description: str
+    scopes: list[str]
+
+
+class TokenCatalogOut(BaseModel):
+    """Scope vocabulary + bundle presets for the mint UI."""
+    scopes: list[ScopeInfoOut]
+    bundles: list[BundleInfoOut]
+
+
 # ---------------------------------------------------------------------------
 # Integrations (GitLab v1): Connection / RepoLink / ExternalLink
 # ---------------------------------------------------------------------------

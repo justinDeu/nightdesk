@@ -23,12 +23,36 @@ import {
 import { SectionHeader } from "./parts/SettingsSection";
 import { ConfirmDialog } from "./parts/ConfirmDialog";
 
+// Fallback preset blurbs for historical bundle names the catalog might not
+// carry (the live descriptions come from the API — see bundleDescription).
 const BUNDLE_BLURB: Record<string, string> = {
   observer: "Read-only across the board, runs, and analytics.",
   reviewer: "Observer plus posting review comments.",
   "pm-agent": "Create, update, transition, and archive tickets. No run-now or config.",
   operator: "PM-agent plus immediate run-now and firing cron jobs.",
 };
+
+/** name → one-line scope description, from the mint catalog. */
+function scopeDescriptions(catalog: TokenCatalog | undefined): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const s of catalog?.scopes ?? []) m.set(s.name, s.description);
+  return m;
+}
+
+/** Live preset description, falling back to the local blurb map. */
+function bundleDescription(catalog: TokenCatalog | undefined, name: string): string {
+  return catalog?.bundles.find((b) => b.name === name)?.description ?? BUNDLE_BLURB[name] ?? "";
+}
+
+/** A scope identifier chip; on hover it explains what the scope gates. */
+function ScopeChip({ scope, description }: { scope: string; description?: string }) {
+  const chip = (
+    <span className="inline-block rounded-control border border-ink-700 bg-ink-800 px-2 py-0.5 font-mono text-[11px] text-moon-100">
+      {scope}
+    </span>
+  );
+  return description ? <Tooltip content={description}>{chip}</Tooltip> : chip;
+}
 
 // Scope strings are "resource.action" — grouping by resource matches how the
 // mint dialog's catalog is ordered (contiguous per resource; see
@@ -250,9 +274,11 @@ function TokenRow({
   const [expanded, setExpanded] = useState(false);
   const isRevoked = !!t.revoked_at;
   const expired = t.expires_at && new Date(t.expires_at).getTime() < Date.now();
+  const catalogOrder = useMemo(() => catalog?.scopes.map((s) => s.name), [catalog]);
+  const descriptions = useMemo(() => scopeDescriptions(catalog), [catalog]);
   const groups = useMemo(
-    () => groupScopes(t.scopes, catalog?.scopes),
-    [t.scopes, catalog?.scopes],
+    () => groupScopes(t.scopes, catalogOrder),
+    [t.scopes, catalogOrder],
   );
   const profileAllowlist = asStringList(t.scope_data?.profile_allowlist);
   const projectAllowlist = asStringList(t.scope_data?.project_allowlist);
@@ -331,7 +357,8 @@ function TokenRow({
             {t.bundle && (
               <p className="text-xs text-moon-600">
                 <span className="font-medium text-moon-400">{t.bundle}</span>
-                {BUNDLE_BLURB[t.bundle] ? ` — ${BUNDLE_BLURB[t.bundle]}` : ""}
+                {bundleDescription(catalog, t.bundle) ? ` — ${bundleDescription(catalog, t.bundle)}` : ""}
+                <span className="text-moon-600"> · snapshot at mint, not a live link</span>
               </p>
             )}
 
@@ -346,11 +373,8 @@ function TokenRow({
                     </h4>
                     <ul className="flex flex-wrap gap-1.5">
                       {g.scopes.map((scope) => (
-                        <li
-                          key={scope}
-                          className="rounded-control border border-ink-700 bg-ink-800 px-2 py-0.5 font-mono text-[11px] text-moon-100"
-                        >
-                          {scope}
+                        <li key={scope}>
+                          <ScopeChip scope={scope} description={descriptions.get(scope)} />
                         </li>
                       ))}
                     </ul>
@@ -416,15 +440,19 @@ function MintDialog({
   const [touched, setTouched] = useState(false);
 
   const humanOnly = useMemo(
-    () => new Set(catalog.data?.human_only ?? []),
+    () => new Set((catalog.data?.scopes ?? []).filter((s) => s.human_only).map((s) => s.name)),
     [catalog.data],
   );
+  const descriptions = useMemo(() => scopeDescriptions(catalog.data), [catalog.data]);
+
+  const bundleScopesOf = (name: string): string[] =>
+    catalog.data?.bundles.find((b) => b.name === name)?.scopes ?? [];
 
   // Until the user tweaks the checklist, the selection tracks the bundle.
   const effectiveScopes = useMemo(() => {
     if (touched) return selected;
-    const preset = catalog.data?.bundles[bundle] ?? [];
-    return new Set(preset);
+    return new Set(bundleScopesOf(bundle));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [touched, selected, bundle, catalog.data]);
 
   function toggle(scope: string) {
@@ -503,26 +531,46 @@ function MintDialog({
           <div>
             <label className="mb-1.5 block text-sm font-medium text-moon-100">Preset</label>
             <div className="grid gap-2 sm:grid-cols-2">
-              {Object.keys(catalog.data?.bundles ?? {}).map((b) => (
+              {(catalog.data?.bundles ?? []).map((b) => (
                 <button
-                  key={b}
+                  key={b.name}
                   type="button"
-                  onClick={() => pickBundle(b)}
+                  onClick={() => pickBundle(b.name)}
                   className={cn(
                     "rounded-card border px-3 py-2 text-left transition-colors",
-                    bundle === b && !touched
+                    bundle === b.name && !touched
                       ? "border-lamp bg-lamp/10"
                       : "border-ink-700 bg-ink-900 hover:border-ink-600",
                   )}
                 >
-                  <div className="text-sm font-medium text-moon-100">{b}</div>
-                  <div className="mt-0.5 text-xs text-moon-600">{BUNDLE_BLURB[b]}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-moon-100">{b.name}</span>
+                    <span className="ml-auto font-mono text-[11px] text-moon-600">
+                      {b.scopes.length} scope{b.scopes.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-moon-600">{b.description}</div>
                 </button>
               ))}
             </div>
+            {!touched && (
+              <div className="mt-2 rounded-card border border-ink-700 bg-ink-900 px-3 py-2">
+                <p className="text-[11px] text-moon-600">
+                  <span className="font-medium text-moon-400">{bundle}</span> expands to:
+                </p>
+                <ul className="mt-1.5 flex flex-wrap gap-1.5">
+                  {bundleScopesOf(bundle).map((scope) => (
+                    <li key={scope}>
+                      <ScopeChip scope={scope} description={descriptions.get(scope)} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <p className="mt-1.5 text-xs text-moon-600">
               Presets are starting points — tweak the scopes below and the token is minted
-              with exactly what's checked.
+              with exactly what's checked. A bundle is a snapshot taken at mint time, not a
+              live link: editing a preset later never changes tokens already minted from it.
             </p>
           </div>
 
@@ -541,18 +589,17 @@ function MintDialog({
             <label className="mb-1.5 block text-sm font-medium text-moon-100">
               Scopes ({effectiveScopes.size})
             </label>
-            <div className="grid max-h-[280px] gap-1 overflow-y-auto rounded-card border border-ink-700 bg-ink-950 p-2 sm:grid-cols-2">
-              {allScopes.map((scope) => {
-                const disabled = humanOnly.has(scope);
+            <div className="grid max-h-[320px] gap-0.5 overflow-y-auto rounded-card border border-ink-700 bg-ink-950 p-2 sm:grid-cols-2">
+              {allScopes.map((info) => {
+                const scope = info.name;
+                const disabled = info.human_only || humanOnly.has(scope);
                 const checked = effectiveScopes.has(scope);
-                const row = (
+                return (
                   <label
                     key={scope}
                     className={cn(
-                      "flex items-center gap-2 rounded-control px-2 py-1.5 text-sm",
-                      disabled
-                        ? "cursor-not-allowed text-moon-600"
-                        : "cursor-pointer text-moon-200 hover:bg-ink-800",
+                      "flex items-start gap-2 rounded-control px-2 py-1.5",
+                      disabled ? "cursor-not-allowed" : "cursor-pointer hover:bg-ink-800",
                     )}
                   >
                     <input
@@ -560,18 +607,26 @@ function MintDialog({
                       checked={disabled ? false : checked}
                       disabled={disabled}
                       onChange={() => toggle(scope)}
-                      className="h-3.5 w-3.5 accent-lamp"
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-lamp"
                     />
-                    <span className="font-mono text-xs">{scope}</span>
-                    {disabled && <Lock size={11} className="ml-auto text-moon-600" />}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className={cn("font-mono text-xs", disabled ? "text-moon-600" : "text-moon-100")}>
+                          {scope}
+                        </span>
+                        {disabled && (
+                          <Tooltip content="Human-only: requires the admin session; never grantable to a token.">
+                            <Lock size={11} className="text-moon-600" />
+                          </Tooltip>
+                        )}
+                      </span>
+                      {info.description && (
+                        <span className="mt-0.5 block text-[11px] leading-snug text-moon-600">
+                          {info.description}
+                        </span>
+                      )}
+                    </span>
                   </label>
-                );
-                return disabled ? (
-                  <Tooltip key={scope} content="Human-only: requires the admin session; never grantable to a token.">
-                    {row}
-                  </Tooltip>
-                ) : (
-                  row
                 );
               })}
             </div>

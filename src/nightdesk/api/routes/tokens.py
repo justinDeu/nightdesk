@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from nightdesk.api.schemas import (
+    TokenCatalogOut,
     TokenMintRequest,
     TokenMintResult,
     TokenOut,
@@ -58,18 +59,33 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
         dependencies=[Depends(scoped(scope_vocab.TOKENS_ADMIN))],
     )
 
-    @router.get("/catalog")
+    @router.get("/catalog", response_model=TokenCatalogOut)
     async def catalog():
-        """Scope vocabulary + bundles for the mint UI.
+        """Scope vocabulary + bundle presets for the mint UI.
 
-        ``human_only`` scopes are returned so the client can render them
-        disabled (teach the model) rather than hide them.
+        Each scope carries its one-line description and a ``human_only`` flag
+        (so the client renders those disabled — teach the model rather than
+        hide them). Each bundle carries its description and the expanded scope
+        snapshot it mints, in ``ALL_SCOPES`` order.
         """
-        return {
-            "scopes": list(scope_vocab.ALL_SCOPES),
-            "human_only": sorted(scope_vocab.HUMAN_ONLY_SCOPES),
-            "bundles": scope_vocab.BUNDLES,
-        }
+        return TokenCatalogOut(
+            scopes=[
+                {
+                    "name": s,
+                    "description": scope_vocab.scope_description(s),
+                    "human_only": s in scope_vocab.HUMAN_ONLY_SCOPES,
+                }
+                for s in scope_vocab.ALL_SCOPES
+            ],
+            bundles=[
+                {
+                    "name": name,
+                    "description": scope_vocab.bundle_description(name),
+                    "scopes": scopes,
+                }
+                for name, scopes in scope_vocab.BUNDLES.items()
+            ],
+        )
 
     @router.get("", response_model=list[TokenOut])
     async def list_tokens(session: Session = Depends(get_session)):

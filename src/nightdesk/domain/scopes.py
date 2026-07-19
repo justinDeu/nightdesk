@@ -115,6 +115,93 @@ _ALL_SCOPES_SET = frozenset(ALL_SCOPES)
 
 
 # ---------------------------------------------------------------------------
+# One-line human descriptions — the single source of truth for what each scope
+# gates, rendered in the token-mint UI. Written against the actual route guards
+# (grep ``scoped(sc.<NAME>)``); non-obvious action couplings are spelled out.
+# Every scope in ALL_SCOPES MUST have a nonempty entry (enforced by a test).
+# ---------------------------------------------------------------------------
+SCOPE_DESCRIPTIONS: dict[str, str] = {
+    TICKETS_READ: "View tickets, board columns, saved views, and their runs.",
+    TICKETS_CREATE: "Create new tickets, including cloning existing ones.",
+    TICKETS_UPDATE: (
+        "Edit ticket fields — title, description, priority, project, profile, "
+        "labels, steer queue, and next-run context."
+    ),
+    TICKETS_TRANSITION: (
+        "Move tickets between lifecycle columns (draft, queued, review, "
+        "archived). Note: 'inbox' is never a valid transition target — inbox "
+        "items are promoted onto the board, not transitioned."
+    ),
+    TICKETS_RUN: (
+        "Start and stop runs: run-now, cancel, cancel-run-now, continue, "
+        "resume, retry, and restart."
+    ),
+    TICKETS_ARCHIVE: "Archive and unarchive tickets, individually or in bulk.",
+    TICKETS_DELETE: (
+        "Permanently delete tickets and their history. Destructive — archive "
+        "covers every agent workflow. Human-only."
+    ),
+    RUNS_READ: "Read run records and stream run transcripts.",
+    COMMENTS_READ: "Read review comments left on a ticket's runs.",
+    COMMENTS_WRITE: "Post and edit review comments.",
+    PROJECTS_READ: "View projects and their metadata.",
+    PROJECTS_WRITE: "Create, edit, and delete projects.",
+    LABELS_WRITE: "Create, rename, and delete labels.",
+    PROFILES_READ: "View execution profiles (backend, models, workspace config).",
+    PROFILES_WRITE: (
+        "Create and edit execution profiles. Human-only — a profile edit "
+        "escalates every future run that uses it."
+    ),
+    PROVIDERS_READ: "View provider endpoints, model catalogs, and subscription usage.",
+    PROVIDERS_WRITE: (
+        "Add, edit, and delete provider endpoints and rotate their "
+        "credentials. Human-only — controls stored credentials and endpoint URLs."
+    ),
+    CONFIG_READ: "Read global settings: schedule windows, worker limits, diagnostics.",
+    CONFIG_WRITE: (
+        "Change global settings — schedule windows and worker knobs. "
+        "Human-only."
+    ),
+    CRON_READ: "View scheduled (cron) jobs.",
+    CRON_WRITE: (
+        "Create, edit, and delete cron jobs. Human-only — a cron job is "
+        "persistent arbitrary execution."
+    ),
+    AGENTS_READ: "View resident agents and their status.",
+    AGENTS_MESSAGE: (
+        "Send prompts and messages to a resident agent. Human-only — a "
+        "message is prompt injection into a full-power agent."
+    ),
+    AGENTS_ADMIN: (
+        "Create, edit, and restart resident agents and read their "
+        "transcripts. Human-only."
+    ),
+    ANALYTICS_READ: "Read spend, token, and latency analytics.",
+    INTEGRATIONS_READ: "Browse linked forge issues/MRs and a ticket's external links.",
+    INTEGRATIONS_LINK: (
+        "Link and unlink forge issues to tickets, and import issues as drafts."
+    ),
+    INTEGRATIONS_WRITE: (
+        "Create and edit forge connections and repo links. Human-only — a "
+        "connection holds a forge credential and an endpoint URL."
+    ),
+    FS_READ: (
+        "Read the server filesystem for path suggestions (workspace and "
+        "source pickers)."
+    ),
+    TOKENS_ADMIN: (
+        "Mint, list, and revoke API tokens. Human-only and unmintable — only "
+        "the admin session ever holds it."
+    ),
+}
+
+
+def scope_description(scope: str) -> str:
+    """One-line description for a scope, or ``""`` if unknown."""
+    return SCOPE_DESCRIPTIONS.get(scope, "")
+
+
+# ---------------------------------------------------------------------------
 # Human-only scopes (§4.3). The mint endpoint rejects any of these outright, so
 # no token can ever hold one — only the admin bearer/cookie passes a route that
 # requires one. Each entry closes a concrete escalation path (see the doc).
@@ -233,9 +320,23 @@ BUNDLES: dict[str, list[str]] = {
 }
 
 
+# One-line description per preset, for the mint UI. Keyed by BUNDLES name.
+BUNDLE_DESCRIPTIONS: dict[str, str] = {
+    "observer": "Read-only across the board, runs, and analytics.",
+    "reviewer": "Observer, plus posting review comments.",
+    "pm-agent": "Create, update, transition, and archive tickets. No run-now or config.",
+    "operator": "PM-agent, plus immediate run-now and firing cron jobs.",
+}
+
+
 def bundle_scopes(name: str) -> list[str]:
     """Expand a bundle name to its scope snapshot. KeyError if unknown."""
     return list(BUNDLES[name])
+
+
+def bundle_description(name: str) -> str:
+    """One-line description for a bundle, or ``""`` if unknown."""
+    return BUNDLE_DESCRIPTIONS.get(name, "")
 
 
 def is_known_scope(scope: str) -> bool:
