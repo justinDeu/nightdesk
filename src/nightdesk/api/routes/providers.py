@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -24,13 +25,17 @@ from nightdesk.api.schemas import (
     EndpointCreate,
     EndpointOut,
     EndpointUpdate,
+    EndpointUsageOut,
     ProtocolInfoOut,
     ProviderCreate,
     ProviderOut,
     ProviderRotateCredential,
     ProviderRotateResult,
     ProviderUpdate,
+    SubscriptionUsageOut,
+    UsageWindowOut,
 )
+from nightdesk.backends.claude_code import _extract_subscription_token
 from nightdesk.domain.profile_secrets import ProfileSecretBox
 from nightdesk.domain.provider_catalog import catalog as offering_catalog
 from nightdesk.domain.providers import (
@@ -323,6 +328,243 @@ def _codex_cache_fallback_models() -> Optional[list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Subscription usage (rate-limit windows)
+# ---------------------------------------------------------------------------
+
+# Which (protocol_kind, credential_source) pairs expose a usage endpoint.
+_USAGE_SOURCES = frozenset({
+    ("anthropic", "subscription_file"),
+    ("openai_codex", "oauth_file"),
+})
+
+_USAGE_TIMEOUT = 10.0
+
+# TTL for the in-process usage cache. Anthropic rate-limits aggressive polling
+# of the usage endpoint; 180s is the documented safe floor and matches the
+# frontend's poll cadence.
+_USAGE_CACHE_TTL = 180.0
+
+_ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+# Anthropic 429s hard without a recognized Claude Code User-Agent.
+_CLAUDE_CODE_USER_AGENT = "claude-code/2.0.32"
+
+# endpoint id -> (monotonic fetched-at, last good EndpointUsageOut). Only
+# successful fetches are cached; on a later error the cached entry is served
+# with ``error`` set rather than being overwritten.
+_usage_cache: dict[str, tuple[float, EndpointUsageOut]] = {}
+
+
+class UsageFetchError(Exception):
+    """The endpoint has no usable credential, or the upstream fetch failed."""
+
+
+def _severity_for(percent: float) -> str:
+    """Threshold severity for vendors/paths that don't supply one."""
+    if percent >= 90:
+        return "critical"
+    if percent >= 75:
+        return "warning"
+    return "normal"
+
+
+def _parse_usage_ts(value: Any) -> Optional[datetime]:
+    """ISO-8601 string -> aware UTC datetime, or None on anything unparseable."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _anthropic_window_label(entry: dict) -> str:
+    """Human label for an Anthropic ``limits[]`` entry from its kind/scope."""
+    kind = entry.get("kind") or ""
+    if kind == "session":
+        return "5h"
+    if kind == "weekly_all":
+        return "Weekly"
+    scope = entry.get("scope")
+    model = scope.get("model") if isinstance(scope, dict) else None
+    name = model.get("display_name") if isinstance(model, dict) else None
+    if isinstance(name, str) and name:
+        return f"Weekly · {name}"
+    if kind == "weekly_opus":
+        return "Weekly · Opus"
+    if kind == "weekly_sonnet":
+        return "Weekly · Sonnet"
+    if kind.startswith("weekly"):
+        return "Weekly"
+    return kind or "Usage"
+
+
+def _parse_anthropic_usage(payload: Any) -> tuple[Optional[str], list[UsageWindowOut]]:
+    """Normalize ``/api/oauth/usage`` into windows.
+
+    Prefers the ``limits[]`` array (richer: per-kind labels + a supplied
+    severity), falling back to the top-level ``five_hour`` / ``seven_day``
+    blocks when ``limits`` is absent. Anthropic exposes no plan field here, so
+    ``plan`` is always None.
+    """
+    if not isinstance(payload, dict):
+        return None, []
+    windows: list[UsageWindowOut] = []
+    limits = payload.get("limits")
+    if isinstance(limits, list) and limits:
+        for entry in limits:
+            if not isinstance(entry, dict):
+                continue
+            percent = entry.get("percent")
+            if percent is None:
+                continue
+            severity = entry.get("severity") or _severity_for(float(percent))
+            windows.append(UsageWindowOut(
+                label=_anthropic_window_label(entry),
+                used_percent=float(percent),
+                resets_at=_parse_usage_ts(entry.get("resets_at")),
+                severity=severity,
+            ))
+        return None, windows
+    for key, label in (("five_hour", "5h"), ("seven_day", "Weekly")):
+        block = payload.get(key)
+        if not isinstance(block, dict):
+            continue
+        util = block.get("utilization")
+        if util is None:
+            continue
+        windows.append(UsageWindowOut(
+            label=label,
+            used_percent=float(util),
+            resets_at=_parse_usage_ts(block.get("resets_at")),
+            severity=_severity_for(float(util)),
+        ))
+    return None, windows
+
+
+def _codex_window_label(seconds: Any) -> str:
+    """Humanize a Codex ``limit_window_seconds`` into a window label."""
+    if seconds == 604800:
+        return "Weekly"
+    if seconds == 18000:
+        return "5h"
+    if isinstance(seconds, (int, float)) and seconds > 0:
+        hours = seconds / 3600
+        if hours >= 24 and hours % 24 == 0:
+            return f"{int(hours // 24)}d"
+        return f"{int(round(hours))}h"
+    return "Window"
+
+
+def _codex_window(window: Any, label: Optional[str]) -> Optional[UsageWindowOut]:
+    """One Codex rate-limit window -> UsageWindowOut, or None when absent."""
+    if not isinstance(window, dict):
+        return None
+    used = window.get("used_percent")
+    if used is None:
+        return None
+    reset_at = window.get("reset_at")
+    resets_at = (
+        datetime.fromtimestamp(reset_at, tz=timezone.utc)
+        if isinstance(reset_at, (int, float))
+        else None
+    )
+    return UsageWindowOut(
+        label=label or _codex_window_label(window.get("limit_window_seconds")),
+        used_percent=float(used),
+        resets_at=resets_at,
+        severity=_severity_for(float(used)),
+    )
+
+
+def _parse_codex_usage(payload: Any) -> tuple[Optional[str], list[UsageWindowOut]]:
+    """Normalize ``/backend-api/wham/usage`` into (plan, windows)."""
+    if not isinstance(payload, dict):
+        return None, []
+    plan = payload.get("plan_type")
+    plan = plan if isinstance(plan, str) and plan else None
+    windows: list[UsageWindowOut] = []
+    rate_limit = payload.get("rate_limit")
+    if isinstance(rate_limit, dict):
+        for key in ("primary_window", "secondary_window"):
+            win = _codex_window(rate_limit.get(key), None)
+            if win is not None:
+                windows.append(win)
+    for extra in payload.get("additional_rate_limits") or []:
+        if not isinstance(extra, dict):
+            continue
+        name = extra.get("limit_name")
+        label = name if isinstance(name, str) and name else None
+        sub = extra.get("rate_limit")
+        if not isinstance(sub, dict):
+            continue
+        for key in ("primary_window", "secondary_window"):
+            win = _codex_window(sub.get(key), label)
+            if win is not None:
+                windows.append(win)
+    return plan, windows
+
+
+def _anthropic_usage_request(credential: Optional[str]) -> tuple[str, dict[str, str]]:
+    token = _extract_subscription_token(credential) if credential else None
+    if not token:
+        raise UsageFetchError("no Claude subscription token available")
+    return _ANTHROPIC_USAGE_URL, {
+        "Authorization": f"Bearer {token}",
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": _CLAUDE_CODE_USER_AGENT,
+        "Accept": "application/json",
+    }
+
+
+def _codex_usage_request(credential: Optional[str]) -> tuple[str, dict[str, str]]:
+    access: Optional[str] = None
+    account_id: Optional[str] = None
+    if credential:
+        try:
+            data = json.loads(credential)
+        except (ValueError, TypeError):
+            data = None
+        if isinstance(data, dict):
+            tokens = data.get("tokens")
+            if isinstance(tokens, dict):
+                access = tokens.get("access_token")
+                account_id = tokens.get("account_id")
+    if not isinstance(access, str) or not access:
+        raise UsageFetchError("no Codex access token available")
+    headers = {
+        "Authorization": f"Bearer {access}",
+        "Accept": "application/json",
+        "Origin": "https://chatgpt.com",
+        "Referer": "https://chatgpt.com/",
+        "User-Agent": "Mozilla/5.0",
+    }
+    if isinstance(account_id, str) and account_id:
+        headers["ChatGPT-Account-Id"] = account_id
+    return _CODEX_USAGE_URL, headers
+
+
+def _fetch_usage(resolved) -> tuple[Optional[str], list[UsageWindowOut]]:
+    """Live-fetch + normalize usage for one resolved endpoint. Raises
+    ``UsageFetchError`` (missing credential) or an httpx error on failure."""
+    protocol = resolved.protocol_kind
+    if protocol == "anthropic":
+        url, headers = _anthropic_usage_request(resolved.credential)
+        parse = _parse_anthropic_usage
+    elif protocol == "openai_codex":
+        url, headers = _codex_usage_request(resolved.credential)
+        parse = _parse_codex_usage
+    else:
+        raise UsageFetchError(f"no usage endpoint for protocol {protocol!r}")
+    with httpx.Client(timeout=_USAGE_TIMEOUT) as http_client:
+        resp = http_client.get(url, headers=headers)
+        resp.raise_for_status()
+        payload = resp.json()
+    return parse(payload)
+
+
+# ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
@@ -434,6 +676,59 @@ def build_router(get_session, bearer_token: str, scoped) -> APIRouter:
     @router.get("/api/v1/providers/protocols", response_model=list[ProtocolInfoOut])
     async def protocols_api():
         return _protocols_out()
+
+    def _endpoint_usage(session: Session, provider, ep) -> EndpointUsageOut:
+        """Usage for one subscription/OAuth endpoint, cache-first.
+
+        A fresh cache hit skips the outbound call entirely. Otherwise a live
+        fetch either refreshes the cache or — on any failure — degrades to the
+        last cached result (with ``error`` set) or an empty errored entry, so
+        the route never 5xxs because a vendor is unreachable.
+        """
+        now = time.monotonic()
+        cached = _usage_cache.get(ep.id)
+        if cached is not None and now - cached[0] < _USAGE_CACHE_TTL:
+            return cached[1]
+        base = dict(
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint_id=ep.id,
+            endpoint_label=ep.label,
+            protocol_kind=ep.protocol_kind,
+        )
+        try:
+            resolved = resolve_endpoint(session, ep.id, box)
+            if resolved is None:
+                raise UsageFetchError("endpoint could not be resolved")
+            plan, windows = _fetch_usage(resolved)
+            result = EndpointUsageOut(
+                **base, plan=plan, windows=windows,
+                fetched_at=datetime.now(timezone.utc), error=None,
+            )
+            _usage_cache[ep.id] = (now, result)
+            return result
+        except Exception as exc:  # noqa: BLE001 — vendor down must not 5xx
+            message = str(exc) or exc.__class__.__name__
+            log.warning("usage fetch for endpoint %s failed: %s", ep.id, message)
+            if cached is not None:
+                return cached[1].model_copy(update={"error": message})
+            return EndpointUsageOut(
+                **base, plan=None, windows=[],
+                fetched_at=datetime.now(timezone.utc), error=message,
+            )
+
+    # Registered before ``/{pid}`` so the literal path isn't captured as a
+    # provider id (same ordering guard as ``catalog`` / ``protocols`` above).
+    # Read-gated by the router-level ``PROVIDERS_READ`` dependency, like every
+    # other GET here.
+    @router.get("/api/v1/providers/usage", response_model=SubscriptionUsageOut)
+    async def providers_usage_api(session: Session = Depends(get_session)):
+        entries: list[EndpointUsageOut] = []
+        for provider in list_providers(session):
+            for ep in provider.endpoints:
+                if (ep.protocol_kind, ep.credential_source) in _USAGE_SOURCES:
+                    entries.append(_endpoint_usage(session, provider, ep))
+        return SubscriptionUsageOut(endpoints=entries)
 
     @router.get("/api/v1/providers/{pid}", response_model=ProviderOut)
     async def show_provider_api(pid: str, session: Session = Depends(get_session)):

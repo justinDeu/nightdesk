@@ -2,13 +2,15 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import * as Popover from "@radix-ui/react-popover";
-import { Activity, Clock, Cpu, ExternalLink, Server, Zap } from "lucide-react";
+import { Activity, Clock, Cpu, ExternalLink, Gauge, Server, Zap } from "lucide-react";
 import { useWorkerStatus } from "@/api/config";
 import { analyticsApi, type SpendResponse } from "@/api/analytics";
+import { useSubscriptionUsage, USAGE_POLL, type SubscriptionUsage } from "@/api/usage";
 import type { WorkerStatusOut } from "@/api/types";
 import { formatTokens, formatUsd } from "@/lib/status";
 import { cn } from "@/lib/cn";
 import { durationBetween, parseTs } from "@/lib/time";
+import { UsageMeters } from "@/components/UsageMeter";
 
 /** One status pill + one rich popover, merging the old separate worker pill
  *  and spend chip. Polls /api/v1/worker/status every 3s; the popover's deeper
@@ -107,6 +109,9 @@ export function WorkerPill() {
     retry: false,
   });
 
+  // Subscription rate-limit windows, same lazy-while-open pattern as spend.
+  const usageQ = useSubscriptionUsage({ enabled: open, staleTime: USAGE_POLL });
+
   const slots = data
     ? data.max_parallel > 0
       ? `${data.total_running}/${data.max_parallel}`
@@ -180,7 +185,7 @@ export function WorkerPill() {
           )}
         >
           {data ? (
-            <WorkerPopoverContent data={data} spend={spendQ.data} tone={tone} />
+            <WorkerPopoverContent data={data} spend={spendQ.data} usage={usageQ.data} tone={tone} />
           ) : (
             <OfflineState isLoading={isLoading} />
           )}
@@ -228,12 +233,15 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 function WorkerPopoverContent({
   data,
   spend,
+  usage,
   tone,
 }: {
   data: WorkerStatusOut;
   spend: SpendResponse | undefined;
+  usage: SubscriptionUsage | undefined;
   tone: Tone;
 }) {
+  const usageEndpoints = usage?.endpoints ?? [];
   const byModel = spend
     ? [...spend.by_model].sort((a, b) => b.cost - a.cost).slice(0, 4)
     : [];
@@ -288,6 +296,17 @@ function WorkerPopoverContent({
           )}
         </dl>
       </div>
+
+      {/* Limits -------------------------------------------------------- */}
+      {usageEndpoints.length > 0 && (
+        <>
+          <Separator />
+          <div className="space-y-1.5">
+            <SectionHeader icon={<Gauge size={11} />} title="Limits" />
+            <UsageMeters endpoints={usageEndpoints} variant="compact" />
+          </div>
+        </>
+      )}
 
       {/* Running tickets ----------------------------------------------- */}
       <Separator />

@@ -228,6 +228,39 @@ class ProtocolInfoOut(BaseModel):
     supports_model_list: bool = True
 
 
+# --- Subscription usage (rate-limit windows) -------------------------------
+#
+# Point-in-time rate-limit-window usage for subscription/OAuth endpoints
+# (Claude subscription, ChatGPT/Codex), fetched + normalized by
+# ``GET /api/v1/providers/usage``. Vendor-neutral so the worker popover and
+# analytics page render one shape regardless of provider.
+
+
+class UsageWindowOut(BaseModel):
+    label: str
+    used_percent: float
+    resets_at: Optional[datetime] = None
+    severity: str = "normal"
+
+
+class EndpointUsageOut(BaseModel):
+    provider_id: str
+    provider_name: str
+    endpoint_id: str
+    endpoint_label: str
+    protocol_kind: str
+    plan: Optional[str] = None
+    windows: list[UsageWindowOut] = []
+    fetched_at: datetime
+    # Set when the upstream fetch/parse failed; ``windows`` may then be empty
+    # or a slightly stale cached result.
+    error: Optional[str] = None
+
+
+class SubscriptionUsageOut(BaseModel):
+    endpoints: list[EndpointUsageOut] = []
+
+
 # --- Backends (Layer 2: harness capability catalog) ------------------------
 #
 # Mirrors ``nightdesk.domain.backend_capabilities.BackendCapability`` so the

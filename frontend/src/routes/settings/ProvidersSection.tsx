@@ -41,6 +41,7 @@ import type {
   ProtocolKind,
   ProviderOut,
 } from "@/api/types";
+import { useSubscriptionUsage } from "@/api/usage";
 import { relativeTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import { SectionHeader } from "./parts/SettingsSection";
@@ -373,6 +374,16 @@ function RotateCredentialDialog({
 // Endpoint card
 // ---------------------------------------------------------------------------
 
+// (protocol_kind:credential_source) pairs that expose a subscription usage
+// readout — mirrors _USAGE_SOURCES in api/routes/providers.py.
+const USAGE_CAPABLE = new Set(["anthropic:subscription_file", "openai_codex:oauth_file"]);
+
+const USAGE_PERCENT_TONE: Record<string, string> = {
+  normal: "text-moon-400",
+  warning: "text-warn",
+  critical: "text-failed",
+};
+
 function EndpointCard({ endpoint, onEdit }: { endpoint: EndpointOut; onEdit: () => void }) {
   const pullModels = usePullModels();
   const deleteEndpoint = useDeleteEndpoint();
@@ -381,6 +392,12 @@ function EndpointCard({ endpoint, onEdit }: { endpoint: EndpointOut; onEdit: () 
   const [expanded, setExpanded] = useState(false);
 
   const canListModels = protocolSupportsModelList(protocols.data, endpoint.protocol_kind);
+
+  // Subscription rate-limit windows for usage-capable endpoints. Shared 180s
+  // cache with the worker popover / analytics — this query is deduped by key.
+  const usageCapable = USAGE_CAPABLE.has(`${endpoint.protocol_kind}:${endpoint.credential_source}`);
+  const usageQ = useSubscriptionUsage({ enabled: usageCapable });
+  const usage = usageQ.data?.endpoints.find((e) => e.endpoint_id === endpoint.id);
 
   async function refresh() {
     try {
@@ -429,6 +446,26 @@ function EndpointCard({ endpoint, onEdit }: { endpoint: EndpointOut; onEdit: () 
             </span>
             {endpoint.models_pulled_at && <span>models pulled {relativeTime(endpoint.models_pulled_at)}</span>}
           </div>
+          {usage && (
+            <div className="mt-2 space-y-0.5">
+              {usage.error ? (
+                <p className="text-[11px] text-moon-600">Usage unavailable right now.</p>
+              ) : usage.windows.length === 0 ? (
+                <p className="text-[11px] text-moon-600">No active usage windows.</p>
+              ) : (
+                usage.windows.map((w, i) => (
+                  <p key={`${w.label}-${i}`} className="text-[11px] text-moon-600">
+                    <span className="text-moon-400">{w.label}</span>
+                    <span> · </span>
+                    <span className={cn("font-mono tabular-nums", USAGE_PERCENT_TONE[w.severity] ?? "text-moon-400")}>
+                      {Math.round(w.used_percent)}%
+                    </span>
+                    {w.resets_at && <span> · resets {relativeTime(w.resets_at)}</span>}
+                  </p>
+                ))
+              )}
+            </div>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {canListModels ? (

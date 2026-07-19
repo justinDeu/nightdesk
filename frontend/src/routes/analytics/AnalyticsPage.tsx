@@ -20,6 +20,8 @@ import {
   type SpendModelRow,
 } from "@/api/analytics";
 import { useProjects } from "@/api/projects";
+import { useSubscriptionUsage, USAGE_POLL } from "@/api/usage";
+import { UsageWindowRows, usageProviderLabel } from "@/components/UsageMeter";
 import {
   BreakdownTable,
   ChartCard,
@@ -77,6 +79,9 @@ export function AnalyticsPage() {
   const latencyQ = useAnalyticsLatency(range, activeProject);
   const pricesQ = useAnalyticsPrices(range, activeProject);
   const projectsQ = useProjects();
+  // Point-in-time rate-limit windows; independent of the range/project filter.
+  const usageQ = useSubscriptionUsage({ refetchInterval: USAGE_POLL });
+  const usageEndpoints = usageQ.data?.endpoints ?? [];
 
   const summary = summaryQ.data;
   const spend = spendQ.data;
@@ -294,6 +299,27 @@ export function AnalyticsPage() {
           </div>
         )}
       </div>
+
+      {/* Subscription usage — point-in-time rate-limit windows, above the
+          ranged charts and independent of the range/project filter. */}
+      {usageEndpoints.length > 0 && (
+        <section className="mb-8">
+          <h2 className="mb-4 font-display text-[13px] font-semibold uppercase tracking-[0.12em] text-moon-400">
+            Subscription usage
+          </h2>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {usageEndpoints.map((e) => (
+              <ChartCard
+                key={e.endpoint_id}
+                title={usageProviderLabel(e)}
+                hint={e.error ? "unavailable" : e.endpoint_label}
+              >
+                <UsageWindowRows endpoint={e} variant="card" />
+              </ChartCard>
+            ))}
+          </div>
+        </section>
+      )}
 
       {summaryQ.isError || spendQ.isError ? (
         <ErrorState
