@@ -1,0 +1,4 @@
+# .nightdesk/.gitignore — written by nightdesk-pm setup.
+# Only profile.md and this file are tracked; live PM state stays local.
+ledger.md
+scratch/
