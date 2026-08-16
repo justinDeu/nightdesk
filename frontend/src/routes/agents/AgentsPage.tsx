@@ -63,6 +63,11 @@ export function AgentsPage() {
       }))
     )
       return;
+    // Navigate away first so a deleted-but-still-open agent never refetches
+    // into a 404 error pane; the list still shows the agent if the delete fails.
+    if (a.id === selectedId) {
+      navigate({ to: "/agents", replace: true });
+    }
     try {
       await del.mutateAsync(a.id);
     } catch (err) {

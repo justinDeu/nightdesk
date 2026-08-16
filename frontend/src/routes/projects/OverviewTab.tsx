@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQueries } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
 import { qk } from "@/api";
+import { useAckDigest } from "@/api/ack";
 import { integrationsApi, useConnections, useProjectRepoLinks } from "@/api/integrations";
 import { useTickets } from "@/api/tickets";
 import { useInbox } from "@/api/inbox";
@@ -18,6 +19,7 @@ import { cn } from "@/lib/cn";
 import type { ProjectOut, RepoLinkOut, TicketOut } from "@/api/types";
 import { countByStatus, defaultsFragments } from "./shared";
 import { VerdictSection } from "./overview/VerdictSection";
+import { AckSection } from "./overview/AckSection";
 import { WaitingSection } from "./overview/WaitingSection";
 import { InboxSection } from "./overview/InboxSection";
 import { ANCHORS, jumpTo } from "./overview/overview";
@@ -52,6 +54,7 @@ export function OverviewTab({
   const connectionsQ = useConnections();
   const projectAgentsQ = useProjectAgents(project.id, { refetchInterval: POLL });
   const attentionQ = useAgentAttention(POLL);
+  const ackDigestQ = useAckDigest(project.id, { refetchInterval: POLL });
 
   const allTickets = ticketsQ.data ?? [];
   const inboxItems = inboxQ.data ?? [];
@@ -100,9 +103,11 @@ export function OverviewTab({
   const openTicket = (id: string) => navigate({ to: "/tickets/$id", params: { id } });
 
   const spend = spendQ.data?.totals;
+  const toAck = ackDigestQ.data?.total ?? 0;
   const hasContent =
     running.length > 0 ||
     review.length > 0 ||
+    toAck > 0 ||
     inboxItems.length > 0 ||
     projectPending.length > 0 ||
     awaitingMrs.length > 0;
@@ -113,6 +118,7 @@ export function OverviewTab({
         <SignalStrip
           counts={counts}
           inbox={inboxItems.length}
+          toAck={toAck}
           awaitingMrs={awaitingMrs.length}
           agentsWaiting={projectPending.length}
           repoHealth={repoHealth}
@@ -125,6 +131,8 @@ export function OverviewTab({
         )}
 
         <VerdictSection tickets={review} />
+
+        <AckSection projectId={project.id} />
 
         <WaitingSection
           pending={projectPending}
@@ -165,6 +173,7 @@ export function OverviewTab({
 function SignalStrip({
   counts,
   inbox,
+  toAck,
   awaitingMrs,
   agentsWaiting,
   repoHealth,
@@ -172,6 +181,7 @@ function SignalStrip({
 }: {
   counts: { running: number; review: number; queued: number; draft: number };
   inbox: number;
+  toAck: number;
   awaitingMrs: number;
   agentsWaiting: number;
   repoHealth: { label: string; tone: "ok" | "warn" | "muted" } | null;
@@ -185,6 +195,11 @@ function SignalStrip({
       <SigItem tone={counts.review > 0 ? "review" : undefined} bold={counts.review > 0} anchor={ANCHORS.verdict}>
         {counts.review} review
       </SigItem>
+      {toAck > 0 && (
+        <SigItem tone="warn" bold anchor={ANCHORS.ack}>
+          {toAck} to ack
+        </SigItem>
+      )}
       <SigItem anchor={ANCHORS.footer}>{counts.queued} queued</SigItem>
       <SigItem anchor={ANCHORS.footer}>{counts.draft} draft</SigItem>
       <SigItem tone={inbox > 0 ? "warn" : undefined} bold={inbox > 0} anchor={ANCHORS.inbox}>

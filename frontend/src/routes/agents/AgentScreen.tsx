@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import {
   ChevronLeft,
   Mail,
@@ -70,6 +70,7 @@ const AgentComposer = lazy(() =>
 
 export function AgentScreen() {
   const { id } = useParams({ from: "/app/agents/$id" });
+  const navigate = useNavigate();
 
   const agentQ = useAgent(id, {
     refetchInterval: (q) => {
@@ -82,6 +83,9 @@ export function AgentScreen() {
       if (l === "cold" || l === "crashed") return 3000;
       return false;
     },
+    // A 404 (agent deleted, e.g. from the list while this screen was open)
+    // is not transient — don't burn 3 retries before surfacing it.
+    retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 2,
   });
   const agent = agentQ.data;
 
@@ -295,6 +299,20 @@ export function AgentScreen() {
   // worker heartbeat, and times how long a wake has been outstanding. Drives the
   // header chip and the transcript banner so a stuck wake is diagnosed, not spun.
   const wakeState = useWakeState(agent?.liveness ?? "cold", pokedAt);
+
+  // Self-healing 404: the agent can vanish out from under this screen (deleted
+  // from the list elsewhere, or by another client). Rather than parking on the
+  // "Agent not found" pane, bounce back to the list — that pane stays as the
+  // fallback for non-404 errors and for the single frame before this fires.
+  const notFoundRedirected = useRef(false);
+  useEffect(() => {
+    const is404 = agentQ.isError && agentQ.error instanceof ApiError && agentQ.error.status === 404;
+    if (is404 && !notFoundRedirected.current) {
+      notFoundRedirected.current = true;
+      toast.error("Agent no longer exists");
+      navigate({ to: "/agents", replace: true });
+    }
+  }, [agentQ.isError, agentQ.error, navigate]);
 
   if (agentQ.isLoading) {
     return <div className="p-8 text-sm text-moon-600">Loading agent…</div>;

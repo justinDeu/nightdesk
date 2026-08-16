@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, GitMerge } from "lucide-react";
 import { qk } from "@/api";
+import { useAcknowledge } from "@/api/ack";
 import { ticketsApi } from "@/api/tickets";
 import { useRuns, useRunDiffstat } from "@/api/runs";
 import { useTicketExternalLinks } from "@/api/integrations";
@@ -172,12 +173,19 @@ function VerdictRow({
   const latest = latestRun(runs);
   const diffstatQ = useRunDiffstat(latest?.id);
   const actions = useTicketActions();
+  const acknowledge = useAcknowledge();
   const qc = useQueryClient();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
   const diffstat = diffstatQ.data;
   const unacked = !ticket.acknowledged_at;
+
+  function ack() {
+    acknowledge.mutate(ticket.id, {
+      onError: (err) => toast.error("Ack failed", { error: err }),
+    });
+  }
 
   async function requeueWithNote() {
     if (busy) return;
@@ -248,6 +256,11 @@ function VerdictRow({
         </span>
         {!expanded && (
           <span className="flex shrink-0 gap-1.5">
+            {unacked && (
+              <VerbButton tone="ghost" data-verb="ack" onClick={ack}>
+                Ack
+              </VerbButton>
+            )}
             <VerbButton tone="sage" data-verb="approve" onClick={() => actions.archive(ticket)}>
               Approve
             </VerbButton>
@@ -262,6 +275,11 @@ function VerdictRow({
         <div className="px-2.5 pb-2.5 pt-1">
           <EvidenceBlock ticketId={ticket.id} latest={latest} runs={runs} />
           <div className="mt-2 flex items-center gap-1.5">
+            {unacked && (
+              <VerbButton tone="ghost" data-verb="ack" onClick={ack}>
+                Ack
+              </VerbButton>
+            )}
             <VerbButton tone="sage" data-verb="approve" onClick={() => actions.archive(ticket)}>
               Approve
             </VerbButton>

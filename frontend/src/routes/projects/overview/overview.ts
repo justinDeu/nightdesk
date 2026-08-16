@@ -77,10 +77,23 @@ export function pendingWaitLabel(p: AgentPendingItem, now = Date.now()): string 
 export const ANCHORS = {
   running: "ov-running",
   verdict: "ov-verdict",
+  ack: "ov-ack",
   waiting: "ov-waiting",
   inbox: "ov-inbox",
   footer: "ov-footer",
 } as const;
+
+/** "today" / "yesterday" / "Mon D" label for an ack digest group's day key.
+ *  Mirrors the Desk's ToAcknowledgeBand so the two ledgers read the same. */
+export function ackDayLabel(day: string): string {
+  const d = new Date(`${day}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today.getTime() - d.getTime()) / 86_400_000);
+  if (diff === 0) return "today";
+  if (diff === 1) return "yesterday";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 /** Smooth-scroll a section anchor into view (signal-strip jump links). */
 export function jumpTo(anchor: string) {
