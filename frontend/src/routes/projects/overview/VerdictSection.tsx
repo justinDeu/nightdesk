@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, GitMerge } from "lucide-react";
+import { Check, ChevronRight, GitMerge } from "lucide-react";
 import { qk } from "@/api";
 import { useAcknowledge } from "@/api/ack";
 import { ticketsApi } from "@/api/tickets";
@@ -257,7 +257,8 @@ function VerdictRow({
         {!expanded && (
           <span className="flex shrink-0 gap-1.5">
             {unacked && (
-              <VerbButton tone="ghost" data-verb="ack" onClick={ack}>
+              <VerbButton tone="outline" data-verb="ack" onClick={ack}>
+                <Check size={12} />
                 Ack
               </VerbButton>
             )}
@@ -276,7 +277,8 @@ function VerdictRow({
           <EvidenceBlock ticketId={ticket.id} latest={latest} runs={runs} />
           <div className="mt-2 flex items-center gap-1.5">
             {unacked && (
-              <VerbButton tone="ghost" data-verb="ack" onClick={ack}>
+              <VerbButton tone="outline" data-verb="ack" onClick={ack}>
+                <Check size={12} />
                 Ack
               </VerbButton>
             )}
@@ -428,17 +430,19 @@ export function VerbButton({
   children,
   ...rest
 }: {
-  tone: "sage" | "ghost" | "warn";
+  tone: "sage" | "ghost" | "warn" | "outline";
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       {...rest}
       className={cn(
-        "rounded-control border px-2.5 py-1 text-[11px] font-medium transition-colors",
+        "inline-flex items-center gap-1 rounded-control border px-2.5 py-1 text-[11px] font-medium transition-colors",
         tone === "sage" &&
           "border-success/40 bg-success/15 text-lamp-soft hover:bg-success/25",
         tone === "ghost" && "border-transparent text-moon-400 hover:bg-ink-800 hover:text-moon-100",
         tone === "warn" && "border-warn/50 bg-warn/15 text-warn hover:bg-warn/25",
+        tone === "outline" &&
+          "border-ink-700 bg-ink-800/70 text-moon-100 hover:bg-ink-700 hover:border-moon-600/50 active:bg-ink-900",
         rest.disabled && "cursor-not-allowed opacity-50",
       )}
     >

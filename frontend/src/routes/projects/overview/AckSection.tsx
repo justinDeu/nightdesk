@@ -1,4 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
+import { Check, CheckCheck } from "lucide-react";
 import { useAckDigest, useAcknowledge, useBulkAck } from "@/api/ack";
 import type { AckDigestGroup, AckDigestTicket } from "@/api/types";
 import { formatUsd } from "@/lib/status";
@@ -48,7 +49,8 @@ export function AckSection({ projectId }: { projectId: string }) {
         label="To acknowledge"
         count={total}
         legend={
-          <VerbButton tone="ghost" onClick={ackAll}>
+          <VerbButton tone="outline" onClick={ackAll}>
+            <CheckCheck size={12} />
             Ack all ({total})
           </VerbButton>
         }
@@ -87,7 +89,8 @@ function AckGroupBlock({
           {group.failed > 0 && <span className="text-failed"> · {group.failed} failed</span>}
           {group.cost_usd > 0 && <span> · {formatUsd(group.cost_usd)}</span>}
         </span>
-        <VerbButton tone="ghost" onClick={onAckGroup}>
+        <VerbButton tone="outline" onClick={onAckGroup}>
+          <Check size={12} />
           Ack
         </VerbButton>
       </div>
@@ -133,13 +136,14 @@ function AckTicketRow({
         </span>
       )}
       <VerbButton
-        tone="ghost"
+        tone="outline"
         onClick={() =>
           acknowledge.mutate(ticket.ticket_id, {
             onError: (err) => toast.error("Ack failed", { error: err }),
           })
         }
       >
+        <Check size={12} />
         Ack
       </VerbButton>
     </div>
